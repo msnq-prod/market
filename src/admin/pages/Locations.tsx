@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Input, Modal, Textarea } from '../components/ui';
+import { Button, Input, Modal } from '../components/ui';
 import { TranslationModal } from '../components/TranslationModal';
 
 interface Location {
     id: string;
-    name: string;
-    country: string;
     lat: number;
     lng: number;
     image?: string;
-    description?: string;
+    translations: {
+        language_id: number;
+        name: string;
+        country: string;
+        description?: string;
+    }[];
 }
 
 export function Locations() {
@@ -55,13 +58,10 @@ export function Locations() {
 
         setIsUploading(true);
         const uploadData = new FormData();
-        uploadData.append('image', file);
-        if (formData.name) {
-            uploadData.append('locationName', formData.name);
-        }
+        uploadData.append('file', file);
 
         try {
-            const res = await fetch('/api/upload', {
+            const res = await fetch('/api/upload/photo', {
                 method: 'POST',
                 body: uploadData,
             });
@@ -71,7 +71,7 @@ export function Locations() {
             }
         } catch (error) {
             console.error('Upload failed', error);
-            alert('Failed to upload image');
+            alert('Не удалось загрузить изображение');
         } finally {
             setIsUploading(false);
         }
@@ -80,13 +80,14 @@ export function Locations() {
     const handleEdit = (loc: Location) => {
         setIsEditing(true);
         setEditingId(loc.id);
+        const en = loc.translations.find(t => t.language_id === 1) || { name: '', country: '', description: '' };
         setFormData({
-            name: loc.name,
-            country: loc.country,
+            name: en.name,
+            country: en.country,
             lat: loc.lat.toString(),
             lng: loc.lng.toString(),
             image: loc.image || '',
-            description: loc.description || ''
+            description: en.description || ''
         });
         setIsModalOpen(true);
     };
@@ -104,16 +105,37 @@ export function Locations() {
             const url = isEditing ? `/api/locations/${editingId}` : '/api/locations';
             const method = isEditing ? 'PUT' : 'POST';
 
+            // Prepare base translations (English)
+            const baseTranslation = {
+                language_id: 1,
+                name: formData.name,
+                country: formData.country,
+                description: formData.description || ''
+            };
+
+            // If editing, we should preserve other translations if they exist? 
+            // The server implementation of PUT currently deletes all and re-creates.
+            // So we need to send ALL translations if we want to keep them.
+            let allTranslations = [baseTranslation];
+            if (isEditing && editingId) {
+                const currentLoc = locations.find(l => l.id === editingId);
+                if (currentLoc) {
+                    const others = currentLoc.translations.filter(t => t.language_id !== 1).map(t => ({
+                        ...t,
+                        description: t.description || ''
+                    }));
+                    allTranslations = [...allTranslations, ...others];
+                }
+            }
+
             await fetch(url, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    name: formData.name,
-                    country: formData.country,
                     lat: parseFloat(formData.lat),
                     lng: parseFloat(formData.lng),
                     image: formData.image,
-                    description: formData.description
+                    translations: allTranslations
                 })
             });
             setFormData({ name: '', country: '', lat: '', lng: '', image: '', description: '' });
@@ -167,10 +189,10 @@ export function Locations() {
                                     <td className="p-4 text-white font-medium">
                                         <div className="flex items-center gap-3">
                                             {loc.image && <img src={loc.image} alt="" className="w-8 h-8 rounded object-cover bg-gray-700" />}
-                                            {loc.name}
+                                            {loc.translations.find(t => t.language_id === 1)?.name || 'Без названия'}
                                         </div>
                                     </td>
-                                    <td className="p-4 text-gray-400">{loc.country}</td>
+                                    <td className="p-4 text-gray-400">{loc.translations.find(t => t.language_id === 1)?.country || 'Неизвестно'}</td>
                                     <td className="p-4 text-gray-500 font-mono text-xs">
                                         {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
                                     </td>
@@ -218,7 +240,7 @@ export function Locations() {
 
                     <div className="grid grid-cols-2 gap-4">
                         <Input
-                            label="Широта (Latitude)"
+                            label="Широта"
                             type="number"
                             step="any"
                             placeholder="55.7558"
@@ -227,7 +249,7 @@ export function Locations() {
                             required
                         />
                         <Input
-                            label="Долгота (Longitude)"
+                            label="Долгота"
                             type="number"
                             step="any"
                             placeholder="37.6173"
@@ -310,19 +332,21 @@ export function Locations() {
                     }}
                     baseData={selectedLocationForTranslation}
                     type="LOCATION"
-                    onSave={async (translations) => {
+                    onSave={async (newTranslations) => {
                         try {
                             await fetch(`/api/locations/${selectedLocationForTranslation.id}`, {
                                 method: 'PUT',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
-                                    ...selectedLocationForTranslation,
-                                    ...translations
+                                    lat: selectedLocationForTranslation.lat,
+                                    lng: selectedLocationForTranslation.lng,
+                                    image: selectedLocationForTranslation.image,
+                                    translations: newTranslations
                                 })
                             });
                             fetchLocations();
                         } catch (error) {
-                            console.error('Failed to save translations', error);
+                            console.error('Не удалось сохранить переводы', error);
                         }
                     }}
                 />

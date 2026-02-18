@@ -34,7 +34,14 @@ async function main() {
     console.log('Start updating locations...');
     for (const loc of LOCATIONS) {
         const existing = await prisma.location.findFirst({
-            where: { name: loc.name }
+            where: {
+                translations: {
+                    some: {
+                        name: loc.name,
+                        language_id: 1
+                    }
+                }
+            }
         });
 
         if (existing) {
@@ -42,7 +49,12 @@ async function main() {
                 where: { id: existing.id },
                 data: {
                     image: loc.image,
-                    description: loc.description
+                    translations: {
+                        updateMany: {
+                            where: { language_id: 1 },
+                            data: { description: loc.description }
+                        }
+                    }
                 }
             });
             console.log(`Updated ${loc.name}`);

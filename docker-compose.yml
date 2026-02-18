@@ -1,0 +1,43 @@
+services:
+  db:
+    image: public.ecr.aws/docker/library/mysql:8.0
+    pull_policy: always
+    container_name: stones-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: stones
+    ports:
+      - "3307:3306"
+    volumes:
+      - stones_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -proot --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stones-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://root:root@db:3306/stones?connection_limit=20&pool_timeout=30
+      ACCESS_TOKEN_SECRET: access_secret_123
+      REFRESH_TOKEN_SECRET: refresh_secret_123
+      PORT: 3001
+      CLIENT_URL: http://localhost:5173
+    ports:
+      - "3001:3001"
+      - "5173:5173"
+    volumes:
+      - stones_uploads:/app/public/uploads
+
+volumes:
+  stones_mysql_data:
+  stones_uploads:

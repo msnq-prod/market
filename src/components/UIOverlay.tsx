@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence, useMotionValue, animate, useTransform } from 'framer-motion'
 import type { PanInfo } from 'framer-motion'
+import type { MotionValue } from 'framer-motion'
 import { useStore } from '../store'
-import type { Product } from '../data/db'
+import { getLocalizedValue } from '../utils/language';
+import type { Product, User } from '../data/db'
 import { Languages } from 'lucide-react';
+import { formatRub } from '../utils/currency';
 
 export function UIOverlay() {
     const activeView = useStore((state) => state.activeView)
@@ -19,6 +22,15 @@ export function UIOverlay() {
         name: string;
         available: boolean;
     }
+    type Dictionary = {
+        marketplace: string;
+        products: string;
+        museums: string;
+        contacts: string;
+        account: string;
+        cart: string;
+        back: string;
+    };
     const [languages, setLanguages] = useState<Language[]>([]);
     const [showLangMenu, setShowLangMenu] = useState(false);
 
@@ -28,7 +40,7 @@ export function UIOverlay() {
                 if (!res.ok) throw new Error('Network response was not ok');
                 return res.json();
             })
-            .then(data => setLanguages(data.filter((l: any) => l.available)))
+            .then((data: Language[]) => setLanguages(data.filter((l) => l.available)))
             .catch(err => {
                 console.warn('Failed to load languages (backend might be offline or outdated):', err);
                 // Fallback or empty
@@ -37,15 +49,15 @@ export function UIOverlay() {
     }, []);
 
     // Translation dictionary for static UI
-    const dictionaries: Record<number, any> = {
+    const dictionaries: Record<number, Dictionary> = {
         1: { // English
-            marketplace: 'MARKETPLACE',
-            products: 'PRODUCTS',
-            museums: 'MUSEUMS',
-            contacts: 'CONTACTS',
-            account: 'ACCOUNT',
-            cart: 'CART',
-            back: 'BACK TO ORBIT'
+            marketplace: 'МАРКЕТПЛЕЙС',
+            products: 'ТОВАРЫ',
+            museums: 'МУЗЕИ',
+            contacts: 'КОНТАКТЫ',
+            account: 'АККАУНТ',
+            cart: 'КОРЗИНА',
+            back: 'НАЗАД НА ОРБИТУ'
         },
         2: { // Russian
             marketplace: 'МАРКЕТПЛЕЙС',
@@ -63,7 +75,7 @@ export function UIOverlay() {
         <div className="fixed inset-0 pointer-events-none z-50 flex flex-col">
             <header className="p-6 flex justify-between items-center w-full bg-gradient-to-b from-black/80 to-transparent pointer-events-auto">
                 <div className="flex items-center gap-8">
-                    <h1 className="text-2xl font-light tracking-widest text-white cursor-pointer" onClick={() => clearSelection()}>ORBITAL MARKET</h1>
+                    <h1 className="text-2xl font-light tracking-widest text-white cursor-pointer" onClick={() => clearSelection()}>ОРБИТАЛЬНЫЙ МАРКЕТ</h1>
 
                     <nav className="flex gap-6 border-l border-white/20 pl-6 h-6 items-center">
                         <button
@@ -172,7 +184,9 @@ export function UIOverlay() {
     )
 }
 
-function AccountView({ user, onClose }: { user: any, onClose: () => void }) {
+type AccountUser = User & { orders?: Array<string | number> };
+
+function AccountView({ user, onClose }: { user: AccountUser, onClose: () => void }) {
     return (
         <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -181,7 +195,7 @@ function AccountView({ user, onClose }: { user: any, onClose: () => void }) {
             className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
         >
             <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-2xl p-8 shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">✕ CLOSE</button>
+                <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
                 <div className="flex items-center gap-6 mb-8">
                     <div className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center text-2xl font-bold">
                         {user.name.charAt(0)}
@@ -191,12 +205,12 @@ function AccountView({ user, onClose }: { user: any, onClose: () => void }) {
                         <p className="text-gray-400">{user.email}</p>
                     </div>
                 </div>
-                <h3 className="text-xl font-medium mb-4 border-b border-white/10 pb-2">Order History</h3>
+                <h3 className="text-xl font-medium mb-4 border-b border-white/10 pb-2">История заказов</h3>
                 <div className="space-y-4">
-                    {user.orders.length === 0 ? (
-                        <p className="text-gray-500 italic">No previous orders found.</p>
+                    {(!user.orders || user.orders.length === 0) ? (
+                        <p className="text-gray-500 italic">Предыдущие заказы не найдены.</p>
                     ) : (
-                        user.orders.map((order: any) => <div key={order}>Order #{order}</div>)
+                        user.orders.map((order) => <div key={order}>Заказ #{order}</div>)
                     )}
                 </div>
             </div>
@@ -207,6 +221,7 @@ function AccountView({ user, onClose }: { user: any, onClose: () => void }) {
 function CartView({ cart, onClose }: { cart: Product[], onClose: () => void }) {
     const total = cart.reduce((sum, item) => sum + item.price, 0)
     const removeFromCart = useStore((state) => state.removeFromCart)
+    const language = useStore((state) => state.language)
 
     return (
         <motion.div
@@ -216,28 +231,28 @@ function CartView({ cart, onClose }: { cart: Product[], onClose: () => void }) {
             className="absolute inset-y-0 right-0 w-full md:w-96 bg-neutral-900/95 backdrop-blur-xl border-l border-white/10 z-50 shadow-2xl pointer-events-auto flex flex-col"
         >
             <div className="p-6 border-b border-white/10 flex justify-between items-center">
-                <h2 className="text-2xl font-light">YOUR CART</h2>
+                <h2 className="text-2xl font-light">ВАША КОРЗИНА</h2>
                 <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {cart.length === 0 ? (
                     <div className="text-center text-gray-500 mt-10">
-                        Your cart is empty.
+                        Ваша корзина пуста.
                     </div>
                 ) : (
                     cart.map((item, idx) => (
                         <div key={`${item.id} -${idx} `} className="flex gap-4">
                             <div className="w-20 h-20 bg-gray-800 rounded-md overflow-hidden flex-shrink-0">
-                                <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                                <img src={item.image} alt={getLocalizedValue(item, 'name', language)} className="w-full h-full object-cover" />
                             </div>
                             <div className="flex-1">
                                 <div className="flex justify-between items-start">
-                                    <h3 className="font-medium text-sm">{item.name}</h3>
-                                    <button onClick={() => removeFromCart(item.id)} className="text-gray-500 hover:text-red-500 text-xs">REMOVE</button>
+                                    <h3 className="font-medium text-sm">{getLocalizedValue(item, 'name', language)}</h3>
+                                    <button onClick={() => removeFromCart(item.id)} className="text-gray-500 hover:text-red-500 text-xs">УДАЛИТЬ</button>
                                 </div>
-                                <p className="text-xs text-gray-400 mt-1">{item.category}</p>
-                                <p className="text-sm font-mono mt-2">${item.price.toLocaleString()}</p>
+                                <p className="text-xs text-gray-400 mt-1">{item.category ? getLocalizedValue(item.category, 'name', language) : ''}</p>
+                                <p className="text-sm font-mono mt-2">{formatRub(item.price)}</p>
                             </div>
                         </div>
                     ))
@@ -246,11 +261,11 @@ function CartView({ cart, onClose }: { cart: Product[], onClose: () => void }) {
 
             <div className="p-6 border-t border-white/10 bg-black/20">
                 <div className="flex justify-between items-center mb-4 text-lg font-medium">
-                    <span>TOTAL</span>
-                    <span className="font-mono text-blue-400">${total.toLocaleString()}</span>
+                    <span>ИТОГО</span>
+                    <span className="font-mono text-blue-400">{formatRub(total)}</span>
                 </div>
                 <button className="w-full py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-bold tracking-wide transition-all">
-                    CHECKOUT
+                    ОФОРМИТЬ
                 </button>
             </div>
         </motion.div>
@@ -263,9 +278,9 @@ function RotatingFilter({
     onChange,
     label
 }: {
-    items: { label: string, value: any }[],
-    value: any,
-    onChange: (val: any) => void,
+    items: { label: string, value: string | number }[],
+    value: string | number,
+    onChange: (val: string | number) => void,
     label: string
 }) {
     // State for the integer index (can go negative or > length for infinite feel)
@@ -303,8 +318,11 @@ function RotatingFilter({
                 if (diff > count / 2) diff -= count;
                 if (diff < -count / 2) diff += count;
                 const newIndex = currentIndex + diff;
-                setCurrentIndex(newIndex);
-                animate(x, -newIndex * ANGLE_STEP_DEG, { type: "spring", stiffness: 300, damping: 30 });
+                const timer = setTimeout(() => {
+                    setCurrentIndex(newIndex);
+                    animate(x, -newIndex * ANGLE_STEP_DEG, { type: "spring", stiffness: 300, damping: 30 });
+                }, 0);
+                return () => clearTimeout(timer);
             }
         }
     }, [value, items, count, currentIndex, x, ANGLE_STEP_DEG]);
@@ -314,7 +332,7 @@ function RotatingFilter({
         x.set(-currentIndex * ANGLE_STEP_DEG);
     }, [currentIndex, x, ANGLE_STEP_DEG]);
 
-    const handleDragEnd = (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+    const handleDragEnd = (_event: MouseEvent | TouchEvent | PointerEvent, _info: PanInfo) => {
         const currentRotation = x.get();
         // Calculate closest index
         const index = Math.round(-currentRotation / ANGLE_STEP_DEG);
@@ -380,7 +398,7 @@ function RotatingFilter({
                     dragElastic={0.001} // Feel
                     // _dragX={x} // Bind drag to x motion value? No, usually separate.
                     // Actually, let's use manual control update on drag
-                    onDrag={(e, info) => {
+                    onDrag={(_e, info) => {
                         // Map pixel delta to rotation delta?
                         // 1px drag = 1/RADIUS radians.
                         const angleDelta = (info.delta.x / RADIUS) * (180 / Math.PI) * 2; // Speed up a bit
@@ -417,10 +435,10 @@ function RotatingItem({
     parentRotation,
     onClick
 }: {
-    item: { label: string, value: any },
+    item: { label: string, value: string | number },
     angle: number,
     radius: number,
-    parentRotation: any,
+    parentRotation: MotionValue<number>,
     onClick: () => void
 }) {
     // Transform rotation to opacity/scale/color without triggering React renders
@@ -493,35 +511,38 @@ function RotatingItem({
 function ProductsView({ onClose }: { onClose: () => void }) {
     const locations = useStore((state) => state.locations);
     const addToCart = useStore((state) => state.addToCart);
+    const language = useStore((state) => state.language);
 
     // In a real app we might fetch all products again, or flattening locations
     // For now, let's derive all products from locations for simplicity
     const allProducts = locations.flatMap(loc =>
-        loc.products.map(p => ({ ...p, locationName: loc.name }))
+        (loc.products || []).map(p => ({ ...p, location_name: getLocalizedValue(loc, 'name', language) }))
     );
 
     const [selectedLocation, setSelectedLocation] = useState<string | 'ALL'>('ALL');
     const [selectedLevel, setSelectedLevel] = useState<number | 'ALL'>('ALL');
-    const [filteredProducts, setFilteredProducts] = useState(allProducts);
 
     // Prepare items for carousels
     const locationItems = React.useMemo(() => [
-        { label: 'All Locations', value: 'ALL' },
-        ...locations.map(l => ({ label: l.name, value: l.name }))
-    ], [locations]);
+        { label: 'Все локации', value: 'ALL' },
+        ...locations.map(l => {
+            const locName = getLocalizedValue(l, 'name', language);
+            return { label: locName, value: locName };
+        })
+    ], [locations, language]);
 
     const levelItems = React.useMemo(() => [
-        { label: 'All Levels', value: 'ALL' },
-        { label: 'Level 1', value: 1 },
-        { label: 'Level 2', value: 2 },
-        { label: 'Level 3', value: 3 },
+        { label: 'Все уровни', value: 'ALL' },
+        { label: 'Уровень 1', value: 1 },
+        { label: 'Уровень 2', value: 2 },
+        { label: 'Уровень 3', value: 3 },
     ], []);
 
-    useEffect(() => {
+    const filteredProducts = React.useMemo(() => {
         let result = allProducts;
 
         if (selectedLocation !== 'ALL') {
-            result = result.filter(p => p.locationName === selectedLocation);
+            result = result.filter(p => p.location_name === selectedLocation);
         }
 
         if (selectedLevel !== 'ALL') {
@@ -529,15 +550,15 @@ function ProductsView({ onClose }: { onClose: () => void }) {
             result = result.filter(p => (p.level || 1) === selectedLevel);
         }
 
-        setFilteredProducts(result);
-    }, [selectedLocation, selectedLevel, locations]);
+        return result;
+    }, [allProducts, selectedLocation, selectedLevel]);
 
     // Find selected location for background image
     let backgroundImage: string | null = null;
     if (selectedLocation === 'ALL') {
         backgroundImage = '/locations/all.jpg';
     } else {
-        const locationData = locations.find(l => l.name === selectedLocation);
+        const locationData = locations.find(l => getLocalizedValue(l, 'name', language) === selectedLocation);
         backgroundImage = locationData?.image ?? null;
     }
 
@@ -567,10 +588,10 @@ function ProductsView({ onClose }: { onClose: () => void }) {
 
             <div className="flex justify-between items-center p-6 bg-gradient-to-b from-black/80 to-transparent z-10 relative">
                 <div className="flex items-center gap-4">
-                    <h2 className="text-3xl font-light tracking-widest text-white">ORBITAL PRODUCTS</h2>
-                    <span className="bg-blue-500/20 text-blue-400 text-xs px-2 py-1 rounded-full">{filteredProducts.length} ITEMS</span>
+                    <h2 className="text-3xl font-light tracking-widest text-white">ОРБИТАЛЬНЫЕ ТОВАРЫ</h2>
+                    <span className="bg-blue-500/20 text-blue-400 text-xs px-2 py-1 rounded-full">{filteredProducts.length} ПОЗИЦИЙ</span>
                 </div>
-                <button onClick={onClose} className="text-gray-400 hover:text-white text-lg">✕ CLOSE</button>
+                <button onClick={onClose} className="text-gray-400 hover:text-white text-lg">✕ ЗАКРЫТЬ</button>
             </div>
 
             {/* Scrollable Content Container */}
@@ -578,16 +599,16 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                 {/* Filters Section - 3D Carousels (Now inside scrollable area) */}
                 <div className="relative z-0 py-4 space-y-4 overflow-visible mb-8" style={{ perspective: '1000px' }}>
                     <RotatingFilter
-                        label="Filter by Location"
+                        label="Фильтр по локации"
                         items={locationItems}
                         value={selectedLocation}
-                        onChange={setSelectedLocation}
+                        onChange={(val) => setSelectedLocation(val as string | 'ALL')}
                     />
                     <RotatingFilter
-                        label="Filter by Level"
+                        label="Фильтр по уровню"
                         items={levelItems}
                         value={selectedLevel}
-                        onChange={setSelectedLevel}
+                        onChange={(val) => setSelectedLevel(val as number | 'ALL')}
                     />
                 </div>
 
@@ -595,40 +616,44 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
                     {filteredProducts.length === 0 ? (
                         <div className="col-span-full text-center text-gray-500 py-20">
-                            No products found matching your filters.
+                            Товары по выбранным фильтрам не найдены.
                         </div>
                     ) : (
-                        filteredProducts.map((product) => (
-                            <div key={product.id} className="bg-neutral-900/80 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden group hover:border-blue-500/50 transition-colors">
-                                <div className="h-48 overflow-hidden relative">
-                                    <img src={product.image} alt={product.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
-                                    <div className="absolute top-2 right-2">
-                                        <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${(product.level || 1) === 3 ? 'bg-yellow-500 text-black' :
-                                            (product.level || 1) === 2 ? 'bg-blue-500 text-white' :
-                                                'bg-gray-500 text-white'
-                                            }`}>
-                                            LVL {product.level || 1}
-                                        </span>
-                                    </div>
-                                </div>
-                                <div className="p-4">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <div>
-                                            <h3 className="text-white font-medium text-lg leading-tight mb-1">{product.name}</h3>
-                                            <p className="text-gray-500 text-xs">{product.locationName}</p>
+                        filteredProducts.map((product) => {
+                            const productName = getLocalizedValue(product, 'name', language);
+                            const productDescription = getLocalizedValue(product, 'description', language);
+                            return (
+                                <div key={product.id} className="bg-neutral-900/80 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden group hover:border-blue-500/50 transition-colors">
+                                    <div className="h-48 overflow-hidden relative">
+                                        <img src={product.image} alt={productName} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                                        <div className="absolute top-2 right-2">
+                                            <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${(product.level || 1) === 3 ? 'bg-yellow-500 text-black' :
+                                                (product.level || 1) === 2 ? 'bg-blue-500 text-white' :
+                                                    'bg-gray-500 text-white'
+                                                }`}>
+                                                УР. {product.level || 1}
+                                            </span>
                                         </div>
-                                        <p className="text-blue-400 font-mono font-medium">${product.price}</p>
                                     </div>
-                                    <p className="text-gray-400 text-sm line-clamp-2 mb-4 h-10">{product.description}</p>
-                                    <button
-                                        onClick={() => addToCart(product)}
-                                        className="w-full py-2 bg-white/10 hover:bg-white text-white hover:text-black rounded-lg font-medium transition-all text-sm"
-                                    >
-                                        ADD TO CART
-                                    </button>
+                                    <div className="p-4">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div>
+                                                <h3 className="text-white font-medium text-lg leading-tight mb-1">{productName}</h3>
+                                                <p className="text-gray-500 text-xs">{product.location_name}</p>
+                                            </div>
+                                            <p className="text-blue-400 font-mono font-medium">{formatRub(product.price)}</p>
+                                        </div>
+                                        <p className="text-gray-400 text-sm line-clamp-2 mb-4 h-10">{productDescription}</p>
+                                        <button
+                                            onClick={() => addToCart(product)}
+                                            className="w-full py-2 bg-white/10 hover:bg-white text-white hover:text-black rounded-lg font-medium transition-all text-sm"
+                                        >
+                                            В КОРЗИНУ
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                        ))
+                            )
+                        })
                     )}
                 </div>
             </div>
@@ -645,33 +670,33 @@ function MuseumsView({ onClose }: { onClose: () => void }) {
             className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
         >
             <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-4xl p-10 shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-6 right-6 text-gray-400 hover:text-white">✕ CLOSE</button>
+                <button onClick={onClose} className="absolute top-6 right-6 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
                 <div className="text-center mb-10">
-                    <h2 className="text-4xl font-light tracking-wide text-white mb-2">GALACTIC MUSEUMS</h2>
+                    <h2 className="text-4xl font-light tracking-wide text-white mb-2">ГАЛАКТИЧЕСКИЕ МУЗЕИ</h2>
                     <div className="h-1 w-20 bg-blue-500 mx-auto"></div>
-                    <p className="text-gray-400 mt-4 max-w-lg mx-auto">Explore the history of orbital mining and the rare artifacts discovered in the deep cosmos.</p>
+                    <p className="text-gray-400 mt-4 max-w-lg mx-auto">Исследуйте историю орбитальной добычи и редкие артефакты, обнаруженные в глубоком космосе.</p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-black/40 border border-white/5 p-6 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
-                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">The Void Archives</h3>
-                        <p className="text-sm text-gray-500">Ancient star maps and early colonization logs perfectly preserved in zero-g vaults.</p>
-                        <div className="mt-4 text-xs text-blue-400 tracking-widest">OPEN NOW • SECTOR 7</div>
+                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">Архивы Пустоты</h3>
+                        <p className="text-sm text-gray-500">Древние звездные карты и журналы ранней колонизации, сохраненные в хранилищах нулевой гравитации.</p>
+                        <div className="mt-4 text-xs text-blue-400 tracking-widest">ОТКРЫТО • СЕКТОР 7</div>
                     </div>
                     <div className="bg-black/40 border border-white/5 p-6 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
-                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">Mineral History</h3>
-                        <p className="text-sm text-gray-500">A comprehensive collection of the first extracted orbital minerals and their processing evolution.</p>
-                        <div className="mt-4 text-xs text-blue-400 tracking-widest">OPEN NOW • LUNAR BASE</div>
+                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">История минералов</h3>
+                        <p className="text-sm text-gray-500">Полная коллекция первых добытых орбитальных минералов и эволюции их обработки.</p>
+                        <div className="mt-4 text-xs text-blue-400 tracking-widest">ОТКРЫТО • ЛУННАЯ БАЗА</div>
                     </div>
                     <div className="bg-black/40 border border-white/5 p-6 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
-                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">Xeno-Botany</h3>
-                        <p className="text-sm text-gray-500">Living exhibits of flora adapted to vacuum and high-radiation environments.</p>
-                        <div className="mt-4 text-xs text-orange-400 tracking-widest">MAINTENANCE • MARS ORBIT</div>
+                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">Ксено-ботаника</h3>
+                        <p className="text-sm text-gray-500">Живые экспонаты флоры, адаптированной к вакууму и высокой радиации.</p>
+                        <div className="mt-4 text-xs text-orange-400 tracking-widest">ТЕХРАБОТЫ • ОРБИТА МАРСА</div>
                     </div>
                     <div className="bg-black/40 border border-white/5 p-6 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
-                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">The Astro-Lounge</h3>
-                        <p className="text-sm text-gray-500">Interactive holographic timelines of human expansion into the solar system.</p>
-                        <div className="mt-4 text-xs text-blue-400 tracking-widest">OPEN NOW • JUPITER STATION</div>
+                        <h3 className="text-xl font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">Астро-Лаунж</h3>
+                        <p className="text-sm text-gray-500">Интерактивные голографические таймлайны освоения Солнечной системы.</p>
+                        <div className="mt-4 text-xs text-blue-400 tracking-widest">ОТКРЫТО • СТАНЦИЯ ЮПИТЕР</div>
                     </div>
                 </div>
             </div>
@@ -688,9 +713,9 @@ function ContactsView({ onClose }: { onClose: () => void }) {
             className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
         >
             <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-2xl p-10 shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-6 right-6 text-gray-400 hover:text-white">✕ CLOSE</button>
+                <button onClick={onClose} className="absolute top-6 right-6 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
                 <div className="text-center mb-10">
-                    <h2 className="text-4xl font-light tracking-wide text-white mb-2">CONTACT US</h2>
+                    <h2 className="text-4xl font-light tracking-wide text-white mb-2">КОНТАКТЫ</h2>
                     <div className="h-1 w-20 bg-blue-500 mx-auto"></div>
                 </div>
 
@@ -702,8 +727,8 @@ function ContactsView({ onClose }: { onClose: () => void }) {
                             </svg>
                         </div>
                         <div>
-                            <h3 className="text-lg font-medium text-white">General Inquiries</h3>
-                            <p className="text-gray-400 text-sm mb-1">For general questions about the marketplace or mining rights.</p>
+                            <h3 className="text-lg font-medium text-white">Общие вопросы</h3>
+                            <p className="text-gray-400 text-sm mb-1">По общим вопросам о маркетплейсе и правах добычи.</p>
                             <a href="mailto:hello@orbitalmarket.space" className="text-blue-400 hover:text-blue-300 transition-colors">hello@orbitalmarket.space</a>
                         </div>
                     </div>
@@ -715,8 +740,8 @@ function ContactsView({ onClose }: { onClose: () => void }) {
                             </svg>
                         </div>
                         <div>
-                            <h3 className="text-lg font-medium text-white">Technical Support</h3>
-                            <p className="text-gray-400 text-sm mb-1">Issues with the orbital interface or transaction failures.</p>
+                            <h3 className="text-lg font-medium text-white">Техническая поддержка</h3>
+                            <p className="text-gray-400 text-sm mb-1">Проблемы с интерфейсом или сбои транзакций.</p>
                             <a href="mailto:support@orbitalmarket.space" className="text-blue-400 hover:text-blue-300 transition-colors">support@orbitalmarket.space</a>
                         </div>
                     </div>
@@ -729,8 +754,8 @@ function ContactsView({ onClose }: { onClose: () => void }) {
                             </svg>
                         </div>
                         <div>
-                            <h3 className="text-lg font-medium text-white">HQ Location</h3>
-                            <p className="text-gray-400 text-sm">Station Alpha, Sector 4, Low Earth Orbit</p>
+                            <h3 className="text-lg font-medium text-white">Локация HQ</h3>
+                            <p className="text-gray-400 text-sm">Станция Альфа, Сектор 4, низкая орбита Земли</p>
                         </div>
                     </div>
                 </div>
@@ -738,4 +763,3 @@ function ContactsView({ onClose }: { onClose: () => void }) {
         </motion.div>
     )
 }
-

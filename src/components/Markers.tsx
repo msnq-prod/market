@@ -1,14 +1,16 @@
-import type { Location } from '../data/db'
 import { useStore } from '../store'
 import * as THREE from 'three'
 import React, { useMemo, useRef } from 'react'
 import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
+import { getLocalizedValue } from '../utils/language'
+import type { Location } from '../data/db'
 
 export function Markers() {
     const selectLocation = useStore((state) => state.selectLocation)
     const selectedLocation = useStore((state) => state.selectedLocation)
     const locations = useStore((state) => state.locations)
+    const language = useStore((state) => state.language)
 
     return (
         <group>
@@ -18,6 +20,7 @@ export function Markers() {
                     location={loc}
                     onClick={() => selectLocation(loc)}
                     isSelected={selectedLocation?.id === loc.id}
+                    language={language}
                 />
             ))}
         </group>
@@ -27,11 +30,13 @@ export function Markers() {
 const Marker = React.memo(function Marker({
     location,
     onClick,
-    isSelected
+    isSelected,
+    language
 }: {
     location: Location,
     onClick: () => void,
-    isSelected: boolean
+    isSelected: boolean,
+    language: number
 }) {
     const ref = useRef<HTMLDivElement>(null)
 
@@ -149,7 +154,7 @@ const Marker = React.memo(function Marker({
                             ${isSelected ? 'text-red-500' : 'text-white group-hover:text-amber-400'}
                         `}
                     >
-                        {location.name}
+                        {getLocalizedValue(location, 'name', language)}
                     </div>
                 </div>
             </Html>

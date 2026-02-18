@@ -53,13 +53,13 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
     return { hasError: true };
   }
 
-  componentDidCatch(error: any, errorInfo: any) {
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
   }
 
   render() {
     if (this.state.hasError) {
-      return <div className="text-white p-10 text-center"><h1>Something went wrong.</h1><button onClick={() => window.location.reload()} className="bg-blue-500 px-4 py-2 mt-4 rounded">Reload</button></div>;
+      return <div className="text-white p-10 text-center"><h1>Произошла ошибка.</h1><button onClick={() => window.location.reload()} className="bg-blue-500 px-4 py-2 mt-4 rounded">Перезагрузить</button></div>;
     }
 
     return this.props.children;
@@ -69,23 +69,23 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 function MainApp() {
   const fetchLocations = useStore((state) => state.fetchLocations)
   const selectedLocation = useStore((state) => state.selectedLocation)
-  const [showOverview, setShowOverview] = React.useState(true)
+  const [showOverviewDelayed, setShowOverviewDelayed] = React.useState(true)
 
   useEffect(() => {
-    fetchLocations()
-  }, [])
+    void fetchLocations()
+  }, [fetchLocations])
 
   useEffect(() => {
     if (selectedLocation) {
-      // When entering a location
-      setShowOverview(false)
       window.scrollTo({ top: 0, behavior: 'instant' })
+      // keep update async to avoid synchronous setState in effect
+      const timer = setTimeout(() => setShowOverviewDelayed(false), 0)
+      return () => clearTimeout(timer)
     } else {
-      // When returning to orbit
-      window.scrollTo({ top: 0, behavior: 'instant' }); // Instant scroll to top
+      window.scrollTo({ top: 0, behavior: 'instant' })
       // Delay showing About text so it fades/appears nicely after zoom out starts
-      const timer = setTimeout(() => setShowOverview(true), 600);
-      return () => clearTimeout(timer);
+      const timer = setTimeout(() => setShowOverviewDelayed(true), 600)
+      return () => clearTimeout(timer)
     }
   }, [selectedLocation])
 
@@ -114,12 +114,21 @@ function MainApp() {
             <ProductListSection />
           </>
         ) : (
-          showOverview && <AboutSection /> // Only show after delay
+          showOverviewDelayed && <AboutSection /> // Only show after delay
         )}
       </div>
     </div>
   )
 }
+
+import { PartnerLayout } from './partner/components/PartnerLayout'
+import { Login as PartnerLogin } from './partner/pages/Login'
+import { Dashboard as PartnerDashboard } from './partner/pages/Dashboard'
+import { CreateBatch } from './partner/pages/CreateBatch'
+import { Finance } from './partner/pages/Finance'
+import { Acceptance } from './admin/pages/Acceptance'
+import { Allocation } from './admin/pages/Allocation'
+import { Users } from './admin/pages/Users'
 
 function App() {
   return (
@@ -132,6 +141,18 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="locations" element={<Locations />} />
           <Route path="products" element={<Products />} />
+          <Route path="acceptance" element={<Acceptance />} />
+          <Route path="allocation" element={<Allocation />} />
+          <Route path="users" element={<Users />} />
+        </Route>
+
+        {/* Partner Routes */}
+        <Route path="/partner" element={<PartnerLayout />}>
+          <Route path="login" element={<PartnerLogin />} />
+          <Route path="dashboard" element={<PartnerDashboard />} />
+          <Route path="batches/new" element={<CreateBatch />} />
+          <Route path="finance" element={<Finance />} />
+          <Route index element={<PartnerDashboard />} />
         </Route>
 
       </Routes>

@@ -1,60 +1,133 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+
+type DashboardLocation = { products?: unknown[] };
+type DashboardBatch = {
+    status: string;
+    items: { status: string }[];
+};
+type DashboardUser = { role: string };
+
+type DashboardStats = {
+    locations: number;
+    products: number;
+    users: number;
+    franchisees: number;
+    inTransitBatches: number;
+    stockHQItems: number;
+};
+
+const initialStats: DashboardStats = {
+    locations: 0,
+    products: 0,
+    users: 0,
+    franchisees: 0,
+    inTransitBatches: 0,
+    stockHQItems: 0,
+};
 
 export function Dashboard() {
-    const [stats, setStats] = useState({ locations: 0, products: 0, views: 1245 }); // Mock views for now
+    const [stats, setStats] = useState<DashboardStats>(initialStats);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
 
     useEffect(() => {
         const fetchStats = async () => {
+            setLoading(true);
+            setError('');
+
             try {
-                const res = await fetch('/api/locations');
-                const locations = await res.json();
-                const productCount = locations.reduce((acc: number, loc: any) => acc + (loc.products?.length || 0), 0);
-                setStats(prev => ({ ...prev, locations: locations.length, products: productCount }));
-            } catch (error) {
-                console.error('Failed to fetch stats', error);
+                const token = localStorage.getItem('accessToken');
+                const headers = { Authorization: `Bearer ${token}` };
+
+                const [locRes, batchRes, usersRes] = await Promise.all([
+                    fetch('/api/locations'),
+                    fetch('/api/batches', { headers }),
+                    fetch('/api/users', { headers }),
+                ]);
+
+                const locations = locRes.ok ? await locRes.json() as DashboardLocation[] : [];
+                const batches = batchRes.ok ? await batchRes.json() as DashboardBatch[] : [];
+                const users = usersRes.ok ? await usersRes.json() as DashboardUser[] : [];
+
+                const products = locations.reduce((acc, loc) => acc + (loc.products?.length || 0), 0);
+                const inTransitBatches = batches.filter((batch) => batch.status === 'TRANSIT').length;
+                const stockHQItems = batches.reduce(
+                    (acc, batch) => acc + batch.items.filter((item) => item.status === 'STOCK_HQ').length,
+                    0
+                );
+
+                setStats({
+                    locations: locations.length,
+                    products,
+                    users: users.length,
+                    franchisees: users.filter((user) => user.role === 'FRANCHISEE').length,
+                    inTransitBatches,
+                    stockHQItems,
+                });
+            } catch (err) {
+                setError(err instanceof Error ? err.message : 'Не удалось загрузить дашборд');
+            } finally {
+                setLoading(false);
             }
         };
+
         fetchStats();
     }, []);
 
     return (
         <div className="space-y-6">
             <header className="mb-8">
-                <h1 className="text-3xl font-bold text-white">Дашборд</h1>
-                <p className="text-gray-400 mt-1">Обзор показателей вашего маркетплейса.</p>
+                <h1 className="text-3xl font-bold text-white">Дашборд HQ</h1>
+                <p className="text-gray-400 mt-1">Сводка по глобальным операциям.</p>
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-gray-900 p-6 rounded-2xl border border-gray-800 hover:border-blue-500/50 transition duration-300">
-                    <div className="text-gray-400 mb-1 font-medium">Всего локаций</div>
-                    <div className="text-3xl font-bold text-white animated-value">{stats.locations}</div>
-                    <div className="mt-4 h-1 w-full bg-gray-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 w-2/3"></div>
-                    </div>
+            {error && (
+                <div className="bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl px-4 py-3">
+                    {error}
                 </div>
+            )}
 
-                <div className="bg-gray-900 p-6 rounded-2xl border border-gray-800 hover:border-green-500/50 transition duration-300">
-                    <div className="text-gray-400 mb-1 font-medium">Активных товаров</div>
-                    <div className="text-3xl font-bold text-white">{stats.products}</div>
-                    <div className="mt-4 h-1 w-full bg-gray-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-green-500 w-1/2"></div>
-                    </div>
-                </div>
-
-                <div className="bg-gray-900 p-6 rounded-2xl border border-gray-800 hover:border-purple-500/50 transition duration-300">
-                    <div className="text-gray-400 mb-1 font-medium">Всего просмотров</div>
-                    <div className="text-3xl font-bold text-white">{stats.views}</div>
-                    <div className="mt-4 h-1 w-full bg-gray-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-purple-500 w-3/4"></div>
-                    </div>
-                </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                <StatCard title="Локации" value={stats.locations} accent="blue" loading={loading} subtitle="Опубликованы на глобусе" />
+                <StatCard title="Товары" value={stats.products} accent="green" loading={loading} subtitle="По всем локациям" />
+                <StatCard title="Пользователи" value={stats.users} accent="purple" loading={loading} subtitle="Все зарегистрированные роли" />
+                <StatCard title="Франчайзи" value={stats.franchisees} accent="sky" loading={loading} subtitle="Активные партнерские аккаунты" />
+                <StatCard title="Партии в пути" value={stats.inTransitBatches} accent="yellow" loading={loading} subtitle="Ожидают приемки" />
+                <StatCard title="Товары на складе HQ" value={stats.stockHQItems} accent="emerald" loading={loading} subtitle="Готовы к распределению" />
             </div>
+        </div>
+    );
+}
 
-            <div className="mt-12">
-                <div className="bg-gray-900 rounded-2xl border border-gray-800 p-8 text-center text-gray-500">
-                    <p>Выберите "Локации" или "Товары" в боковом меню для управления контентом.</p>
-                </div>
+function StatCard({
+    title,
+    value,
+    subtitle,
+    accent,
+    loading
+}: {
+    title: string;
+    value: number;
+    subtitle: string;
+    accent: 'blue' | 'green' | 'purple' | 'sky' | 'yellow' | 'emerald';
+    loading: boolean;
+}) {
+    const accentClass: Record<typeof accent, { border: string; text: string }> = {
+        blue: { border: 'hover:border-blue-500/50', text: 'text-blue-400' },
+        green: { border: 'hover:border-green-500/50', text: 'text-green-400' },
+        purple: { border: 'hover:border-purple-500/50', text: 'text-purple-400' },
+        sky: { border: 'hover:border-sky-500/50', text: 'text-sky-400' },
+        yellow: { border: 'hover:border-yellow-500/50', text: 'text-yellow-400' },
+        emerald: { border: 'hover:border-emerald-500/50', text: 'text-emerald-400' },
+    };
+
+    return (
+        <div className={`bg-gray-900 p-6 rounded-2xl border border-gray-800 transition duration-300 ${accentClass[accent].border}`}>
+            <div className="text-gray-400 mb-1 font-medium">{title}</div>
+            <div className={`text-3xl font-bold ${accentClass[accent].text}`}>
+                {loading ? '...' : value}
             </div>
+            <div className="text-xs text-gray-500 mt-1">{subtitle}</div>
         </div>
     );
 }

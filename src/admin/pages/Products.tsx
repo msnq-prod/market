@@ -1,34 +1,62 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Input, Modal } from '../components/ui';
 import { TranslationModal } from '../components/TranslationModal';
+import { formatRub } from '../../utils/currency';
 
 interface Location {
     id: string;
-    name: string;
-    country: string;
+    translations: {
+        language_id: number;
+        name: string;
+        country: string;
+    }[];
 }
 
-interface Product {
-    id: string;
+interface ProductTranslation {
+    language_id: number;
     name: string;
     description: string;
-    price: number;
-    image: string;
-    category: string;
-    level: number;
-    locationId: string;
-    locationName?: string;
 }
 
+interface ProductBase {
+    id: string;
+    price: number;
+    image: string;
+    category_id: string;
+    location_id: string;
+    translations: ProductTranslation[];
+    category?: {
+        translations: {
+            language_id: number;
+            name: string;
+        }[];
+    };
+    location?: Location;
+    level?: number;
+}
+
+interface ProductView extends ProductBase {
+    name: string;
+    description: string;
+    category_name: string;
+    location_name: string;
+}
+
+const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
+    const t = translations?.find((tr) => tr.language_id === 1);
+    const value = t?.[field];
+    return typeof value === 'string' ? value : '';
+};
+
 export function Products() {
-    const [products, setProducts] = useState<Product[]>([]);
+    const [products, setProducts] = useState<ProductView[]>([]);
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingProductId, setEditingProductId] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [isTranslationOpen, setIsTranslationOpen] = useState(false);
-    const [selectedProductForTranslation, setSelectedProductForTranslation] = useState<Product | null>(null);
+    const [selectedProductForTranslation, setSelectedProductForTranslation] = useState<ProductView | null>(null);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -36,9 +64,9 @@ export function Products() {
         description: '',
         price: '',
         image: '',
-        category: '',
+        category_id: '',
         level: '1',
-        locationId: ''
+        location_id: ''
     });
 
     const fetchData = async () => {
@@ -53,11 +81,21 @@ export function Products() {
             setLocations(locData);
 
             const prodData = await prodRes.json();
-            // Map backend product with location to frontend structure
-            const allProducts = prodData.map((prod: any) => ({
-                ...prod,
-                locationName: prod.location?.name || 'Unknown'
-            }));
+            // Map backend product to frontend display structure (default language)
+            const allProducts = prodData.map((prod: ProductBase) => {
+                const name = getDefaultTranslationValue(prod.translations, 'name');
+                const description = getDefaultTranslationValue(prod.translations, 'description');
+                const category_name = getDefaultTranslationValue(prod.category?.translations || [], 'name') || 'Неизвестно';
+                const location_name = getDefaultTranslationValue(prod.location?.translations || [], 'name') || 'Неизвестно';
+
+                return {
+                    ...prod,
+                    name,
+                    description,
+                    category_name,
+                    location_name
+                };
+            });
             setProducts(allProducts);
 
         } catch (error) {
@@ -76,20 +114,16 @@ export function Products() {
 
         const file = e.target.files[0];
         const uploadData = new FormData();
-        uploadData.append('image', file);
+        uploadData.append('file', file);
 
         setIsUploading(true);
         try {
-            const res = await fetch('/api/upload', {
+            const res = await fetch('/api/upload/photo', {
                 method: 'POST',
                 body: uploadData,
             });
             const data = await res.json();
             if (data.url) {
-                // Ensure full URL if needed, but relative should work if proxy is set up or same origin
-                // If the backend runs on 3001 and frontend on 5173, we might need full URL for image src
-                // For now assuming relative path works if served correctly or proxy handling
-                // But let's prepend backend URL just in case for now if we are not proxying uploads
                 setFormData(prev => ({ ...prev, image: data.url }));
             }
         } catch (error) {
@@ -100,16 +134,16 @@ export function Products() {
         }
     };
 
-    const handleEdit = (product: Product) => {
+    const handleEdit = (product: ProductView) => {
         setEditingProductId(product.id);
         setFormData({
             name: product.name,
             description: product.description,
             price: product.price.toString(),
             image: product.image,
-            category: product.category,
+            category_id: product.category_id,
             level: (product.level || 1).toString(),
-            locationId: product.locationId
+            location_id: product.location_id
         });
         setIsModalOpen(true);
     };
@@ -117,14 +151,33 @@ export function Products() {
     const handleCloseModal = () => {
         setIsModalOpen(false);
         setEditingProductId(null);
-        setFormData({ name: '', description: '', price: '', image: '', category: '', level: '1', locationId: '' });
+        setFormData({ name: '', description: '', price: '', image: '', category_id: '', level: '1', location_id: '' });
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!formData.locationId) {
+        if (!formData.location_id) {
             alert('Пожалуйста, выберите локацию');
             return;
+        }
+        if (!formData.category_id) {
+            alert('Пожалуйста, укажите категорию');
+            return;
+        }
+
+        const baseTranslation = {
+            language_id: 1,
+            name: formData.name,
+            description: formData.description
+        };
+
+        let allTranslations = [baseTranslation];
+        if (editingProductId) {
+            const currentProduct = products.find(p => p.id === editingProductId);
+            if (currentProduct) {
+                const others = currentProduct.translations.filter(t => t.language_id !== 1);
+                allTranslations = [...allTranslations, ...others];
+            }
         }
 
         try {
@@ -137,13 +190,11 @@ export function Products() {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    name: formData.name,
-                    description: formData.description,
                     price: parseFloat(formData.price),
                     image: formData.image || 'https://placehold.co/400x300/333/fff?text=No+Image',
-                    category: formData.category,
-                    level: parseInt(formData.level),
-                    locationId: formData.locationId
+                    category_id: formData.category_id,
+                    location_id: formData.location_id,
+                    translations: allTranslations
                 })
             });
 
@@ -164,14 +215,15 @@ export function Products() {
         }
     };
 
-    // Group products by location
+    // Group products by location (default language)
     const productsByLocation = locations.reduce((acc, loc) => {
-        const locationProducts = products.filter(p => p.locationId === loc.id);
+        const locName = getDefaultTranslationValue(loc.translations, 'name') || 'Неизвестно';
+        const locationProducts = products.filter(p => p.location_id === loc.id);
         if (locationProducts.length > 0) {
-            acc[loc.name] = locationProducts;
+            acc[locName] = locationProducts;
         }
         return acc;
-    }, {} as Record<string, Product[]>);
+    }, {} as Record<string, ProductView[]>);
 
     return (
         <div>
@@ -191,11 +243,11 @@ export function Products() {
                 ) : Object.keys(productsByLocation).length === 0 ? (
                     <div className="text-center text-gray-500 py-12">Товары не найдены.</div>
                 ) : (
-                    Object.entries(productsByLocation).map(([locationName, locationProducts]) => (
-                        <div key={locationName} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                    Object.entries(productsByLocation).map(([location_name, locationProducts]) => (
+                        <div key={location_name} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
                             <div className="bg-gray-800/50 px-6 py-3 border-b border-gray-800 flex items-center gap-2">
                                 <span className="text-xl">📍</span>
-                                <h3 className="font-semibold text-blue-400">{locationName}</h3>
+                                <h3 className="font-semibold text-blue-400">{location_name}</h3>
                                 <span className="text-sm text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full ml-2">
                                     {locationProducts.length}
                                 </span>
@@ -219,7 +271,7 @@ export function Products() {
                                                     <div className="font-medium text-white">{prod.name}</div>
                                                 </div>
                                             </td>
-                                            <td className="p-4 text-gray-400">{prod.category}</td>
+                                            <td className="p-4 text-gray-400">{prod.category_name}</td>
                                             <td className="p-4">
                                                 <span className={`px-2 py-1 rounded text-xs font-medium ${prod.level === 3 ? 'bg-yellow-500/20 text-yellow-500' :
                                                     prod.level === 2 ? 'bg-blue-500/20 text-blue-500' :
@@ -228,7 +280,7 @@ export function Products() {
                                                     LVL {prod.level || 1}
                                                 </span>
                                             </td>
-                                            <td className="p-4 text-green-400 font-mono">${prod.price}</td>
+                                            <td className="p-4 text-green-400 font-mono">{formatRub(prod.price)}</td>
                                             <td className="p-4 text-right">
                                                 <div className="flex justify-end gap-2">
                                                     <Button variant="secondary" size="sm" onClick={() => {
@@ -287,23 +339,23 @@ export function Products() {
                             required
                         />
                         <Input
-                            label="Категория"
-                            value={formData.category}
-                            onChange={e => setFormData({ ...formData, category: e.target.value })}
+                            label="Категория (ID)"
+                            value={formData.category_id}
+                            onChange={e => setFormData({ ...formData, category_id: e.target.value })}
                             required
                         />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-1.5">Уровень (Level)</label>
+                        <label className="block text-sm font-medium text-gray-400 mb-1.5">Уровень</label>
                         <select
                             className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-white outline-none transition-colors"
                             value={formData.level}
                             onChange={e => setFormData({ ...formData, level: e.target.value })}
                         >
-                            <option value="1">Level 1 (Common)</option>
-                            <option value="2">Level 2 (Rare)</option>
-                            <option value="3">Level 3 (Legendary)</option>
+                            <option value="1">Уровень 1 (Обычный)</option>
+                            <option value="2">Уровень 2 (Редкий)</option>
+                            <option value="3">Уровень 3 (Легендарный)</option>
                         </select>
                     </div>
 
@@ -335,14 +387,18 @@ export function Products() {
                         <label className="block text-sm font-medium text-gray-400 mb-1.5">Локация</label>
                         <select
                             className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-white outline-none transition-colors"
-                            value={formData.locationId}
-                            onChange={e => setFormData({ ...formData, locationId: e.target.value })}
+                            value={formData.location_id}
+                            onChange={e => setFormData({ ...formData, location_id: e.target.value })}
                             required
                         >
                             <option value="">-- Выберите локацию --</option>
-                            {locations.map(loc => (
-                                <option key={loc.id} value={loc.id}>{loc.name} ({loc.country})</option>
-                            ))}
+                            {locations.map(loc => {
+                                const locName = getDefaultTranslationValue(loc.translations, 'name') || 'Без названия';
+                                const locCountry = getDefaultTranslationValue(loc.translations, 'country') || 'Неизвестно';
+                                return (
+                                    <option key={loc.id} value={loc.id}>{locName} ({locCountry})</option>
+                                );
+                            })}
                         </select>
                     </div>
 
@@ -373,13 +429,16 @@ export function Products() {
                                     method: 'PUT',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
-                                        ...selectedProductForTranslation,
-                                        ...translations
+                                        price: selectedProductForTranslation.price,
+                                        image: selectedProductForTranslation.image,
+                                        category_id: selectedProductForTranslation.category_id,
+                                        location_id: selectedProductForTranslation.location_id,
+                                        translations
                                     })
                                 });
                                 fetchData();
                             } catch (error) {
-                                console.error('Failed to save translations', error);
+                                console.error('Не удалось сохранить переводы', error);
                             }
                         }}
                     />

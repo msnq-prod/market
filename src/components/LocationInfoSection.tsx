@@ -8,7 +8,7 @@ export function LocationInfoSection() {
     if (!selectedLocation) return null;
 
     const descriptions: Record<number, string> = {
-        1: "Discover rare artifacts and resources unique to this region. Our local partners ensure every item is ethically sourced and verified for authenticity.",
+        1: "Откройте редкие артефакты и ресурсы, уникальные для этого региона. Наши местные партнеры гарантируют этичное происхождение и проверку подлинности.",
         2: "Откройте для себя редкие артефакты и ресурсы, уникальные для этого региона. Наши местные партнеры гарантируют, что каждый предмет получен этичным путем и проверен на подлинность."
     };
 
@@ -25,8 +25,8 @@ export function LocationInfoSection() {
                 <div className="flex flex-col items-center gap-4">
                     <p className="text-xl text-blue-400 font-mono tracking-widest uppercase">{getLocalizedValue(selectedLocation, 'country', language)}</p>
                     <div className="flex gap-4 text-xs text-gray-500 font-mono">
-                        <span>LAT: {selectedLocation.lat.toFixed(4)}</span>
-                        <span>LNG: {selectedLocation.lng.toFixed(4)}</span>
+                        <span>ШИР: {selectedLocation.lat.toFixed(4)}</span>
+                        <span>ДОЛГ: {selectedLocation.lng.toFixed(4)}</span>
                     </div>
                 </div>
                 {/* Add a description mock if not in DB yet, or use what we have */}

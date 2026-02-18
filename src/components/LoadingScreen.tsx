@@ -57,7 +57,7 @@ export function LoadingScreen() {
                         </div>
 
                         <div className="mt-4 text-xs font-mono tracking-widest text-blue-300">
-                            {isDataLoading ? 'INITIALIZING...' : 'ASSETS LOADING'}
+                            {isDataLoading ? 'ИНИЦИАЛИЗАЦИЯ...' : 'ЗАГРУЗКА РЕСУРСОВ'}
                         </div>
                     </div>
                 </motion.div>

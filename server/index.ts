@@ -1,17 +1,27 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { PrismaClient } from '@prisma/client';
-import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { authenticateToken } from './middleware/auth.ts';
+import type { AuthRequest } from './middleware/auth.ts';
+import authRoutes from './routes/auth.ts';
+import batchRoutes from './routes/batches.ts';
+import itemRoutes from './routes/items.ts';
+import hqRoutes from './routes/hq.ts';
+import financialRoutes from './routes/financials.ts';
+import publicRoutes from './routes/public.ts';
+import uploadRoutes from './routes/upload.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const prisma = new PrismaClient();
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
+const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 
 // Ensure uploads directory exists
 const uploadDir = path.join(__dirname, '../public/uploads');
@@ -23,33 +33,13 @@ const locationsDir = path.join(__dirname, '../public/locations');
     }
 });
 
-// Multer Storage Configuration
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        // If locationName is present in body (parsed by multer before file if fields come first, but standard multer processing order might be tricky with form-data order. 
-        // Note: Multer processes fields in order. For destination to see body fields, they must be sent BEFORE the file field in FormData.)
-        // However, standard multer `destination` and `filename` functions have access to `req.body`, but ONLY if the text fields are transmitted before the file field.
-        // We will optimistically assume frontend sends locationName first or handle it if possible.
-        // Actually, for robust handling, we might just default to uploads and then move/rename if needed, OR enforce frontend order.
-        // Let's rely on frontend appending 'locationName' first? But we modified frontend to append it AFTER. 
-        // JS FormData order is insertion order usually, so if we append 'locationName' after 'image', it might not be available here.
-        // Wait, good catch. Let's fix frontend order in next step if verification fails, or just note it.
-        // Actually, let's look at `req.body` in `destination`.
-        // To be safe, let's just stick to default uploadDir here, and move the file in the route handler. 
-        // OR better: Just put everything in 'uploads' temporarily if we want, or just check req.body.
-        // Let's modify the route handler to handle the move/rename logic completely to avoid multer timing issues.
-        // So here we keep it simple or default.
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
-const upload = multer({ storage });
-
-app.use(cors());
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" } // Allow serving images
+}));
+app.use(cors({
+    origin: clientUrl,
+    credentials: true
+}));
 app.use(express.json());
 
 // Request logging middleware
@@ -62,53 +52,34 @@ app.use((req, res, next) => {
     next();
 });
 
-// Serve static files from public directory to access uploads
-app.use(express.static(path.join(__dirname, '../public')));
+// Static media (uploaded files and pre-bundled location images)
+app.use('/uploads', express.static(uploadDir));
+app.use('/locations', express.static(locationsDir));
 
-// Upload Endpoint
-app.post('/api/upload', upload.single('image'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-    }
+app.use('/auth', authRoutes);
+app.use('/api/batches', batchRoutes);
+app.use('/api/items', itemRoutes);
+app.use('/api/hq', hqRoutes);
+app.use('/api/financials', financialRoutes);
+app.use('/api/public', publicRoutes);
 
-    let finalPath = `/uploads/${req.file.filename}`;
+app.use('/api/upload', uploadRoutes);
 
-    // Handle renaming if locationName is provided
-    const { locationName } = req.body;
-    if (locationName) {
-        // Simple slugify
-        const slug = locationName
-            .toLowerCase()
-            .replace(/[^\w\s-]/g, '') // remove non-word chars
-            .replace(/[\s_-]+/g, '-') // collapse whitespace and replace by -
-            .replace(/^-+|-+$/g, ''); // trim -
-
-        if (slug) {
-            const ext = path.extname(req.file.originalname);
-            const newFilename = `${slug}${ext}`;
-            const oldPath = req.file.path; // full path to uploaded file
-            const newDestPath = path.join(locationsDir, newFilename);
-
-            try {
-                // Move/Rename file
-                fs.renameSync(oldPath, newDestPath);
-                finalPath = `/locations/${newFilename}`;
-            } catch (err) {
-                console.error('Failed to rename/move file:', err);
-                // Fallback to original path if move fails, or error out?
-                // We'll just keep the original valid upload path to not break flow
-            }
-        }
-    }
-
-    res.json({ url: finalPath });
-});
-
-// Get all locations with products
+// Get all locations with products and translations
 app.get('/api/locations', async (req, res) => {
     try {
         const locations = await prisma.location.findMany({
-            include: { products: true }
+            include: {
+                products: {
+                    include: {
+                        translations: true,
+                        category: {
+                            include: { translations: true }
+                        }
+                    }
+                },
+                translations: true
+            }
         });
         res.json(locations);
     } catch (error) {
@@ -122,14 +93,38 @@ app.get('/api/user', async (req, res) => {
     try {
         const user = await prisma.user.findFirst();
         if (!user) {
-            const newUser = await prisma.user.create({
-                data: { name: 'Explorer', email: 'user@example.com' }
-            });
-            return res.json(newUser);
+            return res.status(404).json({ error: 'User not found' });
         }
         res.json(user);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Failed to fetch user' });
+    }
+});
+
+// Admin user list for HQ screens
+app.get('/api/users', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !['ADMIN', 'MANAGER'].includes(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
+    try {
+        const users = await prisma.user.findMany({
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                balance: true,
+                commission_rate: true,
+                created_at: true
+            },
+            orderBy: { created_at: 'desc' }
+        });
+        res.json(users);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to fetch users' });
     }
 });
 
@@ -138,22 +133,38 @@ app.get('/api/cart', async (req, res) => {
     res.json([]);
 });
 
+// Categories
+app.get('/api/categories', async (req, res) => {
+    try {
+        const categories = await prisma.category.findMany({
+            include: { translations: true }
+        });
+        res.json(categories);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to fetch categories' });
+    }
+});
+
 // ===== ADMIN API =====
 
 // Create location
 app.post('/api/locations', async (req, res) => {
     try {
         const {
-            name, country, lat, lng, image, description,
-            name_2, name_3, name_4, name_5,
-            country_2, country_3, country_4, country_5
+            lat, lng, image, translations
         } = req.body;
+        // translations should be an array of { language_id, name, country, description }
         const location = await prisma.location.create({
             data: {
-                name, country, lat, lng, image, description,
-                name_2, name_3, name_4, name_5,
-                country_2, country_3, country_4, country_5
-            }
+                lat: parseFloat(lat),
+                lng: parseFloat(lng),
+                image,
+                translations: {
+                    create: translations
+                }
+            },
+            include: { translations: true }
         });
         res.json(location);
     } catch (error) {
@@ -167,17 +178,23 @@ app.put('/api/locations/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const {
-            name, country, lat, lng, image, description,
-            name_2, name_3, name_4, name_5,
-            country_2, country_3, country_4, country_5
+            lat, lng, image, translations
         } = req.body;
+
+        // Update basic info and translations
+        // Simplest way for translations: delete all and re-create, or update individually
         const location = await prisma.location.update({
             where: { id },
             data: {
-                name, country, lat, lng, image, description,
-                name_2, name_3, name_4, name_5,
-                country_2, country_3, country_4, country_5
-            }
+                lat: parseFloat(lat),
+                lng: parseFloat(lng),
+                image,
+                translations: {
+                    deleteMany: {},
+                    create: translations
+                }
+            },
+            include: { translations: true }
         });
         res.json(location);
     } catch (error) {
@@ -198,11 +215,15 @@ app.delete('/api/locations/:id', async (req, res) => {
     }
 });
 
-// Create product
+// Get products
 app.get('/api/products', async (req, res) => {
     try {
         const products = await prisma.product.findMany({
-            include: { location: true } // Include location info for display
+            include: {
+                location: { include: { translations: true } },
+                category: { include: { translations: true } },
+                translations: true
+            }
         });
         res.json(products);
     } catch (error) {
@@ -215,18 +236,19 @@ app.get('/api/products', async (req, res) => {
 app.post('/api/products', async (req, res) => {
     try {
         const {
-            name, description, price, image, category, locationId,
-            name_2, name_3, name_4, name_5,
-            description_2, description_3, description_4, description_5,
-            category_2, category_3, category_4, category_5
+            price, image, location_id, category_id, translations
         } = req.body;
         const product = await prisma.product.create({
             data: {
-                name, description, price, image, category, locationId,
-                name_2, name_3, name_4, name_5,
-                description_2, description_3, description_4, description_5,
-                category_2, category_3, category_4, category_5
-            }
+                price: parseFloat(price),
+                image,
+                location_id,
+                category_id,
+                translations: {
+                    create: translations
+                }
+            },
+            include: { translations: true }
         });
         res.json(product);
     } catch (error) {
@@ -240,19 +262,21 @@ app.put('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const {
-            name, description, price, image, category, locationId,
-            name_2, name_3, name_4, name_5,
-            description_2, description_3, description_4, description_5,
-            category_2, category_3, category_4, category_5
+            price, image, location_id, category_id, translations
         } = req.body;
         const product = await prisma.product.update({
             where: { id },
             data: {
-                name, description, price, image, category, locationId,
-                name_2, name_3, name_4, name_5,
-                description_2, description_3, description_4, description_5,
-                category_2, category_3, category_4, category_5
-            }
+                price: parseFloat(price),
+                image,
+                location_id,
+                category_id,
+                translations: {
+                    deleteMany: {},
+                    create: translations
+                }
+            },
+            include: { translations: true }
         });
         res.json(product);
     } catch (error) {

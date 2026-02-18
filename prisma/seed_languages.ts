@@ -1,15 +1,14 @@
-
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
 async function main() {
     const languages = [
-        { id: 1, name: 'English', available: true },
-        { id: 2, name: 'Russian', available: true },
-        { id: 3, name: 'German', available: false },
-        { id: 4, name: 'Chinese', available: false },
-        { id: 5, name: 'French', available: false },
+        { id: 1, name: 'English', code: 'en', available: true, is_default: true },
+        { id: 2, name: 'Russian', code: 'ru', available: true, is_default: false },
+        { id: 3, name: 'German', code: 'de', available: false, is_default: false },
+        { id: 4, name: 'Chinese', code: 'zh', available: false, is_default: false },
+        { id: 5, name: 'French', code: 'fr', available: false, is_default: false },
     ];
 
     console.log('Seeding languages...');
@@ -17,8 +16,19 @@ async function main() {
     for (const lang of languages) {
         await prisma.language.upsert({
             where: { id: lang.id },
-            update: { name: lang.name, available: lang.available },
-            create: { id: lang.id, name: lang.name, available: lang.available },
+            update: {
+                name: lang.name,
+                code: lang.code,
+                available: lang.available,
+                is_default: lang.is_default
+            },
+            create: {
+                id: lang.id,
+                name: lang.name,
+                code: lang.code,
+                available: lang.available,
+                is_default: lang.is_default
+            },
         });
     }
 

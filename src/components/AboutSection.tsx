@@ -10,7 +10,7 @@ export function AboutSection() {
                     transition={{ duration: 0.8 }}
                     className="text-4xl md:text-6xl font-light tracking-wide uppercase"
                 >
-                    About Orbital Market
+                    О проекте Orbital Market
                 </motion.h2>
                 <div className="w-20 h-1 bg-blue-500 mx-auto rounded-full" />
                 <motion.p
@@ -19,26 +19,26 @@ export function AboutSection() {
                     transition={{ duration: 0.8, delay: 0.2 }}
                     className="text-xl text-gray-400 font-light leading-relaxed"
                 >
-                    We act as a bridge between rare earthly treasures and the digital frontier.
-                    Our mission is to curate exclusive artifacts, precious stones, and unique items from the most remote corners of the globe,
-                    making them accessible to collectors worldwide.
+                    Мы строим мост между редкими земными сокровищами и цифровым рынком.
+                    Наша миссия: отбирать эксклюзивные артефакты, драгоценные камни и уникальные предметы
+                    из самых удаленных уголков мира и делать их доступными коллекционерам.
                 </motion.p>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16 text-left">
                     <div className="p-6 border border-white/5 rounded-2xl bg-white/5">
-                        <h3 className="text-xl font-medium mb-4 text-blue-400">Authentic Sourcing</h3>
-                        <p className="text-sm text-gray-500">Every item is verified and directly sourced from local artisans and miners.</p>
+                        <h3 className="text-xl font-medium mb-4 text-blue-400">Проверенное происхождение</h3>
+                        <p className="text-sm text-gray-500">Каждый предмет проходит проверку и поступает напрямую от локальных мастеров и добытчиков.</p>
                     </div>
                     <div className="p-6 border border-white/5 rounded-2xl bg-white/5">
-                        <h3 className="text-xl font-medium mb-4 text-purple-400">Global Logistics</h3>
-                        <p className="text-sm text-gray-500">Secure shipping from remote locations directly to your doorstep.</p>
+                        <h3 className="text-xl font-medium mb-4 text-purple-400">Глобальная логистика</h3>
+                        <p className="text-sm text-gray-500">Надёжная доставка из удалённых локаций прямо до вашей двери.</p>
                     </div>
                     <div className="p-6 border border-white/5 rounded-2xl bg-white/5">
-                        <h3 className="text-xl font-medium mb-4 text-green-400">Sustainable Trade</h3>
-                        <p className="text-sm text-gray-500">We prioritize ethical practices and fair compensation for all partners.</p>
+                        <h3 className="text-xl font-medium mb-4 text-green-400">Устойчивая торговля</h3>
+                        <p className="text-sm text-gray-500">Мы придерживаемся этичных практик и справедливой оплаты для всех партнёров.</p>
                     </div>
                 </div>
                 <footer className="pt-20 text-gray-600 text-sm">
-                    © 2024 Orbital Market. All rights reserved.
+                    © 2024 Orbital Market. Все права защищены.
                 </footer>
             </div>
         </section>
