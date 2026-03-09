@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import crypto from 'crypto';
+import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -38,7 +39,11 @@ router.post('/batch/:batchId/items', authenticateToken, async (req: AuthRequest,
             }
         });
 
-        res.status(201).json(item);
+        res.status(201).json({
+            ...item,
+            clone_url: buildCloneUrl(req, item.public_token),
+            qr_url: buildQrUrl(item.public_token)
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to add item. Temp ID might be duplicate in this batch.' });
@@ -77,11 +82,32 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res) => {
 router.get('/batch/:batchId', authenticateToken, async (req: AuthRequest, res) => {
     const { batchId } = req.params;
     try {
+        if (!req.user) return res.sendStatus(401);
+
+        const batch = await prisma.batch.findUnique({
+            where: { id: batchId },
+            select: { owner_id: true }
+        });
+
+        if (!batch) return res.status(404).json({ error: 'Batch not found' });
+
+        const isStaff = ['ADMIN', 'MANAGER'].includes(req.user.role);
+        if (req.user.role === 'FRANCHISEE' && batch.owner_id !== req.user.id) {
+            return res.sendStatus(403);
+        }
+        if (!isStaff && req.user.role !== 'FRANCHISEE') {
+            return res.sendStatus(403);
+        }
+
         const items = await prisma.item.findMany({
             where: { batch_id: batchId },
             orderBy: { temp_id: 'asc' }
         });
-        res.json(items);
+        res.json(items.map((item) => ({
+            ...item,
+            clone_url: buildCloneUrl(req, item.public_token),
+            qr_url: buildQrUrl(item.public_token)
+        })));
     } catch (_error) {
         res.status(500).json({ error: 'Failed to fetch items' });
     }

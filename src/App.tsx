@@ -18,6 +18,7 @@ import { useStore } from './store'
 
 function Scene() {
   const selectedLocation = useStore((state) => state.selectedLocation)
+  const clearSelection = useStore((state) => state.clearSelection)
 
   return (
     <>
@@ -38,6 +39,11 @@ function Scene() {
         rotateSpeed={0.5}
         autoRotate={!selectedLocation}
         autoRotateSpeed={0.5}
+        onStart={() => {
+          if (useStore.getState().selectedLocation) {
+            clearSelection()
+          }
+        }}
       />
     </>
   )
@@ -124,33 +130,46 @@ function MainApp() {
 import { PartnerLayout } from './partner/components/PartnerLayout'
 import { Login as PartnerLogin } from './partner/pages/Login'
 import { Dashboard as PartnerDashboard } from './partner/pages/Dashboard'
+import { Batches as PartnerBatches } from './partner/pages/Batches'
 import { CreateBatch } from './partner/pages/CreateBatch'
+import { QrCenter } from './partner/pages/QrCenter'
+import { QrPrint } from './partner/pages/QrPrint'
 import { Finance } from './partner/pages/Finance'
 import { Acceptance } from './admin/pages/Acceptance'
 import { Allocation } from './admin/pages/Allocation'
 import { Users } from './admin/pages/Users'
+import { DigitalClone } from './public/pages/DigitalClone'
+import { CloneContent } from './admin/pages/CloneContent'
+import { Warehouse } from './admin/pages/Warehouse'
 
 function App() {
   return (
     <BrowserRouter>
-      <Routes>
+        <Routes>
         <Route path="/" element={<MainApp />} />
+        <Route path="/clone/:publicToken" element={<DigitalClone />} />
 
         {/* Admin Routes */}
+        <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="locations" element={<Locations />} />
           <Route path="products" element={<Products />} />
           <Route path="acceptance" element={<Acceptance />} />
           <Route path="allocation" element={<Allocation />} />
+          <Route path="warehouse" element={<Warehouse />} />
           <Route path="users" element={<Users />} />
+          <Route path="clone-content" element={<CloneContent />} />
         </Route>
 
         {/* Partner Routes */}
         <Route path="/partner" element={<PartnerLayout />}>
-          <Route path="login" element={<PartnerLogin />} />
+          <Route path="login" element={<PartnerLogin portal="partner" />} />
           <Route path="dashboard" element={<PartnerDashboard />} />
+          <Route path="batches" element={<PartnerBatches />} />
           <Route path="batches/new" element={<CreateBatch />} />
+          <Route path="qr" element={<QrCenter />} />
+          <Route path="qr/print" element={<QrPrint />} />
           <Route path="finance" element={<Finance />} />
           <Route index element={<PartnerDashboard />} />
         </Route>

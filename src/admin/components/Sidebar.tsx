@@ -1,9 +1,18 @@
-import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Box, Truck, Users } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 export function Sidebar() {
     const location = useLocation();
+    const navigate = useNavigate();
+
+    const handleLogout = () => {
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        localStorage.removeItem('userRole');
+        localStorage.removeItem('userName');
+        navigate('/admin/login', { replace: true });
+    };
 
     return (
         <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
@@ -18,17 +27,19 @@ export function Sidebar() {
                 <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Логистика</div>
                 <NavItem to="/admin/acceptance" icon={<Truck size={20} />} label="Приемка" active={location.pathname === '/admin/acceptance'} />
                 <NavItem to="/admin/allocation" icon={<Box size={20} />} label="Распределение" active={location.pathname === '/admin/allocation'} />
+                <NavItem to="/admin/warehouse" icon={<Archive size={20} />} label="Склад" active={location.pathname === '/admin/warehouse'} />
 
                 <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Контент</div>
                 <NavItem to="/admin/locations" icon={<MapPin size={20} />} label="Локации" active={location.pathname === '/admin/locations'} />
                 <NavItem to="/admin/products" icon={<Box size={20} />} label="Товары" active={location.pathname === '/admin/products'} />
+                <NavItem to="/admin/clone-content" icon={<FileText size={20} />} label="Страница клона" active={location.pathname === '/admin/clone-content'} />
 
                 <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Система</div>
                 <NavItem to="/admin/users" icon={<Users size={20} />} label="Пользователи" active={location.pathname === '/admin/users'} />
             </nav>
 
             <div className="p-4 border-t border-gray-800">
-                <div className="flex items-center gap-3 px-4 py-2 text-gray-400 hover:text-white transition-colors cursor-pointer" onClick={() => { localStorage.clear(); window.location.href = '/'; }}>
+                <div className="flex items-center gap-3 px-4 py-2 text-gray-400 hover:text-white transition-colors cursor-pointer" onClick={handleLogout}>
                     <span>Выйти</span>
                 </div>
             </div>

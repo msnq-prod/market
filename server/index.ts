@@ -14,6 +14,8 @@ import hqRoutes from './routes/hq.ts';
 import financialRoutes from './routes/financials.ts';
 import publicRoutes from './routes/public.ts';
 import uploadRoutes from './routes/upload.ts';
+import contentRoutes from './routes/content.ts';
+import collectionRequestsRoutes from './routes/collectionRequests.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,6 +64,8 @@ app.use('/api/items', itemRoutes);
 app.use('/api/hq', hqRoutes);
 app.use('/api/financials', financialRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/content', contentRoutes);
+app.use('/api/collection-requests', collectionRequestsRoutes);
 
 app.use('/api/upload', uploadRoutes);
 

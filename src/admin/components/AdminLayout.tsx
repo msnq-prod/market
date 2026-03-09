@@ -10,10 +10,13 @@ export function AdminLayout() {
     const hasAdminAccess = isStaff || isDev;
 
     if (!token) {
-        return <Navigate to="/partner/login" replace state={{ from: location }} />;
+        return <Navigate to="/admin/login" replace state={{ from: location }} />;
     }
 
     if (!hasAdminAccess) {
+        if (role === 'FRANCHISEE') {
+            return <Navigate to="/partner/dashboard" replace />;
+        }
         return <Navigate to="/" replace />;
     }
 

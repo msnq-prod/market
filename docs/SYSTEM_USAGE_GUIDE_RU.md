@@ -100,6 +100,8 @@ npm run server
 ```bash
 npm run lint
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
 ## 6. Тестовые учетные записи
@@ -130,6 +132,7 @@ npm run build
 Маршруты защищены UI-guard’ами:
 - если staff логинится, его ведет в `/admin`;
 - если франчайзи логинится, его ведет в `/partner/dashboard`.
+- для входа в админку доступен отдельный маршрут `/admin/login`.
 
 ## 8. Работа в админ-кабинете (`/admin`)
 
@@ -228,6 +231,31 @@ npm run build
 - фильтр по типу операции;
 - кнопку `Refresh`.
 
+## 9.5 QR-пакеты (`/partner/qr`)
+
+Операционный центр для массовой выдачи QR:
+1. Выбор партии.
+2. Отметка позиций чекбоксами.
+3. Массовые действия:
+   - `Печать выбранных`;
+   - `Печать всей партии`;
+   - `CSV выбранных`.
+4. Быстрые действия по строке:
+   - `Копировать ссылку клона`;
+   - `Открыть клон`;
+   - `Показать QR`.
+
+CSV формат:
+- `batch_id,temp_id,public_token,status,clone_url,qr_url,photo_url,created_at`
+- UTF-8 с BOM.
+
+## 9.6 Печатный режим (`/partner/qr/print`)
+
+- источник данных: `GET /api/batches/:batchId/qr-pack`;
+- макет: 8 карточек на A4;
+- карточка: QR, `temp_id`, короткий token, короткая clone-ссылка, превью фото;
+- поддерживается browser print-to-PDF.
+
 ## 10. Публичная часть (`/`)
 
 Возможности:
@@ -261,7 +289,9 @@ npm run build
 - Logistics:
   - `GET /api/batches`
   - `POST /api/batches`
+  - `GET /api/batches/:batchId/qr-pack`
   - `POST /api/batches/:id/send`
+  - `GET /api/items/batch/:batchId` (включает `clone_url`, `qr_url`)
   - `POST /api/hq/acceptance/:batchId/verify`
   - `POST /api/hq/items/:itemId/accept`
   - `POST /api/hq/items/:itemId/reject`

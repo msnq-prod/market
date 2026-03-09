@@ -1,73 +1,99 @@
-# React + TypeScript + Vite
+# Stones
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Stones is a full-stack application for HQ and franchise operations around stone item batches, inventory tracking, finance flows, and public digital twins tied to individual `Item` records.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Frontend: React 19, TypeScript, Vite, Tailwind, Zustand, React Three Fiber
+- Backend: Node.js, Express, TypeScript (`tsx`)
+- Database: Prisma + MySQL
+- Tests: Playwright
 
-## React Compiler
+## Core domain
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Roles: `ADMIN`, `MANAGER`, `FRANCHISEE`, `USER`
+- Batch lifecycle: `DRAFT -> TRANSIT -> RECEIVED -> FINISHED`
+- Item statuses: `NEW`, `REJECTED`, `STOCK_HQ`, `STOCK_ONLINE`, `ON_CONSIGNMENT`, `SOLD_ONLINE`, `ACTIVATED`
+- Digital twin is attached to `Item`, not `Product`
+- Public item page: `/clone/:publicToken`
 
-## Expanding the ESLint configuration
+Detailed product and business docs live in [docs/](./docs).
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Quick start
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### Requirements
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- Node.js 22+
+- npm 10+
+- MySQL available at `127.0.0.1:3307` or a custom `DATABASE_URL`
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### Setup
+
+```bash
+npm install
+cp .env.example .env
+npm run db:migrate
+npm run db:seed:languages
+npm run db:seed
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Frontend runs on [http://localhost:5173](http://localhost:5173), backend on [http://localhost:3001](http://localhost:3001).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Environment variables
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Create `.env` from `.env.example`.
+
+Required:
+
+- `DATABASE_URL`
+- `ACCESS_TOKEN_SECRET`
+- `REFRESH_TOKEN_SECRET`
+
+Common local defaults:
+
+- `PORT=3001`
+- `CLIENT_URL=http://localhost:5173`
+- `VITE_HOST=127.0.0.1`
+- `VITE_PORT=5173`
+- `VITE_API_TARGET=http://127.0.0.1:3001`
+
+## Scripts
+
+```bash
+npm run dev
+npm run build
+npm run lint
+npm run server
+npm run db:migrate
+npm run db:seed:languages
+npm run db:seed
+npm run test:e2e
 ```
+
+For isolated e2e runs:
+
+```bash
+npm run dev:e2e
+```
+
+## Project structure
+
+- `src/` client application
+- `server/` Express API and middleware
+- `prisma/` schema, migrations, seed scripts
+- `tests/e2e/` Playwright scenarios
+- `docs/` business, usage, architecture, and operations docs
+
+## Publication notes
+
+- Local `.env`, SQLite/MySQL dumps, uploads, build artifacts, and test artifacts are ignored by Git.
+- Example configuration is stored in `.env.example`.
+- Test credentials and local technical notes are documented in [docs/TEST_CREDENTIALS_AND_TECH_INFO_RU.md](./docs/TEST_CREDENTIALS_AND_TECH_INFO_RU.md).
+
+## Deployment and docs
+
+- Usage guide: [docs/SYSTEM_USAGE_GUIDE_RU.md](./docs/SYSTEM_USAGE_GUIDE_RU.md)
+- Business rules: [docs/BUSINESS_LOGIC_RU.md](./docs/BUSINESS_LOGIC_RU.md)
+- Architecture: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- Docker: [docs/DOCKER_RU.md](./docs/DOCKER_RU.md)

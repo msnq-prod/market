@@ -20,6 +20,7 @@ export function Markers() {
                     location={loc}
                     onClick={() => selectLocation(loc)}
                     isSelected={selectedLocation?.id === loc.id}
+                    hasActiveSelection={Boolean(selectedLocation)}
                     language={language}
                 />
             ))}
@@ -31,14 +32,17 @@ const Marker = React.memo(function Marker({
     location,
     onClick,
     isSelected,
+    hasActiveSelection,
     language
 }: {
     location: Location,
     onClick: () => void,
     isSelected: boolean,
+    hasActiveSelection: boolean,
     language: number
 }) {
     const ref = useRef<HTMLDivElement>(null)
+    const opacityRef = useRef(1)
 
     // Calculate position on sphere
     const position = useMemo(() => {
@@ -54,7 +58,7 @@ const Marker = React.memo(function Marker({
     }, [location.lat, location.lng])
 
     // Manual occlusion/fade logic
-    useFrame(({ camera }) => {
+    useFrame(({ camera }, delta) => {
         if (!ref.current) return
 
         // Get vector from camera to object (or just camera position if object is roughly at origin)
@@ -90,9 +94,14 @@ const Marker = React.memo(function Marker({
             opacity = (dot + 0.1) / 0.3
         }
 
+        const selectionOpacity = hasActiveSelection && !isSelected ? 0 : 1
+        const targetOpacity = opacity * selectionOpacity
+
+        opacityRef.current = THREE.MathUtils.damp(opacityRef.current, targetOpacity, 7, delta)
+
         // Apply styling directly for performance
-        ref.current.style.opacity = opacity.toString()
-        ref.current.style.pointerEvents = opacity > 0.1 ? 'auto' : 'none'
+        ref.current.style.opacity = opacityRef.current.toString()
+        ref.current.style.pointerEvents = opacityRef.current > 0.2 ? 'auto' : 'none'
 
         // Scale effect based on selection is already in CSS classes, but we could add more here if needed.
     })

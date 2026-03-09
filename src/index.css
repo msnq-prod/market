@@ -17,3 +17,155 @@
     display: none;
   }
 }
+
+@layer components {
+  .app-shell-light {
+    color: #0f172a;
+    color-scheme: light;
+  }
+
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea) {
+    color: #0f172a !important;
+    background-color: #ffffff !important;
+    border-color: #94a3b8 !important;
+    color-scheme: light !important;
+    -webkit-text-fill-color: #0f172a !important;
+    caret-color: #0f172a !important;
+    opacity: 1;
+  }
+
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea)::placeholder {
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
+  }
+
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea):focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+    outline: none;
+  }
+
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea):disabled {
+    color: #94a3b8;
+    background: #f8fafc;
+    border-color: #e2e8f0;
+    cursor: not-allowed;
+    -webkit-text-fill-color: #94a3b8;
+    opacity: 1;
+  }
+
+  .app-shell-light option {
+    color: #0f172a;
+    background: #ffffff;
+  }
+
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), textarea):-webkit-autofill,
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), textarea):-webkit-autofill:hover,
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), textarea):-webkit-autofill:focus,
+  .app-shell-light :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), textarea):-webkit-autofill:active {
+    -webkit-text-fill-color: #0f172a;
+    caret-color: #0f172a;
+    box-shadow: 0 0 0 1000px #ffffff inset;
+    transition: background-color 9999s ease-out 0s;
+  }
+
+  .ui-card {
+    @apply rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/70;
+  }
+
+  .ui-input,
+  .ui-select,
+  .ui-textarea {
+    @apply w-full rounded-xl border border-slate-400 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm transition-all;
+  }
+
+  .ui-input,
+  .ui-select,
+  .ui-textarea {
+    color-scheme: light !important;
+    color: #0f172a !important;
+    background-color: #ffffff !important;
+    -webkit-text-fill-color: #0f172a !important;
+    caret-color: #0f172a !important;
+    opacity: 1;
+  }
+
+  .ui-textarea {
+    @apply min-h-24 resize-y;
+  }
+
+  .ui-input::placeholder,
+  .ui-textarea::placeholder {
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
+  }
+
+  .ui-input:hover,
+  .ui-select:hover,
+  .ui-textarea:hover {
+    border-color: #94a3b8;
+  }
+
+  .ui-input:focus,
+  .ui-select:focus,
+  .ui-textarea:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+    outline: none;
+  }
+
+  .ui-input:disabled,
+  .ui-select:disabled,
+  .ui-textarea:disabled {
+    @apply cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400;
+    box-shadow: none;
+    -webkit-text-fill-color: #94a3b8;
+    opacity: 1;
+  }
+
+  .ui-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200;
+  }
+
+  .ui-btn:focus-visible {
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.16);
+    outline: none;
+  }
+
+  .ui-btn:disabled {
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .ui-btn-sm {
+    @apply px-3 py-2 text-xs;
+  }
+
+  .ui-btn-primary {
+    @apply bg-blue-600 text-white shadow-sm shadow-blue-200 hover:bg-blue-700 hover:shadow-md hover:shadow-blue-200;
+  }
+
+  .ui-btn-primary:disabled {
+    background: #93c5fd;
+    color: #eff6ff;
+    box-shadow: none;
+  }
+
+  .ui-btn-secondary {
+    @apply border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50;
+  }
+
+  .ui-btn-secondary:disabled {
+    @apply border-slate-200 bg-slate-50 text-slate-400;
+    box-shadow: none;
+  }
+
+  .ui-btn-ghost {
+    @apply border border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100;
+  }
+
+  .ui-btn-ghost:disabled {
+    @apply border-slate-200 bg-slate-50 text-slate-400;
+    box-shadow: none;
+  }
+}

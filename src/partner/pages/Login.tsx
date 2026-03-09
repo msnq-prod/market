@@ -1,12 +1,33 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
-export function Login() {
+type LoginPortal = 'partner' | 'admin';
+
+type LoginProps = {
+    portal?: LoginPortal;
+};
+
+type LoginLocationState = {
+    from?: {
+        pathname?: string;
+    };
+};
+
+export function Login({ portal = 'partner' }: LoginProps) {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
+    const location = useLocation();
+    const isAdminPortal = portal === 'admin';
+    const title = isAdminPortal ? 'Админ-панель HQ' : 'Партнерский кабинет';
+    const subtitle = isAdminPortal
+        ? 'Войдите для управления операциями HQ'
+        : 'Войдите для управления своими партиями';
+    const deniedMessage = isAdminPortal
+        ? 'Доступ запрещён. Нужна учетная запись администратора или менеджера.'
+        : 'Доступ запрещён. Нужен партнерский или staff-аккаунт.';
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -26,19 +47,30 @@ export function Login() {
                 throw new Error(data.error || 'Ошибка входа');
             }
 
-            // Store tokens
+            const isStaff = data.role === 'ADMIN' || data.role === 'MANAGER';
+            const isFranchisee = data.role === 'FRANCHISEE';
+
+            if (isAdminPortal && !isStaff) {
+                throw new Error(deniedMessage);
+            }
+
+            if (!isStaff && !isFranchisee) {
+                throw new Error(deniedMessage);
+            }
+
             localStorage.setItem('accessToken', data.accessToken);
             localStorage.setItem('refreshToken', data.refreshToken);
             localStorage.setItem('userRole', data.role);
             localStorage.setItem('userName', data.name);
 
-            if (data.role === 'ADMIN' || data.role === 'MANAGER') {
-                navigate('/admin');
-            } else if (data.role === 'FRANCHISEE') {
-                navigate('/partner/dashboard');
-            } else {
-                setError('Доступ запрещён. Нужен партнерский аккаунт.');
+            if (isStaff) {
+                const fromPath = (location.state as LoginLocationState | null)?.from?.pathname;
+                const staffTarget = fromPath?.startsWith('/admin') ? fromPath : '/admin';
+                navigate(staffTarget, { replace: true });
+                return;
             }
+
+            navigate('/partner/dashboard', { replace: true });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Ошибка входа');
         } finally {
@@ -47,11 +79,11 @@ export function Login() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4">
-            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+        <div className="app-shell-light min-h-screen flex items-center justify-center bg-slate-100 px-4 py-10">
+            <div className="ui-card w-full max-w-md p-8">
                 <div className="text-center mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Партнерский кабинет</h1>
-                    <p className="text-gray-500 mt-2">Войдите для управления своими партиями</p>
+                    <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
+                    <p className="text-gray-500 mt-2">{subtitle}</p>
                 </div>
 
                 {error && (
@@ -68,8 +100,10 @@ export function Login() {
                             required
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                            placeholder="partner@stones.com"
+                            className="ui-input text-slate-900 bg-white"
+                            style={{ color: '#0f172a', backgroundColor: '#ffffff', WebkitTextFillColor: '#0f172a', opacity: 1 }}
+                            placeholder={isAdminPortal ? 'admin@stones.com' : 'partner@stones.com'}
+                            autoComplete="email"
                         />
                     </div>
 
@@ -80,15 +114,17 @@ export function Login() {
                             required
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            className="ui-input text-slate-900 bg-white"
+                            style={{ color: '#0f172a', backgroundColor: '#ffffff', WebkitTextFillColor: '#0f172a', opacity: 1 }}
                             placeholder="••••••••"
+                            autoComplete="current-password"
                         />
                     </div>
 
                     <button
                         type="submit"
                         disabled={loading}
-                        className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="ui-btn ui-btn-primary w-full"
                     >
                         {loading ? 'Вход...' : 'Войти'}
                     </button>

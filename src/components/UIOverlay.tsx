@@ -29,7 +29,6 @@ export function UIOverlay() {
         contacts: string;
         account: string;
         cart: string;
-        back: string;
     };
     const [languages, setLanguages] = useState<Language[]>([]);
     const [showLangMenu, setShowLangMenu] = useState(false);
@@ -56,8 +55,7 @@ export function UIOverlay() {
             museums: 'МУЗЕИ',
             contacts: 'КОНТАКТЫ',
             account: 'АККАУНТ',
-            cart: 'КОРЗИНА',
-            back: 'НАЗАД НА ОРБИТУ'
+            cart: 'КОРЗИНА'
         },
         2: { // Russian
             marketplace: 'МАРКЕТПЛЕЙС',
@@ -65,8 +63,7 @@ export function UIOverlay() {
             museums: 'МУЗЕИ',
             contacts: 'КОНТАКТЫ',
             account: 'АККАУНТ',
-            cart: 'КОРЗИНА',
-            back: 'НАЗАД НА ОРБИТУ'
+            cart: 'КОРЗИНА'
         }
     };
     const t = dictionaries[language] || dictionaries[2];
@@ -150,18 +147,6 @@ export function UIOverlay() {
                     </button>
                 </div>
             </header>
-
-            {/* Back Control */}
-            {useStore((state) => state.selectedLocation) && (
-                <div className="absolute top-24 left-6 pointer-events-auto">
-                    <button
-                        onClick={() => clearSelection()}
-                        className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-full text-sm font-medium transition-all text-white"
-                    >
-                        <span>←</span> {t.back}
-                    </button>
-                </div>
-            )}
 
             <AnimatePresence mode="wait">
                 {activeView === 'ACCOUNT' && (

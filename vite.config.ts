@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
+const devServerPort = Number(process.env.VITE_PORT || '5173')
+const apiProxyTarget = process.env.VITE_API_TARGET || 'http://127.0.0.1:3001'
+
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -29,11 +32,12 @@ export default defineConfig({
     chunkSizeWarningLimit: 900,
   },
   server: {
-    port: 5173,
+    host: process.env.VITE_HOST || undefined,
+    port: devServerPort,
     proxy: {
-      '/api': 'http://127.0.0.1:3001',
-      '/auth': 'http://127.0.0.1:3001',
-      '/uploads': 'http://127.0.0.1:3001'
+      '/api': apiProxyTarget,
+      '/auth': apiProxyTarget,
+      '/uploads': apiProxyTarget
     }
   }
 })

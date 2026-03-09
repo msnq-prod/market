@@ -1,8 +1,38 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import QRCode from 'qrcode';
+import { buildCloneUrl } from '../utils/cloneUrls.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Get QR code image for public clone page
+router.get('/items/:publicToken/qr', async (req, res) => {
+    const { publicToken } = req.params;
+    try {
+        const item = await prisma.item.findUnique({
+            where: { public_token: publicToken },
+            select: { id: true }
+        });
+
+        if (!item) return res.status(404).json({ error: 'Item not found' });
+
+        const qrPayload = buildCloneUrl(req, publicToken);
+        const pngBuffer = await QRCode.toBuffer(qrPayload, {
+            type: 'png',
+            width: 512,
+            errorCorrectionLevel: 'M',
+            margin: 1
+        });
+
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(pngBuffer);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to generate QR code' });
+    }
+});
 
 // Get Item Info by Public Token
 router.get('/items/:publicToken', async (req, res) => {
@@ -22,7 +52,10 @@ router.get('/items/:publicToken', async (req, res) => {
         if (!item) return res.status(404).json({ error: 'Item not found' });
 
         // Filter sensitive data?
-        res.json(item);
+        res.json({
+            ...item,
+            clone_url: buildCloneUrl(req, publicToken)
+        });
     } catch (_error) {
         res.status(500).json({ error: 'Failed to fetch item' });
     }

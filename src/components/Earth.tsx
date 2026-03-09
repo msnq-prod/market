@@ -1,9 +1,12 @@
 import React, { useRef } from 'react'
 import { useTexture } from '@react-three/drei'
 import * as THREE from 'three'
+import { useStore } from '../store'
 
 export function Earth() {
     const globeRef = useRef<THREE.Mesh>(null)
+    const selectedLocation = useStore((state) => state.selectedLocation)
+    const clearSelection = useStore((state) => state.clearSelection)
 
     const [colorMap, normalMap] = useTexture([
         '/textures/earth_daymap.jpg',
@@ -20,7 +23,16 @@ export function Earth() {
     return (
         <group>
             {/* Earth Sphere */}
-            <mesh ref={globeRef} rotation={[0, 0, 0]}>
+            <mesh
+                ref={globeRef}
+                rotation={[0, 0, 0]}
+                onClick={(event) => {
+                    if (!selectedLocation) return
+
+                    event.stopPropagation()
+                    clearSelection()
+                }}
+            >
                 <sphereGeometry args={[1, 24, 24]} />
                 <meshStandardMaterial
                     map={colorMap}

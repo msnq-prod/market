@@ -194,6 +194,13 @@ enum LedgerOperation {
   MANUAL_ADJ
 }
 
+enum CollectionRequestStatus {
+  OPEN
+  IN_PROGRESS
+  FULFILLED
+  CANCELLED
+}
+
 model User {
   id              String   @id @default(uuid())
   name            String
@@ -211,6 +218,8 @@ model User {
   batches         Batch[]  @relation("BatchOwner")
   ledgers         Ledger[]
   audit_logs      AuditLog[]
+  created_collection_requests CollectionRequest[] @relation("CollectionRequestCreatedBy")
+  target_collection_requests  CollectionRequest[] @relation("CollectionRequestTargetUser")
 
   @@map("users")
 }
@@ -282,4 +291,35 @@ model AuditLog {
 
   @@index([user_id])
   @@map("audit_logs")
+}
+
+model ContentPage {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  data        Json
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("content_pages")
+}
+
+model CollectionRequest {
+  id              String                  @id @default(uuid())
+  created_by      String
+  target_user_id  String?
+  title           String
+  note            String?
+  requested_qty   Int
+  status          CollectionRequestStatus @default(OPEN)
+  created_at      DateTime                @default(now())
+  updated_at      DateTime                @updatedAt
+
+  created_by_user User                    @relation("CollectionRequestCreatedBy", fields: [created_by], references: [id])
+  target_user     User?                   @relation("CollectionRequestTargetUser", fields: [target_user_id], references: [id])
+
+  @@index([created_by])
+  @@index([target_user_id])
+  @@index([status])
+  @@index([created_at])
+  @@map("collection_requests")
 }

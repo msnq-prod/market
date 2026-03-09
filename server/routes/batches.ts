@@ -2,6 +2,7 @@ import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
+import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -32,6 +33,58 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
         res.json(batches);
     } catch (_error) {
         res.status(500).json({ error: 'Failed to fetch batches' });
+    }
+});
+
+// QR Pack for a Batch
+router.get('/:batchId/qr-pack', authenticateToken, async (req: AuthRequest, res) => {
+    const { batchId } = req.params;
+
+    try {
+        if (!req.user) return res.sendStatus(401);
+
+        const batch = await prisma.batch.findUnique({
+            where: { id: batchId },
+            include: {
+                items: {
+                    orderBy: { temp_id: 'asc' }
+                }
+            }
+        });
+
+        if (!batch) return res.status(404).json({ error: 'Batch not found' });
+
+        const isStaff = ['ADMIN', 'MANAGER'].includes(req.user.role);
+        if (req.user.role === 'FRANCHISEE' && batch.owner_id !== req.user.id) {
+            return res.sendStatus(403);
+        }
+        if (!isStaff && req.user.role !== 'FRANCHISEE') {
+            return res.sendStatus(403);
+        }
+
+        return res.json({
+            batch: {
+                id: batch.id,
+                status: batch.status,
+                created_at: batch.created_at,
+                gps_lat: batch.gps_lat,
+                gps_lng: batch.gps_lng,
+                video_url: batch.video_url
+            },
+            items: batch.items.map((item) => ({
+                id: item.id,
+                temp_id: item.temp_id,
+                public_token: item.public_token,
+                status: item.status,
+                photo_url: item.photo_url,
+                created_at: item.created_at,
+                clone_url: buildCloneUrl(req, item.public_token),
+                qr_url: buildQrUrl(item.public_token)
+            }))
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ error: 'Failed to fetch QR pack' });
     }
 });
 
