@@ -12,6 +12,14 @@ interface Location {
     }[];
 }
 
+interface Category {
+    id: string;
+    translations: {
+        language_id: number;
+        name: string;
+    }[];
+}
+
 interface ProductTranslation {
     language_id: number;
     name: string;
@@ -22,6 +30,8 @@ interface ProductBase {
     id: string;
     price: number;
     image: string;
+    wildberries_url?: string | null;
+    ozon_url?: string | null;
     category_id: string;
     location_id: string;
     translations: ProductTranslation[];
@@ -51,6 +61,7 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
 export function Products() {
     const [products, setProducts] = useState<ProductView[]>([]);
     const [locations, setLocations] = useState<Location[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -64,6 +75,8 @@ export function Products() {
         description: '',
         price: '',
         image: '',
+        wildberries_url: '',
+        ozon_url: '',
         category_id: '',
         level: '1',
         location_id: ''
@@ -72,15 +85,18 @@ export function Products() {
     const fetchData = async () => {
         setIsLoading(true);
         try {
-            const [locRes, prodRes] = await Promise.all([
+            const [locRes, prodRes, catRes] = await Promise.all([
                 fetch('/api/locations'),
-                fetch('/api/products')
+                fetch('/api/products'),
+                fetch('/api/categories')
             ]);
 
             const locData = await locRes.json();
             setLocations(locData);
 
             const prodData = await prodRes.json();
+            const catData = await catRes.json();
+            setCategories(catData);
             // Map backend product to frontend display structure (default language)
             const allProducts = prodData.map((prod: ProductBase) => {
                 const name = getDefaultTranslationValue(prod.translations, 'name');
@@ -141,6 +157,8 @@ export function Products() {
             description: product.description,
             price: product.price.toString(),
             image: product.image,
+            wildberries_url: product.wildberries_url || '',
+            ozon_url: product.ozon_url || '',
             category_id: product.category_id,
             level: (product.level || 1).toString(),
             location_id: product.location_id
@@ -151,7 +169,17 @@ export function Products() {
     const handleCloseModal = () => {
         setIsModalOpen(false);
         setEditingProductId(null);
-        setFormData({ name: '', description: '', price: '', image: '', category_id: '', level: '1', location_id: '' });
+        setFormData({
+            name: '',
+            description: '',
+            price: '',
+            image: '',
+            wildberries_url: '',
+            ozon_url: '',
+            category_id: '',
+            level: '1',
+            location_id: ''
+        });
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -186,22 +214,30 @@ export function Products() {
                 : '/api/products';
             const method = editingProductId ? 'PUT' : 'POST';
 
-            await fetch(url, {
+            const response = await fetch(url, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     price: parseFloat(formData.price),
                     image: formData.image || 'https://placehold.co/400x300/333/fff?text=No+Image',
+                    wildberries_url: formData.wildberries_url.trim(),
+                    ozon_url: formData.ozon_url.trim(),
                     category_id: formData.category_id,
                     location_id: formData.location_id,
                     translations: allTranslations
                 })
             });
 
+            if (!response.ok) {
+                const data = await response.json().catch(() => null);
+                throw new Error(data?.error || 'Не удалось сохранить товар');
+            }
+
             handleCloseModal();
             fetchData();
         } catch (error) {
             console.error(error);
+            alert(error instanceof Error ? error.message : 'Не удалось сохранить товар');
         }
     };
 
@@ -219,9 +255,7 @@ export function Products() {
     const productsByLocation = locations.reduce((acc, loc) => {
         const locName = getDefaultTranslationValue(loc.translations, 'name') || 'Неизвестно';
         const locationProducts = products.filter(p => p.location_id === loc.id);
-        if (locationProducts.length > 0) {
-            acc[locName] = locationProducts;
-        }
+        acc[locName] = locationProducts;
         return acc;
     }, {} as Record<string, ProductView[]>);
 
@@ -263,42 +297,50 @@ export function Products() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-800">
-                                    {locationProducts.map((prod) => (
-                                        <tr key={prod.id} className="hover:bg-gray-800/30 transition">
-                                            <td className="p-4">
-                                                <div className="flex items-center gap-3">
-                                                    <img src={prod.image} alt="" className="w-10 h-10 rounded bg-gray-700 object-cover" />
-                                                    <div className="font-medium text-white">{prod.name}</div>
-                                                </div>
-                                            </td>
-                                            <td className="p-4 text-gray-400">{prod.category_name}</td>
-                                            <td className="p-4">
-                                                <span className={`px-2 py-1 rounded text-xs font-medium ${prod.level === 3 ? 'bg-yellow-500/20 text-yellow-500' :
-                                                    prod.level === 2 ? 'bg-blue-500/20 text-blue-500' :
-                                                        'bg-gray-500/20 text-gray-500'
-                                                    }`}>
-                                                    LVL {prod.level || 1}
-                                                </span>
-                                            </td>
-                                            <td className="p-4 text-green-400 font-mono">{formatRub(prod.price)}</td>
-                                            <td className="p-4 text-right">
-                                                <div className="flex justify-end gap-2">
-                                                    <Button variant="secondary" size="sm" onClick={() => {
-                                                        setSelectedProductForTranslation(prod);
-                                                        setIsTranslationOpen(true);
-                                                    }}>
-                                                        Перевод
-                                                    </Button>
-                                                    <Button variant="secondary" size="sm" onClick={() => handleEdit(prod)}>
-                                                        Изменить
-                                                    </Button>
-                                                    <Button variant="danger" size="sm" onClick={() => handleDelete(prod.id)}>
-                                                        ✕
-                                                    </Button>
-                                                </div>
+                                    {locationProducts.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={5} className="p-4 text-sm text-gray-500">
+                                                В этой локации пока нет товаров.
                                             </td>
                                         </tr>
-                                    ))}
+                                    ) : (
+                                        locationProducts.map((prod) => (
+                                            <tr key={prod.id} className="hover:bg-gray-800/30 transition">
+                                                <td className="p-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <img src={prod.image} alt="" className="w-10 h-10 rounded bg-gray-700 object-cover" />
+                                                        <div className="font-medium text-white">{prod.name}</div>
+                                                    </div>
+                                                </td>
+                                                <td className="p-4 text-gray-400">{prod.category_name}</td>
+                                                <td className="p-4">
+                                                    <span className={`px-2 py-1 rounded text-xs font-medium ${prod.level === 3 ? 'bg-yellow-500/20 text-yellow-500' :
+                                                        prod.level === 2 ? 'bg-blue-500/20 text-blue-500' :
+                                                            'bg-gray-500/20 text-gray-500'
+                                                        }`}>
+                                                        LVL {prod.level || 1}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4 text-green-400 font-mono">{formatRub(prod.price)}</td>
+                                                <td className="p-4 text-right">
+                                                    <div className="flex justify-end gap-2">
+                                                        <Button variant="secondary" size="sm" onClick={() => {
+                                                            setSelectedProductForTranslation(prod);
+                                                            setIsTranslationOpen(true);
+                                                        }}>
+                                                            Перевод
+                                                        </Button>
+                                                        <Button variant="secondary" size="sm" onClick={() => handleEdit(prod)}>
+                                                            Изменить
+                                                        </Button>
+                                                        <Button variant="danger" size="sm" onClick={() => handleDelete(prod.id)}>
+                                                            ✕
+                                                        </Button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
                                 </tbody>
                             </table>
                         </div>
@@ -338,12 +380,23 @@ export function Products() {
                             onChange={e => setFormData({ ...formData, price: e.target.value })}
                             required
                         />
-                        <Input
-                            label="Категория (ID)"
-                            value={formData.category_id}
-                            onChange={e => setFormData({ ...formData, category_id: e.target.value })}
-                            required
-                        />
+                        <div>
+                            <label className="block text-sm font-medium text-gray-400 mb-1.5">Категория</label>
+                            <select
+                                className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-white outline-none transition-colors"
+                                value={formData.category_id}
+                                onChange={e => setFormData({ ...formData, category_id: e.target.value })}
+                                required
+                            >
+                                <option value="">-- Выберите категорию --</option>
+                                {categories.map(category => {
+                                    const categoryName = getDefaultTranslationValue(category.translations, 'name') || category.id;
+                                    return (
+                                        <option key={category.id} value={category.id}>{categoryName}</option>
+                                    );
+                                })}
+                            </select>
+                        </div>
                     </div>
 
                     <div>
@@ -381,6 +434,23 @@ export function Products() {
                                 {isUploading && <p className="text-xs text-yellow-500 mt-1">Загрузка...</p>}
                             </div>
                         </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <Input
+                            label="Ссылка на Wildberries"
+                            type="url"
+                            placeholder="https://www.wildberries.ru/..."
+                            value={formData.wildberries_url}
+                            onChange={e => setFormData({ ...formData, wildberries_url: e.target.value })}
+                        />
+                        <Input
+                            label="Ссылка на Ozon"
+                            type="url"
+                            placeholder="https://www.ozon.ru/..."
+                            value={formData.ozon_url}
+                            onChange={e => setFormData({ ...formData, ozon_url: e.target.value })}
+                        />
                     </div>
 
                     <div>
@@ -431,6 +501,8 @@ export function Products() {
                                     body: JSON.stringify({
                                         price: selectedProductForTranslation.price,
                                         image: selectedProductForTranslation.image,
+                                        wildberries_url: selectedProductForTranslation.wildberries_url || '',
+                                        ozon_url: selectedProductForTranslation.ozon_url || '',
                                         category_id: selectedProductForTranslation.category_id,
                                         location_id: selectedProductForTranslation.location_id,
                                         translations

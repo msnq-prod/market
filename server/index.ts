@@ -1,7 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import { PrismaClient, Prisma } from '@prisma/client';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -16,6 +17,7 @@ import publicRoutes from './routes/public.ts';
 import uploadRoutes from './routes/upload.ts';
 import contentRoutes from './routes/content.ts';
 import collectionRequestsRoutes from './routes/collectionRequests.ts';
+import ordersRoutes from './routes/orders.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +26,28 @@ const prisma = new PrismaClient();
 const app = express();
 const port = process.env.PORT || 3001;
 const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+
+const getPrismaErrorMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2003') {
+            return 'Связанная категория или локация не найдена.';
+        }
+        if (error.code === 'P2025') {
+            return 'Запись не найдена.';
+        }
+    }
+
+    return fallback;
+};
+
+const normalizeOptionalUrl = (value: unknown) => {
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+};
 
 // Ensure uploads directory exists
 const uploadDir = path.join(__dirname, '../public/uploads');
@@ -66,6 +90,7 @@ app.use('/api/financials', financialRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/collection-requests', collectionRequestsRoutes);
+app.use('/api/orders', ordersRoutes);
 
 app.use('/api/upload', uploadRoutes);
 
@@ -129,6 +154,67 @@ app.get('/api/users', authenticateToken, async (req: AuthRequest, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+
+app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !['ADMIN', 'MANAGER'].includes(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
+    const { name, email, password, role } = req.body as {
+        name?: string;
+        email?: string;
+        password?: string;
+        role?: string;
+    };
+
+    const safeName = typeof name === 'string' ? name.trim() : '';
+    const safeEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const safePassword = typeof password === 'string' ? password : '';
+    const safeRole = typeof role === 'string' ? role.trim() : '';
+    const allowedRoles = new Set(['ADMIN', 'MANAGER', 'SALES_MANAGER', 'FRANCHISEE']);
+
+    if (!safeName) {
+        return res.status(400).json({ error: 'Укажите имя пользователя.' });
+    }
+
+    if (!safeEmail) {
+        return res.status(400).json({ error: 'Укажите email пользователя.' });
+    }
+
+    if (!safePassword || safePassword.length < 6) {
+        return res.status(400).json({ error: 'Пароль должен содержать минимум 6 символов.' });
+    }
+
+    if (!allowedRoles.has(safeRole)) {
+        return res.status(400).json({ error: 'Недопустимая роль для создания из админки.' });
+    }
+
+    try {
+        const passwordHash = await bcrypt.hash(safePassword, 10);
+        const user = await prisma.user.create({
+            data: {
+                name: safeName,
+                email: safeEmail,
+                password_hash: passwordHash,
+                role: safeRole as 'ADMIN' | 'MANAGER' | 'SALES_MANAGER' | 'FRANCHISEE'
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                balance: true,
+                commission_rate: true,
+                created_at: true
+            }
+        });
+
+        res.status(201).json(user);
+    } catch (error) {
+        console.error(error);
+        res.status(400).json({ error: 'Не удалось создать пользователя. Возможно, email уже используется.' });
     }
 });
 
@@ -240,12 +326,14 @@ app.get('/api/products', async (req, res) => {
 app.post('/api/products', async (req, res) => {
     try {
         const {
-            price, image, location_id, category_id, translations
+            price, image, wildberries_url, ozon_url, location_id, category_id, translations
         } = req.body;
         const product = await prisma.product.create({
             data: {
                 price: parseFloat(price),
                 image,
+                wildberries_url: normalizeOptionalUrl(wildberries_url),
+                ozon_url: normalizeOptionalUrl(ozon_url),
                 location_id,
                 category_id,
                 translations: {
@@ -257,7 +345,7 @@ app.post('/api/products', async (req, res) => {
         res.json(product);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to create product' });
+        res.status(500).json({ error: getPrismaErrorMessage(error, 'Failed to create product') });
     }
 });
 
@@ -266,13 +354,15 @@ app.put('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const {
-            price, image, location_id, category_id, translations
+            price, image, wildberries_url, ozon_url, location_id, category_id, translations
         } = req.body;
         const product = await prisma.product.update({
             where: { id },
             data: {
                 price: parseFloat(price),
                 image,
+                wildberries_url: normalizeOptionalUrl(wildberries_url),
+                ozon_url: normalizeOptionalUrl(ozon_url),
                 location_id,
                 category_id,
                 translations: {
@@ -285,7 +375,7 @@ app.put('/api/products/:id', async (req, res) => {
         res.json(product);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to update product' });
+        res.status(500).json({ error: getPrismaErrorMessage(error, 'Failed to update product') });
     }
 });
 

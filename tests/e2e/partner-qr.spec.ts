@@ -16,7 +16,7 @@ type CreatedItemPayload = {
     qr_url: string;
 };
 
-const PARTNER_EMAIL = 'partner@stones.com';
+const PARTNER_EMAIL = 'yakutia.partner@stones.com';
 const PARTNER_PASSWORD = 'partner123';
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
@@ -84,7 +84,8 @@ test('API ACL: qr-pack недоступен чужому франчайзи и �
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
 
     const outsiderEmail = `outsider-${randomKey()}@stones.test`;
-    const registerResponse = await request.post('/auth/register', {
+    const registerResponse = await request.post('/api/users', {
+        headers: authHeaders(admin.accessToken),
         data: {
             name: 'QR Outsider',
             email: outsiderEmail,

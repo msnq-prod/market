@@ -6,13 +6,21 @@
 
 При старте `app` автоматически:
 1. применяет Prisma миграции;
-2. выполняет сиды языков;
-3. выполняет базовый сид данных;
-4. запускает API и фронтенд.
+2. запускает API и фронтенд.
+
+Сиды не выполняются автоматически. Это сделано для того, чтобы данные, добавленные вручную в работающей системе, не перезаписывались при `docker compose up --build`.
 
 ## Запуск
 ```bash
 docker compose up --build
+```
+
+## Первичное заполнение тестовыми данными
+Если нужна тестовая база из seed, выполните команды вручную после старта контейнеров:
+
+```bash
+docker compose exec app npm run db:seed:languages
+docker compose exec app npm run db:seed
 ```
 
 ## Доступ
@@ -22,7 +30,9 @@ docker compose up --build
 
 ## Тестовые аккаунты (из seed)
 - Админ: `admin@stones.com` / `admin123`
-- Франчайзи: `partner@stones.com` / `partner123`
+- Менеджер продаж: `sales@stones.com` / `partner123`
+- Франчайзи: `yakutia.partner@stones.com` / `partner123`
+- Покупатель: `anna` / `partner123`
 
 ## Остановка
 ```bash

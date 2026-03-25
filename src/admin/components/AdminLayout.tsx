@@ -5,7 +5,9 @@ export function AdminLayout() {
     const location = useLocation();
     const token = localStorage.getItem('accessToken');
     const role = localStorage.getItem('userRole');
-    const isStaff = role === 'ADMIN' || role === 'MANAGER';
+    const isHqStaff = role === 'ADMIN' || role === 'MANAGER';
+    const isSalesManager = role === 'SALES_MANAGER';
+    const isStaff = isHqStaff || isSalesManager;
     const isDev = import.meta.env.DEV;
     const hasAdminAccess = isStaff || isDev;
 
@@ -18,6 +20,10 @@ export function AdminLayout() {
             return <Navigate to="/partner/dashboard" replace />;
         }
         return <Navigate to="/" replace />;
+    }
+
+    if (isSalesManager && location.pathname !== '/admin/orders') {
+        return <Navigate to="/admin/orders" replace />;
     }
 
     return (

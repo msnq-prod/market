@@ -7,6 +7,9 @@ import { getLocalizedValue } from '../utils/language';
 import type { Product, User } from '../data/db'
 import { Languages } from 'lucide-react';
 import { formatRub } from '../utils/currency';
+import projectLogo from '../assets/project-logo.png';
+import { MarketplaceButtons } from './MarketplaceButtons';
+import { AccountView as StorefrontAccountView, CartView as StorefrontCartView } from './StorefrontPanels';
 
 export function UIOverlay() {
     const activeView = useStore((state) => state.activeView)
@@ -16,6 +19,7 @@ export function UIOverlay() {
     const setLanguage = useStore((state) => state.setLanguage)
     const setActiveView = useStore((state) => state.setActiveView)
     const clearSelection = useStore((state) => state.clearSelection)
+    const hydrateSession = useStore((state) => state.hydrateSession)
 
     interface Language {
         id: number;
@@ -32,6 +36,10 @@ export function UIOverlay() {
     };
     const [languages, setLanguages] = useState<Language[]>([]);
     const [showLangMenu, setShowLangMenu] = useState(false);
+
+    useEffect(() => {
+        void hydrateSession()
+    }, [hydrateSession])
 
     useEffect(() => {
         fetch('/api/languages')
@@ -72,7 +80,18 @@ export function UIOverlay() {
         <div className="fixed inset-0 pointer-events-none z-50 flex flex-col">
             <header className="p-6 flex justify-between items-center w-full bg-gradient-to-b from-black/80 to-transparent pointer-events-auto">
                 <div className="flex items-center gap-8">
-                    <h1 className="text-2xl font-light tracking-widest text-white cursor-pointer" onClick={() => clearSelection()}>ОРБИТАЛЬНЫЙ МАРКЕТ</h1>
+                    <button
+                        type="button"
+                        className="cursor-pointer"
+                        onClick={() => clearSelection()}
+                        aria-label="ZAGARAM"
+                    >
+                        <img
+                            src={projectLogo}
+                            alt="ZAGARAMI"
+                            className="h-14 w-auto max-w-[220px] object-contain invert"
+                        />
+                    </button>
 
                     <nav className="flex gap-6 border-l border-white/20 pl-6 h-6 items-center">
                         <button
@@ -169,92 +188,12 @@ export function UIOverlay() {
     )
 }
 
-type AccountUser = User & { orders?: Array<string | number> };
-
-function AccountView({ user, onClose }: { user: AccountUser, onClose: () => void }) {
-    return (
-        <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
-        >
-            <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-2xl p-8 shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
-                <div className="flex items-center gap-6 mb-8">
-                    <div className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center text-2xl font-bold">
-                        {user.name.charAt(0)}
-                    </div>
-                    <div>
-                        <h2 className="text-3xl font-light">{user.name}</h2>
-                        <p className="text-gray-400">{user.email}</p>
-                    </div>
-                </div>
-                <h3 className="text-xl font-medium mb-4 border-b border-white/10 pb-2">История заказов</h3>
-                <div className="space-y-4">
-                    {(!user.orders || user.orders.length === 0) ? (
-                        <p className="text-gray-500 italic">Предыдущие заказы не найдены.</p>
-                    ) : (
-                        user.orders.map((order) => <div key={order}>Заказ #{order}</div>)
-                    )}
-                </div>
-            </div>
-        </motion.div>
-    )
+function AccountView({ user, onClose }: { user: User | null, onClose: () => void }) {
+    return <StorefrontAccountView user={user} onClose={onClose} />
 }
 
 function CartView({ cart, onClose }: { cart: Product[], onClose: () => void }) {
-    const total = cart.reduce((sum, item) => sum + item.price, 0)
-    const removeFromCart = useStore((state) => state.removeFromCart)
-    const language = useStore((state) => state.language)
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, x: '100%' }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: '100%' }}
-            className="absolute inset-y-0 right-0 w-full md:w-96 bg-neutral-900/95 backdrop-blur-xl border-l border-white/10 z-50 shadow-2xl pointer-events-auto flex flex-col"
-        >
-            <div className="p-6 border-b border-white/10 flex justify-between items-center">
-                <h2 className="text-2xl font-light">ВАША КОРЗИНА</h2>
-                <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {cart.length === 0 ? (
-                    <div className="text-center text-gray-500 mt-10">
-                        Ваша корзина пуста.
-                    </div>
-                ) : (
-                    cart.map((item, idx) => (
-                        <div key={`${item.id} -${idx} `} className="flex gap-4">
-                            <div className="w-20 h-20 bg-gray-800 rounded-md overflow-hidden flex-shrink-0">
-                                <img src={item.image} alt={getLocalizedValue(item, 'name', language)} className="w-full h-full object-cover" />
-                            </div>
-                            <div className="flex-1">
-                                <div className="flex justify-between items-start">
-                                    <h3 className="font-medium text-sm">{getLocalizedValue(item, 'name', language)}</h3>
-                                    <button onClick={() => removeFromCart(item.id)} className="text-gray-500 hover:text-red-500 text-xs">УДАЛИТЬ</button>
-                                </div>
-                                <p className="text-xs text-gray-400 mt-1">{item.category ? getLocalizedValue(item.category, 'name', language) : ''}</p>
-                                <p className="text-sm font-mono mt-2">{formatRub(item.price)}</p>
-                            </div>
-                        </div>
-                    ))
-                )}
-            </div>
-
-            <div className="p-6 border-t border-white/10 bg-black/20">
-                <div className="flex justify-between items-center mb-4 text-lg font-medium">
-                    <span>ИТОГО</span>
-                    <span className="font-mono text-blue-400">{formatRub(total)}</span>
-                </div>
-                <button className="w-full py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-bold tracking-wide transition-all">
-                    ОФОРМИТЬ
-                </button>
-            </div>
-        </motion.div>
-    )
+    return <StorefrontCartView cart={cart} onClose={onClose} />
 }
 
 function RotatingFilter({
@@ -573,7 +512,7 @@ function ProductsView({ onClose }: { onClose: () => void }) {
 
             <div className="flex justify-between items-center p-6 bg-gradient-to-b from-black/80 to-transparent z-10 relative">
                 <div className="flex items-center gap-4">
-                    <h2 className="text-3xl font-light tracking-widest text-white">ОРБИТАЛЬНЫЕ ТОВАРЫ</h2>
+                    <h2 className="text-3xl font-light tracking-widest text-white">ТОВАРЫ ZAGARAMI</h2>
                     <span className="bg-blue-500/20 text-blue-400 text-xs px-2 py-1 rounded-full">{filteredProducts.length} ПОЗИЦИЙ</span>
                 </div>
                 <button onClick={onClose} className="text-gray-400 hover:text-white text-lg">✕ ЗАКРЫТЬ</button>
@@ -608,7 +547,7 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                             const productName = getLocalizedValue(product, 'name', language);
                             const productDescription = getLocalizedValue(product, 'description', language);
                             return (
-                                <div key={product.id} className="bg-neutral-900/80 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden group hover:border-blue-500/50 transition-colors">
+                                <div key={product.id} className="group flex h-full flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/80 backdrop-blur-sm transition-colors hover:border-blue-500/50">
                                     <div className="h-48 overflow-hidden relative">
                                         <img src={product.image} alt={productName} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
                                         <div className="absolute top-2 right-2">
@@ -620,7 +559,7 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                                             </span>
                                         </div>
                                     </div>
-                                    <div className="p-4">
+                                    <div className="flex flex-1 flex-col p-4">
                                         <div className="flex justify-between items-start mb-2">
                                             <div>
                                                 <h3 className="text-white font-medium text-lg leading-tight mb-1">{productName}</h3>
@@ -629,12 +568,19 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                                             <p className="text-blue-400 font-mono font-medium">{formatRub(product.price)}</p>
                                         </div>
                                         <p className="text-gray-400 text-sm line-clamp-2 mb-4 h-10">{productDescription}</p>
-                                        <button
-                                            onClick={() => addToCart(product)}
-                                            className="w-full py-2 bg-white/10 hover:bg-white text-white hover:text-black rounded-lg font-medium transition-all text-sm"
-                                        >
-                                            В КОРЗИНУ
-                                        </button>
+                                        <div className="mt-auto pt-2">
+                                            <button
+                                                onClick={() => addToCart(product)}
+                                                className="w-full rounded-lg bg-white/10 py-2 text-sm font-medium text-white transition-all hover:bg-white hover:text-black"
+                                            >
+                                                В КОРЗИНУ
+                                            </button>
+                                            <MarketplaceButtons
+                                                wildberriesUrl={product.wildberries_url}
+                                                ozonUrl={product.ozon_url}
+                                                className="mt-3"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             )

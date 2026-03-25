@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { UserPlus, User as UserIcon, RefreshCw, X } from 'lucide-react';
 import { formatRub } from '../../utils/currency';
+import { authFetch } from '../../utils/authFetch';
 
 type UserRow = {
     id: string;
     name: string;
-    email: string;
-    role: 'USER' | 'ADMIN' | 'MANAGER' | 'FRANCHISEE' | string;
+    email: string | null;
+    role: 'ADMIN' | 'MANAGER' | 'SALES_MANAGER' | 'FRANCHISEE' | string;
     balance?: string;
 };
 
@@ -14,7 +15,7 @@ type CreateUserForm = {
     name: string;
     email: string;
     password: string;
-    role: 'USER' | 'ADMIN' | 'MANAGER' | 'FRANCHISEE';
+    role: 'ADMIN' | 'MANAGER' | 'SALES_MANAGER' | 'FRANCHISEE';
 };
 
 const initialForm: CreateUserForm = {
@@ -37,10 +38,7 @@ export function Users() {
         setError('');
 
         try {
-            const token = localStorage.getItem('accessToken');
-            const res = await fetch('/api/users', {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            const res = await authFetch('/api/users');
 
             if (!res.ok) {
                 const payload = await res.json().catch(() => ({}));
@@ -66,7 +64,7 @@ export function Users() {
         setError('');
 
         try {
-            const res = await fetch('/auth/register', {
+            const res = await authFetch('/api/users', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(form)
@@ -146,7 +144,7 @@ export function Users() {
                                         <div className="p-2 bg-gray-800 rounded-full"><UserIcon size={16} className="text-gray-400" /></div>
                                         <div>
                                             <div className="text-white font-medium">{user.name}</div>
-                                            <div className="text-xs text-gray-500">{user.email}</div>
+                                            <div className="text-xs text-gray-500">{user.email || 'email не указан'}</div>
                                             <div className="text-[10px] text-gray-600 font-mono mt-1">{user.id.slice(0, 8)}...</div>
                                         </div>
                                     </div>
@@ -217,8 +215,8 @@ export function Users() {
                                 >
                                     <option value="FRANCHISEE">ФРАНЧАЙЗИ</option>
                                     <option value="MANAGER">МЕНЕДЖЕР</option>
+                                    <option value="SALES_MANAGER">МЕНЕДЖЕР ПРОДАЖ</option>
                                     <option value="ADMIN">АДМИН</option>
-                                    <option value="USER">ПОЛЬЗОВАТЕЛЬ</option>
                                 </select>
                             </div>
 
@@ -249,6 +247,7 @@ export function Users() {
 function roleColor(role: string) {
     if (role === 'ADMIN') return 'bg-purple-900/50 text-purple-400';
     if (role === 'MANAGER') return 'bg-cyan-900/50 text-cyan-400';
+    if (role === 'SALES_MANAGER') return 'bg-orange-900/50 text-orange-300';
     if (role === 'FRANCHISEE') return 'bg-blue-900/50 text-blue-400';
     return 'bg-gray-700 text-gray-300';
 }
@@ -256,7 +255,7 @@ function roleColor(role: string) {
 function roleLabel(role: string) {
     if (role === 'ADMIN') return 'АДМИН';
     if (role === 'MANAGER') return 'МЕНЕДЖЕР';
+    if (role === 'SALES_MANAGER') return 'ПРОДАЖИ';
     if (role === 'FRANCHISEE') return 'ФРАНЧАЙЗИ';
-    if (role === 'USER') return 'ПОЛЬЗОВАТЕЛЬ';
     return role;
 }

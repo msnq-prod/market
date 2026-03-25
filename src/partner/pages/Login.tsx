@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { persistAuthSession } from '../../utils/session';
 
 type LoginPortal = 'partner' | 'admin';
 
@@ -23,10 +24,10 @@ export function Login({ portal = 'partner' }: LoginProps) {
     const isAdminPortal = portal === 'admin';
     const title = isAdminPortal ? 'Админ-панель HQ' : 'Партнерский кабинет';
     const subtitle = isAdminPortal
-        ? 'Войдите для управления операциями HQ'
+        ? 'Войдите для управления HQ или очередью продаж'
         : 'Войдите для управления своими партиями';
     const deniedMessage = isAdminPortal
-        ? 'Доступ запрещён. Нужна учетная запись администратора или менеджера.'
+        ? 'Доступ запрещён. Нужна учетная запись администратора, менеджера HQ или менеджера продаж.'
         : 'Доступ запрещён. Нужен партнерский или staff-аккаунт.';
 
     const handleLogin = async (e: React.FormEvent) => {
@@ -47,7 +48,7 @@ export function Login({ portal = 'partner' }: LoginProps) {
                 throw new Error(data.error || 'Ошибка входа');
             }
 
-            const isStaff = data.role === 'ADMIN' || data.role === 'MANAGER';
+            const isStaff = data.role === 'ADMIN' || data.role === 'MANAGER' || data.role === 'SALES_MANAGER';
             const isFranchisee = data.role === 'FRANCHISEE';
 
             if (isAdminPortal && !isStaff) {
@@ -58,10 +59,12 @@ export function Login({ portal = 'partner' }: LoginProps) {
                 throw new Error(deniedMessage);
             }
 
-            localStorage.setItem('accessToken', data.accessToken);
-            localStorage.setItem('refreshToken', data.refreshToken);
-            localStorage.setItem('userRole', data.role);
-            localStorage.setItem('userName', data.name);
+            persistAuthSession({
+                accessToken: data.accessToken,
+                refreshToken: data.refreshToken,
+                role: data.role,
+                name: data.name
+            });
 
             if (isStaff) {
                 const fromPath = (location.state as LoginLocationState | null)?.from?.pathname;
@@ -102,7 +105,7 @@ export function Login({ portal = 'partner' }: LoginProps) {
                             onChange={(e) => setEmail(e.target.value)}
                             className="ui-input text-slate-900 bg-white"
                             style={{ color: '#0f172a', backgroundColor: '#ffffff', WebkitTextFillColor: '#0f172a', opacity: 1 }}
-                            placeholder={isAdminPortal ? 'admin@stones.com' : 'partner@stones.com'}
+                            placeholder={isAdminPortal ? 'admin@stones.com' : 'yakutia.partner@stones.com'}
                             autoComplete="email"
                         />
                     </div>

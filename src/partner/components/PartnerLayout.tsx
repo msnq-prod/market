@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { Package, RussianRuble, LogOut, Home, QrCode, Menu, X, ListOrdered } from 'lucide-react';
+import { clearAuthSession } from '../../utils/session';
 
 export function PartnerLayout() {
     const navigate = useNavigate();
@@ -14,14 +15,11 @@ export function PartnerLayout() {
 
     const token = localStorage.getItem('accessToken');
     const role = localStorage.getItem('userRole');
-    const isStaff = role === 'ADMIN' || role === 'MANAGER';
+    const isStaff = role === 'ADMIN' || role === 'MANAGER' || role === 'SALES_MANAGER';
     const isFranchisee = role === 'FRANCHISEE';
 
     const handleLogout = () => {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        localStorage.removeItem('userRole');
-        localStorage.removeItem('userName');
+        clearAuthSession();
         navigate('/partner/login');
     };
 

@@ -38,17 +38,18 @@ npm run dev
 
 Роли и логины:
 
-| Роль | Email | Пароль | Где использовать |
+| Роль | Логин / Email | Пароль | Где использовать |
 |---|---|---|---|
 | ADMIN | `admin@stones.com` | `admin123` | `/admin/login`, `/admin/*`, доступ к админским API |
 | MANAGER | `manager@stones.com` | `partner123` | `/admin/login`, складские/операционные сценарии |
+| SALES_MANAGER | `sales@stones.com` | `partner123` | `/admin/login`, очередь заказов `/admin/orders` |
 | FRANCHISEE | `yakutia.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
 | FRANCHISEE | `ural.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
 | FRANCHISEE | `baltic.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| USER | `anna.smirnova@example.ru` | `partner123` | API/данные заказов |
-| USER | `maxim.lebedev@example.ru` | `partner123` | API/данные заказов |
-| USER | `olga.kuznetsova@example.ru` | `partner123` | API/данные заказов |
-| USER | `kirill.volkov@example.ru` | `partner123` | API/данные заказов |
+| USER | `anna` | `partner123` | Публичная витрина `/`, checkout, история заказов |
+| USER | `maxim` | `partner123` | Публичная витрина `/`, checkout, история заказов |
+| USER | `olga` | `partner123` | Публичная витрина `/`, checkout, история заказов |
+| USER | `kirill` | `partner123` | Публичная витрина `/`, checkout, история заказов |
 
 ## 6. Важные UI-маршруты
 - Публичная витрина: `/`
@@ -61,6 +62,7 @@ npm run dev
 - Печать QR: `/partner/qr/print?batchId=<ID>`
 - Финансы партнёра: `/partner/finance`
 - Админ дашборд: `/admin`
+- Заказы с сайта: `/admin/orders`
 - Приемка: `/admin/acceptance`
 - Аллокация: `/admin/allocation`
 - Пользователи: `/admin/users`
@@ -69,9 +71,15 @@ npm run dev
 ## 7. API, которые чаще всего нужны во время тестов
 
 Аутентификация:
+- `GET /auth/me`
 - `POST /auth/login`
 - `POST /auth/refresh`
 - `POST /auth/register`
+- `POST /api/users`
+- `POST /api/orders`
+- `GET /api/orders/my`
+- `GET /api/orders`
+- `PATCH /api/orders/:id`
 
 Операции партнёра и HQ:
 - `GET /api/batches`
@@ -104,11 +112,17 @@ npm run dev
 Сид создаёт предсказуемый набор данных:
 - Локации: `5`
 - Товары: `10`
-- Пользователи: `9`
+- Пользователи: `10`
 - Партии: `7`
 - Item-позиции: `27`
 - Ledger-записи: `10`
 - Заказы: `4`
+
+Статусы демо-заказов:
+- `order-anna-001`: `COMPLETED`
+- `order-maxim-001`: `IN_PROGRESS`
+- `order-olga-001`: `NEW`
+- `order-kirill-001`: `CANCELLED`
 
 Ключевые статусы партий в тестовых данных:
 - `batch-yak-2026-01`: `FINISHED`
@@ -128,3 +142,7 @@ npm run dev
 
 ## 10. Известный нюанс текущей БД
 Если в локальной БД нет таблицы `content_pages`, сид не падает: блок сидирования контента цифрового двойника пропускается с предупреждением.
+
+Отдельный нюанс checkout:
+- открытый `POST /auth/register` теперь создает только buyer-аккаунт с ролью `USER` и логином `username`;
+- staff и франчайзи создаются только через защищённый `POST /api/users`.

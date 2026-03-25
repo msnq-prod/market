@@ -3,6 +3,7 @@ import type { Product } from '../data/db';
 import { useStore } from '../store';
 import { getLocalizedValue } from '../utils/language';
 import { formatRub } from '../utils/currency';
+import { MarketplaceButtons } from './MarketplaceButtons';
 
 export function ProductListSection() {
     const { selectedLocation, addToCart, language } = useStore();
@@ -33,25 +34,32 @@ function ProductCard({ product, addToCart, language }: { product: Product, addTo
             initial={{ opacity: 0, scale: 0.9 }}
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true }}
-            className="group bg-neutral-900/50 border border-white/10 rounded-2xl overflow-hidden hover:border-blue-500/50 transition-all duration-300"
+            className="group flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/50 transition-all duration-300 hover:border-blue-500/50"
         >
             <div className="aspect-[4/3] overflow-hidden relative">
                 <img src={product.image} alt={name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
             </div>
-            <div className="p-6">
+            <div className="flex flex-1 flex-col p-6">
                 <h3 className="font-bold text-lg mb-1">{name}</h3>
                 <p className="text-sm text-white/60 mb-3">{getLocalizedValue(product, 'description', language)}</p>
                 <div className="flex justify-between items-center">
                     <span className="text-blue-400 font-medium">{formatRub(product.price)}</span>
                     <span className="text-xs px-2 py-1 bg-white/10 rounded">{categoryLabel}</span>
                 </div>
-                <button
-                    onClick={() => addToCart(product)}
-                    className="w-full py-3 bg-white/5 hover:bg-blue-600 text-white rounded-lg font-medium tracking-wide transition-all uppercase text-xs mt-6"
-                >
-                    В корзину
-                </button>
+                <div className="mt-auto pt-6">
+                    <button
+                        onClick={() => addToCart(product)}
+                        className="w-full rounded-lg bg-white/5 py-3 text-xs font-medium uppercase tracking-wide text-white transition-all hover:bg-blue-600"
+                    >
+                        В корзину
+                    </button>
+                    <MarketplaceButtons
+                        wildberriesUrl={product.wildberries_url}
+                        ozonUrl={product.ozon_url}
+                        className="mt-3"
+                    />
+                </div>
             </div>
         </motion.div>
     )

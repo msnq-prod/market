@@ -111,8 +111,14 @@ npm run test:e2e
 - Админ:
   - email: `admin@stones.com`
   - password: `admin123`
+- Менеджер продаж:
+  - email: `sales@stones.com`
+  - password: `partner123`
 - Франчайзи:
-  - email: `partner@stones.com`
+  - email: `yakutia.partner@stones.com`
+  - password: `partner123`
+- Публичный покупатель:
+  - login: `anna`
   - password: `partner123`
 
 Рекомендуется сменить пароли и секреты сразу после первичного запуска.
@@ -122,12 +128,15 @@ npm run test:e2e
 - `ADMIN` / `MANAGER`
   - доступ в `/admin`
   - управление контентом, пользователями, приемкой, распределением
+- `SALES_MANAGER`
+  - доступ в `/admin/orders`
+  - обработка интернет-заказов и смена их статусов
 - `FRANCHISEE`
   - доступ в `/partner`
   - создание партий, просмотр финансов
 - Публичный пользователь
   - доступ на `/`
-  - просмотр локаций/товаров
+  - просмотр локаций/товаров, регистрация по `username + password`, оформление заказа
 
 Маршруты защищены UI-guard’ами:
 - если staff логинится, его ведет в `/admin`;
@@ -149,27 +158,44 @@ npm run test:e2e
 
 Раздел позволяет:
 - просматривать пользователей;
-- создавать пользователя через форму (`name`, `email`, `password`, `role`);
+- создавать staff/partner-аккаунты через форму (`name`, `email`, `password`, `role`);
 - обновлять список кнопкой `Refresh`.
 
-Создание пользователя вызывает `POST /auth/register`.
+Создание пользователя вызывает защищённый `POST /api/users`.
 
-## 8.3 Locations
+## 8.3 Orders
+
+Раздел `/admin/orders` показывает интернет-заказы с сайта.
+
+Возможности:
+- серверный поиск по `order id`, `user.name`, `user.username`, `contact_phone`, `contact_email`, `delivery_address`;
+- фильтры `Активные`, `Новые`, `В работе`, `Закрытые`;
+- master-detail интерфейс: слева список заявок, справа рабочая карточка выбранного заказа;
+- просмотр и редактирование контактов, адреса доставки, комментария клиента и `internal_note`;
+- внутренние заметки менеджера не отдаются покупателю в `GET /api/orders/my`;
+- клиентские поля заказа доступны для редактирования только пока заказ не закрыт;
+- переходы статусов:
+  - `NEW -> IN_PROGRESS`
+  - `IN_PROGRESS -> COMPLETED`
+  - `NEW|IN_PROGRESS -> CANCELLED`
+
+## 8.4 Locations
 
 Позволяет:
 - создать/редактировать/удалить локацию;
 - добавить изображение;
 - редактировать переводы.
 
-## 8.4 Products
+## 8.5 Products
 
 Позволяет:
 - создать/редактировать/удалить товар;
 - назначить локацию/категорию;
 - загружать изображение;
+- задавать ссылки Wildberries и Ozon для карточки товара;
 - редактировать переводы.
 
-## 8.5 Acceptance (приемка)
+## 8.6 Acceptance (приемка)
 
 Шаги:
 1. Открыть `/admin/acceptance`.
@@ -180,7 +206,7 @@ npm run test:e2e
    - `Reject` -> статус товара `REJECTED`
 5. После обработки всех товаров нажать `Finish Batch` (кнопка блокируется, пока есть `NEW`).
 
-## 8.6 Allocation (распределение)
+## 8.7 Allocation (распределение)
 
 Шаги:
 1. Открыть `/admin/allocation`.
@@ -262,7 +288,18 @@ CSV формат:
 - просмотр глобуса с локациями;
 - просмотр карточек товаров;
 - мультиязычность (доступные языки из БД);
+- корзина и checkout;
+- регистрация/вход покупателя через логин и пароль;
+- кнопка Telegram-авторизации как заглушка;
+- история заказов в личном кабинете;
 - базовые UI-разделы (account/cart/contacts и т.д.).
+
+Checkout flow:
+1. Покупатель добавляет товар в корзину.
+2. В корзине он либо входит, либо регистрирует аккаунт через `POST /auth/register`.
+3. После авторизации заполняет адрес доставки, телефон, email и комментарий.
+4. Кнопка оплаты пока работает как заглушка и создаёт заявку через `POST /api/orders`.
+5. Заявка появляется в `/admin/orders` у `ADMIN` и `SALES_MANAGER`.
 
 ## 11. Финансовая логика (вкратце)
 
@@ -278,14 +315,21 @@ CSV формат:
 ## 12. Основные API (для отладки)
 
 - Auth:
+  - `GET /auth/me`
   - `POST /auth/register`
   - `POST /auth/login`
   - `POST /auth/refresh`
 - Admin/Public data:
   - `GET /api/users`
+  - `POST /api/users`
   - `GET /api/locations`
   - `GET /api/products`
   - `GET /api/languages`
+- Orders:
+  - `POST /api/orders`
+  - `GET /api/orders/my` (`internal_note` скрыт)
+  - `GET /api/orders` (`q`, `status`)
+  - `PATCH /api/orders/:id` (`status`, `delivery_address`, `contact_phone`, `contact_email`, `comment`, `internal_note`)
 - Logistics:
   - `GET /api/batches`
   - `POST /api/batches`
@@ -349,7 +393,7 @@ npx prisma migrate status
 
 - сменить `ACCESS_TOKEN_SECRET` и `REFRESH_TOKEN_SECRET`;
 - сменить дефолтные пароли;
-- ограничить/закрыть `POST /auth/register` (например, только для staff);
+- добавить rate limit/anti-bruteforce на `POST /auth/register` и `POST /auth/login`;
 - вынести медиа в объектное хранилище (S3/MinIO) при росте нагрузки;
 - включить регулярные бэкапы БД.
 

@@ -318,6 +318,16 @@ async function main() {
                 created_at: daysAgo(150, 11),
             },
             {
+                id: 'usr-sales-manager',
+                name: 'Менеджер продаж',
+                email: 'sales@stones.com',
+                password_hash: DEFAULT_PASSWORD_HASH,
+                role: 'SALES_MANAGER',
+                balance: 0,
+                details: { city: 'Москва', channel: 'site-orders' },
+                created_at: daysAgo(120, 10),
+            },
+            {
                 id: 'usr-fr-yakutia',
                 name: 'ИП Петров / Якутия',
                 email: 'yakutia.partner@stones.com',
@@ -354,6 +364,7 @@ async function main() {
                 id: 'usr-cust-anna',
                 name: 'Анна Смирнова',
                 email: 'anna.smirnova@example.ru',
+                username: 'anna',
                 password_hash: DEFAULT_PASSWORD_HASH,
                 role: 'USER',
                 balance: 0,
@@ -364,6 +375,7 @@ async function main() {
                 id: 'usr-cust-maxim',
                 name: 'Максим Лебедев',
                 email: 'maxim.lebedev@example.ru',
+                username: 'maxim',
                 password_hash: DEFAULT_PASSWORD_HASH,
                 role: 'USER',
                 balance: 0,
@@ -374,6 +386,7 @@ async function main() {
                 id: 'usr-cust-olga',
                 name: 'Ольга Кузнецова',
                 email: 'olga.kuznetsova@example.ru',
+                username: 'olga',
                 password_hash: DEFAULT_PASSWORD_HASH,
                 role: 'USER',
                 balance: 0,
@@ -384,6 +397,7 @@ async function main() {
                 id: 'usr-cust-kirill',
                 name: 'Кирилл Волков',
                 email: 'kirill.volkov@example.ru',
+                username: 'kirill',
                 password_hash: DEFAULT_PASSWORD_HASH,
                 role: 'USER',
                 balance: 0,
@@ -863,7 +877,11 @@ async function main() {
             id: 'order-anna-001',
             user_id: 'usr-cust-anna',
             total: 34400,
-            status: 'DELIVERED',
+            status: 'COMPLETED',
+            delivery_address: 'Казань, ул. Баумана, 14',
+            contact_phone: '+7 900 111-22-33',
+            contact_email: 'anna.smirnova@example.ru',
+            comment: 'Позвонить за час до доставки.',
             created_at: daysAgo(18, 12),
             items: {
                 create: [
@@ -879,7 +897,11 @@ async function main() {
             id: 'order-maxim-001',
             user_id: 'usr-cust-maxim',
             total: 41200,
-            status: 'SHIPPED',
+            status: 'IN_PROGRESS',
+            delivery_address: 'Новосибирск, Красный проспект, 9',
+            contact_phone: '+7 901 222-33-44',
+            contact_email: 'maxim.lebedev@example.ru',
+            comment: 'Доставка в будни после 18:00.',
             created_at: daysAgo(11, 16),
             items: {
                 create: [
@@ -894,7 +916,11 @@ async function main() {
             id: 'order-olga-001',
             user_id: 'usr-cust-olga',
             total: 185000,
-            status: 'PAID',
+            status: 'NEW',
+            delivery_address: 'Санкт-Петербург, Невский проспект, 41',
+            contact_phone: '+7 902 333-44-55',
+            contact_email: 'olga.kuznetsova@example.ru',
+            comment: 'Оставить у консьержа, если не отвечаю.',
             created_at: daysAgo(4, 14),
             items: {
                 create: [
@@ -910,6 +936,10 @@ async function main() {
             user_id: 'usr-cust-kirill',
             total: 17900,
             status: 'CANCELLED',
+            delivery_address: 'Краснодар, ул. Северная, 99',
+            contact_phone: '+7 903 444-55-66',
+            contact_email: 'kirill.volkov@example.ru',
+            comment: 'Отменен клиентом после звонка менеджера.',
             created_at: daysAgo(6, 11),
             items: {
                 create: [

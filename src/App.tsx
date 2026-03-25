@@ -72,6 +72,12 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
+const INITIAL_CAMERA_POSITION: [number, number, number] = [
+  -1.7057780567874519,
+  2.3921494680329234,
+  -1.902088889503387
+]
+
 function MainApp() {
   const fetchLocations = useStore((state) => state.fetchLocations)
   const selectedLocation = useStore((state) => state.selectedLocation)
@@ -101,7 +107,7 @@ function MainApp() {
 
       <div className="fixed inset-0 z-0">
         <ErrorBoundary>
-          <Canvas camera={{ position: [0, 0, 3.5], fov: 45 }}>
+          <Canvas camera={{ position: INITIAL_CAMERA_POSITION, fov: 45 }}>
             <Suspense fallback={null}>
               <Scene />
             </Suspense>
@@ -141,6 +147,7 @@ import { Users } from './admin/pages/Users'
 import { DigitalClone } from './public/pages/DigitalClone'
 import { CloneContent } from './admin/pages/CloneContent'
 import { Warehouse } from './admin/pages/Warehouse'
+import { Orders } from './admin/pages/Orders'
 
 function App() {
   return (
@@ -153,6 +160,7 @@ function App() {
         <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Dashboard />} />
+          <Route path="orders" element={<Orders />} />
           <Route path="locations" element={<Locations />} />
           <Route path="products" element={<Products />} />
           <Route path="acceptance" element={<Acceptance />} />
