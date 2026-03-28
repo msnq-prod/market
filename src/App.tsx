@@ -102,7 +102,7 @@ function MainApp() {
   }, [selectedLocation])
 
   return (
-    <div className="relative w-full min-h-screen bg-black">
+    <div className="relative w-full min-h-[100svh] overflow-x-clip bg-black">
       <LoadingScreen />
 
       <div className="fixed inset-0 z-0">
@@ -118,16 +118,11 @@ function MainApp() {
       <div className="relative z-10 pointer-events-none">
         <UIOverlay />
 
-        {!selectedLocation && <div className="h-screen pointer-events-none" />}
+        {!selectedLocation && <div className="h-[100svh] pointer-events-none" />}
 
-        {selectedLocation ? (
-          <>
-            <LocationInfoSection />
-            <ProductListSection />
-          </>
-        ) : (
-          showOverviewDelayed && <AboutSection /> // Only show after delay
-        )}
+        <LocationInfoSection />
+        <ProductListSection />
+        {!selectedLocation && showOverviewDelayed && <AboutSection />}
       </div>
     </div>
   )

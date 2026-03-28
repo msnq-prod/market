@@ -1,15 +1,53 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence, useMotionValue, animate, useTransform } from 'framer-motion'
 import type { PanInfo } from 'framer-motion'
 import type { MotionValue } from 'framer-motion'
 import { useStore } from '../store'
 import { getLocalizedValue } from '../utils/language';
 import type { Product, User } from '../data/db'
-import { Languages } from 'lucide-react';
+import { Languages, Menu, ShoppingBag, ShoppingCart, UserRound, X } from 'lucide-react';
 import { formatRub } from '../utils/currency';
 import projectLogo from '../assets/project-logo.png';
 import { MarketplaceButtons } from './MarketplaceButtons';
 import { AccountView as StorefrontAccountView, CartView as StorefrontCartView } from './StorefrontPanels';
+
+interface Language {
+    id: number;
+    name: string;
+    available: boolean;
+}
+
+type Dictionary = {
+    marketplace: string;
+    products: string;
+    museums: string;
+    contacts: string;
+    account: string;
+    cart: string;
+};
+
+function useIsMobile() {
+    const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+
+    useEffect(() => {
+        const mediaQuery = window.matchMedia('(max-width: 767px)');
+        const sync = (event?: MediaQueryListEvent) => {
+            setIsMobile(event ? event.matches : mediaQuery.matches);
+        };
+
+        sync();
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', sync);
+            return () => mediaQuery.removeEventListener('change', sync);
+        }
+
+        mediaQuery.addListener(sync);
+        return () => mediaQuery.removeListener(sync);
+    }, []);
+
+    return isMobile;
+}
 
 export function UIOverlay() {
     const activeView = useStore((state) => state.activeView)
@@ -20,22 +58,9 @@ export function UIOverlay() {
     const setActiveView = useStore((state) => state.setActiveView)
     const clearSelection = useStore((state) => state.clearSelection)
     const hydrateSession = useStore((state) => state.hydrateSession)
-
-    interface Language {
-        id: number;
-        name: string;
-        available: boolean;
-    }
-    type Dictionary = {
-        marketplace: string;
-        products: string;
-        museums: string;
-        contacts: string;
-        account: string;
-        cart: string;
-    };
     const [languages, setLanguages] = useState<Language[]>([]);
     const [showLangMenu, setShowLangMenu] = useState(false);
+    const [showMobileMenu, setShowMobileMenu] = useState(false);
 
     useEffect(() => {
         void hydrateSession()
@@ -75,15 +100,20 @@ export function UIOverlay() {
         }
     };
     const t = dictionaries[language] || dictionaries[2];
+    const closeToMarket = () => {
+        setShowMobileMenu(false)
+        clearSelection()
+        setActiveView('MARKET')
+    };
 
     return (
         <div className="fixed inset-0 pointer-events-none z-50 flex flex-col">
-            <header className="p-6 flex justify-between items-center w-full bg-gradient-to-b from-black/80 to-transparent pointer-events-auto">
+            <header className="hidden w-full items-center justify-between bg-gradient-to-b from-black/80 to-transparent p-6 pointer-events-auto md:flex">
                 <div className="flex items-center gap-8">
                     <button
                         type="button"
                         className="cursor-pointer"
-                        onClick={() => clearSelection()}
+                        onClick={closeToMarket}
                         aria-label="ZAGARAM"
                     >
                         <img
@@ -95,10 +125,7 @@ export function UIOverlay() {
 
                     <nav className="flex gap-6 border-l border-white/20 pl-6 h-6 items-center">
                         <button
-                            onClick={() => {
-                                clearSelection()
-                                setActiveView('MARKET')
-                            }}
+                            onClick={closeToMarket}
                             className={`text-sm tracking-widest transition-colors ${activeView === 'MARKET' ? 'text-blue-400 font-bold' : 'text-gray-400 hover:text-white'}`}
                         >
                             {t.marketplace}
@@ -167,6 +194,139 @@ export function UIOverlay() {
                 </div>
             </header>
 
+            <div className="pointer-events-none md:hidden">
+                {activeView === 'MARKET' && (
+                    <div className="pointer-events-auto absolute inset-x-0 top-0 z-[60] px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
+                        <div className="flex items-center justify-between rounded-full border border-white/10 bg-black/55 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+                            <button
+                                type="button"
+                                className="flex min-w-0 items-center gap-3"
+                                onClick={closeToMarket}
+                                aria-label="ZAGARAM"
+                            >
+                                <img
+                                    src={projectLogo}
+                                    alt="ZAGARAMI"
+                                    className="h-9 w-auto max-w-[148px] object-contain invert"
+                                />
+                            </button>
+
+                            <div className="flex items-center gap-1">
+                                <LanguageSwitcher
+                                    languages={languages}
+                                    language={language}
+                                    setLanguage={setLanguage}
+                                    showLangMenu={showLangMenu}
+                                    setShowLangMenu={setShowLangMenu}
+                                    compact
+                                />
+                                <button
+                                    type="button"
+                                    data-testid="mobile-menu-button"
+                                    onClick={() => setShowMobileMenu((prev) => !prev)}
+                                    className="rounded-full p-2 text-white transition-colors hover:bg-white/10"
+                                    aria-expanded={showMobileMenu}
+                                    aria-label={showMobileMenu ? 'Закрыть меню' : 'Открыть меню'}
+                                >
+                                    {showMobileMenu ? <X size={18} /> : <Menu size={18} />}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <AnimatePresence>
+                    {showMobileMenu && (
+                        <>
+                            <motion.button
+                                type="button"
+                                aria-label="Закрыть мобильное меню"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowMobileMenu(false)}
+                                className="absolute inset-0 z-[55] bg-black/45 backdrop-blur-sm"
+                            />
+                            <motion.div
+                                initial={{ opacity: 0, y: -16 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -16 }}
+                                transition={{ duration: 0.2 }}
+                                data-testid="mobile-menu-sheet"
+                                className="pointer-events-auto absolute inset-x-4 top-[calc(env(safe-area-inset-top)+4.75rem)] z-[60] rounded-[1.75rem] border border-white/10 bg-black/80 p-4 shadow-2xl backdrop-blur-xl"
+                            >
+                                <div className="space-y-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setActiveView('MUSEUMS');
+                                            setShowMobileMenu(false);
+                                        }}
+                                        className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-sm text-white transition-colors hover:bg-white/10"
+                                    >
+                                        <span>{t.museums}</span>
+                                        <span className="text-white/40">›</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setActiveView('CONTACTS');
+                                            setShowMobileMenu(false);
+                                        }}
+                                        className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-sm text-white transition-colors hover:bg-white/10"
+                                    >
+                                        <span>{t.contacts}</span>
+                                        <span className="text-white/40">›</span>
+                                    </button>
+                                </div>
+                            </motion.div>
+                        </>
+                    )}
+                </AnimatePresence>
+
+                {activeView === 'MARKET' && (
+                    <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-[60] px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+                        <div className="grid grid-cols-4 gap-2 rounded-[1.75rem] border border-white/10 bg-black/65 p-2 shadow-[0_-10px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+                            <MobileNavButton
+                                label="Маркет"
+                                active
+                                onClick={closeToMarket}
+                                icon={<ShoppingBag size={16} />}
+                            />
+                            <MobileNavButton
+                                label="Товары"
+                                active={false}
+                                onClick={() => {
+                                    setShowMobileMenu(false);
+                                    setActiveView('PRODUCTS');
+                                }}
+                                icon={<ShoppingBag size={16} />}
+                                testId="mobile-nav-products"
+                            />
+                            <MobileNavButton
+                                label="Корзина"
+                                active={false}
+                                onClick={() => {
+                                    setShowMobileMenu(false);
+                                    setActiveView('CART');
+                                }}
+                                icon={<ShoppingCart size={16} />}
+                                badge={cart.length > 0 ? cart.length : undefined}
+                            />
+                            <MobileNavButton
+                                label="Аккаунт"
+                                active={false}
+                                onClick={() => {
+                                    setShowMobileMenu(false);
+                                    setActiveView('ACCOUNT');
+                                }}
+                                icon={<UserRound size={16} />}
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <AnimatePresence mode="wait">
                 {activeView === 'ACCOUNT' && (
                     <AccountView key="account" user={activeUser} onClose={() => setActiveView('MARKET')} />
@@ -194,6 +354,86 @@ function AccountView({ user, onClose }: { user: User | null, onClose: () => void
 
 function CartView({ cart, onClose }: { cart: Product[], onClose: () => void }) {
     return <StorefrontCartView cart={cart} onClose={onClose} />
+}
+
+function LanguageSwitcher({
+    languages,
+    language,
+    setLanguage,
+    showLangMenu,
+    setShowLangMenu,
+    compact = false
+}: {
+    languages: Language[];
+    language: number;
+    setLanguage: (value: number) => void;
+    showLangMenu: boolean;
+    setShowLangMenu: React.Dispatch<React.SetStateAction<boolean>>;
+    compact?: boolean;
+}) {
+    return (
+        <div className="relative">
+            <button
+                type="button"
+                onClick={() => setShowLangMenu(!showLangMenu)}
+                className={`rounded-full p-2 text-white transition-colors hover:bg-white/10 ${compact ? '' : ''}`}
+                aria-label="Переключить язык"
+            >
+                <Languages size={20} />
+            </button>
+
+            {showLangMenu && (
+                <div className="absolute right-0 top-full mt-2 w-32 overflow-hidden rounded-lg border border-white/20 bg-black/90 backdrop-blur-md">
+                    {languages.map(lang => (
+                        <button
+                            type="button"
+                            key={lang.id}
+                            onClick={() => {
+                                setLanguage(lang.id);
+                                setShowLangMenu(false);
+                            }}
+                            className={`w-full px-4 py-2 text-left text-sm transition-colors hover:bg-white/20 ${language === lang.id ? 'bg-white/10 text-white' : 'text-gray-400'}`}
+                        >
+                            {lang.name}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function MobileNavButton({
+    label,
+    active,
+    onClick,
+    icon,
+    badge,
+    testId
+}: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+    icon: React.ReactNode;
+    badge?: number;
+    testId?: string;
+}) {
+    return (
+        <button
+            type="button"
+            data-testid={testId}
+            onClick={onClick}
+            className={`relative flex min-h-[4.25rem] flex-col items-center justify-center gap-1 rounded-[1.25rem] px-2 py-2 text-[11px] font-medium transition-colors ${active ? 'bg-white text-black' : 'bg-white/5 text-white hover:bg-white/10'}`}
+        >
+            {icon}
+            <span>{label}</span>
+            {badge ? (
+                <span className={`absolute right-2 top-2 min-w-5 rounded-full px-1 text-[10px] leading-5 ${active ? 'bg-black text-white' : 'bg-blue-500 text-white'}`}>
+                    {badge}
+                </span>
+            ) : null}
+        </button>
+    );
 }
 
 function RotatingFilter({
@@ -432,10 +672,113 @@ function RotatingItem({
     );
 }
 
+function MobileSwipeFilter({
+    items,
+    value,
+    onChange,
+    label,
+    testId
+}: {
+    items: { label: string, value: string | number }[];
+    value: string | number;
+    onChange: (val: string | number) => void;
+    label: string;
+    testId: string;
+}) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const touchStartX = useRef<number | null>(null);
+    const selectedIndex = Math.max(0, items.findIndex((item) => item.value === value));
+
+    useEffect(() => {
+        const container = containerRef.current;
+        const card = container?.children[selectedIndex] as HTMLElement | undefined;
+        card?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }, [selectedIndex]);
+
+    const setByIndex = (index: number) => {
+        const nextIndex = (index + items.length) % items.length;
+        onChange(items[nextIndex].value);
+    };
+
+    const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+        touchStartX.current = event.touches[0]?.clientX ?? null;
+    };
+
+    const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+        const start = touchStartX.current;
+        const end = event.changedTouches[0]?.clientX ?? null;
+
+        if (start === null || end === null) return;
+
+        const delta = end - start;
+        if (Math.abs(delta) < 36) return;
+
+        if (delta < 0) {
+            setByIndex(selectedIndex + 1);
+        } else {
+            setByIndex(selectedIndex - 1);
+        }
+    };
+
+    return (
+        <div className="space-y-3" data-testid={testId}>
+            <div className="flex items-center justify-between gap-3">
+                <h3 className="text-[11px] font-medium uppercase tracking-[0.28em] text-gray-500">{label}</h3>
+                <span className="text-[11px] text-gray-500">{selectedIndex + 1} / {items.length}</span>
+            </div>
+
+            <div className="relative">
+                <button
+                    type="button"
+                    onClick={() => setByIndex(selectedIndex - 1)}
+                    className="absolute inset-y-0 left-0 z-20 w-16 rounded-l-[1.5rem] text-left text-white/80"
+                    aria-label={`${label}: предыдущий`}
+                >
+                    <span className="pointer-events-none pl-4 text-2xl">‹</span>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => setByIndex(selectedIndex + 1)}
+                    className="absolute inset-y-0 right-0 z-20 w-16 rounded-r-[1.5rem] text-right text-white/80"
+                    aria-label={`${label}: следующий`}
+                >
+                    <span className="pointer-events-none pr-4 text-2xl">›</span>
+                </button>
+
+                <div
+                    ref={containerRef}
+                    onTouchStart={handleTouchStart}
+                    onTouchEnd={handleTouchEnd}
+                    className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-10 pb-1 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
+                    {items.map((item) => {
+                        const isActive = item.value === value;
+
+                        return (
+                            <button
+                                type="button"
+                                key={String(item.value)}
+                                onClick={() => onChange(item.value)}
+                                className={`min-w-[calc(100%-1rem)] snap-center rounded-[1.5rem] border px-5 py-4 text-left transition-all ${isActive ? 'border-blue-400/60 bg-blue-500/15 text-white shadow-[0_12px_30px_rgba(59,130,246,0.18)]' : 'border-white/10 bg-white/5 text-gray-300'}`}
+                            >
+                                <div className="pr-2 text-sm font-medium leading-snug">
+                                    {item.label}
+                                </div>
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function ProductsView({ onClose }: { onClose: () => void }) {
     const locations = useStore((state) => state.locations);
     const addToCart = useStore((state) => state.addToCart);
     const language = useStore((state) => state.language);
+    const isMobile = useIsMobile();
 
     // In a real app we might fetch all products again, or flattening locations
     // For now, let's derive all products from locations for simplicity
@@ -491,7 +834,7 @@ function ProductsView({ onClose }: { onClose: () => void }) {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 bg-black/90 backdrop-blur-md z-50 flex flex-col pointer-events-auto overflow-hidden"
+            className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-black/90 backdrop-blur-md pointer-events-auto"
         >
             {/* Dynamic Background */}
             <AnimatePresence mode="popLayout">
@@ -510,34 +853,55 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                 )}
             </AnimatePresence>
 
-            <div className="flex justify-between items-center p-6 bg-gradient-to-b from-black/80 to-transparent z-10 relative">
-                <div className="flex items-center gap-4">
-                    <h2 className="text-3xl font-light tracking-widest text-white">ТОВАРЫ ZAGARAMI</h2>
-                    <span className="bg-blue-500/20 text-blue-400 text-xs px-2 py-1 rounded-full">{filteredProducts.length} ПОЗИЦИЙ</span>
+            <div className="relative z-10 flex items-start justify-between gap-4 bg-gradient-to-b from-black/80 to-transparent px-4 pb-4 pt-[calc(env(safe-area-inset-top)+1rem)] md:items-center md:p-6">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-4">
+                    <h2 className="text-2xl font-light tracking-[0.22em] text-white md:text-3xl md:tracking-widest">ТОВАРЫ ZAGARAMI</h2>
+                    <span className="w-fit rounded-full bg-blue-500/20 px-2 py-1 text-[11px] text-blue-400 md:text-xs">{filteredProducts.length} ПОЗИЦИЙ</span>
                 </div>
-                <button onClick={onClose} className="text-gray-400 hover:text-white text-lg">✕ ЗАКРЫТЬ</button>
+                <button onClick={onClose} className="shrink-0 text-sm text-gray-400 hover:text-white md:text-lg">✕ ЗАКРЫТЬ</button>
             </div>
 
-            {/* Scrollable Content Container */}
-            <div className="flex-1 overflow-y-auto px-6 pb-10 z-10 relative">
-                {/* Filters Section - 3D Carousels (Now inside scrollable area) */}
-                <div className="relative z-0 py-4 space-y-4 overflow-visible mb-8" style={{ perspective: '1000px' }}>
-                    <RotatingFilter
-                        label="Фильтр по локации"
-                        items={locationItems}
-                        value={selectedLocation}
-                        onChange={(val) => setSelectedLocation(val as string | 'ALL')}
-                    />
-                    <RotatingFilter
-                        label="Фильтр по уровню"
-                        items={levelItems}
-                        value={selectedLevel}
-                        onChange={(val) => setSelectedLevel(val as number | 'ALL')}
-                    />
+            <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] md:px-6 md:pb-10">
+                <div
+                    className={`mb-8 py-4 ${isMobile ? 'space-y-4' : 'relative z-0 space-y-4 overflow-visible'}`}
+                    style={isMobile ? undefined : { perspective: '1000px' }}
+                >
+                    {isMobile ? (
+                        <>
+                            <MobileSwipeFilter
+                                testId="mobile-filter-location"
+                                label="Фильтр по локации"
+                                items={locationItems}
+                                value={selectedLocation}
+                                onChange={(val) => setSelectedLocation(val as string | 'ALL')}
+                            />
+                            <MobileSwipeFilter
+                                testId="mobile-filter-level"
+                                label="Фильтр по уровню"
+                                items={levelItems}
+                                value={selectedLevel}
+                                onChange={(val) => setSelectedLevel(val as number | 'ALL')}
+                            />
+                        </>
+                    ) : (
+                        <>
+                            <RotatingFilter
+                                label="Фильтр по локации"
+                                items={locationItems}
+                                value={selectedLocation}
+                                onChange={(val) => setSelectedLocation(val as string | 'ALL')}
+                            />
+                            <RotatingFilter
+                                label="Фильтр по уровню"
+                                items={levelItems}
+                                value={selectedLevel}
+                                onChange={(val) => setSelectedLevel(val as number | 'ALL')}
+                            />
+                        </>
+                    )}
                 </div>
 
-                {/* Products Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 md:gap-6 lg:grid-cols-4 xl:grid-cols-5">
                     {filteredProducts.length === 0 ? (
                         <div className="col-span-full text-center text-gray-500 py-20">
                             Товары по выбранным фильтрам не найдены.
@@ -547,7 +911,7 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                             const productName = getLocalizedValue(product, 'name', language);
                             const productDescription = getLocalizedValue(product, 'description', language);
                             return (
-                                <div key={product.id} className="group flex h-full flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/80 backdrop-blur-sm transition-colors hover:border-blue-500/50">
+                                <div key={product.id} className="group flex h-full flex-col overflow-hidden rounded-[1.25rem] border border-white/10 bg-neutral-900/80 backdrop-blur-sm transition-colors hover:border-blue-500/50">
                                     <div className="h-48 overflow-hidden relative">
                                         <img src={product.image} alt={productName} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
                                         <div className="absolute top-2 right-2">
@@ -560,12 +924,12 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                                         </div>
                                     </div>
                                     <div className="flex flex-1 flex-col p-4">
-                                        <div className="flex justify-between items-start mb-2">
+                                        <div className="mb-2 flex items-start justify-between gap-3">
                                             <div>
-                                                <h3 className="text-white font-medium text-lg leading-tight mb-1">{productName}</h3>
+                                                <h3 className="mb-1 text-base font-medium leading-tight text-white md:text-lg">{productName}</h3>
                                                 <p className="text-gray-500 text-xs">{product.location_name}</p>
                                             </div>
-                                            <p className="text-blue-400 font-mono font-medium">{formatRub(product.price)}</p>
+                                            <p className="shrink-0 font-mono text-sm font-medium text-blue-400 md:text-base">{formatRub(product.price)}</p>
                                         </div>
                                         <p className="text-gray-400 text-sm line-clamp-2 mb-4 h-10">{productDescription}</p>
                                         <div className="mt-auto pt-2">
@@ -598,12 +962,12 @@ function MuseumsView({ onClose }: { onClose: () => void }) {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
+            className="absolute inset-0 z-50 flex items-end justify-center bg-black/80 p-0 backdrop-blur-md pointer-events-auto md:items-center md:p-6"
         >
-            <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-4xl p-10 shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-6 right-6 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
-                <div className="text-center mb-10">
-                    <h2 className="text-4xl font-light tracking-wide text-white mb-2">ГАЛАКТИЧЕСКИЕ МУЗЕИ</h2>
+            <div className="relative max-h-[92svh] w-full overflow-y-auto rounded-t-[2rem] border border-white/10 bg-neutral-900 p-6 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-2xl md:max-h-none md:max-w-4xl md:rounded-2xl md:p-10">
+                <button onClick={onClose} className="absolute right-5 top-5 text-sm text-gray-400 hover:text-white md:right-6 md:top-6 md:text-base">✕ ЗАКРЫТЬ</button>
+                <div className="mb-8 text-center md:mb-10">
+                    <h2 className="mb-2 text-3xl font-light tracking-wide text-white md:text-4xl">ГАЛАКТИЧЕСКИЕ МУЗЕИ</h2>
                     <div className="h-1 w-20 bg-blue-500 mx-auto"></div>
                     <p className="text-gray-400 mt-4 max-w-lg mx-auto">Исследуйте историю орбитальной добычи и редкие артефакты, обнаруженные в глубоком космосе.</p>
                 </div>
@@ -641,12 +1005,12 @@ function ContactsView({ onClose }: { onClose: () => void }) {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
+            className="absolute inset-0 z-50 flex items-end justify-center bg-black/80 p-0 backdrop-blur-md pointer-events-auto md:items-center md:p-6"
         >
-            <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-2xl p-10 shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-6 right-6 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
-                <div className="text-center mb-10">
-                    <h2 className="text-4xl font-light tracking-wide text-white mb-2">КОНТАКТЫ</h2>
+            <div className="relative max-h-[92svh] w-full overflow-y-auto rounded-t-[2rem] border border-white/10 bg-neutral-900 p-6 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-2xl md:max-w-2xl md:rounded-2xl md:p-10">
+                <button onClick={onClose} className="absolute right-5 top-5 text-sm text-gray-400 hover:text-white md:right-6 md:top-6 md:text-base">✕ ЗАКРЫТЬ</button>
+                <div className="mb-8 text-center md:mb-10">
+                    <h2 className="mb-2 text-3xl font-light tracking-wide text-white md:text-4xl">КОНТАКТЫ</h2>
                     <div className="h-1 w-20 bg-blue-500 mx-auto"></div>
                 </div>
 

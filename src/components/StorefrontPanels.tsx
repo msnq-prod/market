@@ -136,10 +136,10 @@ export function AccountView({ user, onClose }: AccountViewProps) {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 pointer-events-auto"
+            className="absolute inset-0 z-50 flex items-end justify-center bg-black/80 p-0 backdrop-blur-md pointer-events-auto md:items-center md:p-6"
         >
-            <div className="bg-neutral-900 border border-white/10 rounded-2xl w-full max-w-4xl p-8 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-                <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">✕ ЗАКРЫТЬ</button>
+            <div className="relative max-h-[92svh] w-full overflow-y-auto rounded-t-[2rem] border border-white/10 bg-neutral-900 p-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-2xl md:max-h-[90vh] md:max-w-4xl md:rounded-2xl md:p-8">
+                <button onClick={onClose} className="absolute right-4 top-4 text-sm text-gray-400 hover:text-white md:text-base">✕ ЗАКРЫТЬ</button>
 
                 {authLoading ? (
                     <div className="py-20 text-center text-gray-400">Восстанавливаем сессию...</div>
@@ -336,14 +336,14 @@ export function CartView({ cart, onClose }: CartViewProps) {
             initial={{ opacity: 0, x: '100%' }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: '100%' }}
-            className="absolute inset-y-0 right-0 w-full md:w-[520px] bg-neutral-900/95 backdrop-blur-xl border-l border-white/10 z-50 shadow-2xl pointer-events-auto flex flex-col"
+            className="absolute inset-0 z-50 flex w-full flex-col bg-neutral-900/95 backdrop-blur-xl shadow-2xl pointer-events-auto md:inset-y-0 md:right-0 md:w-[520px] md:border-l md:border-white/10"
         >
-            <div className="p-6 border-b border-white/10 flex justify-between items-center">
-                <h2 className="text-2xl font-light">ОФОРМЛЕНИЕ ЗАКАЗА</h2>
+            <div className="flex items-center justify-between border-b border-white/10 px-4 pb-4 pt-[calc(env(safe-area-inset-top)+1rem)] md:p-6">
+                <h2 className="text-xl font-light md:text-2xl">ОФОРМЛЕНИЕ ЗАКАЗА</h2>
                 <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 space-y-6 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-5 md:p-6">
                 {successMessage && (
                     <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
                         {successMessage}

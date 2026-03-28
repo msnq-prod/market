@@ -136,8 +136,15 @@ function CloneMarker({ lat, lng, offsetX }: { lat: number, lng: number, offsetX:
 }
 
 function CloneCameraController({ lat, lng, offsetX }: { lat: number | null, lng: number | null, offsetX: number }) {
+    const [startAnim, setStartAnim] = useState(false);
+
+    useEffect(() => {
+        const timer = setTimeout(() => setStartAnim(true), 500);
+        return () => clearTimeout(timer);
+    }, []);
+
     useFrame((state, delta) => {
-        if (lat != null && lng != null) {
+        if (startAnim && lat != null && lng != null) {
             const phi = (90 - lat) * (Math.PI / 180)
             const theta = (lng + 180) * (Math.PI / 180)
             const distance = 2.0
