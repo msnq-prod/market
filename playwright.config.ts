@@ -13,7 +13,10 @@ export default defineConfig({
     use: {
         baseURL: e2eBaseUrl,
         headless: true,
-        trace: 'on-first-retry'
+        trace: 'on-first-retry',
+        launchOptions: {
+            args: ['--enable-webgl', '--ignore-gpu-blocklist', '--use-angle=swiftshader']
+        }
     },
     webServer: useExistingServer
         ? undefined

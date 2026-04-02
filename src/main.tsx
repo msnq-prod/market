@@ -5,8 +5,18 @@ import './App.css'
 import App from './App.tsx'
 import { useStore } from './store.ts'
 
+type StonesDebugWindow = Window & {
+  __STONES_STORE__?: typeof useStore
+  __STONES_DEBUG__?: {
+    store?: typeof useStore
+  }
+}
+
 if (import.meta.env.DEV) {
-  (window as typeof window & { __STONES_STORE__?: typeof useStore }).__STONES_STORE__ = useStore
+  const debugWindow = window as StonesDebugWindow
+  debugWindow.__STONES_STORE__ = useStore
+  debugWindow.__STONES_DEBUG__ ??= {}
+  debugWindow.__STONES_DEBUG__.store = useStore
 }
 
 createRoot(document.getElementById('root')!).render(

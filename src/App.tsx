@@ -1,7 +1,8 @@
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
-import React, { Suspense, useEffect } from 'react'
+import { OrbitControls as DreiOrbitControls } from '@react-three/drei'
+import React, { Suspense, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { Earth } from './components/Earth'
 import { Markers } from './components/Markers'
 import { CameraController } from './components/CameraController'
@@ -16,9 +17,97 @@ import { Locations } from './admin/pages/Locations'
 import { Products } from './admin/pages/Products'
 import { useStore } from './store'
 
-function Scene() {
+type StonesDebugWindow = Window & {
+  __STONES_DEBUG__?: {
+    orbit?: {
+      getAngles: () => {
+        azimuthalAngle: number | null
+        polarAngle: number | null
+        touchAction: string | null
+      }
+    }
+  }
+}
+
+const scrollToTop = () => {
+  window.scrollTo({ top: 0, behavior: 'auto' })
+}
+
+function useIsMobileViewport() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)')
+    const sync = (event?: MediaQueryListEvent) => {
+      setIsMobile(event ? event.matches : mediaQuery.matches)
+    }
+
+    sync()
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', sync)
+      return () => mediaQuery.removeEventListener('change', sync)
+    }
+
+    mediaQuery.addListener(sync)
+    return () => mediaQuery.removeListener(sync)
+  }, [])
+
+  return isMobile
+}
+
+function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) {
   const selectedLocation = useStore((state) => state.selectedLocation)
   const clearSelection = useStore((state) => state.clearSelection)
+  const controlsRef = useRef<OrbitControlsImpl | null>(null)
+
+  useEffect(() => {
+    const domElement = controlsRef.current?.domElement
+    if (!domElement) return
+
+    domElement.style.touchAction = touchAction
+  }, [touchAction])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+
+    const debugWindow = window as StonesDebugWindow
+    debugWindow.__STONES_DEBUG__ ??= {}
+    debugWindow.__STONES_DEBUG__.orbit = {
+      getAngles: () => ({
+        azimuthalAngle: controlsRef.current?.getAzimuthalAngle() ?? null,
+        polarAngle: controlsRef.current?.getPolarAngle() ?? null,
+        touchAction
+      })
+    }
+
+    return () => {
+      if (debugWindow.__STONES_DEBUG__) {
+        delete debugWindow.__STONES_DEBUG__.orbit
+      }
+    }
+  }, [touchAction])
+
+  return (
+    <DreiOrbitControls
+      ref={controlsRef}
+      enablePan={false}
+      enableZoom={false}
+      enableRotate={true}
+      rotateSpeed={0.5}
+      autoRotate={!selectedLocation}
+      autoRotateSpeed={0.5}
+      onStart={() => {
+        if (useStore.getState().selectedLocation) {
+          clearSelection()
+        }
+      }}
+    />
+  )
+}
+
+function Scene() {
+  const isMobile = useIsMobileViewport()
 
   return (
     <>
@@ -32,19 +121,7 @@ function Scene() {
 
       <CameraController />
 
-      <OrbitControls
-        enablePan={false}
-        enableZoom={false}
-        enableRotate={true}
-        rotateSpeed={0.5}
-        autoRotate={!selectedLocation}
-        autoRotateSpeed={0.5}
-        onStart={() => {
-          if (useStore.getState().selectedLocation) {
-            clearSelection()
-          }
-        }}
-      />
+      <GlobeOrbitControls touchAction={isMobile ? 'pan-y' : 'none'} />
     </>
   )
 }
@@ -89,12 +166,12 @@ function MainApp() {
 
   useEffect(() => {
     if (selectedLocation) {
-      window.scrollTo({ top: 0, behavior: 'instant' })
+      scrollToTop()
       // keep update async to avoid synchronous setState in effect
       const timer = setTimeout(() => setShowOverviewDelayed(false), 0)
       return () => clearTimeout(timer)
     } else {
-      window.scrollTo({ top: 0, behavior: 'instant' })
+      scrollToTop()
       // Delay showing About text so it fades/appears nicely after zoom out starts
       const timer = setTimeout(() => setShowOverviewDelayed(true), 600)
       return () => clearTimeout(timer)
@@ -107,7 +184,14 @@ function MainApp() {
 
       <div className="fixed inset-0 z-0">
         <ErrorBoundary>
-          <Canvas camera={{ position: INITIAL_CAMERA_POSITION, fov: 45 }}>
+          <Canvas
+            camera={{ position: INITIAL_CAMERA_POSITION, fov: 45 }}
+            fallback={
+              <div className="flex h-full w-full items-center justify-center bg-black text-sm text-white/70">
+                3D-сцена недоступна в этом браузере
+              </div>
+            }
+          >
             <Suspense fallback={null}>
               <Scene />
             </Suspense>
