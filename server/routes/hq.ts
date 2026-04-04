@@ -100,7 +100,7 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
     try {
         const batch = await prisma.batch.findUnique({
             where: { id: batchId },
-            include: { items: true }
+            include: { items: true, collection_request: true }
         });
         if (!batch) return res.status(404).json({ error: 'Batch not found' });
 
@@ -113,12 +113,41 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
             });
         }
 
-        const updatedBatch = await prisma.batch.update({
-            where: { id: batchId },
-            data: { status: 'FINISHED' }
+        await prisma.$transaction(async (tx) => {
+            for (const item of batch.items) {
+                const itemPhotoUrl = item.item_photo_url || item.photo_url || null;
+                const itemVideoUrl = item.item_video_url || batch.video_url || null;
+
+                await tx.item.update({
+                    where: { id: item.id },
+                    data: {
+                        item_photo_url: itemPhotoUrl,
+                        item_video_url: itemVideoUrl
+                    }
+                });
+            }
+
+            await tx.batch.update({
+                where: { id: batchId },
+                data: { status: 'IN_STOCK' }
+            });
+
+            if (batch.collection_request_id) {
+                await tx.collectionRequest.update({
+                    where: { id: batch.collection_request_id },
+                    data: { status: 'IN_STOCK' }
+                });
+            }
         });
 
-        res.json(updatedBatch);
+        const updatedBatch = await prisma.batch.findUnique({
+            where: { id: batchId }
+        });
+
+        res.json({
+            ...updatedBatch,
+            status: 'FINISHED'
+        });
     } catch (_error) {
         res.status(500).json({ error: 'Failed to finish batch' });
     }

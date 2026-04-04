@@ -41,6 +41,8 @@ function ProductCard({ product, addToCart, language }: { product: Product, addTo
         ? getLocalizedValue(product.category, 'name', language)
         : '';
     const name = getLocalizedValue(product, 'name', language);
+    const availableStock = product.available_stock ?? 0;
+    const available = typeof product.available === 'boolean' ? product.available : availableStock > 0;
 
     return (
         <motion.div
@@ -58,14 +60,20 @@ function ProductCard({ product, addToCart, language }: { product: Product, addTo
                 <p className="text-sm text-white/60 mb-3">{getLocalizedValue(product, 'description', language)}</p>
                 <div className="flex items-center justify-between gap-3">
                     <span className="text-blue-400 font-medium">{formatRub(product.price)}</span>
-                    <span className="rounded bg-white/10 px-2 py-1 text-[11px] leading-tight md:text-xs">{categoryLabel}</span>
+                    <div className="flex items-center gap-2">
+                        <span className="rounded bg-white/10 px-2 py-1 text-[11px] leading-tight md:text-xs">{categoryLabel}</span>
+                        <span className={`rounded px-2 py-1 text-[11px] leading-tight md:text-xs ${available ? 'bg-emerald-500/20 text-emerald-200' : 'bg-red-500/20 text-red-200'}`}>
+                            {available ? `В наличии: ${availableStock}` : 'Нет в наличии'}
+                        </span>
+                    </div>
                 </div>
                 <div className="mt-auto pt-5 md:pt-6">
                     <button
                         onClick={() => addToCart(product)}
-                        className="w-full rounded-lg bg-white/5 py-3 text-xs font-medium uppercase tracking-wide text-white transition-all hover:bg-blue-600"
+                        disabled={!available}
+                        className="w-full rounded-lg bg-white/5 py-3 text-xs font-medium uppercase tracking-wide text-white transition-all hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40"
                     >
-                        В корзину
+                        {available ? 'В корзину' : 'Нет в наличии'}
                     </button>
                     <MarketplaceButtons
                         wildberriesUrl={product.wildberries_url}

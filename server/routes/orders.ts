@@ -192,7 +192,15 @@ router.post('/', async (req: AuthRequest, res) => {
             where: { id: { in: productIds } },
             select: {
                 id: true,
-                price: true
+                price: true,
+                is_published: true,
+                items: {
+                    where: {
+                        status: 'STOCK_ONLINE',
+                        is_sold: false
+                    },
+                    select: { id: true }
+                }
             }
         });
 
@@ -208,6 +216,14 @@ router.post('/', async (req: AuthRequest, res) => {
             const quantity = groupedItems.get(productId) || 0;
             if (!product || quantity <= 0) {
                 throw new Error('INVALID_ORDER_ITEMS');
+            }
+
+             if (!product.is_published) {
+                throw new Error('PRODUCT_UNAVAILABLE');
+            }
+
+            if ((product.items?.length || 0) < quantity) {
+                throw new Error('OUT_OF_STOCK');
             }
 
             total = total.add(product.price.mul(quantity));
@@ -239,6 +255,12 @@ router.post('/', async (req: AuthRequest, res) => {
     } catch (error) {
         if (error instanceof Error && error.message === 'INVALID_ORDER_ITEMS') {
             return res.status(400).json({ error: 'Некорректный состав заказа.' });
+        }
+        if (error instanceof Error && error.message === 'PRODUCT_UNAVAILABLE') {
+            return res.status(400).json({ error: 'Один или несколько товаров недоступны для продажи.' });
+        }
+        if (error instanceof Error && error.message === 'OUT_OF_STOCK') {
+            return res.status(400).json({ error: 'Недостаточно камней в наличии для оформления заказа.' });
         }
 
         console.error(error);

@@ -18,6 +18,7 @@ import uploadRoutes from './routes/upload.ts';
 import contentRoutes from './routes/content.ts';
 import collectionRequestsRoutes from './routes/collectionRequests.ts';
 import ordersRoutes from './routes/orders.ts';
+import { isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +48,66 @@ const normalizeOptionalUrl = (value: unknown) => {
 
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+};
+
+const parseTemplateCode = (value: unknown, fallback: string, maxLength: number) => {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+
+    return normalizeCode(value, fallback, maxLength);
+};
+
+const serializeProduct = <T extends {
+    id: string;
+    price: Prisma.Decimal;
+    image: string;
+    wildberries_url: string | null;
+    ozon_url: string | null;
+    location_id: string;
+    category_id: string;
+    country_code: string;
+    location_code: string;
+    item_code: string;
+    location_description: string | null;
+    is_published: boolean;
+    created_at: Date;
+    updated_at: Date;
+    translations: unknown[];
+    category?: unknown;
+    location?: unknown;
+    items?: Array<{ id: string }>;
+    batches?: Array<{ id: string; status: string; created_at: Date; items?: Array<{ id: string }> }>;
+}>(product: T) => {
+    const availableStock = product.items?.length || 0;
+
+    return {
+        id: product.id,
+        price: Number(product.price),
+        image: product.image,
+        wildberries_url: product.wildberries_url,
+        ozon_url: product.ozon_url,
+        location_id: product.location_id,
+        category_id: product.category_id,
+        country_code: product.country_code,
+        location_code: product.location_code,
+        item_code: product.item_code,
+        location_description: product.location_description,
+        is_published: product.is_published,
+        created_at: product.created_at,
+        updated_at: product.updated_at,
+        available_stock: availableStock,
+        available: availableStock > 0,
+        translations: product.translations,
+        category: product.category,
+        location: product.location,
+        batches: product.batches?.map((batch) => ({
+            id: batch.id,
+            status: batch.status,
+            created_at: batch.created_at,
+            items_count: batch.items?.length || 0
+        })) || []
+    };
 };
 
 // Ensure uploads directory exists
@@ -100,17 +161,29 @@ app.get('/api/locations', async (req, res) => {
         const locations = await prisma.location.findMany({
             include: {
                 products: {
+                    where: { is_published: true },
                     include: {
                         translations: true,
                         category: {
                             include: { translations: true }
+                        },
+                        items: {
+                            where: {
+                                status: 'STOCK_ONLINE',
+                                is_sold: false
+                            },
+                            select: { id: true }
                         }
                     }
                 },
                 translations: true
             }
         });
-        res.json(locations);
+
+        res.json(locations.map((location) => ({
+            ...location,
+            products: location.products.map((product) => serializeProduct(product))
+        })));
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to fetch locations' });
@@ -239,7 +312,11 @@ app.get('/api/categories', async (req, res) => {
 // ===== ADMIN API =====
 
 // Create location
-app.post('/api/locations', async (req, res) => {
+app.post('/api/locations', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const {
             lat, lng, image, translations
@@ -264,7 +341,11 @@ app.post('/api/locations', async (req, res) => {
 });
 
 // Update location
-app.put('/api/locations/:id', async (req, res) => {
+app.put('/api/locations/:id', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const { id } = req.params;
         const {
@@ -294,7 +375,11 @@ app.put('/api/locations/:id', async (req, res) => {
 });
 
 // Delete location
-app.delete('/api/locations/:id', async (req, res) => {
+app.delete('/api/locations/:id', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const { id } = req.params;
         await prisma.location.delete({ where: { id } });
@@ -306,16 +391,33 @@ app.delete('/api/locations/:id', async (req, res) => {
 });
 
 // Get products
-app.get('/api/products', async (req, res) => {
+app.get('/api/products', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const products = await prisma.product.findMany({
             include: {
                 location: { include: { translations: true } },
                 category: { include: { translations: true } },
-                translations: true
+                translations: true,
+                items: {
+                    where: {
+                        status: 'STOCK_ONLINE',
+                        is_sold: false
+                    },
+                    select: { id: true }
+                },
+                batches: {
+                    orderBy: { created_at: 'desc' },
+                    include: {
+                        items: { select: { id: true } }
+                    }
+                }
             }
         });
-        res.json(products);
+        res.json(products.map((product) => serializeProduct(product)));
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to fetch products' });
@@ -323,11 +425,27 @@ app.get('/api/products', async (req, res) => {
 });
 
 // Create product
-app.post('/api/products', async (req, res) => {
+app.post('/api/products', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const {
-            price, image, wildberries_url, ozon_url, location_id, category_id, translations
+            price,
+            image,
+            wildberries_url,
+            ozon_url,
+            location_id,
+            category_id,
+            translations,
+            country_code,
+            location_code,
+            item_code,
+            location_description,
+            is_published
         } = req.body;
+
         const product = await prisma.product.create({
             data: {
                 price: parseFloat(price),
@@ -336,13 +454,37 @@ app.post('/api/products', async (req, res) => {
                 ozon_url: normalizeOptionalUrl(ozon_url),
                 location_id,
                 category_id,
+                country_code: parseTemplateCode(country_code, 'RUS', 3),
+                location_code: parseTemplateCode(location_code, 'LOC', 3),
+                item_code: parseTemplateCode(item_code, '00', 8),
+                location_description: typeof location_description === 'string' && location_description.trim()
+                    ? location_description.trim()
+                    : null,
+                is_published: Boolean(is_published),
                 translations: {
                     create: translations
                 }
             },
-            include: { translations: true }
+            include: {
+                location: { include: { translations: true } },
+                category: { include: { translations: true } },
+                translations: true,
+                items: {
+                    where: {
+                        status: 'STOCK_ONLINE',
+                        is_sold: false
+                    },
+                    select: { id: true }
+                },
+                batches: {
+                    orderBy: { created_at: 'desc' },
+                    include: {
+                        items: { select: { id: true } }
+                    }
+                }
+            }
         });
-        res.json(product);
+        res.json(serializeProduct(product));
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: getPrismaErrorMessage(error, 'Failed to create product') });
@@ -350,12 +492,28 @@ app.post('/api/products', async (req, res) => {
 });
 
 // Update product
-app.put('/api/products/:id', async (req, res) => {
+app.put('/api/products/:id', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const { id } = req.params;
         const {
-            price, image, wildberries_url, ozon_url, location_id, category_id, translations
+            price,
+            image,
+            wildberries_url,
+            ozon_url,
+            location_id,
+            category_id,
+            translations,
+            country_code,
+            location_code,
+            item_code,
+            location_description,
+            is_published
         } = req.body;
+
         const product = await prisma.product.update({
             where: { id },
             data: {
@@ -365,22 +523,88 @@ app.put('/api/products/:id', async (req, res) => {
                 ozon_url: normalizeOptionalUrl(ozon_url),
                 location_id,
                 category_id,
+                country_code: parseTemplateCode(country_code, 'RUS', 3),
+                location_code: parseTemplateCode(location_code, 'LOC', 3),
+                item_code: parseTemplateCode(item_code, '00', 8),
+                location_description: typeof location_description === 'string' && location_description.trim()
+                    ? location_description.trim()
+                    : null,
+                is_published: Boolean(is_published),
                 translations: {
                     deleteMany: {},
                     create: translations
                 }
             },
-            include: { translations: true }
+            include: {
+                location: { include: { translations: true } },
+                category: { include: { translations: true } },
+                translations: true,
+                items: {
+                    where: {
+                        status: 'STOCK_ONLINE',
+                        is_sold: false
+                    },
+                    select: { id: true }
+                },
+                batches: {
+                    orderBy: { created_at: 'desc' },
+                    include: {
+                        items: { select: { id: true } }
+                    }
+                }
+            }
         });
-        res.json(product);
+        res.json(serializeProduct(product));
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: getPrismaErrorMessage(error, 'Failed to update product') });
     }
 });
 
+app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
+    try {
+        const product = await prisma.product.update({
+            where: { id: req.params.id },
+            data: {
+                is_published: Boolean(req.body?.is_published)
+            },
+            include: {
+                location: { include: { translations: true } },
+                category: { include: { translations: true } },
+                translations: true,
+                items: {
+                    where: {
+                        status: 'STOCK_ONLINE',
+                        is_sold: false
+                    },
+                    select: { id: true }
+                },
+                batches: {
+                    orderBy: { created_at: 'desc' },
+                    include: {
+                        items: { select: { id: true } }
+                    }
+                }
+            }
+        });
+
+        res.json(serializeProduct(product));
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: getPrismaErrorMessage(error, 'Failed to update publish state') });
+    }
+});
+
 // Delete product
-app.delete('/api/products/:id', async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
         const { id } = req.params;
         await prisma.product.delete({ where: { id } });

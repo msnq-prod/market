@@ -1,24 +1,7 @@
-# Stones: Тестовые креды и техническая информация
+# Stones: тестовые креды и техническая информация
 
-## 1. Что это за файл
-Этот файл нужен для быстрого старта тестирования локального окружения: вход в роли, запуск проекта, проверка БД, ключевые URL и API.
+## 1. Быстрый запуск
 
-## 2. Требования окружения
-- Node.js: `>=22.0.0`
-- npm: `>=10.5.1`
-- БД: MySQL (локально используется `127.0.0.1:3307`)
-- Рабочая БД: `stones`
-
-## 3. Переменные окружения
-Текущие значения в `.env`:
-
-```env
-DATABASE_URL="mysql://root@127.0.0.1:3307/stones?connection_limit=20&pool_timeout=30"
-ACCESS_TOKEN_SECRET="access_secret_123"
-REFRESH_TOKEN_SECRET="refresh_secret_123"
-```
-
-## 4. Быстрый запуск
 ```bash
 npm install
 npm run db:migrate
@@ -27,122 +10,136 @@ npm run db:seed
 npm run dev
 ```
 
-После `npm run dev`:
-- Frontend (Vite): `http://localhost:5173`
-- Backend (Express API): `http://localhost:3001`
+После запуска:
+- frontend: `http://localhost:5173`
+- backend: `http://localhost:3001`
+- mysql: `127.0.0.1:3307`
 
-## 5. Тестовые креды
+## 2. Тестовые креды
+
 Пароли из актуального `prisma/seed.ts`:
 - `admin123` для `admin@stones.com`
 - `partner123` для остальных seeded-пользователей
 
-Роли и логины:
-
 | Роль | Логин / Email | Пароль | Где использовать |
 |---|---|---|---|
-| ADMIN | `admin@stones.com` | `admin123` | `/admin/login`, `/admin/*`, доступ к админским API |
-| MANAGER | `manager@stones.com` | `partner123` | `/admin/login`, складские/операционные сценарии |
-| SALES_MANAGER | `sales@stones.com` | `partner123` | `/admin/login`, очередь заказов `/admin/orders` |
-| FRANCHISEE | `yakutia.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| FRANCHISEE | `ural.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| FRANCHISEE | `baltic.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| USER | `anna` | `partner123` | Публичная витрина `/`, checkout, история заказов |
-| USER | `maxim` | `partner123` | Публичная витрина `/`, checkout, история заказов |
-| USER | `olga` | `partner123` | Публичная витрина `/`, checkout, история заказов |
-| USER | `kirill` | `partner123` | Публичная витрина `/`, checkout, история заказов |
+| ADMIN | `admin@stones.com` | `admin123` | `/admin/login`, все HQ-операции |
+| MANAGER | `manager@stones.com` | `partner123` | `/admin/login`, товары, локации, склад |
+| SALES_MANAGER | `sales@stones.com` | `partner123` | `/admin/login`, `/admin/orders` |
+| FRANCHISEE | `yakutia.partner@stones.com` | `partner123` | `/partner/login`, партнерский кабинет |
+| FRANCHISEE | `ural.partner@stones.com` | `partner123` | `/partner/login`, партнерский кабинет |
+| FRANCHISEE | `baltic.partner@stones.com` | `partner123` | `/partner/login`, партнерский кабинет |
+| USER | `anna` | `partner123` | публичная витрина, checkout, история |
+| USER | `maxim` | `partner123` | публичная витрина, checkout, история |
+| USER | `olga` | `partner123` | публичная витрина, checkout, история |
+| USER | `kirill` | `partner123` | публичная витрина, checkout, история |
 
-## 6. Важные UI-маршруты
-- Публичная витрина: `/`
-- Цифровой двойник по токену: `/clone/:publicToken`
-- Логин админки: `/admin/login`
-- Логин партнера/персонала: `/partner/login`
-- Партнёрский дашборд: `/partner/dashboard`
-- Создание партии: `/partner/batches/new`
+## 3. Ключевые UI-маршруты
+
+- Витрина: `/`
+- Паспорт камня: `/clone/:publicToken`
+- Админ-логин: `/admin/login`
+- Партнер-логин: `/partner/login`
+- Dashboard HQ: `/admin`
+- Товары HQ: `/admin/products`
+- Склад HQ: `/admin/warehouse`
+- Приемка legacy: `/admin/acceptance`
+- Аллокация: `/admin/allocation`
+- Заказы сайта: `/admin/orders`
+- Партнерский дашборд: `/partner/dashboard`
+- Выполнение заказа на сбор: `/partner/batches/new`
+- Партии партнера: `/partner/batches`
 - QR центр: `/partner/qr`
 - Печать QR: `/partner/qr/print?batchId=<ID>`
-- Финансы партнёра: `/partner/finance`
-- Админ дашборд: `/admin`
-- Заказы с сайта: `/admin/orders`
-- Приемка: `/admin/acceptance`
-- Аллокация: `/admin/allocation`
-- Пользователи: `/admin/users`
-- Редактор страницы цифрового двойника: `/admin/clone-content`
 
-## 7. API, которые чаще всего нужны во время тестов
+## 4. Основные API для ручной проверки
 
 Аутентификация:
-- `GET /auth/me`
 - `POST /auth/login`
 - `POST /auth/refresh`
-- `POST /auth/register`
-- `POST /api/users`
-- `POST /api/orders`
-- `GET /api/orders/my`
-- `GET /api/orders`
-- `PATCH /api/orders/:id`
+- `GET /auth/me`
 
-Операции партнёра и HQ:
-- `GET /api/batches`
+Новый v1 flow:
+- `GET /api/collection-requests`
+- `POST /api/collection-requests`
+- `PATCH /api/collection-requests/:id`
+- `DELETE /api/collection-requests/:id`
+- `POST /api/collection-requests/:id/ack`
+- `POST /api/collection-requests/:id/complete`
+- `POST /api/batches/:id/receive`
+- `POST /api/batches/:id/media-sync`
+- `POST /api/batches/:id/finalize`
+
+QR и clone:
+- `GET /api/batches/:batchId/qr-pack`
+- `GET /api/items/batch/:batchId`
+- `GET /api/public/items/:publicToken`
+- `GET /api/public/items/:publicToken/qr`
+
+Legacy-совместимость:
 - `POST /api/batches`
 - `POST /api/batches/:id/send`
-- `POST /api/batches/:id/receive`
-- `GET /api/batches/:batchId/qr-pack`
 - `POST /api/items/batch/:batchId/items`
-- `GET /api/items/batch/:batchId`
 - `POST /api/hq/acceptance/:batchId/verify`
 - `POST /api/hq/items/:itemId/accept`
 - `POST /api/hq/items/:itemId/reject`
 - `POST /api/hq/batches/:batchId/finish`
-- `POST /api/financials/items/:itemId/allocate`
-- `GET /api/financials/me`
-- `GET /api/financials/ledger`
 
-Публичный цифровой двойник:
-- `GET /api/public/items/:publicToken`
-- `GET /api/public/items/:publicToken/qr`
-- `POST /api/public/items/:publicToken/activate`
+## 5. Ожидаемое состояние БД после `npm run db:seed`
 
-Каталог:
-- `GET /api/locations`
-- `GET /api/products`
-- `GET /api/categories`
-- `GET /api/languages`
+Сид создает:
+- локации: `5`
+- товары-шаблоны: `10`
+- пользователи: `10`
+- заказы на сбор: `8`
+- партии: `6`
+- item-позиции: `24`
+- ledger-записи: `10`
+- site-orders: `4`
 
-## 8. Ожидаемое состояние БД после `npm run db:seed`
-Сид создаёт предсказуемый набор данных:
-- Локации: `5`
-- Товары: `10`
-- Пользователи: `10`
-- Партии: `7`
-- Item-позиции: `27`
-- Ledger-записи: `10`
-- Заказы: `4`
+Ключевые заказы на сбор:
+- `req-yak-2026-01`: `IN_STOCK`
+- `req-yak-2026-02`: `IN_TRANSIT`
+- `req-ural-2026-01`: `IN_STOCK`
+- `req-ural-2026-02`: `RECEIVED`
+- `req-ural-open`: `OPEN`
+- `req-baltic-in-progress`: `IN_PROGRESS`
+- `req-kola-cancelled`: `CANCELLED`
 
-Статусы демо-заказов:
-- `order-anna-001`: `COMPLETED`
-- `order-maxim-001`: `IN_PROGRESS`
-- `order-olga-001`: `NEW`
-- `order-kirill-001`: `CANCELLED`
-
-Ключевые статусы партий в тестовых данных:
-- `batch-yak-2026-01`: `FINISHED`
-- `batch-ural-2026-01`: `FINISHED`
-- `batch-baltic-2026-01`: `FINISHED`
+Ключевые партии:
+- `batch-yak-2026-01`: `IN_STOCK`
+- `batch-yak-2026-02`: `IN_TRANSIT`
+- `batch-ural-2026-01`: `IN_STOCK`
 - `batch-ural-2026-02`: `RECEIVED`
-- `batch-baltic-2026-02`: `ERROR`
-- `batch-yak-2026-02`: `TRANSIT`
-- `batch-ural-2026-03`: `DRAFT`
+- `batch-baltic-2026-01`: `IN_STOCK`
+- `batch-baltic-2026-02`: `CANCELLED`
 
-## 9. Проверка цифрового двойника (быстрый сценарий)
-1. Войти как франчайзи: `yakutia.partner@stones.com / partner123`.
-2. Открыть `/partner/qr`.
-3. Выбрать партию и взять `clone_url` или `public_token`.
-4. Открыть `/clone/:publicToken`.
-5. Проверить QR-картинку через `GET /api/public/items/:publicToken/qr`.
+Опубликованные шаблоны:
+- `prod-yak-001`
+- `prod-ural-001`
+- `prod-baltic-001`
 
-## 10. Известный нюанс текущей БД
-Если в локальной БД нет таблицы `content_pages`, сид не падает: блок сидирования контента цифрового двойника пропускается с предупреждением.
+У этих шаблонов есть реальные складские экземпляры для публичной витрины и checkout/regression.
 
-Отдельный нюанс checkout:
-- открытый `POST /auth/register` теперь создает только buyer-аккаунт с ролью `USER` и логином `username`;
-- staff и франчайзи создаются только через защищённый `POST /api/users`.
+## 6. Быстрый smoke сценарий v1
+
+1. Войти как `admin@stones.com / admin123`.
+2. Открыть `/admin/products` и проверить опубликованные шаблоны и остатки.
+3. Перейти в `/admin/warehouse` и убедиться, что есть:
+   - открытый заказ `req-ural-open`;
+   - заказ `req-baltic-in-progress`;
+   - полученная партия `batch-ural-2026-02`.
+4. Войти как `yakutia.partner@stones.com / partner123`.
+5. Открыть `/partner/dashboard` и проверить свои заказы и партии.
+6. Открыть `/partner/qr`, выбрать партию и получить `clone_url`.
+7. Открыть `/clone/:publicToken` и проверить паспорт конкретного `Item`.
+
+## 7. Важные замечания
+
+- Цифровой двойник привязан к `Item`, а не к `Product`.
+- Публичная доступность зависит и от `is_published`, и от реального остатка `Item`.
+- Переход партии в `IN_STOCK` через новый workflow требует media для каждого `Item`.
+- Legacy-роуты сохранены специально для QR- и acceptance-regression.
+
+---
+Актуально на 04.04.2026

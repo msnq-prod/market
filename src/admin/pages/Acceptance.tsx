@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Search, CheckCircle, XCircle } from 'lucide-react';
+import { authFetch } from '../../utils/authFetch';
 
 type BatchItem = {
     id: string;
@@ -37,13 +38,10 @@ export function Acceptance() {
     const [batch, setBatch] = useState<BatchData | null>(null);
 
     const fetchTransitBatches = async (): Promise<BatchData[]> => {
-        const token = localStorage.getItem('accessToken');
-        const res = await fetch('/api/batches', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const res = await authFetch('/api/batches');
         if (!res.ok) return [];
         const batches = await res.json() as BatchData[];
-        const transitOnly = batches.filter((batch) => batch.status === 'TRANSIT');
+        const transitOnly = batches.filter((batch) => batch.status === 'IN_TRANSIT');
         setTransitBatches(transitOnly);
         return transitOnly;
     };
@@ -85,12 +83,10 @@ export function Acceptance() {
         setScannedItem(null);
 
         try {
-            const token = localStorage.getItem('accessToken');
-            const res = await fetch(`/api/hq/acceptance/${batchId}/verify`, {
+            const res = await authFetch(`/api/hq/acceptance/${batchId}/verify`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ temp_id: tempId })
             });
@@ -114,15 +110,13 @@ export function Acceptance() {
         if (!scannedItem) return;
         setLoading(true);
         try {
-            const token = localStorage.getItem('accessToken');
             const endpoint = decision === 'accept' ? 'accept' : 'reject';
             const body = decision === 'reject' ? { reason: 'Не пройден контроль качества' } : {};
 
-            const res = await fetch(`/api/hq/items/${scannedItem.id}/${endpoint}`, {
+            const res = await authFetch(`/api/hq/items/${scannedItem.id}/${endpoint}`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(body)
             });
@@ -145,10 +139,8 @@ export function Acceptance() {
 
     const handleFinishBatch = async () => {
         if (!confirm('Подтвердите, что все позиции обработаны')) return;
-        const token = localStorage.getItem('accessToken');
-        const res = await fetch(`/api/hq/batches/${batchId}/finish`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` }
+        const res = await authFetch(`/api/hq/batches/${batchId}/finish`, {
+            method: 'POST'
         });
         if (res.ok) {
             alert('Партия завершена');
@@ -196,7 +188,7 @@ export function Acceptance() {
                         </div>
                         <div className="flex flex-wrap gap-2">
                             {transitBatches.length === 0 && (
-                                <span className="text-sm text-gray-500">Нет партий в статусе TRANSIT.</span>
+                                <span className="text-sm text-gray-500">Нет партий в статусе IN_TRANSIT.</span>
                             )}
                             {transitBatches.map((transit) => (
                                 <button

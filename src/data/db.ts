@@ -15,6 +15,13 @@ export interface Product {
     ozon_url?: string | null;
     category_id: string;
     location_id: string;
+    country_code?: string;
+    location_code?: string;
+    item_code?: string;
+    location_description?: string | null;
+    is_published?: boolean;
+    available_stock?: number;
+    available?: boolean;
     category_name?: string;
     location_name?: string;
     level?: number;
@@ -29,6 +36,12 @@ export interface Product {
         name: string;
         description: string;
     }[];
+    batches?: Array<{
+        id: string;
+        status: string;
+        created_at: string;
+        items_count: number;
+    }>;
 }
 
 export interface Location {

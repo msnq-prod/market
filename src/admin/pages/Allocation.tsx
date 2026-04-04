@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Store, Globe, ArrowRight } from 'lucide-react';
+import { authFetch } from '../../utils/authFetch';
 
 type StockItem = {
     id: string;
@@ -36,10 +37,7 @@ export function Allocation() {
         setLoading(true);
         setError('');
         try {
-            const token = localStorage.getItem('accessToken');
-            const res = await fetch('/api/batches', {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            const res = await authFetch('/api/batches');
 
             if (!res.ok) return;
             const batches = await res.json();
@@ -59,10 +57,7 @@ export function Allocation() {
 
     const loadFranchisees = async () => {
         try {
-            const token = localStorage.getItem('accessToken');
-            const res = await fetch('/api/users', {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            const res = await authFetch('/api/users');
 
             if (!res.ok) return;
             const users = await res.json();
@@ -93,14 +88,12 @@ export function Allocation() {
         setLoading(true);
         setError('');
         try {
-            const token = localStorage.getItem('accessToken');
             await Promise.all(
                 selectedItems.map((id) =>
-                    fetch(`/api/financials/items/${id}/allocate`, {
+                    authFetch(`/api/financials/items/${id}/allocate`, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
-                            Authorization: `Bearer ${token}`
+                            'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
                             channel,

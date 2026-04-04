@@ -21,8 +21,8 @@ type SaleFilter = 'ALL' | 'SOLD' | 'UNSOLD';
 type SortBy = 'NEWEST' | 'OLDEST' | 'MOST_SOLD' | 'LEAST_SOLD';
 
 const SOLD_ITEM_STATUSES = new Set(['SOLD_ONLINE', 'ACTIVATED']);
-const SENT_BATCH_STATUSES = new Set(['TRANSIT', 'RECEIVED', 'FINISHED']);
-const IN_PROGRESS_BATCH_STATUSES = new Set(['DRAFT', 'TRANSIT', 'RECEIVED']);
+const SENT_BATCH_STATUSES = new Set(['IN_TRANSIT', 'RECEIVED', 'IN_STOCK']);
+const IN_PROGRESS_BATCH_STATUSES = new Set(['IN_PROGRESS']);
 
 const getSoldCount = (items: BatchItem[]): number => items.filter((item) => SOLD_ITEM_STATUSES.has(item.status)).length;
 
@@ -79,7 +79,7 @@ export function Batches() {
         const totalBatches = batches.length;
         const sentBatches = batches.filter((batch) => SENT_BATCH_STATUSES.has(batch.status)).length;
         const inProgressBatches = batches.filter((batch) => IN_PROGRESS_BATCH_STATUSES.has(batch.status)).length;
-        const finishedBatches = batches.filter((batch) => batch.status === 'FINISHED').length;
+        const finishedBatches = batches.filter((batch) => batch.status === 'IN_STOCK').length;
         const totalItems = batches.reduce((acc, batch) => acc + batch.items.length, 0);
         const soldItems = batches.reduce((acc, batch) => acc + getSoldCount(batch.items), 0);
         const unsoldItems = totalItems - soldItems;
@@ -106,7 +106,7 @@ export function Batches() {
                 return false;
             }
 
-            if (batchFilter === 'FINISHED' && batch.status !== 'FINISHED') {
+            if (batchFilter === 'FINISHED' && batch.status !== 'IN_STOCK') {
                 return false;
             }
 
@@ -475,24 +475,24 @@ function FilterButton({ label, count, active, onClick }: { label: string; count:
 
 function StatusBadge({ status }: { status: string }) {
     const colors: Record<string, string> = {
-        DRAFT: 'bg-gray-100 text-gray-700',
-        TRANSIT: 'bg-amber-100 text-amber-700',
+        IN_PROGRESS: 'bg-gray-100 text-gray-700',
+        IN_TRANSIT: 'bg-amber-100 text-amber-700',
         RECEIVED: 'bg-blue-100 text-blue-700',
-        FINISHED: 'bg-emerald-100 text-emerald-700',
-        ERROR: 'bg-red-100 text-red-700'
+        IN_STOCK: 'bg-emerald-100 text-emerald-700',
+        CANCELLED: 'bg-red-100 text-red-700'
     };
     const labels: Record<string, string> = {
-        DRAFT: 'ЧЕРНОВИК',
-        TRANSIT: 'В ПУТИ',
+        IN_PROGRESS: 'В РАБОТЕ',
+        IN_TRANSIT: 'В ДОСТАВКЕ',
         RECEIVED: 'ПОЛУЧЕНО',
-        FINISHED: 'ЗАВЕРШЕНО',
-        ERROR: 'ОШИБКА'
+        IN_STOCK: 'НА СКЛАДЕ',
+        CANCELLED: 'ОТМЕНЕНО'
     };
 
     return (
         <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${colors[status] || 'bg-gray-100 text-gray-700'}`}>
-            {status === 'TRANSIT' && <Truck size={12} />}
-            {status === 'FINISHED' && <Check size={12} />}
+            {status === 'IN_TRANSIT' && <Truck size={12} />}
+            {status === 'IN_STOCK' && <Check size={12} />}
             {labels[status] || status}
         </span>
     );

@@ -13,6 +13,29 @@ const daysAgo = (days: number, hour = 12) => {
     date.setHours(hour, 0, 0, 0);
     return date;
 };
+const collectionMoment = (days: number, hour = 12, minute = 0) => {
+    const date = daysAgo(days, hour);
+    date.setMinutes(minute, 0, 0);
+    return date;
+};
+const toCollectedDate = (date: Date) => new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+const formatCollectedTime = (date: Date) => `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+const formatItemSeq = (value: number) => String(value).padStart(3, '0');
+const formatCollectedDateCode = (date: Date) => {
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const year = String(date.getUTCFullYear()).slice(-2);
+    return `${day}${month}${year}`;
+};
+const buildSeedSerialNumber = (
+    product: { country_code: string; location_code: string; item_code: string },
+    collectedDate: Date,
+    itemSeq: number,
+    dailyBatchSeq: number
+) => {
+    const base = `${product.country_code}${product.location_code}${product.item_code}${formatCollectedDateCode(collectedDate)}${formatItemSeq(itemSeq)}`;
+    return dailyBatchSeq > 1 ? `${dailyBatchSeq}${base}` : base;
+};
 
 const isMissingContentPagesTable = (error: unknown) =>
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -55,6 +78,7 @@ async function main() {
         db.auditLog.deleteMany(),
         db.item.deleteMany(),
         db.batch.deleteMany(),
+        db.collectionRequest.deleteMany(),
         db.productTranslation.deleteMany(),
         db.product.deleteMany(),
         db.locationTranslation.deleteMany(),
@@ -175,6 +199,45 @@ async function main() {
     }
 
     // 5) Products
+    const locationTemplateMeta: Record<string, { country_code: string; location_code: string; location_description: string }> = {
+        'loc-yakutia': {
+            country_code: 'RUS',
+            location_code: 'YAK',
+            location_description: 'Алмазный карьер с промышленной добычей и сортировкой камня.'
+        },
+        'loc-ural': {
+            country_code: 'RUS',
+            location_code: 'URL',
+            location_description: 'Центр огранки малахита, горного хрусталя и редких минералов.'
+        },
+        'loc-baltic': {
+            country_code: 'RUS',
+            location_code: 'BAL',
+            location_description: 'Побережье Балтики с промышленной добычей янтаря.'
+        },
+        'loc-altai': {
+            country_code: 'RUS',
+            location_code: 'ALT',
+            location_description: 'Горные россыпи кварца и халцедона коллекционного качества.'
+        },
+        'loc-kola': {
+            country_code: 'RUS',
+            location_code: 'KOL',
+            location_description: 'Северные месторождения апатита и редкоземельных минералов.'
+        }
+    };
+    const productTemplateMeta: Record<string, { item_code: string; is_published: boolean }> = {
+        'prod-yak-001': { item_code: '01', is_published: true },
+        'prod-yak-002': { item_code: '02', is_published: false },
+        'prod-ural-001': { item_code: '03', is_published: true },
+        'prod-ural-002': { item_code: '04', is_published: false },
+        'prod-baltic-001': { item_code: '05', is_published: true },
+        'prod-baltic-002': { item_code: '06', is_published: false },
+        'prod-altai-001': { item_code: '07', is_published: false },
+        'prod-altai-002': { item_code: '08', is_published: false },
+        'prod-kola-001': { item_code: '09', is_published: false },
+        'prod-kola-002': { item_code: '10', is_published: false },
+    };
     const products = [
         {
             id: 'prod-yak-001',
@@ -269,6 +332,9 @@ async function main() {
     ];
 
     for (const product of products) {
+        const locationMeta = locationTemplateMeta[product.location_id];
+        const productMeta = productTemplateMeta[product.id];
+
         await db.product.create({
             data: {
                 id: product.id,
@@ -276,6 +342,11 @@ async function main() {
                 image: product.image,
                 location_id: product.location_id,
                 category_id: product.category_id,
+                country_code: locationMeta?.country_code || 'RUS',
+                location_code: locationMeta?.location_code || 'LOC',
+                item_code: productMeta?.item_code || '00',
+                location_description: locationMeta?.location_description || product.description,
+                is_published: productMeta?.is_published ?? false,
                 translations: {
                     create: [
                         {
@@ -293,6 +364,17 @@ async function main() {
             },
         });
     }
+
+    const productCodeMap = Object.fromEntries(
+        products.map((product) => [
+            product.id,
+            {
+                country_code: locationTemplateMeta[product.location_id]?.country_code || 'RUS',
+                location_code: locationTemplateMeta[product.location_id]?.location_code || 'LOC',
+                item_code: productTemplateMeta[product.id]?.item_code || '00'
+            }
+        ])
+    ) as Record<string, { country_code: string; location_code: string; item_code: string }>;
 
     // 6) Users
     await db.user.createMany({
@@ -407,20 +489,135 @@ async function main() {
         ],
     });
 
-    // 7) Batches + items (already active operational lifecycle)
+    // 7) Collection requests + batches + items
+    const yakStockMoment = collectionMoment(49, 9, 30);
+    const yakTransitMoment = collectionMoment(7, 8, 15);
+    const uralStockMoment = collectionMoment(34, 9, 20);
+    const uralReceivedMoment = collectionMoment(16, 8, 45);
+    const balticStockMoment = collectionMoment(30, 10, 10);
+    const balticCancelledMoment = collectionMoment(10, 10, 5);
+
+    await db.collectionRequest.createMany({
+        data: [
+            {
+                id: 'req-yak-2026-01',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-yakutia',
+                accepted_by: 'usr-fr-yakutia',
+                product_id: 'prod-yak-001',
+                title: 'Сбор партии YAK-01',
+                note: 'Промышленная сортировка с маркировкой по пакетам.',
+                requested_qty: 6,
+                status: 'IN_STOCK',
+                accepted_at: daysAgo(49, 8),
+                created_at: daysAgo(50, 13)
+            },
+            {
+                id: 'req-yak-2026-02',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-yakutia',
+                accepted_by: 'usr-fr-yakutia',
+                product_id: 'prod-yak-001',
+                title: 'Сбор партии YAK-02',
+                note: 'Партия уже в доставке, ожидаем приемку HQ.',
+                requested_qty: 4,
+                status: 'IN_TRANSIT',
+                accepted_at: daysAgo(7, 7),
+                created_at: daysAgo(8, 15)
+            },
+            {
+                id: 'req-ural-2026-01',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-ural',
+                accepted_by: 'usr-fr-ural',
+                product_id: 'prod-ural-001',
+                title: 'Сбор партии URL-03',
+                note: 'Готовая складская партия для сайта.',
+                requested_qty: 5,
+                status: 'IN_STOCK',
+                accepted_at: daysAgo(35, 8),
+                created_at: daysAgo(36, 12)
+            },
+            {
+                id: 'req-ural-2026-02',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-ural',
+                accepted_by: 'usr-fr-ural',
+                product_id: 'prod-ural-002',
+                title: 'Сбор партии URL-04',
+                note: 'Партия получена HQ, ждет дозагрузки media.',
+                requested_qty: 3,
+                status: 'RECEIVED',
+                accepted_at: daysAgo(17, 9),
+                created_at: daysAgo(18, 14)
+            },
+            {
+                id: 'req-baltic-2026-01',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-baltic',
+                accepted_by: 'usr-fr-baltic',
+                product_id: 'prod-baltic-001',
+                title: 'Сбор партии BAL-05',
+                note: 'Партия уже на складе и доступна для продажи.',
+                requested_qty: 4,
+                status: 'IN_STOCK',
+                accepted_at: daysAgo(31, 9),
+                created_at: daysAgo(32, 11)
+            },
+            {
+                id: 'req-ural-open',
+                created_by: 'usr-admin',
+                product_id: 'prod-ural-001',
+                title: 'Новый заказ на сбор URL-03',
+                note: 'Открытый пул для ближайшего окна сбора.',
+                requested_qty: 5,
+                status: 'OPEN',
+                created_at: daysAgo(1, 12)
+            },
+            {
+                id: 'req-baltic-in-progress',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-baltic',
+                accepted_by: 'usr-fr-baltic',
+                product_id: 'prod-baltic-002',
+                title: 'Сбор партии BAL-06',
+                note: 'Партнер уже принял заказ, партия еще не сформирована.',
+                requested_qty: 3,
+                status: 'IN_PROGRESS',
+                accepted_at: daysAgo(2, 10),
+                created_at: daysAgo(3, 9)
+            },
+            {
+                id: 'req-kola-cancelled',
+                created_by: 'usr-admin',
+                target_user_id: 'usr-fr-ural',
+                product_id: 'prod-kola-001',
+                title: 'Отмененный заказ KOL-09',
+                note: 'Отменен администратором до начала исполнения.',
+                requested_qty: 2,
+                status: 'CANCELLED',
+                created_at: daysAgo(5, 11)
+            }
+        ]
+    });
+
+    const soldStatuses = new Set(['SOLD_ONLINE', 'ACTIVATED']);
     const batchSeeds = [
         {
             id: 'batch-yak-2026-01',
             owner_id: 'usr-fr-yakutia',
-            status: 'FINISHED' as const,
+            product_id: 'prod-yak-001',
+            collection_request_id: 'req-yak-2026-01',
+            status: 'IN_STOCK' as const,
             video_url: '/uploads/videos/yakutia-2026-01.mp4',
             gps_lat: 62.5353,
             gps_lng: 113.9611,
-            created_at: daysAgo(48, 10),
+            collected_at: yakStockMoment,
+            daily_batch_seq: 1,
             items: [
                 {
                     id: 'item-yak-001',
-                    temp_id: 'ЯК-001',
+                    temp_id: '001',
                     public_token: 'yak001token',
                     photo_url: 'https://picsum.photos/seed/item-yak-001/600/600',
                     status: 'ACTIVATED' as const,
@@ -432,18 +629,16 @@ async function main() {
                 },
                 {
                     id: 'item-yak-002',
-                    temp_id: 'ЯК-002',
+                    temp_id: '002',
                     public_token: 'yak002token',
                     photo_url: 'https://picsum.photos/seed/item-yak-002/600/600',
                     status: 'STOCK_ONLINE' as const,
                     sales_channel: 'MARKETPLACE' as const,
-                    price_sold: 92000,
-                    commission_hq: 13800,
                     created_at: daysAgo(47, 11),
                 },
                 {
                     id: 'item-yak-003',
-                    temp_id: 'ЯК-003',
+                    temp_id: '003',
                     public_token: 'yak003token',
                     photo_url: 'https://picsum.photos/seed/item-yak-003/600/600',
                     status: 'ON_CONSIGNMENT' as const,
@@ -452,7 +647,7 @@ async function main() {
                 },
                 {
                     id: 'item-yak-004',
-                    temp_id: 'ЯК-004',
+                    temp_id: '004',
                     public_token: 'yak004token',
                     photo_url: 'https://picsum.photos/seed/item-yak-004/600/600',
                     status: 'STOCK_HQ' as const,
@@ -460,7 +655,7 @@ async function main() {
                 },
                 {
                     id: 'item-yak-005',
-                    temp_id: 'ЯК-005',
+                    temp_id: '005',
                     public_token: 'yak005token',
                     photo_url: 'https://picsum.photos/seed/item-yak-005/600/600',
                     status: 'REJECTED' as const,
@@ -468,7 +663,7 @@ async function main() {
                 },
                 {
                     id: 'item-yak-006',
-                    temp_id: 'ЯК-006',
+                    temp_id: '006',
                     public_token: 'yak006token',
                     photo_url: 'https://picsum.photos/seed/item-yak-006/600/600',
                     status: 'ACTIVATED' as const,
@@ -483,15 +678,18 @@ async function main() {
         {
             id: 'batch-yak-2026-02',
             owner_id: 'usr-fr-yakutia',
-            status: 'TRANSIT' as const,
+            product_id: 'prod-yak-001',
+            collection_request_id: 'req-yak-2026-02',
+            status: 'IN_TRANSIT' as const,
             video_url: '/uploads/videos/yakutia-2026-02.mp4',
             gps_lat: 63.02,
             gps_lng: 112.45,
-            created_at: daysAgo(7, 8),
+            collected_at: yakTransitMoment,
+            daily_batch_seq: 1,
             items: [
                 {
                     id: 'item-yak-101',
-                    temp_id: 'ЯК-Т-101',
+                    temp_id: '001',
                     public_token: 'yakt101token',
                     photo_url: 'https://picsum.photos/seed/item-yak-101/600/600',
                     status: 'NEW' as const,
@@ -499,7 +697,7 @@ async function main() {
                 },
                 {
                     id: 'item-yak-102',
-                    temp_id: 'ЯК-Т-102',
+                    temp_id: '002',
                     public_token: 'yakt102token',
                     photo_url: 'https://picsum.photos/seed/item-yak-102/600/600',
                     status: 'NEW' as const,
@@ -507,7 +705,7 @@ async function main() {
                 },
                 {
                     id: 'item-yak-103',
-                    temp_id: 'ЯК-Т-103',
+                    temp_id: '003',
                     public_token: 'yakt103token',
                     photo_url: 'https://picsum.photos/seed/item-yak-103/600/600',
                     status: 'NEW' as const,
@@ -515,7 +713,7 @@ async function main() {
                 },
                 {
                     id: 'item-yak-104',
-                    temp_id: 'ЯК-Т-104',
+                    temp_id: '004',
                     public_token: 'yakt104token',
                     photo_url: 'https://picsum.photos/seed/item-yak-104/600/600',
                     status: 'NEW' as const,
@@ -524,52 +722,20 @@ async function main() {
             ],
         },
         {
-            id: 'batch-ural-2026-03',
-            owner_id: 'usr-fr-ural',
-            status: 'DRAFT' as const,
-            video_url: '/uploads/videos/ural-2026-03.mp4',
-            gps_lat: 57.22,
-            gps_lng: 59.96,
-            created_at: daysAgo(2, 13),
-            items: [
-                {
-                    id: 'item-ural-101',
-                    temp_id: 'УР-101',
-                    public_token: 'ural101token',
-                    photo_url: 'https://picsum.photos/seed/item-ural-101/600/600',
-                    status: 'NEW' as const,
-                    created_at: daysAgo(2, 13),
-                },
-                {
-                    id: 'item-ural-102',
-                    temp_id: 'УР-102',
-                    public_token: 'ural102token',
-                    photo_url: 'https://picsum.photos/seed/item-ural-102/600/600',
-                    status: 'NEW' as const,
-                    created_at: daysAgo(2, 14),
-                },
-                {
-                    id: 'item-ural-103',
-                    temp_id: 'УР-103',
-                    public_token: 'ural103token',
-                    photo_url: 'https://picsum.photos/seed/item-ural-103/600/600',
-                    status: 'NEW' as const,
-                    created_at: daysAgo(2, 15),
-                },
-            ],
-        },
-        {
             id: 'batch-ural-2026-01',
             owner_id: 'usr-fr-ural',
-            status: 'FINISHED' as const,
+            product_id: 'prod-ural-001',
+            collection_request_id: 'req-ural-2026-01',
+            status: 'IN_STOCK' as const,
             video_url: '/uploads/videos/ural-2026-01.mp4',
             gps_lat: 56.8389,
             gps_lng: 60.6057,
-            created_at: daysAgo(34, 9),
+            collected_at: uralStockMoment,
+            daily_batch_seq: 1,
             items: [
                 {
                     id: 'item-ural-201',
-                    temp_id: 'УР-201',
+                    temp_id: '001',
                     public_token: 'ural201token',
                     photo_url: 'https://picsum.photos/seed/item-ural-201/600/600',
                     status: 'ACTIVATED' as const,
@@ -581,7 +747,7 @@ async function main() {
                 },
                 {
                     id: 'item-ural-202',
-                    temp_id: 'УР-202',
+                    temp_id: '002',
                     public_token: 'ural202token',
                     photo_url: 'https://picsum.photos/seed/item-ural-202/600/600',
                     status: 'STOCK_HQ' as const,
@@ -589,18 +755,16 @@ async function main() {
                 },
                 {
                     id: 'item-ural-203',
-                    temp_id: 'УР-203',
+                    temp_id: '003',
                     public_token: 'ural203token',
                     photo_url: 'https://picsum.photos/seed/item-ural-203/600/600',
                     status: 'STOCK_ONLINE' as const,
                     sales_channel: 'MARKETPLACE' as const,
-                    price_sold: 88000,
-                    commission_hq: 13200,
                     created_at: daysAgo(33, 12),
                 },
                 {
                     id: 'item-ural-204',
-                    temp_id: 'УР-204',
+                    temp_id: '004',
                     public_token: 'ural204token',
                     photo_url: 'https://picsum.photos/seed/item-ural-204/600/600',
                     status: 'REJECTED' as const,
@@ -608,7 +772,7 @@ async function main() {
                 },
                 {
                     id: 'item-ural-205',
-                    temp_id: 'УР-205',
+                    temp_id: '005',
                     public_token: 'ural205token',
                     photo_url: 'https://picsum.photos/seed/item-ural-205/600/600',
                     status: 'SOLD_ONLINE' as const,
@@ -622,15 +786,18 @@ async function main() {
         {
             id: 'batch-baltic-2026-01',
             owner_id: 'usr-fr-baltic',
-            status: 'FINISHED' as const,
+            product_id: 'prod-baltic-001',
+            collection_request_id: 'req-baltic-2026-01',
+            status: 'IN_STOCK' as const,
             video_url: '/uploads/videos/baltic-2026-01.mp4',
             gps_lat: 54.7104,
             gps_lng: 20.4522,
-            created_at: daysAgo(30, 10),
+            collected_at: balticStockMoment,
+            daily_batch_seq: 1,
             items: [
                 {
                     id: 'item-baltic-301',
-                    temp_id: 'БЛ-301',
+                    temp_id: '001',
                     public_token: 'balt301token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-301/600/600',
                     status: 'ACTIVATED' as const,
@@ -642,7 +809,7 @@ async function main() {
                 },
                 {
                     id: 'item-baltic-302',
-                    temp_id: 'БЛ-302',
+                    temp_id: '002',
                     public_token: 'balt302token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-302/600/600',
                     status: 'ACTIVATED' as const,
@@ -654,16 +821,16 @@ async function main() {
                 },
                 {
                     id: 'item-baltic-303',
-                    temp_id: 'БЛ-303',
+                    temp_id: '003',
                     public_token: 'balt303token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-303/600/600',
-                    status: 'ON_CONSIGNMENT' as const,
-                    sales_channel: 'OFFLINE_POINT' as const,
+                    status: 'STOCK_ONLINE' as const,
+                    sales_channel: 'MARKETPLACE' as const,
                     created_at: daysAgo(29, 12),
                 },
                 {
                     id: 'item-baltic-304',
-                    temp_id: 'БЛ-304',
+                    temp_id: '004',
                     public_token: 'balt304token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-304/600/600',
                     status: 'REJECTED' as const,
@@ -672,17 +839,63 @@ async function main() {
             ],
         },
         {
+            id: 'batch-ural-2026-02',
+            owner_id: 'usr-fr-ural',
+            product_id: 'prod-ural-002',
+            collection_request_id: 'req-ural-2026-02',
+            status: 'RECEIVED' as const,
+            video_url: '/uploads/videos/ural-2026-02.mp4',
+            gps_lat: 57.0,
+            gps_lng: 60.2,
+            collected_at: uralReceivedMoment,
+            daily_batch_seq: 1,
+            items: [
+                {
+                    id: 'item-ural-301',
+                    temp_id: '001',
+                    public_token: 'ural301token',
+                    photo_url: 'https://picsum.photos/seed/item-ural-301/600/600',
+                    item_photo_url: 'https://picsum.photos/seed/item-ural-301/600/600',
+                    item_video_url: null,
+                    status: 'STOCK_HQ' as const,
+                    created_at: daysAgo(16, 9),
+                },
+                {
+                    id: 'item-ural-302',
+                    temp_id: '002',
+                    public_token: 'ural302token',
+                    photo_url: 'https://picsum.photos/seed/item-ural-302/600/600',
+                    item_photo_url: 'https://picsum.photos/seed/item-ural-302/600/600',
+                    item_video_url: null,
+                    status: 'STOCK_HQ' as const,
+                    created_at: daysAgo(16, 10),
+                },
+                {
+                    id: 'item-ural-303',
+                    temp_id: '003',
+                    public_token: 'ural303token',
+                    photo_url: 'https://picsum.photos/seed/item-ural-303/600/600',
+                    item_photo_url: null,
+                    item_video_url: null,
+                    status: 'REJECTED' as const,
+                    created_at: daysAgo(16, 11),
+                },
+            ],
+        },
+        {
             id: 'batch-baltic-2026-02',
             owner_id: 'usr-fr-baltic',
-            status: 'ERROR' as const,
+            product_id: 'prod-baltic-002',
+            status: 'CANCELLED' as const,
             video_url: '/uploads/videos/baltic-2026-02.mp4',
             gps_lat: 54.95,
             gps_lng: 20.1,
-            created_at: daysAgo(10, 10),
+            collected_at: balticCancelledMoment,
+            daily_batch_seq: 1,
             items: [
                 {
                     id: 'item-baltic-401',
-                    temp_id: 'БЛ-401',
+                    temp_id: '001',
                     public_token: 'balt401token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-401/600/600',
                     status: 'NEW' as const,
@@ -690,7 +903,7 @@ async function main() {
                 },
                 {
                     id: 'item-baltic-402',
-                    temp_id: 'БЛ-402',
+                    temp_id: '002',
                     public_token: 'balt402token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-402/600/600',
                     status: 'NEW' as const,
@@ -698,55 +911,47 @@ async function main() {
                 },
             ],
         },
-        {
-            id: 'batch-ural-2026-02',
-            owner_id: 'usr-fr-ural',
-            status: 'RECEIVED' as const,
-            video_url: '/uploads/videos/ural-2026-02.mp4',
-            gps_lat: 57.0,
-            gps_lng: 60.2,
-            created_at: daysAgo(16, 8),
-            items: [
-                {
-                    id: 'item-ural-301',
-                    temp_id: 'УР-301',
-                    public_token: 'ural301token',
-                    photo_url: 'https://picsum.photos/seed/item-ural-301/600/600',
-                    status: 'STOCK_HQ' as const,
-                    created_at: daysAgo(16, 9),
-                },
-                {
-                    id: 'item-ural-302',
-                    temp_id: 'УР-302',
-                    public_token: 'ural302token',
-                    photo_url: 'https://picsum.photos/seed/item-ural-302/600/600',
-                    status: 'STOCK_HQ' as const,
-                    created_at: daysAgo(16, 10),
-                },
-                {
-                    id: 'item-ural-303',
-                    temp_id: 'УР-303',
-                    public_token: 'ural303token',
-                    photo_url: 'https://picsum.photos/seed/item-ural-303/600/600',
-                    status: 'REJECTED' as const,
-                    created_at: daysAgo(16, 11),
-                },
-            ],
-        },
     ];
 
     for (const batch of batchSeeds) {
+        const collectedDate = toCollectedDate(batch.collected_at);
+        const collectedTime = formatCollectedTime(batch.collected_at);
+        const productCodes = productCodeMap[batch.product_id];
+
         await db.batch.create({
             data: {
                 id: batch.id,
                 owner_id: batch.owner_id,
+                product_id: batch.product_id,
+                collection_request_id: batch.collection_request_id,
                 status: batch.status,
                 video_url: batch.video_url,
                 gps_lat: batch.gps_lat,
                 gps_lng: batch.gps_lng,
-                created_at: batch.created_at,
+                collected_date: collectedDate,
+                collected_time: collectedTime,
+                daily_batch_seq: batch.daily_batch_seq,
+                created_at: batch.collected_at,
                 items: {
-                    create: batch.items,
+                    create: batch.items.map((item, index) => ({
+                        ...item,
+                        product_id: batch.product_id,
+                        serial_number: buildSeedSerialNumber(productCodes, collectedDate, index + 1, batch.daily_batch_seq),
+                        item_seq: index + 1,
+                        item_photo_url: typeof item.item_photo_url !== 'undefined'
+                            ? item.item_photo_url
+                            : batch.status === 'IN_STOCK'
+                                ? item.photo_url
+                                : null,
+                        item_video_url: typeof item.item_video_url !== 'undefined'
+                            ? item.item_video_url
+                            : batch.status === 'IN_STOCK'
+                                ? batch.video_url
+                                : null,
+                        is_sold: soldStatuses.has(item.status),
+                        collected_date: collectedDate,
+                        collected_time: collectedTime
+                    })),
                 },
             },
         });

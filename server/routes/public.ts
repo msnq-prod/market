@@ -6,18 +6,18 @@ import { buildCloneUrl } from '../utils/cloneUrls.ts';
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get QR code image for public clone page
 router.get('/items/:publicToken/qr', async (req, res) => {
-    const { publicToken } = req.params;
     try {
         const item = await prisma.item.findUnique({
-            where: { public_token: publicToken },
+            where: { public_token: req.params.publicToken },
             select: { id: true }
         });
 
-        if (!item) return res.status(404).json({ error: 'Item not found' });
+        if (!item) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
 
-        const qrPayload = buildCloneUrl(req, publicToken);
+        const qrPayload = buildCloneUrl(req, req.params.publicToken);
         const pngBuffer = await QRCode.toBuffer(qrPayload, {
             type: 'png',
             width: 512,
@@ -30,54 +30,98 @@ router.get('/items/:publicToken/qr', async (req, res) => {
         res.send(pngBuffer);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to generate QR code' });
+        res.status(500).json({ error: 'Не удалось сгенерировать QR-код.' });
     }
 });
 
-// Get Item Info by Public Token
 router.get('/items/:publicToken', async (req, res) => {
-    const { publicToken } = req.params;
     try {
         const item = await prisma.item.findUnique({
-            where: { public_token: publicToken },
+            where: { public_token: req.params.publicToken },
             include: {
                 batch: {
                     include: {
-                        owner: { select: { name: true } }
+                        owner: {
+                            select: { id: true, name: true }
+                        }
+                    }
+                },
+                product: {
+                    include: {
+                        translations: true,
+                        location: {
+                            include: {
+                                translations: true
+                            }
+                        }
                     }
                 }
             }
         });
 
-        if (!item) return res.status(404).json({ error: 'Item not found' });
+        if (!item) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
 
-        // Filter sensitive data?
         res.json({
-            ...item,
-            clone_url: buildCloneUrl(req, publicToken)
+            id: item.id,
+            temp_id: item.temp_id,
+            serial_number: item.serial_number,
+            public_token: item.public_token,
+            status: item.status,
+            is_sold: item.is_sold,
+            activation_date: item.activation_date,
+            photo_url: item.item_photo_url || item.photo_url,
+            item_photo_url: item.item_photo_url,
+            item_video_url: item.item_video_url,
+            collected_date: item.collected_date,
+            collected_time: item.collected_time,
+            clone_url: buildCloneUrl(req, req.params.publicToken),
+            batch: {
+                id: item.batch.id,
+                gps_lat: item.batch.gps_lat,
+                gps_lng: item.batch.gps_lng,
+                video_url: item.batch.video_url,
+                collected_date: item.batch.collected_date,
+                collected_time: item.batch.collected_time,
+                created_at: item.batch.created_at,
+                owner: item.batch.owner
+            },
+            product: item.product ? {
+                id: item.product.id,
+                price: Number(item.product.price),
+                image: item.product.image,
+                country_code: item.product.country_code,
+                location_code: item.product.location_code,
+                item_code: item.product.item_code,
+                location_description: item.product.location_description,
+                is_published: item.product.is_published,
+                translations: item.product.translations,
+                location: item.product.location
+            } : null
         });
-    } catch (_error) {
-        res.status(500).json({ error: 'Failed to fetch item' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Не удалось загрузить паспорт камня.' });
     }
 });
 
-// Activate Item (Scan Inner QR)
-// In real world, this endpoint might need protection or strict logical checks.
-// Here we assume scanning inner QR acts as proof of purchase/opening.
 router.post('/items/:publicToken/activate', async (req, res) => {
-    const { publicToken } = req.params;
-
     try {
         const item = await prisma.item.findUnique({
-            where: { public_token: publicToken },
-            include: { batch: true }
+            where: { public_token: req.params.publicToken },
+            include: {
+                batch: true
+            }
         });
 
-        if (!item) return res.status(404).json({ error: 'Item not found' });
+        if (!item) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
 
         if (item.status === 'ACTIVATED') {
             return res.json({
-                message: 'Item already activated',
+                message: 'Камень уже активирован.',
                 activation_date: item.activation_date
             });
         }
@@ -85,37 +129,27 @@ router.post('/items/:publicToken/activate', async (req, res) => {
         const now = new Date();
         const franchiseeId = item.batch.owner_id;
 
-        // Financial Logic
         if (item.status === 'ON_CONSIGNMENT') {
-            // Offline Sale -> Charge Royalty from Franchisee
-            // Amount = Fixed Royalty (Use commission_rate from User or fixed value?)
-            // Spec says: "Sписать с баланса Франчайзи комиссию (Роялти)."
-            // Let's use `user.commission_rate` as a placeholder for royalty amount or percentage?
-            // "Commission Rate" usually % of sale. But we don't know sale price here.
-            // Or maybe default royalty is fixed. Let's assume 100 for now or fetch from User config.
-
             const franchisee = await prisma.user.findUnique({ where: { id: franchiseeId } });
-            const royaltyAmount = Number(franchisee?.commission_rate) || 50; // Default 50 if 0/null
+            const royaltyAmount = Number(franchisee?.commission_rate) || 50;
 
             await prisma.$transaction([
-                // Update Item
                 prisma.item.update({
                     where: { id: item.id },
                     data: {
                         status: 'ACTIVATED',
-                        activation_date: now
+                        activation_date: now,
+                        is_sold: true
                     }
                 }),
-                // Charge Ledger
                 prisma.ledger.create({
                     data: {
                         user_id: franchiseeId,
                         item_id: item.id,
-                        operation: 'ROYALTY_CHARGE', // Debit
+                        operation: 'ROYALTY_CHARGE',
                         amount: -royaltyAmount
                     }
                 }),
-                // Update User Balance
                 prisma.user.update({
                     where: { id: franchiseeId },
                     data: {
@@ -123,28 +157,23 @@ router.post('/items/:publicToken/activate', async (req, res) => {
                     }
                 })
             ]);
-
         } else if (item.status === 'STOCK_ONLINE' || item.status === 'SOLD_ONLINE') {
-            // Online Sale -> Credit Supplier (Franchisee)
-            // "Начислить на баланс Поставщика камня (Сумма продажи - Комиссия HQ)"
-            // Sales price? Validating purchase?
-            // We assume price_sold is set or we use a fixed price for now. 
-            // Let's assume net payout 500 for demo. Or 0 if price not set.
-            const payoutAmount = Number(item.price_sold || 500); // Placeholder
+            const payoutAmount = Number(item.price_sold || 500);
 
             await prisma.$transaction([
                 prisma.item.update({
                     where: { id: item.id },
                     data: {
                         status: 'ACTIVATED',
-                        activation_date: now
+                        activation_date: now,
+                        is_sold: true
                     }
                 }),
                 prisma.ledger.create({
                     data: {
                         user_id: franchiseeId,
                         item_id: item.id,
-                        operation: 'SALES_PAYOUT', // Credit
+                        operation: 'SALES_PAYOUT',
                         amount: payoutAmount
                     }
                 }),
@@ -156,19 +185,20 @@ router.post('/items/:publicToken/activate', async (req, res) => {
                 })
             ]);
         } else {
-            // Just activate without finance? Or error?
-            // Maybe it was stolen?
-            // Allow activation but log warning?
             await prisma.item.update({
                 where: { id: item.id },
-                data: { status: 'ACTIVATED', activation_date: now }
+                data: {
+                    status: 'ACTIVATED',
+                    activation_date: now,
+                    is_sold: true
+                }
             });
         }
 
-        res.json({ success: true, message: 'Item Activated' });
+        res.json({ success: true, message: 'Камень активирован.' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Activation failed' });
+        res.status(500).json({ error: 'Не удалось активировать камень.' });
     }
 });
 

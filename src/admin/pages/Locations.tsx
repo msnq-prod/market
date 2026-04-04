@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Input, Modal } from '../components/ui';
 import { TranslationModal } from '../components/TranslationModal';
+import { authFetch } from '../../utils/authFetch';
 
 interface Location {
     id: string;
@@ -38,7 +39,7 @@ export function Locations() {
     const fetchLocations = async () => {
         setIsLoading(true);
         try {
-            const res = await fetch('/api/locations');
+            const res = await authFetch('/api/locations');
             const data = await res.json();
             setLocations(data);
         } catch (error) {
@@ -128,7 +129,7 @@ export function Locations() {
                 }
             }
 
-            await fetch(url, {
+            await authFetch(url, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -149,7 +150,7 @@ export function Locations() {
     const handleDelete = async (id: string) => {
         if (!confirm('Вы уверены, что хотите удалить эту локацию?')) return;
         try {
-            await fetch(`/api/locations/${id}`, { method: 'DELETE' });
+            await authFetch(`/api/locations/${id}`, { method: 'DELETE' });
             fetchLocations();
         } catch (error) {
             console.error(error);
@@ -334,7 +335,7 @@ export function Locations() {
                     type="LOCATION"
                     onSave={async (newTranslations) => {
                         try {
-                            await fetch(`/api/locations/${selectedLocationForTranslation.id}`, {
+                            await authFetch(`/api/locations/${selectedLocationForTranslation.id}`, {
                                 method: 'PUT',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({

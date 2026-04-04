@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { authFetch } from '../../utils/authFetch';
 
-type DashboardLocation = { products?: unknown[] };
+type DashboardLocation = { id: string };
+type DashboardProduct = { id: string };
 type DashboardBatch = {
     status: string;
     items: { status: string }[];
@@ -36,21 +38,19 @@ export function Dashboard() {
             setError('');
 
             try {
-                const token = localStorage.getItem('accessToken');
-                const headers = { Authorization: `Bearer ${token}` };
-
-                const [locRes, batchRes, usersRes] = await Promise.all([
-                    fetch('/api/locations'),
-                    fetch('/api/batches', { headers }),
-                    fetch('/api/users', { headers }),
+                const [locationsRes, productsRes, batchRes, usersRes] = await Promise.all([
+                    authFetch('/api/locations'),
+                    authFetch('/api/products'),
+                    authFetch('/api/batches'),
+                    authFetch('/api/users'),
                 ]);
 
-                const locations = locRes.ok ? await locRes.json() as DashboardLocation[] : [];
+                const locations = locationsRes.ok ? await locationsRes.json() as DashboardLocation[] : [];
+                const products = productsRes.ok ? await productsRes.json() as DashboardProduct[] : [];
                 const batches = batchRes.ok ? await batchRes.json() as DashboardBatch[] : [];
                 const users = usersRes.ok ? await usersRes.json() as DashboardUser[] : [];
 
-                const products = locations.reduce((acc, loc) => acc + (loc.products?.length || 0), 0);
-                const inTransitBatches = batches.filter((batch) => batch.status === 'TRANSIT').length;
+                const inTransitBatches = batches.filter((batch) => batch.status === 'IN_TRANSIT').length;
                 const stockHQItems = batches.reduce(
                     (acc, batch) => acc + batch.items.filter((item) => item.status === 'STOCK_HQ').length,
                     0
@@ -58,7 +58,7 @@ export function Dashboard() {
 
                 setStats({
                     locations: locations.length,
-                    products,
+                    products: products.length,
                     users: users.length,
                     franchisees: users.filter((user) => user.role === 'FRANCHISEE').length,
                     inTransitBatches,

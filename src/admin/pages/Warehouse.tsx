@@ -1,766 +1,573 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { ExternalLink, Copy, ChevronDown, ChevronUp } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
-type WarehouseItem = {
+type BatchItem = {
     id: string;
     temp_id: string;
+    serial_number: string | null;
     public_token: string;
-    photo_url: string;
     status: string;
+    is_sold: boolean;
+    photo_url?: string | null;
+    item_photo_url?: string | null;
+    item_video_url?: string | null;
+    item_seq?: number | null;
     created_at: string;
+    clone_url: string;
+    qr_url: string;
 };
 
-type WarehouseBatch = {
+type BatchView = {
     id: string;
-    status: string;
-    created_at: string;
-    owner?: {
-        id?: string;
-        name?: string;
-        email?: string;
-    };
-    items: WarehouseItem[];
-};
-
-type WarehouseItemRow = WarehouseItem & {
-    batch_id: string;
-    batch_status: string;
-    batch_created_at: string;
-    owner_name: string;
-    owner_email: string;
-};
-
-type WarehouseGroup = {
-    batch_id: string;
-    batch_status: string;
-    batch_created_at: string;
-    owner_name: string;
-    owner_email: string;
-    items: WarehouseItemRow[];
-};
-
-type SaleFilter = 'ALL' | 'SOLD' | 'UNSOLD';
-type ScopeFilter = 'SITE' | 'ALL';
-type SortBy = 'NEWEST' | 'OLDEST' | 'TEMP_ASC' | 'TEMP_DESC' | 'BATCH_ASC' | 'BATCH_DESC';
-type RequestFilter = 'ALL' | 'ACTIVE' | 'OPEN' | 'IN_PROGRESS' | 'CLOSED';
-
-type UserOption = {
-    id: string;
-    name: string;
-    email: string;
-    role: string;
-};
-
-type CollectionRequest = {
-    id: string;
-    title: string;
-    note: string | null;
-    requested_qty: number;
     status: string;
     created_at: string;
     updated_at: string;
-    created_by_user: {
+    collected_date?: string | null;
+    collected_time?: string | null;
+    gps_lat?: number | null;
+    gps_lng?: number | null;
+    video_url?: string | null;
+    daily_batch_seq?: number | null;
+    owner?: {
         id: string;
         name: string;
         email: string;
     };
-    target_user: {
+    collection_request?: {
+        id: string;
+        status: string;
+        requested_qty: number;
+    } | null;
+    product?: {
+        id: string;
+        image: string;
+        country_code: string;
+        location_code: string;
+        item_code: string;
+        location_description?: string | null;
+        translations: Array<{
+            language_id: number;
+            name: string;
+            description: string;
+        }>;
+    } | null;
+    items: BatchItem[];
+};
+
+type CollectionRequestView = {
+    id: string;
+    title: string;
+    note?: string | null;
+    requested_qty: number;
+    status: string;
+    created_at: string;
+    accepted_at?: string | null;
+    product?: {
+        id: string;
+        image: string;
+        country_code: string;
+        location_code: string;
+        item_code: string;
+        is_published: boolean;
+        available_now?: number;
+        translations: Array<{
+            language_id: number;
+            name: string;
+            description: string;
+        }>;
+        location?: {
+            translations: Array<{
+                language_id: number;
+                name: string;
+            }>;
+        };
+    } | null;
+    target_user?: {
         id: string;
         name: string;
         email: string;
     } | null;
-    metrics: {
-        site_online_now: number;
-        sold_now: number;
-        collected_since_request: number;
-        online_since_request: number;
-        remaining_to_collect: number;
-        progress_percent: number;
-        site_gap: number;
-    };
-    recent_batches: Array<{
+    accepted_by_user?: {
+        id: string;
+        name: string;
+        email: string;
+    } | null;
+    batch?: {
         id: string;
         status: string;
-        created_at: string;
         items_count: number;
-        online_items: number;
-    }>;
+        media_ready_count: number;
+    } | null;
+    metrics: {
+        available_now: number;
+        produced_count: number;
+        media_ready_count: number;
+        missing_media_count: number;
+    };
 };
 
-type RequestForm = {
-    title: string;
-    requested_qty: string;
-    target_user_id: string;
-    note: string;
+const statusLabel: Record<string, string> = {
+    OPEN: 'Открыт',
+    IN_PROGRESS: 'В работе',
+    IN_TRANSIT: 'В доставке',
+    RECEIVED: 'Получен',
+    IN_STOCK: 'На складе',
+    CANCELLED: 'Отменен'
 };
 
-const SITE_STATUSES = new Set(['STOCK_ONLINE', 'SOLD_ONLINE', 'ACTIVATED']);
-const SOLD_STATUSES = new Set(['SOLD_ONLINE', 'ACTIVATED']);
-
-const itemStatusLabels: Record<string, string> = {
-    NEW: 'НОВЫЙ',
-    REJECTED: 'ОТКЛОНЕН',
-    STOCK_HQ: 'СКЛАД HQ',
-    STOCK_ONLINE: 'НА САЙТЕ',
-    ON_CONSIGNMENT: 'КОНСИГНАЦИЯ',
-    SOLD_ONLINE: 'ПРОДАН ОНЛАЙН',
-    ACTIVATED: 'АКТИВИРОВАН',
+const statusClass: Record<string, string> = {
+    OPEN: 'bg-blue-500/15 text-blue-200 border border-blue-500/30',
+    IN_PROGRESS: 'bg-amber-500/15 text-amber-200 border border-amber-500/30',
+    IN_TRANSIT: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
+    RECEIVED: 'bg-violet-500/15 text-violet-200 border border-violet-500/30',
+    IN_STOCK: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
+    CANCELLED: 'bg-red-500/15 text-red-200 border border-red-500/30'
 };
 
-const itemStatusColors: Record<string, string> = {
-    NEW: 'bg-gray-700/70 text-gray-200',
-    REJECTED: 'bg-red-500/20 text-red-300 border border-red-500/40',
-    STOCK_HQ: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40',
-    STOCK_ONLINE: 'bg-blue-500/20 text-blue-300 border border-blue-500/40',
-    ON_CONSIGNMENT: 'bg-violet-500/20 text-violet-300 border border-violet-500/40',
-    SOLD_ONLINE: 'bg-amber-500/20 text-amber-200 border border-amber-500/40',
-    ACTIVATED: 'bg-green-500/20 text-green-200 border border-green-500/40',
+const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
+    const translation = translations.find((item) => item.language_id === 2)
+        || translations.find((item) => item.language_id === 1)
+        || translations[0];
+    const value = translation?.[field];
+    return typeof value === 'string' ? value : '';
 };
 
-const requestStatusLabels: Record<string, string> = {
-    OPEN: 'ОТКРЫТА',
-    IN_PROGRESS: 'В РАБОТЕ',
-    FULFILLED: 'ЗАКРЫТА',
-    CANCELLED: 'ОТМЕНЕНА',
-};
-
-const requestStatusColors: Record<string, string> = {
-    OPEN: 'bg-blue-500/20 text-blue-300 border border-blue-500/40',
-    IN_PROGRESS: 'bg-amber-500/20 text-amber-200 border border-amber-500/40',
-    FULFILLED: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40',
-    CANCELLED: 'bg-red-500/20 text-red-300 border border-red-500/40',
-};
-
-const normalizeDate = (value: string): number => {
-    const timestamp = new Date(value).getTime();
-    return Number.isFinite(timestamp) ? timestamp : 0;
-};
-
-const shortId = (value: string): string => {
-    if (value.length <= 12) return value;
-    return `${value.slice(0, 8)}...${value.slice(-4)}`;
-};
-
-const itemComparator = (sortBy: SortBy) => {
-    if (sortBy === 'TEMP_ASC') {
-        return (a: WarehouseItemRow, b: WarehouseItemRow) => a.temp_id.localeCompare(b.temp_id, 'ru');
-    }
-    if (sortBy === 'TEMP_DESC') {
-        return (a: WarehouseItemRow, b: WarehouseItemRow) => b.temp_id.localeCompare(a.temp_id, 'ru');
-    }
-    if (sortBy === 'OLDEST') {
-        return (a: WarehouseItemRow, b: WarehouseItemRow) => normalizeDate(a.created_at) - normalizeDate(b.created_at);
-    }
-    return (a: WarehouseItemRow, b: WarehouseItemRow) => normalizeDate(b.created_at) - normalizeDate(a.created_at);
-};
-
-const batchComparator = (sortBy: SortBy) => {
-    if (sortBy === 'BATCH_ASC') {
-        return (a: WarehouseGroup, b: WarehouseGroup) => a.batch_id.localeCompare(b.batch_id, 'ru');
-    }
-    if (sortBy === 'BATCH_DESC') {
-        return (a: WarehouseGroup, b: WarehouseGroup) => b.batch_id.localeCompare(a.batch_id, 'ru');
-    }
-    if (sortBy === 'OLDEST') {
-        return (a: WarehouseGroup, b: WarehouseGroup) => normalizeDate(a.batch_created_at) - normalizeDate(b.batch_created_at);
-    }
-    return (a: WarehouseGroup, b: WarehouseGroup) => normalizeDate(b.batch_created_at) - normalizeDate(a.batch_created_at);
-};
-
-const createClonePath = (publicToken: string): string => `/clone/${encodeURIComponent(publicToken)}`;
-
-const createCloneAbsoluteUrl = (publicToken: string): string =>
-    `${window.location.origin}${createClonePath(publicToken)}`;
-
-const isClosedRequest = (status: string): boolean => status === 'FULFILLED' || status === 'CANCELLED';
-const authErrorText = 'Сессия истекла или нет доступа. Войдите снова.';
-const missingEndpointText = 'Backend не обновлён (404). Перезапустите сервер.';
+const createClonePath = (publicToken: string) => `/clone/${encodeURIComponent(publicToken)}`;
 
 export function Warehouse() {
-    const [batches, setBatches] = useState<WarehouseBatch[]>([]);
-    const [loadingStock, setLoadingStock] = useState(true);
-    const [stockError, setStockError] = useState('');
-    const [query, setQuery] = useState('');
-    const [saleFilter, setSaleFilter] = useState<SaleFilter>('ALL');
-    const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('SITE');
-    const [sortBy, setSortBy] = useState<SortBy>('NEWEST');
-    const [expandedBatches, setExpandedBatches] = useState<string[]>([]);
-    const [copiedItemId, setCopiedItemId] = useState('');
-
-    const [franchisees, setFranchisees] = useState<UserOption[]>([]);
-    const [requests, setRequests] = useState<CollectionRequest[]>([]);
-    const [loadingRequests, setLoadingRequests] = useState(true);
-    const [requestError, setRequestError] = useState('');
-    const [requestFilter, setRequestFilter] = useState<RequestFilter>('ACTIVE');
-    const [requestForm, setRequestForm] = useState<RequestForm>({
-        title: '',
-        requested_qty: '',
-        target_user_id: '',
-        note: ''
-    });
-    const [creatingRequest, setCreatingRequest] = useState(false);
+    const [requests, setRequests] = useState<CollectionRequestView[]>([]);
+    const [batches, setBatches] = useState<BatchView[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [expandedBatchId, setExpandedBatchId] = useState('');
     const [updatingRequestId, setUpdatingRequestId] = useState('');
+    const [uploadingBatchId, setUploadingBatchId] = useState('');
 
-    const loadStock = async () => {
-        setLoadingStock(true);
-        setStockError('');
+    const loadData = async () => {
+        setLoading(true);
+        setError('');
         try {
-            const response = await authFetch('/api/batches');
-
-            if (!response.ok) {
-                if (response.status === 401 || response.status === 403) {
-                    setStockError(authErrorText);
-                } else if (response.status === 404) {
-                    setStockError(missingEndpointText);
-                } else {
-                    setStockError('Не удалось загрузить складские данные.');
-                }
-                setBatches([]);
-                return;
-            }
-
-            setBatches(await response.json() as WarehouseBatch[]);
-        } catch (_error) {
-            setStockError('Сетевая ошибка при загрузке склада.');
-            setBatches([]);
-        } finally {
-            setLoadingStock(false);
-        }
-    };
-
-    const loadRequests = async () => {
-        setLoadingRequests(true);
-        setRequestError('');
-        try {
-            const [requestRes, usersRes] = await Promise.all([
+            const [requestsRes, batchesRes] = await Promise.all([
                 authFetch('/api/collection-requests'),
-                authFetch('/api/users')
+                authFetch('/api/batches')
             ]);
 
-            if (!requestRes.ok) {
-                if (requestRes.status === 401 || requestRes.status === 403) {
-                    setRequestError(authErrorText);
-                } else if (requestRes.status === 404) {
-                    setRequestError(missingEndpointText);
-                } else {
-                    setRequestError('Не удалось загрузить заявки на сбор.');
-                }
-                setRequests([]);
-            } else {
-                setRequests(await requestRes.json() as CollectionRequest[]);
+            if (!requestsRes.ok || !batchesRes.ok) {
+                throw new Error('Не удалось загрузить складские данные.');
             }
 
-            if (usersRes.ok) {
-                const users = await usersRes.json() as UserOption[];
-                setFranchisees(users.filter((user) => user.role === 'FRANCHISEE'));
-            } else {
-                setFranchisees([]);
-            }
-        } catch (_error) {
-            setRequestError('Сетевая ошибка при загрузке заявок.');
-            setRequests([]);
-            setFranchisees([]);
+            setRequests(await requestsRes.json() as CollectionRequestView[]);
+            setBatches(await batchesRes.json() as BatchView[]);
+        } catch (loadError) {
+            console.error(loadError);
+            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить складские данные.');
         } finally {
-            setLoadingRequests(false);
+            setLoading(false);
         }
     };
 
     useEffect(() => {
-        void Promise.all([loadStock(), loadRequests()]);
+        void loadData();
     }, []);
 
-    const allItems = useMemo<WarehouseItemRow[]>(() => {
-        return batches.flatMap((batch) =>
-            batch.items.map((item) => ({
-                ...item,
-                batch_id: batch.id,
-                batch_status: batch.status,
-                batch_created_at: batch.created_at,
-                owner_name: batch.owner?.name || 'Без владельца',
-                owner_email: batch.owner?.email || '—',
-            }))
-        );
-    }, [batches]);
+    const summary = useMemo(() => ({
+        requests: requests.length,
+        activeRequests: requests.filter((request) => request.status !== 'CANCELLED' && request.status !== 'IN_STOCK').length,
+        inTransitBatches: batches.filter((batch) => batch.status === 'IN_TRANSIT').length,
+        inStockItems: batches.reduce((total, batch) => total + batch.items.filter((item) => item.status === 'STOCK_ONLINE' && !item.is_sold).length, 0)
+    }), [batches, requests]);
 
-    const summary = useMemo(() => {
-        const total = allItems.length;
-        const onSite = allItems.filter((item) => SITE_STATUSES.has(item.status)).length;
-        const sold = allItems.filter((item) => SOLD_STATUSES.has(item.status)).length;
-        const unsold = total - sold;
-        return { total, onSite, sold, unsold };
-    }, [allItems]);
-
-    const filteredItems = useMemo(() => {
-        const term = query.trim().toLowerCase();
-
-        return allItems.filter((item) => {
-            if (scopeFilter === 'SITE' && !SITE_STATUSES.has(item.status)) {
-                return false;
-            }
-
-            if (saleFilter === 'SOLD' && !SOLD_STATUSES.has(item.status)) {
-                return false;
-            }
-
-            if (saleFilter === 'UNSOLD' && SOLD_STATUSES.has(item.status)) {
-                return false;
-            }
-
-            if (!term) return true;
-
-            return (
-                item.temp_id.toLowerCase().includes(term) ||
-                item.id.toLowerCase().includes(term) ||
-                item.batch_id.toLowerCase().includes(term) ||
-                item.public_token.toLowerCase().includes(term)
-            );
-        });
-    }, [allItems, query, saleFilter, scopeFilter]);
-
-    const groupedBatches = useMemo<WarehouseGroup[]>(() => {
-        const groups = new Map<string, WarehouseGroup>();
-
-        for (const item of filteredItems) {
-            if (!groups.has(item.batch_id)) {
-                groups.set(item.batch_id, {
-                    batch_id: item.batch_id,
-                    batch_status: item.batch_status,
-                    batch_created_at: item.batch_created_at,
-                    owner_name: item.owner_name,
-                    owner_email: item.owner_email,
-                    items: [],
-                });
-            }
-            groups.get(item.batch_id)?.items.push(item);
-        }
-
-        const result = [...groups.values()];
-        const compareItems = itemComparator(sortBy);
-
-        for (const group of result) {
-            if (sortBy === 'BATCH_ASC' || sortBy === 'BATCH_DESC') {
-                group.items.sort(itemComparator('TEMP_ASC'));
-            } else {
-                group.items.sort(compareItems);
-            }
-        }
-
-        result.sort(batchComparator(sortBy));
-        return result;
-    }, [filteredItems, sortBy]);
-
-    const filteredRequests = useMemo(() => {
-        if (requestFilter === 'ALL') return requests;
-        if (requestFilter === 'OPEN') return requests.filter((request) => request.status === 'OPEN');
-        if (requestFilter === 'IN_PROGRESS') return requests.filter((request) => request.status === 'IN_PROGRESS');
-        if (requestFilter === 'CLOSED') return requests.filter((request) => isClosedRequest(request.status));
-        return requests.filter((request) => !isClosedRequest(request.status));
-    }, [requests, requestFilter]);
-
-    const toggleBatch = (batchId: string) => {
-        setExpandedBatches((prev) =>
-            prev.includes(batchId)
-                ? prev.filter((id) => id !== batchId)
-                : [...prev, batchId]
-        );
-    };
-
-    const handleCopyLink = async (item: WarehouseItemRow) => {
-        try {
-            await navigator.clipboard.writeText(createCloneAbsoluteUrl(item.public_token));
-            setCopiedItemId(item.id);
-            setTimeout(() => setCopiedItemId(''), 1500);
-        } catch (_error) {
-            setCopiedItemId('');
-        }
-    };
-
-    const handleCreateRequest = async (event: FormEvent) => {
-        event.preventDefault();
-        setRequestError('');
-
-        const requestedQty = Number(requestForm.requested_qty);
-        if (!requestForm.title.trim()) {
-            setRequestError('Введите название заявки.');
-            return;
-        }
-        if (!Number.isInteger(requestedQty) || requestedQty <= 0) {
-            setRequestError('Количество должно быть положительным целым числом.');
-            return;
-        }
-
-        setCreatingRequest(true);
-        try {
-            const response = await authFetch('/api/collection-requests', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    title: requestForm.title.trim(),
-                    requested_qty: requestedQty,
-                    target_user_id: requestForm.target_user_id || null,
-                    note: requestForm.note.trim() || null
-                })
-            });
-
-            if (!response.ok) {
-                const data = await response.json().catch(() => ({ error: 'Не удалось создать заявку.' }));
-                setRequestError(data.error || 'Не удалось создать заявку.');
-                return;
-            }
-
-            const created = await response.json() as CollectionRequest;
-            setRequests((prev) => [created, ...prev]);
-            setRequestForm({
-                title: '',
-                requested_qty: '',
-                target_user_id: '',
-                note: ''
-            });
-        } catch (_error) {
-            setRequestError('Сетевая ошибка при создании заявки.');
-        } finally {
-            setCreatingRequest(false);
-        }
-    };
-
-    const handleUpdateRequestStatus = async (requestId: string, status: 'OPEN' | 'IN_PROGRESS' | 'FULFILLED' | 'CANCELLED') => {
+    const handleUpdateRequestStatus = async (requestId: string, status: string) => {
         setUpdatingRequestId(requestId);
-        setRequestError('');
+        setError('');
         try {
             const response = await authFetch(`/api/collection-requests/${requestId}`, {
                 method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ status })
             });
 
             if (!response.ok) {
-                const data = await response.json().catch(() => ({ error: 'Не удалось обновить статус заявки.' }));
-                setRequestError(data.error || 'Не удалось обновить статус заявки.');
-                return;
+                const payload = await response.json().catch(() => ({ error: 'Не удалось обновить статус.' }));
+                throw new Error(payload.error || 'Не удалось обновить статус.');
             }
 
-            const updated = await response.json() as CollectionRequest;
-            setRequests((prev) => prev.map((item) => item.id === updated.id ? updated : item));
-        } catch (_error) {
-            setRequestError('Сетевая ошибка при обновлении заявки.');
+            await loadData();
+        } catch (updateError) {
+            console.error(updateError);
+            setError(updateError instanceof Error ? updateError.message : 'Не удалось обновить статус.');
         } finally {
             setUpdatingRequestId('');
         }
     };
 
+    const handleDeleteRequest = async (requestId: string) => {
+        if (!confirm('Удалить открытый заказ на сбор?')) return;
+
+        setUpdatingRequestId(requestId);
+        setError('');
+        try {
+            const response = await authFetch(`/api/collection-requests/${requestId}`, { method: 'DELETE' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось удалить заказ.' }));
+                throw new Error(payload.error || 'Не удалось удалить заказ.');
+            }
+            await loadData();
+        } catch (deleteError) {
+            console.error(deleteError);
+            setError(deleteError instanceof Error ? deleteError.message : 'Не удалось удалить заказ.');
+        } finally {
+            setUpdatingRequestId('');
+        }
+    };
+
+    const handleReceiveBatch = async (batchId: string) => {
+        setUpdatingRequestId(batchId);
+        setError('');
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/receive`, { method: 'POST' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось перевести партию в RECEIVED.' }));
+                throw new Error(payload.error || 'Не удалось перевести партию в RECEIVED.');
+            }
+            await loadData();
+        } catch (receiveError) {
+            console.error(receiveError);
+            setError(receiveError instanceof Error ? receiveError.message : 'Не удалось перевести партию в RECEIVED.');
+        } finally {
+            setUpdatingRequestId('');
+        }
+    };
+
+    const handleFinalizeBatch = async (batchId: string) => {
+        setUpdatingRequestId(batchId);
+        setError('');
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/finalize`, { method: 'POST' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось перевести партию на склад.' }));
+                throw new Error(payload.error || 'Не удалось перевести партию на склад.');
+            }
+            await loadData();
+        } catch (finalizeError) {
+            console.error(finalizeError);
+            setError(finalizeError instanceof Error ? finalizeError.message : 'Не удалось перевести партию на склад.');
+        } finally {
+            setUpdatingRequestId('');
+        }
+    };
+
+    const handleMediaUpload = async (batchId: string, files: FileList | null) => {
+        if (!files || files.length === 0) return;
+
+        setUploadingBatchId(batchId);
+        setError('');
+        try {
+            const uploadedFiles: Array<{ name: string; url: string }> = [];
+
+            for (const file of Array.from(files)) {
+                const form = new FormData();
+                form.append('file', file);
+
+                const uploadResponse = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: form
+                });
+
+                const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось загрузить media-файл.' }));
+                if (!uploadResponse.ok || !uploadPayload.url) {
+                    throw new Error(uploadPayload.error || `Не удалось загрузить файл ${file.name}.`);
+                }
+
+                uploadedFiles.push({
+                    name: file.name,
+                    url: uploadPayload.url
+                });
+            }
+
+            const syncResponse = await authFetch(`/api/batches/${batchId}/media-sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ files: uploadedFiles })
+            });
+
+            if (!syncResponse.ok) {
+                const payload = await syncResponse.json().catch(() => ({ error: 'Не удалось сопоставить файлы партии.' }));
+                throw new Error(payload.error || 'Не удалось сопоставить файлы партии.');
+            }
+
+            await loadData();
+        } catch (uploadError) {
+            console.error(uploadError);
+            setError(uploadError instanceof Error ? uploadError.message : 'Не удалось загрузить media-файлы.');
+        } finally {
+            setUploadingBatchId('');
+        }
+    };
+
     return (
-        <div className="space-y-6">
+        <div className="space-y-8">
             <header>
-                <h1 className="text-2xl font-bold text-white">Склад</h1>
-                <p className="text-gray-500 mt-1">
-                    Заявки на сбор партий и синхронный трекинг с позициями на сайте.
-                </p>
+                <h1 className="text-2xl font-bold text-white">Склад и партии</h1>
+                <p className="text-gray-500 mt-1">Контроль заказов на сбор, статусов партий и обязательной media-дозагрузки.</p>
             </header>
 
-            {(stockError || requestError) && (
-                <div className="rounded-xl border border-red-500/40 bg-red-500/10 text-red-200 px-4 py-3">
-                    {stockError || requestError}
+            {error && (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
+                    {error}
                 </div>
             )}
 
             <section className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                <SummaryCard title="Всего позиций" value={summary.total} />
-                <SummaryCard title="Товары на сайте" value={summary.onSite} />
-                <SummaryCard title="Проданные" value={summary.sold} />
-                <SummaryCard title="Не проданные" value={summary.unsold} />
+                <SummaryCard title="Заказы на сбор" value={summary.requests} />
+                <SummaryCard title="Активные заказы" value={summary.activeRequests} />
+                <SummaryCard title="Партии в доставке" value={summary.inTransitBatches} />
+                <SummaryCard title="Камни в наличии" value={summary.inStockItems} />
             </section>
 
-            <section className="grid grid-cols-1 xl:grid-cols-[420px_1fr] gap-6">
-                <form onSubmit={handleCreateRequest} className="rounded-xl border border-gray-800 bg-gray-900 p-4 space-y-4">
-                    <h2 className="text-lg font-semibold text-white">Новая заявка на сбор партии</h2>
-                    <input
-                        value={requestForm.title}
-                        onChange={(event) => setRequestForm((prev) => ({ ...prev, title: event.target.value }))}
-                        placeholder="Например: Пополнить онлайн-витрину Якутии"
-                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                    />
-
-                    <div className="grid grid-cols-2 gap-3">
-                        <input
-                            value={requestForm.requested_qty}
-                            onChange={(event) => setRequestForm((prev) => ({ ...prev, requested_qty: event.target.value }))}
-                            placeholder="Кол-во"
-                            inputMode="numeric"
-                            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                        />
-                        <select
-                            value={requestForm.target_user_id}
-                            onChange={(event) => setRequestForm((prev) => ({ ...prev, target_user_id: event.target.value }))}
-                            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                        >
-                            <option value="">Все поставщики</option>
-                            {franchisees.map((user) => (
-                                <option key={user.id} value={user.id}>
-                                    {user.name}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <textarea
-                        value={requestForm.note}
-                        onChange={(event) => setRequestForm((prev) => ({ ...prev, note: event.target.value }))}
-                        placeholder="Комментарий для поставщика (опционально)"
-                        rows={3}
-                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white resize-none"
-                    />
-
-                    <button
-                        type="submit"
-                        disabled={creatingRequest}
-                        className="w-full rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-4 py-2 text-sm font-medium"
-                    >
-                        {creatingRequest ? 'Создание...' : 'Создать заявку'}
-                    </button>
-                </form>
-
-                <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 space-y-4">
-                    <div className="flex flex-wrap gap-2">
-                        <FilterButton active={requestFilter === 'ACTIVE'} onClick={() => setRequestFilter('ACTIVE')} label="Активные" />
-                        <FilterButton active={requestFilter === 'OPEN'} onClick={() => setRequestFilter('OPEN')} label="Открытые" />
-                        <FilterButton active={requestFilter === 'IN_PROGRESS'} onClick={() => setRequestFilter('IN_PROGRESS')} label="В работе" />
-                        <FilterButton active={requestFilter === 'CLOSED'} onClick={() => setRequestFilter('CLOSED')} label="Закрытые" />
-                        <FilterButton active={requestFilter === 'ALL'} onClick={() => setRequestFilter('ALL')} label="Все" />
-                    </div>
-
-                    {loadingRequests && (
-                        <div className="rounded-lg border border-gray-800 bg-gray-950 px-4 py-3 text-gray-400">
-                            Загрузка заявок...
-                        </div>
-                    )}
-
-                    {!loadingRequests && filteredRequests.length === 0 && (
-                        <div className="rounded-lg border border-gray-800 bg-gray-950 px-4 py-3 text-gray-400">
-                            По выбранному фильтру заявок нет.
-                        </div>
-                    )}
-
-                    {!loadingRequests && filteredRequests.map((request) => (
-                        <article key={request.id} className="rounded-lg border border-gray-800 bg-gray-950 p-4 space-y-3">
-                            <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-                                <div>
-                                    <h3 className="text-white font-semibold">{request.title}</h3>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                        {new Date(request.created_at).toLocaleString('ru-RU')} | назначено: {request.target_user?.name || 'всем поставщикам'}
-                                    </p>
-                                </div>
-                                <RequestStatusBadge status={request.status} />
-                            </div>
-
-                            {request.note && (
-                                <p className="text-sm text-gray-300 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
-                                    {request.note}
-                                </p>
-                            )}
-
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                                <MetricChip label="Запрошено" value={request.requested_qty} />
-                                <MetricChip label="Собрано с даты" value={request.metrics.collected_since_request} />
-                                <MetricChip label="На сайте сейчас" value={request.metrics.site_online_now} />
-                                <MetricChip label="Разрыв по сайту" value={request.metrics.site_gap} />
-                            </div>
-
-                            <div>
-                                <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                                    <span>Прогресс выполнения</span>
-                                    <span>{request.metrics.progress_percent}%</span>
-                                </div>
-                                <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
-                                    <div
-                                        className="h-2 bg-blue-500 rounded-full transition-all"
-                                        style={{ width: `${Math.min(100, Math.max(0, request.metrics.progress_percent))}%` }}
-                                    />
-                                </div>
-                            </div>
-
-                            {request.recent_batches.length > 0 && (
-                                <div className="text-xs text-gray-400">
-                                    <p className="mb-1 text-gray-500">Новые партии после заявки:</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {request.recent_batches.map((batch) => (
-                                            <span key={batch.id} className="inline-flex items-center gap-1 bg-gray-900 border border-gray-800 rounded px-2 py-1">
-                                                {shortId(batch.id)} ({batch.items_count} шт., сайт {batch.online_items})
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="flex flex-wrap gap-2">
-                                {request.status === 'OPEN' && (
-                                    <button
-                                        onClick={() => void handleUpdateRequestStatus(request.id, 'IN_PROGRESS')}
-                                        disabled={updatingRequestId === request.id}
-                                        className="px-3 py-1.5 rounded-lg text-sm bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white"
-                                    >
-                                        В работу
-                                    </button>
-                                )}
-                                {(request.status === 'OPEN' || request.status === 'IN_PROGRESS') && (
-                                    <button
-                                        onClick={() => void handleUpdateRequestStatus(request.id, 'FULFILLED')}
-                                        disabled={updatingRequestId === request.id}
-                                        className="px-3 py-1.5 rounded-lg text-sm bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white"
-                                    >
-                                        Закрыть
-                                    </button>
-                                )}
-                                {(request.status === 'OPEN' || request.status === 'IN_PROGRESS') && (
-                                    <button
-                                        onClick={() => void handleUpdateRequestStatus(request.id, 'CANCELLED')}
-                                        disabled={updatingRequestId === request.id}
-                                        className="px-3 py-1.5 rounded-lg text-sm bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white"
-                                    >
-                                        Отменить
-                                    </button>
-                                )}
-                                {isClosedRequest(request.status) && (
-                                    <button
-                                        onClick={() => void handleUpdateRequestStatus(request.id, 'OPEN')}
-                                        disabled={updatingRequestId === request.id}
-                                        className="px-3 py-1.5 rounded-lg text-sm border border-gray-700 text-gray-200 hover:bg-gray-800 disabled:opacity-50"
-                                    >
-                                        Переоткрыть
-                                    </button>
-                                )}
-                            </div>
-                        </article>
-                    ))}
-                </div>
-            </section>
-
-            <section className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-                    <input
-                        value={query}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Поиск: temp_id, item id, batch id, token"
-                        className="lg:col-span-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                    />
-
-                    <select
-                        value={scopeFilter}
-                        onChange={(event) => setScopeFilter(event.target.value as ScopeFilter)}
-                        className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                    >
-                        <option value="SITE">Только товары на сайте</option>
-                        <option value="ALL">Все товары</option>
-                    </select>
-
-                    <select
-                        value={sortBy}
-                        onChange={(event) => setSortBy(event.target.value as SortBy)}
-                        className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                    >
-                        <option value="NEWEST">Сортировка: сначала новые</option>
-                        <option value="OLDEST">Сортировка: сначала старые</option>
-                        <option value="TEMP_ASC">Сортировка: temp_id A-Z</option>
-                        <option value="TEMP_DESC">Сортировка: temp_id Z-A</option>
-                        <option value="BATCH_ASC">Сортировка: партия A-Z</option>
-                        <option value="BATCH_DESC">Сортировка: партия Z-A</option>
-                    </select>
+            <section className="rounded-2xl border border-gray-800 bg-gray-900">
+                <div className="border-b border-gray-800 px-6 py-4">
+                    <h2 className="text-lg font-semibold text-white">Заказы на сбор</h2>
                 </div>
 
-                <div className="flex flex-wrap gap-2">
-                    <FilterButton active={saleFilter === 'ALL'} onClick={() => setSaleFilter('ALL')} label="Все" />
-                    <FilterButton active={saleFilter === 'SOLD'} onClick={() => setSaleFilter('SOLD')} label="Проданные" />
-                    <FilterButton active={saleFilter === 'UNSOLD'} onClick={() => setSaleFilter('UNSOLD')} label="Не проданные" />
-                </div>
-            </section>
+                {loading ? (
+                    <div className="px-6 py-8 text-gray-400">Загрузка заказов...</div>
+                ) : requests.length === 0 ? (
+                    <div className="px-6 py-8 text-gray-500">Заказов на сбор пока нет.</div>
+                ) : (
+                    <div className="divide-y divide-gray-800">
+                        {requests.map((request) => {
+                            const productName = request.product ? getDefaultTranslationValue(request.product.translations, 'name') : request.title;
+                            const locationName = request.product?.location
+                                ? getDefaultTranslationValue(request.product.location.translations, 'name')
+                                : 'Без локации';
 
-            <section className="space-y-4">
-                {loadingStock && (
-                    <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-5 text-gray-400">
-                        Загрузка склада...
-                    </div>
-                )}
-
-                {!loadingStock && groupedBatches.length === 0 && (
-                    <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-5 text-gray-400">
-                        По текущим фильтрам ничего не найдено.
-                    </div>
-                )}
-
-                {!loadingStock && groupedBatches.map((group) => {
-                    const expanded = expandedBatches.includes(group.batch_id);
-
-                    return (
-                        <article key={group.batch_id} className="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden">
-                            <header className="px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <div>
-                                    <h2 className="text-white font-semibold">
-                                        Партия {shortId(group.batch_id)}
-                                    </h2>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                        {new Date(group.batch_created_at).toLocaleString('ru-RU')} | {group.owner_name} ({group.owner_email})
-                                    </p>
-                                    <div className="mt-2">
-                                        <ItemStatusBadge status={group.batch_status} />
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center gap-3">
-                                    <span className="text-sm text-gray-400">
-                                        Позиций: <span className="text-white font-semibold">{group.items.length}</span>
-                                    </span>
-                                    <button
-                                        onClick={() => toggleBatch(group.batch_id)}
-                                        className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-700 text-sm text-gray-200 hover:bg-gray-800"
-                                    >
-                                        {expanded ? 'Скрыть' : 'Открыть'}
-                                        {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                                    </button>
-                                </div>
-                            </header>
-
-                            {expanded && (
-                                <div className="border-t border-gray-800 divide-y divide-gray-800">
-                                    {group.items.map((item) => (
-                                        <div key={item.id} className="px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                            <div className="min-w-0">
-                                                <p className="text-white font-medium">#{item.temp_id}</p>
-                                                <p className="text-xs text-gray-500 truncate">Item ID: {item.id}</p>
-                                                <p className="text-xs text-gray-500 truncate">Token: {item.public_token}</p>
-                                                <div className="mt-2">
-                                                    <ItemStatusBadge status={item.status} />
-                                                </div>
+                            return (
+                                <article key={request.id} className="px-6 py-5">
+                                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                                        <div className="space-y-3 min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <h3 className="text-white font-semibold">{productName}</h3>
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${statusClass[request.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                    {statusLabel[request.status] || request.status}
+                                                </span>
                                             </div>
 
-                                            <div className="flex items-center gap-2">
-                                                <a
-                                                    href={createClonePath(item.public_token)}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm"
-                                                >
-                                                    <ExternalLink size={14} />
-                                                    Открыть ссылку
-                                                </a>
-                                                <button
-                                                    onClick={() => void handleCopyLink(item)}
-                                                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-700 text-sm text-gray-200 hover:bg-gray-800"
-                                                >
-                                                    <Copy size={14} />
-                                                    {copiedItemId === item.id ? 'Скопировано' : 'Копировать'}
-                                                </button>
+                                            <p className="text-sm text-gray-400">
+                                                {locationName} • запрос: {request.requested_qty} камней • в наличии сейчас: {request.metrics.available_now}
+                                            </p>
+
+                                            {request.note && (
+                                                <p className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-300">
+                                                    {request.note}
+                                                </p>
+                                            )}
+
+                                            <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+                                                <span className="rounded-full border border-gray-700 px-3 py-1">Создан: {new Date(request.created_at).toLocaleString('ru-RU')}</span>
+                                                {request.target_user && (
+                                                    <span className="rounded-full border border-gray-700 px-3 py-1">Назначен: {request.target_user.name}</span>
+                                                )}
+                                                {request.accepted_by_user && (
+                                                    <span className="rounded-full border border-gray-700 px-3 py-1">Взял: {request.accepted_by_user.name}</span>
+                                                )}
+                                                {request.batch && (
+                                                    <span className="rounded-full border border-gray-700 px-3 py-1">
+                                                        Партия: {request.batch.id} • media: {request.metrics.media_ready_count}/{request.batch.items_count}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
-                                    ))}
-                                </div>
-                            )}
-                        </article>
-                    );
-                })}
+
+                                        <div className="flex flex-wrap gap-2 xl:justify-end">
+                                            {request.status === 'OPEN' && !request.batch && (
+                                                <Button
+                                                    variant="danger"
+                                                    size="sm"
+                                                    onClick={() => void handleDeleteRequest(request.id)}
+                                                    disabled={updatingRequestId === request.id}
+                                                >
+                                                    Удалить
+                                                </Button>
+                                            )}
+                                            {request.status === 'IN_PROGRESS' && !request.batch && (
+                                                <Button
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    onClick={() => void handleUpdateRequestStatus(request.id, 'OPEN')}
+                                                    disabled={updatingRequestId === request.id}
+                                                >
+                                                    Вернуть в пул
+                                                </Button>
+                                            )}
+                                            {request.status !== 'CANCELLED' && request.status !== 'IN_STOCK' && (
+                                                <Button
+                                                    variant="danger"
+                                                    size="sm"
+                                                    onClick={() => void handleUpdateRequestStatus(request.id, 'CANCELLED')}
+                                                    disabled={updatingRequestId === request.id}
+                                                >
+                                                    Отменить
+                                                </Button>
+                                            )}
+                                            {request.batch && request.status !== 'IN_TRANSIT' && request.status !== 'CANCELLED' && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => void handleUpdateRequestStatus(request.id, 'IN_TRANSIT')}
+                                                    disabled={updatingRequestId === request.id}
+                                                >
+                                                    В доставку
+                                                </Button>
+                                            )}
+                                            {request.batch && request.status !== 'RECEIVED' && request.status !== 'CANCELLED' && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => void handleUpdateRequestStatus(request.id, 'RECEIVED')}
+                                                    disabled={updatingRequestId === request.id}
+                                                >
+                                                    Получен
+                                                </Button>
+                                            )}
+                                            {request.batch && request.status !== 'IN_STOCK' && request.status !== 'CANCELLED' && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => void handleUpdateRequestStatus(request.id, 'IN_STOCK')}
+                                                    disabled={updatingRequestId === request.id}
+                                                >
+                                                    На склад
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </article>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
+
+            <section className="rounded-2xl border border-gray-800 bg-gray-900">
+                <div className="border-b border-gray-800 px-6 py-4">
+                    <h2 className="text-lg font-semibold text-white">Партии</h2>
+                </div>
+
+                {loading ? (
+                    <div className="px-6 py-8 text-gray-400">Загрузка партий...</div>
+                ) : batches.length === 0 ? (
+                    <div className="px-6 py-8 text-gray-500">Партии еще не созданы.</div>
+                ) : (
+                    <div className="divide-y divide-gray-800">
+                        {batches.map((batch) => {
+                            const productName = batch.product ? getDefaultTranslationValue(batch.product.translations, 'name') : batch.id;
+                            const missingMedia = batch.items.filter((item) => !item.item_photo_url || !item.item_video_url).length;
+                            const isExpanded = expandedBatchId === batch.id;
+
+                            return (
+                                <article key={batch.id} className="px-6 py-5">
+                                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                                        <div className="min-w-0 flex-1 space-y-3">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <h3 className="text-white font-semibold">{productName}</h3>
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${statusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                    {statusLabel[batch.status] || batch.status}
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-gray-400">
+                                                {batch.id} • {batch.owner?.name || 'Без партнера'} • камней: {batch.items.length}
+                                            </p>
+                                            <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+                                                {batch.collected_date && (
+                                                    <span className="rounded-full border border-gray-700 px-3 py-1">
+                                                        Сбор: {new Date(batch.collected_date).toLocaleDateString('ru-RU')} {batch.collected_time || ''}
+                                                    </span>
+                                                )}
+                                                <span className="rounded-full border border-gray-700 px-3 py-1">
+                                                    Media готово: {batch.items.length - missingMedia}/{batch.items.length}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-wrap gap-2 xl:justify-end">
+                                            {batch.status === 'IN_TRANSIT' && (
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() => void handleReceiveBatch(batch.id)}
+                                                    disabled={updatingRequestId === batch.id}
+                                                >
+                                                    Принять
+                                                </Button>
+                                            )}
+                                            {batch.status === 'RECEIVED' && (
+                                                <>
+                                                    <label className="inline-flex cursor-pointer items-center rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800">
+                                                        {uploadingBatchId === batch.id ? 'Загрузка...' : 'Загрузить media'}
+                                                        <input
+                                                            type="file"
+                                                            multiple
+                                                            accept="image/*,video/*"
+                                                            className="hidden"
+                                                            onChange={(event) => void handleMediaUpload(batch.id, event.target.files)}
+                                                        />
+                                                    </label>
+                                                    <Button
+                                                        size="sm"
+                                                        onClick={() => void handleFinalizeBatch(batch.id)}
+                                                        disabled={updatingRequestId === batch.id}
+                                                    >
+                                                        На склад
+                                                    </Button>
+                                                </>
+                                            )}
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => setExpandedBatchId(isExpanded ? '' : batch.id)}
+                                            >
+                                                {isExpanded ? 'Скрыть' : 'Открыть партию'}
+                                            </Button>
+                                        </div>
+                                    </div>
+
+                                    {isExpanded && (
+                                        <div className="mt-4 rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-3">
+                                            {batch.items.map((item) => (
+                                                <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
+                                                    <div className="min-w-0">
+                                                        <p className="text-sm font-semibold text-white">{item.serial_number || item.temp_id}</p>
+                                                        <p className="text-xs text-gray-500">Пакет: {item.temp_id} • token: {item.public_token}</p>
+                                                        <p className="text-xs text-gray-500">{item.is_sold ? 'Продан' : 'Не продан'}</p>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <a
+                                                            href={item.qr_url}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500"
+                                                        >
+                                                            QR
+                                                        </a>
+                                                        <a
+                                                            href={createClonePath(item.public_token)}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                                                        >
+                                                            Просмотр
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </article>
+                            );
+                        })}
+                    </div>
+                )}
             </section>
         </div>
     );
@@ -768,48 +575,9 @@ export function Warehouse() {
 
 function SummaryCard({ title, value }: { title: string; value: number }) {
     return (
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
-            <p className="text-xs uppercase tracking-wide text-gray-500">{title}</p>
-            <p className="text-2xl font-bold text-white mt-2">{value}</p>
+        <div className="rounded-2xl border border-gray-800 bg-gray-900 px-5 py-4">
+            <p className="text-sm text-gray-500">{title}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
         </div>
-    );
-}
-
-function MetricChip({ label, value }: { label: string; value: number }) {
-    return (
-        <div className="rounded-lg border border-gray-800 bg-gray-900 px-2 py-1.5">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</p>
-            <p className="text-sm text-white font-semibold mt-1">{value}</p>
-        </div>
-    );
-}
-
-function FilterButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-    return (
-        <button
-            onClick={onClick}
-            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${active
-                ? 'bg-blue-600/20 border-blue-500/40 text-blue-200'
-                : 'bg-gray-800 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-700'
-                }`}
-        >
-            {label}
-        </button>
-    );
-}
-
-function ItemStatusBadge({ status }: { status: string }) {
-    return (
-        <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold ${itemStatusColors[status] || 'bg-gray-700/60 text-gray-200'}`}>
-            {itemStatusLabels[status] || status}
-        </span>
-    );
-}
-
-function RequestStatusBadge({ status }: { status: string }) {
-    return (
-        <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold ${requestStatusColors[status] || 'bg-gray-700/60 text-gray-200'}`}>
-            {requestStatusLabels[status] || status}
-        </span>
     );
 }

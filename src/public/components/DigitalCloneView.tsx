@@ -11,19 +11,47 @@ import { easing } from 'maath';
 export type CloneItemView = {
     id: string;
     temp_id: string;
+    serial_number?: string | null;
     public_token: string;
-    photo_url: string;
+    photo_url?: string | null;
+    item_photo_url?: string | null;
+    item_video_url?: string | null;
     status: string;
+    is_sold?: boolean;
     activation_date: string | null;
+    collected_date?: string | null;
+    collected_time?: string | null;
     batch: {
         gps_lat: number | null;
         gps_lng: number | null;
         video_url: string | null;
+        collected_date?: string | null;
+        collected_time?: string | null;
         created_at: string;
         owner?: {
             name: string;
         };
     };
+    product?: {
+        id: string;
+        country_code: string;
+        location_code: string;
+        item_code: string;
+        location_description?: string | null;
+        translations: Array<{
+            language_id: number;
+            name: string;
+            description: string;
+        }>;
+        location?: {
+            translations: Array<{
+                language_id: number;
+                name: string;
+                country?: string;
+                description?: string;
+            }>;
+        };
+    } | null;
 };
 
 const resolveMediaUrl = (value: string | null | undefined): string | null => {
@@ -175,10 +203,38 @@ function CloneCameraController({ lat, lng, offsetX }: { lat: number | null, lng:
 
 export function DigitalCloneView({ item, content, cloneUrl, previewMode = false }: DigitalCloneViewProps) {
     const [copied, setCopied] = useState(false);
-    const videoUrl = useMemo(() => resolveMediaUrl(item.batch.video_url), [item.batch.video_url]);
+    const videoUrl = useMemo(
+        () => resolveMediaUrl(item.item_video_url || item.batch.video_url),
+        [item.batch.video_url, item.item_video_url]
+    );
+    const photoUrl = useMemo(
+        () => resolveMediaUrl(item.item_photo_url || item.photo_url),
+        [item.item_photo_url, item.photo_url]
+    );
+
+    const productName = useMemo(() => (
+        item.product?.translations.find((translation) => translation.language_id === 2)?.name
+        || item.product?.translations.find((translation) => translation.language_id === 1)?.name
+        || item.product?.translations[0]?.name
+        || 'Камень'
+    ), [item.product?.translations]);
+
+    const productDescription = useMemo(() => (
+        item.product?.translations.find((translation) => translation.language_id === 2)?.description
+        || item.product?.translations.find((translation) => translation.language_id === 1)?.description
+        || item.product?.translations[0]?.description
+        || ''
+    ), [item.product?.translations]);
+
+    const locationName = useMemo(() => (
+        item.product?.location?.translations.find((translation) => translation.language_id === 2)?.name
+        || item.product?.location?.translations.find((translation) => translation.language_id === 1)?.name
+        || item.product?.location?.translations[0]?.name
+        || 'Локация'
+    ), [item.product?.location?.translations]);
 
     const heroTitle = applyCloneTemplate(content.hero_title_template, {
-        temp_id: item.temp_id,
+        temp_id: item.serial_number || item.temp_id,
         token: item.public_token,
         status: item.status,
         partner: item.batch.owner?.name ?? ''
@@ -218,6 +274,13 @@ export function DigitalCloneView({ item, content, cloneUrl, previewMode = false 
                     <div className="mb-6 lg:mb-8 p-5 lg:p-6 rounded-3xl bg-black/20 backdrop-blur-md border border-white/5">
                         <h1 className="text-4xl md:text-5xl font-semibold text-white leading-tight drop-shadow-md">{heroTitle}</h1>
                         <p className="mt-4 text-gray-300 text-base md:text-lg drop-shadow">{content.hero_description}</p>
+                        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                            <p className="text-sm font-semibold text-white">{productName}</p>
+                            {productDescription && <p className="mt-2 text-sm text-gray-300">{productDescription}</p>}
+                            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-blue-300">
+                                {locationName}
+                            </p>
+                        </div>
                     </div>
 
                     <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-4 lg:p-5 shadow-[0_20px_60px_rgba(0,0,0,0.8)]">
@@ -226,9 +289,16 @@ export function DigitalCloneView({ item, content, cloneUrl, previewMode = false 
                             {videoUrl ? (
                                 <video
                                     src={videoUrl}
+                                    poster={photoUrl || undefined}
                                     controls
                                     playsInline
                                     className="absolute inset-0 w-full h-full object-cover bg-black"
+                                />
+                            ) : photoUrl ? (
+                                <img
+                                    src={photoUrl}
+                                    alt={productName}
+                                    className="absolute inset-0 h-full w-full object-cover bg-black"
                                 />
                             ) : (
                                 <div className="p-8 flex items-center justify-center text-gray-500 text-center">
@@ -243,9 +313,18 @@ export function DigitalCloneView({ item, content, cloneUrl, previewMode = false 
                     <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-5 lg:p-6 shadow-xl">
                         <h2 className="text-lg font-semibold text-white mb-4">{content.details_heading}</h2>
                         <div className="flex flex-col text-sm space-y-3">
+                            <InfoRow label="Серийный номер" value={item.serial_number || 'Не сгенерирован'} mono />
                             <InfoRow label={content.field_token_label} value={item.public_token} mono />
                             <InfoRow label={content.field_status_label} value={item.status} />
+                            <InfoRow label="Продажа" value={item.is_sold ? 'Продан' : 'Не продан'} />
                             <InfoRow label={content.field_activation_label} value={item.activation_date ? new Date(item.activation_date).toLocaleString('ru-RU') : 'Не активирован'} />
+                            <InfoRow
+                                label="Дата и время сбора"
+                                value={[
+                                    item.collected_date ? new Date(item.collected_date).toLocaleDateString('ru-RU') : null,
+                                    item.collected_time || null
+                                ].filter(Boolean).join(' ') || 'Не указаны'}
+                            />
                             <InfoRow
                                 label={content.field_coords_label}
                                 value={(item.batch.gps_lat != null && item.batch.gps_lng != null)
@@ -253,7 +332,16 @@ export function DigitalCloneView({ item, content, cloneUrl, previewMode = false 
                                     : 'Не указаны'}
                             />
                             <InfoRow label={content.field_batch_date_label} value={new Date(item.batch.created_at).toLocaleDateString('ru-RU')} />
+                            <InfoRow label="Шаблон" value={productName} />
+                            <InfoRow label="Локация" value={locationName} />
                         </div>
+                    </div>
+
+                    <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-5 lg:p-6 shadow-xl">
+                        <h2 className="text-lg font-semibold text-white mb-4">Описание происхождения</h2>
+                        <p className="text-sm text-gray-300 leading-relaxed">
+                            {item.product?.location_description || 'Описание локации будет добавлено позже.'}
+                        </p>
                     </div>
 
                     <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-5 lg:p-6 space-y-4 shadow-xl">
