@@ -18,6 +18,7 @@ services:
       retries: 20
 
   app:
+    image: stones-runtime:local
     build:
       context: .
       dockerfile: Dockerfile
@@ -37,7 +38,28 @@ services:
       - "5173:5173"
     volumes:
       - stones_uploads:/app/public/uploads
+      - stones_video_jobs:/app/storage/video-jobs
+      - stones_video_exports:/app/storage/video-export
+
+  video-processor:
+    image: stones-runtime:local
+    pull_policy: never
+    container_name: stones-video-processor
+    restart: unless-stopped
+    command: ["npm", "run", "video-processor"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://root:root@db:3306/stones?connection_limit=20&pool_timeout=30
+      VIDEO_PROCESSOR_POLL_MS: 3000
+    volumes:
+      - stones_uploads:/app/public/uploads
+      - stones_video_jobs:/app/storage/video-jobs
+      - stones_video_exports:/app/storage/video-export
 
 volumes:
   stones_mysql_data:
   stones_uploads:
+  stones_video_jobs:
+  stones_video_exports:

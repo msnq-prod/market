@@ -15,9 +15,13 @@ lerna-debug.log*
 *.db
 coverage
 public/uploads
+storage/video-jobs
+storage/video-export
+storage/video-export-helper
 
 node_modules
 dist
+dist-electron
 dist-ssr
 playwright-report
 test-results

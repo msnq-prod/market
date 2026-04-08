@@ -12,6 +12,7 @@ import { ProductListSection } from './components/ProductListSection'
 import { LocationInfoSection } from './components/LocationInfoSection'
 import { LoadingScreen } from './components/LoadingScreen'
 import { AdminLayout } from './admin/components/AdminLayout'
+import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
 import { Dashboard } from './admin/pages/Dashboard'
 import { Locations } from './admin/pages/Locations'
 import { Products } from './admin/pages/Products'
@@ -227,6 +228,7 @@ import { DigitalClone } from './public/pages/DigitalClone'
 import { CloneContent } from './admin/pages/CloneContent'
 import { Warehouse } from './admin/pages/Warehouse'
 import { Orders } from './admin/pages/Orders'
+import { VideoTool } from './admin/pages/VideoTool'
 
 function App() {
   return (
@@ -237,6 +239,14 @@ function App() {
 
         {/* Admin Routes */}
         <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
+        <Route
+          path="/admin/video-tool/:batchId"
+          element={(
+            <AdminFullscreenRoute>
+              <VideoTool />
+            </AdminFullscreenRoute>
+          )}
+        />
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="orders" element={<Orders />} />

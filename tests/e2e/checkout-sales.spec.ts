@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { createProductFixture, disconnectTestDb } from './support/db-fixtures';
 
 const SALES_EMAIL = 'sales@stones.com';
 const SALES_PASSWORD = 'partner123';
@@ -67,6 +68,7 @@ test('Sales manager can search, edit and process checkout заявки without l
     const updatedComment = `Уточнение по заказу ${key}`;
     const internalNote = `Созвонить после 18:00 ${key}`;
 
+    await createProductFixture({ isPublished: true, stockOnlineCount: 2 });
     await seedCartAndOpenCheckout(page);
 
     await page.getByRole('button', { name: 'Регистрация' }).click();
@@ -195,4 +197,8 @@ test('Sales manager can search, edit and process checkout заявки without l
     expect(buyerOrder?.delivery_address).toBe(updatedAddress);
     expect(buyerOrder?.comment).toBe(updatedComment);
     expect(buyerOrder?.internal_note).toBeUndefined();
+});
+
+test.afterAll(async () => {
+    await disconnectTestDb();
 });

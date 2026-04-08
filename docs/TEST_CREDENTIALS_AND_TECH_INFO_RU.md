@@ -10,6 +10,22 @@ npm run db:seed
 npm run dev
 ```
 
+Desktop helper для HQ pilot:
+- основной пользовательский путь: открыть `/admin/video-tool/:batchId`, нажать `Скачать Stones Video Helper`, установить `DMG` и один раз открыть приложение;
+- после первого запуска helper работает в фоне и стартует при логине автоматически.
+
+Dev fallback без Electron:
+
+```bash
+npm run video-export-helper
+```
+
+Production DMG build:
+
+```bash
+STONES_HELPER_ALLOWED_ORIGIN=https://admin.example.com npm run video-export-helper:desktop:dist
+```
+
 После запуска:
 - frontend: `http://localhost:5173`
 - backend: `http://localhost:3001`
@@ -27,12 +43,7 @@ npm run dev
 | MANAGER | `manager@stones.com` | `partner123` | `/admin/login`, товары, локации, склад |
 | SALES_MANAGER | `sales@stones.com` | `partner123` | `/admin/login`, `/admin/orders` |
 | FRANCHISEE | `yakutia.partner@stones.com` | `partner123` | `/partner/login`, партнерский кабинет |
-| FRANCHISEE | `ural.partner@stones.com` | `partner123` | `/partner/login`, партнерский кабинет |
-| FRANCHISEE | `baltic.partner@stones.com` | `partner123` | `/partner/login`, партнерский кабинет |
-| USER | `anna` | `partner123` | публичная витрина, checkout, история |
-| USER | `maxim` | `partner123` | публичная витрина, checkout, история |
-| USER | `olga` | `partner123` | публичная витрина, checkout, история |
-| USER | `kirill` | `partner123` | публичная витрина, checkout, история |
+| USER | `user` | `partner123` | публичная витрина, checkout, история |
 
 ## 3. Ключевые UI-маршруты
 
@@ -43,7 +54,8 @@ npm run dev
 - Dashboard HQ: `/admin`
 - Товары HQ: `/admin/products`
 - Склад HQ: `/admin/warehouse`
-- Приемка legacy: `/admin/acceptance`
+- HQ монтаж видео: `/admin/video-tool/:batchId`
+- Приемка HQ: `/admin/acceptance`
 - Аллокация: `/admin/allocation`
 - Заказы сайта: `/admin/orders`
 - Партнерский дашборд: `/partner/dashboard`
@@ -66,6 +78,12 @@ npm run dev
 - `DELETE /api/collection-requests/:id`
 - `POST /api/collection-requests/:id/ack`
 - `POST /api/collection-requests/:id/complete`
+- `GET /api/batches/:id/video-tool`
+- `POST /api/batches/:id/video-export-sessions`
+- `GET /api/batches/:id/video-export-sessions/:sessionId`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/files`
 - `POST /api/batches/:id/receive`
 - `POST /api/batches/:id/media-sync`
 - `POST /api/batches/:id/finalize`
@@ -87,59 +105,39 @@ Legacy-совместимость:
 
 ## 5. Ожидаемое состояние БД после `npm run db:seed`
 
-Сид создает:
-- локации: `5`
-- товары-шаблоны: `10`
-- пользователи: `10`
-- заказы на сбор: `8`
-- партии: `6`
-- item-позиции: `24`
-- ledger-записи: `10`
-- site-orders: `4`
+Seed теперь оставляет только базовое пустое состояние для ручного старта:
+- пользователи: `5`
+- локации: `0`
+- товары-шаблоны: `0`
+- заказы на сбор: `0`
+- партии: `0`
+- item-позиции: `0`
+- ledger-записи: `0`
+- site-orders: `0`
 
-Ключевые заказы на сбор:
-- `req-yak-2026-01`: `IN_STOCK`
-- `req-yak-2026-02`: `IN_TRANSIT`
-- `req-ural-2026-01`: `IN_STOCK`
-- `req-ural-2026-02`: `RECEIVED`
-- `req-ural-open`: `OPEN`
-- `req-baltic-in-progress`: `IN_PROGRESS`
-- `req-kola-cancelled`: `CANCELLED`
-
-Ключевые партии:
-- `batch-yak-2026-01`: `IN_STOCK`
-- `batch-yak-2026-02`: `IN_TRANSIT`
-- `batch-ural-2026-01`: `IN_STOCK`
-- `batch-ural-2026-02`: `RECEIVED`
-- `batch-baltic-2026-01`: `IN_STOCK`
-- `batch-baltic-2026-02`: `CANCELLED`
-
-Опубликованные шаблоны:
-- `prod-yak-001`
-- `prod-ural-001`
-- `prod-baltic-001`
-
-У этих шаблонов есть реальные складские экземпляры для публичной витрины и checkout/regression.
+В базе остаются только:
+- языки интерфейса;
+- контент страницы цифрового двойника (`content_pages.clone_page`, если таблица уже промигрирована);
+- по одному пользователю на каждую роль: `ADMIN`, `MANAGER`, `SALES_MANAGER`, `FRANCHISEE`, `USER`.
 
 ## 6. Быстрый smoke сценарий v1
 
 1. Войти как `admin@stones.com / admin123`.
-2. Открыть `/admin/products` и проверить опубликованные шаблоны и остатки.
-3. Перейти в `/admin/warehouse` и убедиться, что есть:
-   - открытый заказ `req-ural-open`;
-   - заказ `req-baltic-in-progress`;
-   - полученная партия `batch-ural-2026-02`.
+2. Открыть `/admin/products` и убедиться, что список пуст.
+3. Перейти в `/admin/warehouse` и проверить, что нет заказов на сбор и партий.
 4. Войти как `yakutia.partner@stones.com / partner123`.
-5. Открыть `/partner/dashboard` и проверить свои заказы и партии.
-6. Открыть `/partner/qr`, выбрать партию и получить `clone_url`.
-7. Открыть `/clone/:publicToken` и проверить паспорт конкретного `Item`.
+5. Открыть `/partner/dashboard` и убедиться, что кабинет стартует без активных заказов и партий.
+6. Открыть `/partner/qr` и проверить пустое состояние без доступных batch.
+7. При необходимости создать тестовые сущности вручную через UI/API или временные e2e-фикстуры.
 
 ## 7. Важные замечания
 
 - Цифровой двойник привязан к `Item`, а не к `Product`.
 - Публичная доступность зависит и от `is_published`, и от реального остатка `Item`.
 - Переход партии в `IN_STOCK` через новый workflow требует media для каждого `Item`.
+- Для локального HQ-монтажа нужен отдельный localhost helper; в pilot он поставляется как macOS menu bar app с bundled `ffmpeg` и `ffprobe`.
+- Для production web UI ссылка на DMG задаётся через `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
 - Legacy-роуты сохранены специально для QR- и acceptance-regression.
 
 ---
-Актуально на 04.04.2026
+Актуально на 07.04.2026

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stones Video Helper</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #08111d;
+            --panel: #111d32;
+            --panel-soft: #17243d;
+            --text: #eff6ff;
+            --muted: #9fb1c8;
+            --accent: #31c48d;
+            --warn: #f59e0b;
+            --danger: #f87171;
+            --border: rgba(159, 177, 200, 0.22);
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+            background:
+                radial-gradient(circle at top, rgba(49, 196, 141, 0.18), transparent 35%),
+                linear-gradient(180deg, #08111d 0%, #0f172a 100%);
+            color: var(--text);
+        }
+
+        main {
+            padding: 24px;
+            display: grid;
+            gap: 16px;
+        }
+
+        .panel {
+            background: rgba(17, 29, 50, 0.88);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 18px;
+            backdrop-filter: blur(18px);
+        }
+
+        h1, h2, p {
+            margin: 0;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        h2 {
+            font-size: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+
+        .meta {
+            display: grid;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .meta-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .meta-row span:last-child {
+            color: var(--muted);
+            text-align: right;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        button {
+            appearance: none;
+            border: 0;
+            border-radius: 12px;
+            padding: 10px 14px;
+            font: inherit;
+            cursor: pointer;
+            color: #04111f;
+            background: var(--accent);
+        }
+
+        button.secondary {
+            background: var(--panel-soft);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .status-ready {
+            color: var(--accent);
+        }
+
+        .status-error {
+            color: var(--danger);
+        }
+
+        .small {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        code {
+            font-family: "SF Mono", "Menlo", monospace;
+            font-size: 12px;
+            color: #d8e6ff;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <section class="panel">
+            <h1>Stones Video Helper</h1>
+            <p class="small" id="status-line">Запуск helper...</p>
+            <p class="small" style="margin-top: 8px;">Helper работает в фоне, стартует при логине и обслуживает монтаж в HQ без отдельной установки ffmpeg.</p>
+            <div class="actions">
+                <button id="refresh-button">Обновить статус</button>
+                <button id="cleanup-button" class="secondary">Очистить старый cache</button>
+                <button id="restart-button" class="secondary">Перезапустить helper</button>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>Runtime</h2>
+            <div class="meta" id="runtime-meta"></div>
+        </section>
+
+        <section class="panel">
+            <h2>Storage</h2>
+            <div class="meta" id="storage-meta"></div>
+            <div class="actions">
+                <button id="open-storage-button" class="secondary">Показать папку</button>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>Allowed Origins</h2>
+            <div class="meta" id="origins-meta"></div>
+            <p class="small">Release helper принимает origin, который вшит в production DMG при сборке. Для dev fallback по-прежнему можно использовать <code>VIDEO_EXPORT_HELPER_ALLOWED_ORIGINS</code> или local config.</p>
+        </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+</body>
+</html>

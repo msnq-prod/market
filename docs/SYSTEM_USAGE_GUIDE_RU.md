@@ -79,33 +79,56 @@ Checkout:
 
 ### 5.3 Warehouse
 
-Экран `/admin/warehouse` — основной рабочий центр по партиям и заказам на сбор.
+Экран `/admin/warehouse` — обзорный центр складской логистики и заказов на сбор.
 
 Возможности:
 - видеть все `CollectionRequest`;
 - удалять открытый заказ без партии;
 - возвращать заказ в пул (`OPEN`);
 - отменять заказ (`CANCELLED`);
-- переводить заказ и партию между `IN_PROGRESS`, `IN_TRANSIT`, `RECEIVED`, `IN_STOCK`;
-- принимать партию в HQ;
-- загружать фото и видео партии;
-- синхронизировать media по именам файлов с `serial_number`;
-- переводить партию в склад только после обязательной media-полноты.
-
-Правило перевода в `IN_STOCK`:
-- у каждого `Item` должны быть и фото, и видео.
+- видеть партии, их статусы, media-прогресс и текущие video/job состояния;
+- раскрывать партию для обзора `Item`, QR и clone-ссылок;
+- контролировать общий складской остаток без дублирования приемочных операций.
 
 ### 5.4 Acceptance
 
-Экран `/admin/acceptance` сохранен как legacy-совместимый сценарий для быстрого контроля и старых e2e.
+Экран `/admin/acceptance` — основной рабочий центр HQ-приемки.
 
-Он работает с:
-- партиями в `IN_TRANSIT`;
-- проверкой по `temp_id`;
-- действиями `accept/reject`;
-- завершающей кнопкой `Finish Batch`.
+Основной batch-first поток:
+- показывает партии в `IN_TRANSIT` и `RECEIVED`;
+- позволяет принять партию в HQ (`IN_TRANSIT -> RECEIVED`);
+- показывает прогресс по фото, видео и общей media-полноте;
+- загружает фото по `serial_number`;
+- открывает локальный монтажный инструмент `/admin/video-tool/:batchId`;
+- переводит партию в `IN_STOCK` только после полной media-готовности.
 
-Для нового бизнес-потока приоритетным остается `/admin/warehouse`.
+Legacy-секция внутри `Acceptance`:
+- сохраняет проверку по `temp_id`;
+- поддерживает действия `accept/reject`;
+- оставляет кнопку `Finish Batch` только для старых сценариев и e2e-совместимости.
+
+Правило перевода в `IN_STOCK`:
+- у каждого `Item` должны быть и фото, и видео;
+- если для партии идет legacy video job в `QUEUED` или `PROCESSING`, перевод в `IN_STOCK` блокируется;
+- если для партии есть активная local export session в `OPEN` или `UPLOADING`, перевод в `IN_STOCK` тоже блокируется.
+
+Локальный монтаж видео:
+- точка входа из `Acceptance` через кнопку `Монтаж видео`;
+- экран маршрута: `/admin/video-tool/:batchId`;
+- для HQ pilot нужен отдельный macOS helper `Stones Video Helper`, который скачивается прямо из экрана монтажа;
+- пользователь ставит `DMG`, один раз открывает helper, дальше он живёт в menu bar и стартует при логине автоматически;
+- dev fallback для локальной разработки: `npm run video-export-helper`;
+- монтажер загружает один исходник локально, режет его на `000..NNN` и экспортирует только готовые финальные MP4;
+- файл `000` считается внутренним вступлением и отдельно на сервер не отправляется;
+- каждый итоговый ролик уходит на сервер по `Item.serial_number`;
+- draft нарезки хранится локально в браузере по ключу `video-tool-draft:<batchId>`;
+- при падении загрузки повторять нужно только оставшиеся `serial_number`, уже загруженные файлы не трогаются;
+- export-session можно отменить вручную;
+- если export-session зависла более чем на 24 часа, backend переводит ее в `ABANDONED`, а следующий запуск выполняет retry-tail.
+
+Production helper build:
+- production DMG собирается отдельно командой `STONES_HELPER_ALLOWED_ORIGIN=https://admin.example.com npm run video-export-helper:desktop:dist`;
+- ссылка на production DMG попадает в web UI через `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
 
 ### 5.5 Allocation
 
@@ -220,6 +243,11 @@ Checkout:
 
 Партии:
 - `GET /api/batches`
+- `GET /api/batches/:id/video-tool`
+- `POST /api/batches/:id/video-export-sessions`
+- `GET /api/batches/:id/video-export-sessions/:sessionId`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/files`
+- `POST /api/batches/:id/video-jobs`
 - `POST /api/batches/:id/receive`
 - `POST /api/batches/:id/media-sync`
 - `POST /api/batches/:id/finalize`
@@ -263,10 +291,10 @@ npm run test:e2e
 4. Партнер принимает заказ в `/partner/dashboard`.
 5. Партнер выполняет заказ в `/partner/batches/new`.
 6. Система создает партию и камни, генерирует серийники и QR.
-7. HQ принимает партию в `/admin/warehouse`, загружает media.
+7. HQ открывает `/admin/acceptance`, принимает партию, загружает фото по `serial_number` и запускает локальный видео-инструмент для партии.
 8. HQ переводит партию в `IN_STOCK`.
 9. Публичная карточка шаблона начинает показывать актуальный остаток.
 10. Покупатель получает QR и открывает паспорт своего конкретного `Item`.
 
 ---
-Актуально на 04.04.2026
+Актуально на 06.04.2026

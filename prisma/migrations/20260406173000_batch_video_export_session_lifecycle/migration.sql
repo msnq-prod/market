@@ -1,0 +1,2 @@
+ALTER TABLE `batch_video_export_sessions`
+    MODIFY `status` ENUM('OPEN', 'UPLOADING', 'COMPLETED', 'FAILED', 'CANCELLED', 'ABANDONED') NOT NULL DEFAULT 'OPEN';

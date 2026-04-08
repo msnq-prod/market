@@ -4,11 +4,11 @@ const prisma = new PrismaClient();
 
 async function main() {
     const languages = [
-        { id: 1, name: 'English', code: 'en', available: true, is_default: true },
-        { id: 2, name: 'Russian', code: 'ru', available: true, is_default: false },
-        { id: 3, name: 'German', code: 'de', available: false, is_default: false },
-        { id: 4, name: 'Chinese', code: 'zh', available: false, is_default: false },
-        { id: 5, name: 'French', code: 'fr', available: false, is_default: false },
+        { id: 1, name: 'English', code: 'en', available: true, is_default: false },
+        { id: 2, name: 'Русский', code: 'ru', available: true, is_default: true },
+        { id: 3, name: 'Deutsch', code: 'de', available: false, is_default: false },
+        { id: 4, name: '中文', code: 'zh', available: false, is_default: false },
+        { id: 5, name: 'Français', code: 'fr', available: false, is_default: false },
     ];
 
     console.log('Seeding languages...');

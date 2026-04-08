@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createProductFixture, disconnectTestDb } from './support/db-fixtures';
 
 type TouchPoint = {
     x: number;
@@ -21,6 +22,7 @@ test.describe('Mobile landing page', () => {
     });
 
     test('mobile nav and product filters stay usable on /', async ({ page }) => {
+        await createProductFixture({ isPublished: true, stockOnlineCount: 1 });
         await page.goto('/');
 
         await page.waitForFunction(() => {
@@ -54,6 +56,7 @@ test.describe('Mobile landing page', () => {
     });
 
     test('vertical swipe scrolls, horizontal swipe orbits, and focused location exits back to orbit', async ({ page }) => {
+        await createProductFixture({ isPublished: true, stockOnlineCount: 1 });
         const client = await page.context().newCDPSession(page);
 
         const swipe = async (from: TouchPoint, to: TouchPoint, steps = 10) => {
@@ -197,5 +200,9 @@ test.describe('Mobile landing page', () => {
             }).__STONES_STORE__?.getState().selectedLocation;
         });
         expect(selectedLocationAfterSwipe).toBeNull();
+    });
+
+    test.afterAll(async () => {
+        await disconnectTestDb();
     });
 });

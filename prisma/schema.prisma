@@ -219,6 +219,23 @@ enum CollectionWorkflowStatus {
   CANCELLED
 }
 
+enum VideoProcessingJobStatus {
+  UPLOADED
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum BatchVideoExportStatus {
+  OPEN
+  UPLOADING
+  COMPLETED
+  FAILED
+  CANCELLED
+  ABANDONED
+}
+
 model User {
   id              String   @id @default(uuid())
   name            String
@@ -240,6 +257,8 @@ model User {
   created_collection_requests  CollectionRequest[] @relation("CollectionRequestCreatedBy")
   target_collection_requests   CollectionRequest[] @relation("CollectionRequestTargetUser")
   accepted_collection_requests CollectionRequest[] @relation("CollectionRequestAcceptedBy")
+  requested_video_jobs         VideoProcessingJob[] @relation("VideoProcessingRequestedBy")
+  requested_video_exports      BatchVideoExportSession[] @relation("BatchVideoExportRequestedBy")
 
   @@map("users")
 }
@@ -263,6 +282,8 @@ model Batch {
   product            Product?           @relation(fields: [product_id], references: [id])
   collection_request CollectionRequest? @relation(fields: [collection_request_id], references: [id])
   items              Item[]
+  video_processing_jobs VideoProcessingJob[]
+  video_export_sessions BatchVideoExportSession[]
 
   @@index([owner_id])
   @@index([product_id])
@@ -302,6 +323,60 @@ model Item {
   @@index([public_token])
   @@index([status, is_sold])
   @@map("items")
+}
+
+model VideoProcessingJob {
+  id                     String                   @id @default(uuid())
+  batch_id               String
+  requested_by_user_id   String
+  status                 VideoProcessingJobStatus @default(UPLOADED)
+  version                Int
+  source_count           Int
+  output_count           Int
+  processed_output_count Int                      @default(0)
+  base_clip_name         String                   @db.VarChar(255)
+  source_manifest        Json
+  result_manifest        Json?
+  error_message          String?                  @db.Text
+  started_at             DateTime?
+  finished_at            DateTime?
+  created_at             DateTime                 @default(now())
+  updated_at             DateTime                 @updatedAt
+
+  batch             Batch @relation(fields: [batch_id], references: [id])
+  requested_by_user User  @relation("VideoProcessingRequestedBy", fields: [requested_by_user_id], references: [id])
+
+  @@unique([batch_id, version])
+  @@index([batch_id, created_at])
+  @@index([status])
+  @@map("video_processing_jobs")
+}
+
+model BatchVideoExportSession {
+  id                 String                 @id @default(uuid())
+  batch_id           String
+  created_by_user_id String
+  status             BatchVideoExportStatus @default(OPEN)
+  version            Int
+  expected_count     Int
+  uploaded_count     Int                    @default(0)
+  crossfade_ms       Int
+  source_fingerprint Json?
+  render_manifest    Json?
+  uploaded_manifest  Json?
+  error_message      String?                @db.Text
+  started_at         DateTime?
+  finished_at        DateTime?
+  created_at         DateTime               @default(now())
+  updated_at         DateTime               @updatedAt
+
+  batch             Batch @relation(fields: [batch_id], references: [id])
+  created_by_user   User  @relation("BatchVideoExportRequestedBy", fields: [created_by_user_id], references: [id])
+
+  @@unique([batch_id, version])
+  @@index([batch_id, created_at])
+  @@index([status])
+  @@map("batch_video_export_sessions")
 }
 
 model Ledger {

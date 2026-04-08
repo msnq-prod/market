@@ -1,325 +1,926 @@
-import { useEffect, useState } from 'react';
-import { Search, CheckCircle, XCircle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Camera, CheckCircle2, PackageCheck, QrCode, ScanSearch, Search, Video, XCircle } from 'lucide-react';
+import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
 type BatchItem = {
     id: string;
     temp_id: string;
-    photo_url: string;
+    serial_number: string | null;
+    public_token: string;
     status: string;
+    is_sold: boolean;
+    photo_url?: string | null;
+    item_photo_url?: string | null;
+    item_video_url?: string | null;
+    item_seq?: number | null;
+    created_at: string;
+    clone_url: string;
+    qr_url: string;
 };
 
-type BatchData = {
+type VideoProcessingState = {
+    job_id: string;
+    status: string;
+    version: number;
+    source_count: number;
+    output_count: number;
+    processed_output_count: number;
+    error_message: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+};
+
+type VideoExportState = {
+    session_id: string;
+    status: string;
+    version: number;
+    expected_count: number;
+    uploaded_count: number;
+    crossfade_ms: number;
+    error_message: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+};
+
+type BatchView = {
     id: string;
-    status?: string;
-    created_at?: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    owner?: {
+        id: string;
+        name: string;
+        email: string;
+    };
+    collection_request?: {
+        id: string;
+        status: string;
+        requested_qty: number;
+    } | null;
+    video_processing?: VideoProcessingState | null;
+    video_export?: VideoExportState | null;
+    product?: {
+        id: string;
+        country_code: string;
+        location_code: string;
+        item_code: string;
+        translations: Array<{
+            language_id: number;
+            name: string;
+            description: string;
+        }>;
+    } | null;
     items: BatchItem[];
 };
 
-export function Acceptance() {
-    const [tempId, setTempId] = useState('');
-    const [scannedItem, setScannedItem] = useState<BatchItem | null>(null);
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [transitBatches, setTransitBatches] = useState<BatchData[]>([]);
+type LegacyScannedItem = {
+    id: string;
+    temp_id: string;
+    photo_url: string | null;
+    status: string;
+};
 
-    // In a real app, we'd fetch the active batch context first or just search globally.
-    // For this demo, let's assume we are processing a specific batch or global search.
-    // Since verifying by temp_id alone might be ambiguous if duplicates exist across batches (though they shouldn't in a good system, our logic allows dupes if not finished), 
-    // let's assume we scan items from a batch.
-    // However, the prompt says "High-speed verification (TempID search)".
-    // Let's implement a global search for finding the item in a TRANSIT batch.
+const statusLabel: Record<string, string> = {
+    IN_TRANSIT: 'В пути',
+    RECEIVED: 'Принята',
+    IN_STOCK: 'На складе',
+    CANCELLED: 'Отменена'
+};
 
-    // We need an endpoint to find item by temp_id across all TRANSIT batches? 
-    // Our backend `verify` was scoped to a batchId. 
-    // Let's create a simpler UI: Enter Batch ID first, then scan items.
+const statusClass: Record<string, string> = {
+    IN_TRANSIT: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
+    RECEIVED: 'bg-violet-500/15 text-violet-200 border border-violet-500/30',
+    IN_STOCK: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
+    CANCELLED: 'bg-red-500/15 text-red-200 border border-red-500/30'
+};
 
-    const [batchId, setBatchId] = useState('');
-    const [batch, setBatch] = useState<BatchData | null>(null);
+const itemStatusLabel: Record<string, string> = {
+    NEW: 'Новый',
+    REJECTED: 'Отклонен',
+    STOCK_HQ: 'На складе HQ',
+    STOCK_ONLINE: 'Готов к продаже',
+    ON_CONSIGNMENT: 'На консигнации',
+    SOLD_ONLINE: 'Продан онлайн',
+    ACTIVATED: 'Активирован'
+};
 
-    const fetchTransitBatches = async (): Promise<BatchData[]> => {
-        const res = await authFetch('/api/batches');
-        if (!res.ok) return [];
-        const batches = await res.json() as BatchData[];
-        const transitOnly = batches.filter((batch) => batch.status === 'IN_TRANSIT');
-        setTransitBatches(transitOnly);
-        return transitOnly;
+const itemStatusClass: Record<string, string> = {
+    NEW: 'bg-gray-800 text-gray-300',
+    REJECTED: 'bg-red-500/15 text-red-200',
+    STOCK_HQ: 'bg-emerald-500/15 text-emerald-200',
+    STOCK_ONLINE: 'bg-emerald-500/15 text-emerald-200',
+    ON_CONSIGNMENT: 'bg-amber-500/15 text-amber-200',
+    SOLD_ONLINE: 'bg-blue-500/15 text-blue-200',
+    ACTIVATED: 'bg-violet-500/15 text-violet-200'
+};
+
+const videoProcessingLabel: Record<string, string> = {
+    UPLOADED: 'Загружено',
+    QUEUED: 'В очереди',
+    PROCESSING: 'Обработка',
+    COMPLETED: 'Готово',
+    FAILED: 'Ошибка'
+};
+
+const videoProcessingClass: Record<string, string> = {
+    UPLOADED: 'bg-gray-500/15 text-gray-200 border border-gray-500/30',
+    QUEUED: 'bg-blue-500/15 text-blue-200 border border-blue-500/30',
+    PROCESSING: 'bg-amber-500/15 text-amber-200 border border-amber-500/30',
+    COMPLETED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
+    FAILED: 'bg-red-500/15 text-red-200 border border-red-500/30'
+};
+
+const videoExportLabel: Record<string, string> = {
+    OPEN: 'Черновик',
+    UPLOADING: 'Загрузка',
+    COMPLETED: 'Готово',
+    FAILED: 'Ошибка',
+    CANCELLED: 'Отменено',
+    ABANDONED: 'Зависло'
+};
+
+const videoExportClass: Record<string, string> = {
+    OPEN: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
+    UPLOADING: 'bg-amber-500/15 text-amber-200 border border-amber-500/30',
+    COMPLETED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
+    FAILED: 'bg-red-500/15 text-red-200 border border-red-500/30',
+    CANCELLED: 'bg-gray-500/15 text-gray-200 border border-gray-500/30',
+    ABANDONED: 'bg-orange-500/15 text-orange-200 border border-orange-500/30'
+};
+
+const activeVideoProcessingStatuses = new Set(['QUEUED', 'PROCESSING']);
+const activeVideoExportStatuses = new Set(['OPEN', 'UPLOADING']);
+
+const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
+    const translation = translations.find((item) => item.language_id === 2)
+        || translations.find((item) => item.language_id === 1)
+        || translations[0];
+    const value = translation?.[field];
+    return typeof value === 'string' ? value : '';
+};
+
+const createClonePath = (publicToken: string) => `/clone/${encodeURIComponent(publicToken)}`;
+
+const countBatchMedia = (batch: BatchView | null) => {
+    if (!batch) {
+        return {
+            total: 0,
+            photoReady: 0,
+            videoReady: 0,
+            fullyReady: 0,
+            processedLegacyCount: 0
+        };
+    }
+
+    const photoReady = batch.items.filter((item) => Boolean(item.item_photo_url)).length;
+    const videoReady = batch.items.filter((item) => Boolean(item.item_video_url)).length;
+    const fullyReady = batch.items.filter((item) => Boolean(item.item_photo_url) && Boolean(item.item_video_url)).length;
+    const processedLegacyCount = batch.items.filter((item) => item.status !== 'NEW').length;
+
+    return {
+        total: batch.items.length,
+        photoReady,
+        videoReady,
+        fullyReady,
+        processedLegacyCount
     };
+};
 
-    useEffect(() => {
-        void fetchTransitBatches();
-    }, []);
+export function Acceptance() {
+    const [batches, setBatches] = useState<BatchView[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [selectedBatchId, setSelectedBatchId] = useState('');
+    const [batchQuery, setBatchQuery] = useState('');
+    const [updatingBatchId, setUpdatingBatchId] = useState('');
+    const [photoUploadingBatchId, setPhotoUploadingBatchId] = useState('');
+    const [tempId, setTempId] = useState('');
+    const [legacyLoading, setLegacyLoading] = useState(false);
+    const [scannedItem, setScannedItem] = useState<LegacyScannedItem | null>(null);
 
-    const loadBatch = async (targetId?: string) => {
-        const idToFind = (targetId || batchId).trim();
-        if (!idToFind) return;
-        setLoading(true);
+    const loadBatches = async (showSpinner = true) => {
+        if (showSpinner) {
+            setLoading(true);
+        }
+        setError('');
+
         try {
-            let found = transitBatches.find((b) => b.id === idToFind || b.id.startsWith(idToFind));
-            if (!found) {
-                const latestTransit = await fetchTransitBatches();
-                found = latestTransit.find((b) => b.id === idToFind || b.id.startsWith(idToFind));
+            const response = await authFetch('/api/batches');
+            if (!response.ok) {
+                throw new Error('Не удалось загрузить партии для приемки.');
             }
 
-            if (found) {
-                setBatch(found);
-                setBatchId(found.id); // Normalize ID
-                setError('');
-            } else {
-                setError('Партия в транзите не найдена');
-            }
-        } catch (_err) {
-            setError('Не удалось загрузить партию');
+            const payload = await response.json() as BatchView[];
+            setBatches(payload);
+        } catch (loadError) {
+            console.error(loadError);
+            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить партии для приемки.');
         } finally {
-            setLoading(false);
+            if (showSpinner) {
+                setLoading(false);
+            }
         }
     };
 
-    const handleVerify = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!batchId) { setError('Сначала выберите партию'); return; }
-        setLoading(true);
+    useEffect(() => {
+        void loadBatches();
+    }, []);
+
+    const relevantBatches = useMemo(
+        () => batches.filter((batch) => batch.status === 'IN_TRANSIT' || batch.status === 'RECEIVED'),
+        [batches]
+    );
+
+    useEffect(() => {
+        if (relevantBatches.length === 0) {
+            if (selectedBatchId) {
+                setSelectedBatchId('');
+            }
+            return;
+        }
+
+        const exists = relevantBatches.some((batch) => batch.id === selectedBatchId);
+        if (!selectedBatchId || !exists) {
+            const nextBatch = relevantBatches.find((batch) => batch.status === 'IN_TRANSIT') || relevantBatches[0];
+            setSelectedBatchId(nextBatch.id);
+        }
+    }, [relevantBatches, selectedBatchId]);
+
+    useEffect(() => {
+        const hasActiveVideoWork = relevantBatches.some((batch) =>
+            (batch.video_processing && activeVideoProcessingStatuses.has(batch.video_processing.status))
+            || (batch.video_export && activeVideoExportStatuses.has(batch.video_export.status))
+        );
+        if (!hasActiveVideoWork) {
+            return;
+        }
+
+        const intervalId = window.setInterval(() => {
+            void loadBatches(false);
+        }, 4000);
+
+        return () => {
+            window.clearInterval(intervalId);
+        };
+    }, [relevantBatches]);
+
+    const filteredBatches = useMemo(() => {
+        const normalizedQuery = batchQuery.trim().toLowerCase();
+        if (!normalizedQuery) {
+            return relevantBatches;
+        }
+
+        return relevantBatches.filter((batch) => {
+            const ownerMatch = batch.owner?.name?.toLowerCase().includes(normalizedQuery);
+            const productName = batch.product ? getDefaultTranslationValue(batch.product.translations, 'name').toLowerCase() : '';
+            return batch.id.toLowerCase().includes(normalizedQuery)
+                || productName.includes(normalizedQuery)
+                || Boolean(ownerMatch);
+        });
+    }, [batchQuery, relevantBatches]);
+
+    const selectedBatch = useMemo(
+        () => relevantBatches.find((batch) => batch.id === selectedBatchId) || null,
+        [relevantBatches, selectedBatchId]
+    );
+
+    const mediaStats = useMemo(() => countBatchMedia(selectedBatch), [selectedBatch]);
+    const missingMediaCount = Math.max(0, mediaStats.total - mediaStats.fullyReady);
+    const hasActiveVideoJob = Boolean(
+        selectedBatch?.video_processing && activeVideoProcessingStatuses.has(selectedBatch.video_processing.status)
+    );
+    const hasActiveVideoExport = Boolean(
+        selectedBatch?.video_export && activeVideoExportStatuses.has(selectedBatch.video_export.status)
+    );
+    const canFinalize = Boolean(
+        selectedBatch
+        && selectedBatch.status === 'RECEIVED'
+        && !hasActiveVideoJob
+        && !hasActiveVideoExport
+        && missingMediaCount === 0
+    );
+    const legacyRemainingCount = Math.max(0, mediaStats.total - mediaStats.processedLegacyCount);
+
+    const refreshAndKeepBatch = async (batchId: string) => {
+        await loadBatches(false);
+        setSelectedBatchId(batchId);
+    };
+
+    const handleSelectBatch = (batchId: string) => {
+        setSelectedBatchId(batchId);
+        setError('');
+        setScannedItem(null);
+        setTempId('');
+    };
+
+    const handleReceiveBatch = async (batchId: string) => {
+        setUpdatingBatchId(batchId);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/receive`, { method: 'POST' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось принять партию.' }));
+                throw new Error(payload.error || 'Не удалось принять партию.');
+            }
+
+            await refreshAndKeepBatch(batchId);
+        } catch (receiveError) {
+            console.error(receiveError);
+            setError(receiveError instanceof Error ? receiveError.message : 'Не удалось принять партию.');
+        } finally {
+            setUpdatingBatchId('');
+        }
+    };
+
+    const handleFinalizeBatch = async (batchId: string) => {
+        setUpdatingBatchId(batchId);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/finalize`, { method: 'POST' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось перевести партию на склад.' }));
+                throw new Error(payload.error || 'Не удалось перевести партию на склад.');
+            }
+
+            setScannedItem(null);
+            setTempId('');
+            await loadBatches(false);
+        } catch (finalizeError) {
+            console.error(finalizeError);
+            setError(finalizeError instanceof Error ? finalizeError.message : 'Не удалось перевести партию на склад.');
+        } finally {
+            setUpdatingBatchId('');
+        }
+    };
+
+    const handlePhotoUpload = async (batchId: string, files: FileList | null) => {
+        if (!files || files.length === 0) return;
+
+        setPhotoUploadingBatchId(batchId);
+        setError('');
+
+        try {
+            const uploadedFiles: Array<{ name: string; url: string }> = [];
+
+            for (const file of Array.from(files)) {
+                const form = new FormData();
+                form.append('file', file);
+
+                const uploadResponse = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: form
+                });
+
+                const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось загрузить media-файл.' }));
+                if (!uploadResponse.ok || !uploadPayload.url) {
+                    throw new Error(uploadPayload.error || `Не удалось загрузить файл ${file.name}.`);
+                }
+
+                uploadedFiles.push({
+                    name: file.name,
+                    url: uploadPayload.url
+                });
+            }
+
+            const syncResponse = await authFetch(`/api/batches/${batchId}/media-sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ files: uploadedFiles })
+            });
+
+            if (!syncResponse.ok) {
+                const payload = await syncResponse.json().catch(() => ({ error: 'Не удалось сопоставить файлы партии.' }));
+                throw new Error(payload.error || 'Не удалось сопоставить файлы партии.');
+            }
+
+            await refreshAndKeepBatch(batchId);
+        } catch (uploadError) {
+            console.error(uploadError);
+            setError(uploadError instanceof Error ? uploadError.message : 'Не удалось загрузить фото партии.');
+        } finally {
+            setPhotoUploadingBatchId('');
+        }
+    };
+
+    const handleLegacyVerify = async (event: React.FormEvent) => {
+        event.preventDefault();
+        if (!selectedBatch) {
+            setError('Сначала выберите партию.');
+            return;
+        }
+        if (!tempId.trim()) {
+            setError('Укажите `temp_id` для сверки.');
+            return;
+        }
+
+        setLegacyLoading(true);
         setError('');
         setScannedItem(null);
 
         try {
-            const res = await authFetch(`/api/hq/acceptance/${batchId}/verify`, {
+            const response = await authFetch(`/api/hq/acceptance/${selectedBatch.id}/verify`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ temp_id: tempId })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ temp_id: tempId.trim() })
             });
 
-            if (res.ok) {
-                const item = await res.json() as BatchItem;
-                setScannedItem(item);
-                setTempId(''); // Clear for next scan
-            } else {
-                const err = await res.json();
-                setError(err.error || 'Проверка не пройдена');
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Позиция не найдена в партии.' }));
+                throw new Error(payload.error || 'Позиция не найдена в партии.');
             }
-        } catch (_err) {
-            setError('Сетевая ошибка');
+
+            const item = await response.json() as LegacyScannedItem;
+            setScannedItem(item);
+            setTempId('');
+        } catch (verifyError) {
+            console.error(verifyError);
+            setError(verifyError instanceof Error ? verifyError.message : 'Не удалось проверить позицию.');
         } finally {
-            setLoading(false);
+            setLegacyLoading(false);
         }
     };
 
-    const handleDecision = async (decision: 'accept' | 'reject') => {
-        if (!scannedItem) return;
-        setLoading(true);
+    const handleLegacyDecision = async (decision: 'accept' | 'reject') => {
+        if (!selectedBatch || !scannedItem) return;
+
+        setLegacyLoading(true);
+        setError('');
+
         try {
             const endpoint = decision === 'accept' ? 'accept' : 'reject';
-            const body = decision === 'reject' ? { reason: 'Не пройден контроль качества' } : {};
-
-            const res = await authFetch(`/api/hq/items/${scannedItem.id}/${endpoint}`, {
+            const response = await authFetch(`/api/hq/items/${scannedItem.id}/${endpoint}`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(body)
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(decision === 'reject'
+                    ? { reason: 'Не пройден контроль качества' }
+                    : {})
             });
 
-            if (res.ok) {
-                const updated = await res.json();
-                setScannedItem(updated); // Update UI
-                // Update batch list locally
-                if (batch) {
-                    const newItems = batch.items.map((i) => i.id === updated.id ? updated : i);
-                    setBatch({ ...batch, items: newItems });
-                }
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось обновить статус позиции.' }));
+                throw new Error(payload.error || 'Не удалось обновить статус позиции.');
             }
-        } catch (_err) {
-            alert('Не удалось выполнить действие');
+
+            const updatedItem = await response.json() as LegacyScannedItem;
+            setScannedItem(updatedItem);
+            await refreshAndKeepBatch(selectedBatch.id);
+        } catch (decisionError) {
+            console.error(decisionError);
+            setError(decisionError instanceof Error ? decisionError.message : 'Не удалось обновить статус позиции.');
         } finally {
-            setLoading(false);
+            setLegacyLoading(false);
         }
     };
 
-    const handleFinishBatch = async () => {
-        if (!confirm('Подтвердите, что все позиции обработаны')) return;
-        const res = await authFetch(`/api/hq/batches/${batchId}/finish`, {
-            method: 'POST'
-        });
-        if (res.ok) {
-            alert('Партия завершена');
-            setBatch(null); setBatchId('');
-            await fetchTransitBatches();
-        } else {
-            const err = await res.json();
-            alert(err.error);
+    const handleLegacyFinishBatch = async () => {
+        if (!selectedBatch) return;
+        if (!window.confirm('Завершить legacy-сценарий приемки для выбранной партии?')) return;
+
+        setLegacyLoading(true);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/hq/batches/${selectedBatch.id}/finish`, {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось завершить legacy-приемку.' }));
+                throw new Error(payload.error || 'Не удалось завершить legacy-приемку.');
+            }
+
+            setScannedItem(null);
+            setTempId('');
+            await loadBatches(false);
+        } catch (finishError) {
+            console.error(finishError);
+            setError(finishError instanceof Error ? finishError.message : 'Не удалось завершить legacy-приемку.');
+        } finally {
+            setLegacyLoading(false);
         }
     };
-
-    const processedCount = batch ? batch.items.filter((item) => item.status !== 'NEW').length : 0;
-    const totalCount = batch?.items.length || 0;
-    const remaining = Math.max(0, totalCount - processedCount);
 
     return (
-        <div className="text-gray-100 space-y-8">
-            <header>
-                <h1 className="text-2xl font-bold">Складская приемка</h1>
-                <p className="text-gray-500">Сканируйте позиции для сверки с манифестом.</p>
+        <div className="space-y-8">
+            <header className="space-y-2">
+                <h1 className="text-2xl font-bold text-white">Складская приемка</h1>
+                <p className="text-gray-500">
+                    Единый экран приемки HQ: выбор партии, перевод в статус получено, media-полнота и вспомогательная сверка по `temp_id`.
+                </p>
             </header>
 
-            {!batch ? (
-                <div className="space-y-4 max-w-2xl">
-                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
-                        <label className="block text-sm font-medium text-gray-400 mb-2">Введите ID партии</label>
-                        <div className="flex gap-2">
-                            <input
-                                value={batchId}
-                                onChange={(e) => setBatchId(e.target.value)}
-                                className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 flex-1 focus:ring-2 focus:ring-blue-500 outline-none"
-                                placeholder="например, 550e8400..."
-                            />
-                            <button onClick={() => void loadBatch()} disabled={loading} className="bg-blue-600 px-6 py-2 rounded-lg font-medium hover:bg-blue-700">
-                                Загрузить
-                            </button>
-                        </div>
-                        {error && <p className="text-red-500 mt-2 text-sm">{error}</p>}
-                    </div>
-
-                    <div className="bg-gray-900 p-4 rounded-xl border border-gray-800">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-semibold text-white">Партии в транзите</h3>
-                            <span className="text-xs text-gray-500">всего: {transitBatches.length}</span>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            {transitBatches.length === 0 && (
-                                <span className="text-sm text-gray-500">Нет партий в статусе IN_TRANSIT.</span>
-                            )}
-                            {transitBatches.map((transit) => (
-                                <button
-                                    key={transit.id}
-                                    onClick={() => void loadBatch(transit.id)}
-                                    className="px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 hover:bg-gray-700 text-sm font-mono"
-                                >
-                                    {transit.id.slice(0, 8)}...
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+            {error && (
+                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
+                    {error}
                 </div>
-            ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Scanner */}
-                    <div className="space-y-6">
-                        <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
-                            <form onSubmit={handleVerify}>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Скан позиции (№ упаковки)</label>
-                                <div className="flex gap-2">
-                                    <div className="relative flex-1">
-                                        <Search className="absolute left-3 top-3 text-gray-500" size={18} />
-                                        <input
-                                            value={tempId}
-                                            onChange={(e) => setTempId(e.target.value)}
-                                            className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg pl-10 pr-4 py-2 focus:ring-2 focus:ring-green-500 outline-none"
-                                            placeholder="Сканируйте штрихкод..."
-                                            autoFocus
-                                        />
-                                    </div>
-                                    <button type="submit" disabled={loading} className="bg-green-600 px-6 py-2 rounded-lg font-medium hover:bg-green-700">
-                                        Проверить
-                                    </button>
-                                </div>
-                            </form>
-                            {error && <p className="text-red-500 mt-4 bg-red-500/10 p-2 rounded border border-red-500/20">{error}</p>}
-                        </div>
+            )}
 
-                        {scannedItem && (
-                            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 animate-in fade-in slide-in-from-top-4">
-                                <div className="flex gap-6">
-                                    <img src={scannedItem.photo_url || 'https://placehold.co/400'} className="w-48 h-48 object-cover rounded-lg bg-gray-900" />
-                                    <div className="flex-1">
-                                        <div className="flex justify-between items-start">
-                                            <div>
-                                                <h3 className="text-xl font-bold text-white">Позиция #{scannedItem.temp_id}</h3>
-                                                <p className="text-gray-400 text-sm">{scannedItem.id}</p>
+            <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-4">
+                <MetricCard title="В пути" value={relevantBatches.filter((batch) => batch.status === 'IN_TRANSIT').length} />
+                <MetricCard title="Приняты" value={relevantBatches.filter((batch) => batch.status === 'RECEIVED').length} />
+                <MetricCard title="Фото готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_photo_url)).length, 0)} />
+                <MetricCard title="Видео готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_video_url)).length, 0)} />
+            </section>
+
+            <div className="grid gap-6 xl:grid-cols-[340px,minmax(0,1fr)]">
+                <section className="rounded-2xl border border-gray-800 bg-gray-900">
+                    <div className="border-b border-gray-800 px-5 py-4">
+                        <div className="flex items-center gap-2">
+                            <PackageCheck size={18} className="text-blue-300" />
+                            <h2 className="text-lg font-semibold text-white">Партии приемки</h2>
+                        </div>
+                        <p className="mt-1 text-sm text-gray-500">Показываются только партии в стадиях `IN_TRANSIT` и `RECEIVED`.</p>
+                    </div>
+
+                    <div className="border-b border-gray-800 px-5 py-4">
+                        <label className="block text-sm font-medium text-gray-400 mb-2">Поиск партии</label>
+                        <div className="relative">
+                            <Search className="absolute left-3 top-3 text-gray-500" size={18} />
+                            <input
+                                value={batchQuery}
+                                onChange={(event) => setBatchQuery(event.target.value)}
+                                placeholder="ID партии, товар или партнер"
+                                className="w-full rounded-xl border border-gray-700 bg-gray-950 py-2.5 pl-10 pr-4 text-white outline-none transition focus:border-blue-500"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="max-h-[720px] overflow-y-auto p-3">
+                        {loading ? (
+                            <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-sm text-gray-400">
+                                Загружаем партии приемки...
+                            </div>
+                        ) : filteredBatches.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950 px-4 py-8 text-sm text-gray-500">
+                                По текущему фильтру нет партий для приемки.
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {filteredBatches.map((batch) => {
+                                    const productName = batch.product ? getDefaultTranslationValue(batch.product.translations, 'name') : 'Без привязки к товару';
+                                    const counts = countBatchMedia(batch);
+                                    const isSelected = batch.id === selectedBatchId;
+
+                                    return (
+                                        <button
+                                            key={batch.id}
+                                            type="button"
+                                            onClick={() => handleSelectBatch(batch.id)}
+                                            className={`w-full rounded-2xl border p-4 text-left transition ${isSelected
+                                                ? 'border-blue-500/40 bg-blue-500/10 shadow-[0_0_24px_rgba(59,130,246,0.12)]'
+                                                : 'border-gray-800 bg-gray-950 hover:border-gray-700 hover:bg-gray-900'
+                                                }`}
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="truncate font-semibold text-white">{productName}</p>
+                                                    <p className="mt-1 truncate font-mono text-xs text-gray-500">{batch.id}</p>
+                                                </div>
+                                                <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                    {statusLabel[batch.status] || batch.status}
+                                                </span>
                                             </div>
-                                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${scannedItem.status === 'STOCK_HQ' ? 'bg-green-500/20 text-green-400' :
-                                                scannedItem.status === 'REJECTED' ? 'bg-red-500/20 text-red-400' : 'bg-gray-700 text-gray-300'
-                                                }`}>
-                                                {statusLabel(scannedItem.status)}
-                                            </span>
+                                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
+                                                <span className="rounded-full border border-gray-700 px-2.5 py-1">
+                                                    {batch.owner?.name || 'Без партнера'}
+                                                </span>
+                                                <span className="rounded-full border border-gray-700 px-2.5 py-1">
+                                                    Камней: {batch.items.length}
+                                                </span>
+                                                <span className="rounded-full border border-gray-700 px-2.5 py-1">
+                                                    Media: {counts.fullyReady}/{counts.total}
+                                                </span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                <section className="space-y-6">
+                    {!selectedBatch ? (
+                        <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900 px-6 py-12 text-center text-gray-500">
+                            Выберите партию слева, чтобы открыть рабочее место приемки.
+                        </div>
+                    ) : (
+                        <>
+                            <article className="rounded-2xl border border-gray-800 bg-gray-900">
+                                <div className="border-b border-gray-800 px-6 py-5">
+                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                        <div className="space-y-3 min-w-0">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <h2 className="text-xl font-semibold text-white">
+                                                    {selectedBatch.product
+                                                        ? getDefaultTranslationValue(selectedBatch.product.translations, 'name')
+                                                        : 'Партия без карточки товара'}
+                                                </h2>
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${statusClass[selectedBatch.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                    {statusLabel[selectedBatch.status] || selectedBatch.status}
+                                                </span>
+                                                {selectedBatch.video_export && (
+                                                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoExportClass[selectedBatch.video_export.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                        Монтаж: {videoExportLabel[selectedBatch.video_export.status] || selectedBatch.video_export.status}
+                                                    </span>
+                                                )}
+                                                {selectedBatch.video_processing && (
+                                                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoProcessingClass[selectedBatch.video_processing.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                        Legacy: {videoProcessingLabel[selectedBatch.video_processing.status] || selectedBatch.video_processing.status}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            <div className="space-y-1 text-sm text-gray-400">
+                                                <p className="font-mono text-xs text-gray-500">{selectedBatch.id}</p>
+                                                <p>Партнер: {selectedBatch.owner?.name || 'Не назначен'}{selectedBatch.owner?.email ? ` • ${selectedBatch.owner.email}` : ''}</p>
+                                                <p>Позиций в партии: {selectedBatch.items.length}</p>
+                                            </div>
                                         </div>
 
-                                        <div className="mt-8 flex gap-4">
-                                            {scannedItem.status !== 'STOCK_HQ' && scannedItem.status !== 'REJECTED' && (
+                                        <div className="flex flex-wrap gap-2 lg:justify-end">
+                                            {selectedBatch.status === 'IN_TRANSIT' && (
+                                                <Button
+                                                    onClick={() => void handleReceiveBatch(selectedBatch.id)}
+                                                    disabled={updatingBatchId === selectedBatch.id}
+                                                >
+                                                    Принять партию
+                                                </Button>
+                                            )}
+
+                                            {selectedBatch.status === 'RECEIVED' && (
                                                 <>
-                                                    <button onClick={() => handleDecision('accept')} className="flex-1 bg-green-600 py-3 rounded-lg font-bold hover:bg-green-500 flex items-center justify-center gap-2">
-                                                        <CheckCircle size={20} /> Принять
-                                                    </button>
-                                                    <button onClick={() => handleDecision('reject')} className="flex-1 bg-red-600 py-3 rounded-lg font-bold hover:bg-red-500 flex items-center justify-center gap-2">
-                                                        <XCircle size={20} /> Отклонить
-                                                    </button>
+                                                    <label className={`inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm ${photoUploadingBatchId === selectedBatch.id
+                                                        ? 'cursor-default text-gray-400'
+                                                        : 'cursor-pointer text-gray-100 hover:bg-gray-800'
+                                                        }`}>
+                                                        <Camera size={16} />
+                                                        {photoUploadingBatchId === selectedBatch.id ? 'Загрузка фото...' : 'Загрузить фото'}
+                                                        <input
+                                                            type="file"
+                                                            multiple
+                                                            accept="image/*"
+                                                            className="hidden"
+                                                            disabled={photoUploadingBatchId === selectedBatch.id}
+                                                            onChange={(event) => {
+                                                                void handlePhotoUpload(selectedBatch.id, event.target.files);
+                                                                event.currentTarget.value = '';
+                                                            }}
+                                                        />
+                                                    </label>
+                                                    <Link
+                                                        to={`/admin/video-tool/${encodeURIComponent(selectedBatch.id)}`}
+                                                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-700 px-3 py-2 text-sm text-emerald-100 hover:bg-emerald-500/10"
+                                                    >
+                                                        <Video size={16} />
+                                                        Монтаж видео
+                                                    </Link>
+                                                    <Button
+                                                        onClick={() => void handleFinalizeBatch(selectedBatch.id)}
+                                                        disabled={updatingBatchId === selectedBatch.id || !canFinalize}
+                                                    >
+                                                        На склад
+                                                    </Button>
                                                 </>
                                             )}
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        )}
-                    </div>
 
-                    {/* Batch List */}
-                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 overflow-hidden flex flex-col h-[600px]">
-                        <div className="flex justify-between items-center mb-4">
-                            <div>
-                                <h3 className="font-bold text-white">Манифест партии</h3>
-                                <p className="text-xs text-gray-500">ID: {batchId}</p>
-                                <p className="text-xs text-gray-500 mt-1">Обработано: {processedCount}/{totalCount}</p>
-                            </div>
-                            <button
-                                onClick={handleFinishBatch}
-                                disabled={remaining > 0}
-                                className="bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-500"
-                            >
-                                Завершить партию
-                            </button>
-                        </div>
-
-                        <div className="flex-1 overflow-auto space-y-2 pr-2">
-                            {batch.items.map((item) => (
-                                <div key={item.id} className={`p-3 rounded-lg flex justify-between items-center border ${item.id === scannedItem?.id ? 'bg-blue-500/10 border-blue-500/50' : 'bg-gray-800 border-gray-700'
-                                    }`}>
-                                    <div className="flex items-center gap-3">
-                                        <img src={item.photo_url} className="w-10 h-10 rounded bg-gray-700 object-cover" />
-                                        <span className="font-mono text-sm">{item.temp_id}</span>
-                                    </div>
-                                    <StatusBadge status={item.status} />
+                                <div className="grid gap-4 px-6 py-5 md:grid-cols-2 xl:grid-cols-4">
+                                    <InfoTile title="Фото готовы" value={`${mediaStats.photoReady}/${mediaStats.total}`} note="Файлы по `serial_number`" />
+                                    <InfoTile title="Видео готовы" value={`${mediaStats.videoReady}/${mediaStats.total}`} note="Финальные ролики по item" />
+                                    <InfoTile title="Media полностью" value={`${mediaStats.fullyReady}/${mediaStats.total}`} note="Готово к переводу на склад" />
+                                    <InfoTile title="Legacy обработано" value={`${mediaStats.processedLegacyCount}/${mediaStats.total}`} note="Сверка по `temp_id`" />
                                 </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
+
+                                {selectedBatch.status === 'RECEIVED' && (
+                                    <div className="border-t border-gray-800 px-6 py-5">
+                                        <div className="grid gap-4 lg:grid-cols-3">
+                                            <NoticeCard
+                                                title="Фото"
+                                                text="Массовая привязка фото выполняется по имени файла, которое должно совпадать с `serial_number`."
+                                            />
+                                            <NoticeCard
+                                                title="Видео"
+                                                text="Монтаж запускается отдельным инструментом. В приемке остается только точка входа и контроль прогресса."
+                                            />
+                                            <NoticeCard
+                                                title="Готовность к складу"
+                                                text={canFinalize
+                                                    ? 'Все позиции укомплектованы. Партию можно переводить на склад.'
+                                                    : hasActiveVideoJob || hasActiveVideoExport
+                                                    ? 'Активная видео-обработка еще идет. Перевод на склад временно заблокирован.'
+                                                    : `Не хватает media для ${missingMediaCount} позиций.`}
+                                                tone={canFinalize ? 'success' : 'warning'}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </article>
+
+                            <article className="rounded-2xl border border-gray-800 bg-gray-900">
+                                <div className="border-b border-gray-800 px-6 py-4">
+                                    <h3 className="text-lg font-semibold text-white">Позиции партии</h3>
+                                    <p className="mt-1 text-sm text-gray-500">Здесь находится вся приемка товара на склад: серийники, media-статус и быстрые ссылки.</p>
+                                </div>
+
+                                <div className="divide-y divide-gray-800">
+                                    {selectedBatch.items.map((item) => (
+                                        <div key={item.id} className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between">
+                                            <div className="min-w-0 space-y-2">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <p className="font-semibold text-white">{item.serial_number || item.temp_id}</p>
+                                                    <span className={`rounded-full px-2.5 py-1 text-xs ${itemStatusClass[item.status] || 'bg-gray-800 text-gray-300'}`}>
+                                                        {itemStatusLabel[item.status] || item.status}
+                                                    </span>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+                                                    <span className="rounded-full border border-gray-700 px-2.5 py-1">Пакет: {item.temp_id}</span>
+                                                    {item.item_seq != null && (
+                                                        <span className="rounded-full border border-gray-700 px-2.5 py-1">Позиция: {String(item.item_seq).padStart(3, '0')}</span>
+                                                    )}
+                                                    <span className="rounded-full border border-gray-700 px-2.5 py-1">{item.is_sold ? 'Продан' : 'Не продан'}</span>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2 text-xs">
+                                                    <span className={`rounded-full px-2.5 py-1 ${item.item_photo_url ? 'bg-emerald-500/15 text-emerald-200' : 'bg-gray-800 text-gray-400'}`}>
+                                                        Фото {item.item_photo_url ? 'есть' : 'нет'}
+                                                    </span>
+                                                    <span className={`rounded-full px-2.5 py-1 ${item.item_video_url ? 'bg-emerald-500/15 text-emerald-200' : 'bg-gray-800 text-gray-400'}`}>
+                                                        Видео {item.item_video_url ? 'есть' : 'нет'}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                                <a
+                                                    href={item.qr_url}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500"
+                                                >
+                                                    <QrCode size={16} />
+                                                    QR
+                                                </a>
+                                                <a
+                                                    href={createClonePath(item.public_token)}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                                                >
+                                                    Просмотр
+                                                </a>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </article>
+
+                            <article className="rounded-2xl border border-amber-500/20 bg-gray-900">
+                                <div className="border-b border-amber-500/20 px-6 py-4">
+                                    <div className="flex items-center gap-2">
+                                        <ScanSearch size={18} className="text-amber-200" />
+                                        <h3 className="text-lg font-semibold text-white">Legacy-сверка по `temp_id`</h3>
+                                    </div>
+                                    <p className="mt-1 text-sm text-gray-400">
+                                        Вспомогательный сценарий для старых процессов и e2e. Основная приемка идет через блок партии выше.
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-6 px-6 py-5 lg:grid-cols-[minmax(0,1fr),360px]">
+                                    <div className="space-y-5">
+                                        <form onSubmit={handleLegacyVerify} className="rounded-2xl border border-gray-800 bg-gray-950 p-4">
+                                            <label className="block text-sm font-medium text-gray-400 mb-2">Скан позиции (`temp_id`)</label>
+                                            <div className="flex flex-col gap-3 sm:flex-row">
+                                                <div className="relative flex-1">
+                                                    <Search className="absolute left-3 top-3 text-gray-500" size={18} />
+                                                    <input
+                                                        value={tempId}
+                                                        onChange={(event) => setTempId(event.target.value)}
+                                                        className="w-full rounded-xl border border-gray-700 bg-gray-900 py-2.5 pl-10 pr-4 text-white outline-none transition focus:border-amber-500"
+                                                        placeholder="Введите или сканируйте temp_id"
+                                                        autoFocus
+                                                    />
+                                                </div>
+                                                <Button type="submit" variant="secondary" disabled={legacyLoading}>
+                                                    Проверить
+                                                </Button>
+                                            </div>
+                                        </form>
+
+                                        {scannedItem ? (
+                                            <div className="rounded-2xl border border-gray-800 bg-gray-950 p-5">
+                                                <div className="flex flex-col gap-5 sm:flex-row">
+                                                    <img
+                                                        src={scannedItem.photo_url || 'https://placehold.co/320x320?text=No+Photo'}
+                                                        alt={scannedItem.temp_id}
+                                                        className="h-36 w-36 rounded-xl bg-gray-900 object-cover"
+                                                    />
+                                                    <div className="flex-1">
+                                                        <div className="flex flex-wrap items-center gap-3">
+                                                            <h4 className="text-lg font-semibold text-white">Позиция #{scannedItem.temp_id}</h4>
+                                                            <span className={`rounded-full px-2.5 py-1 text-xs ${itemStatusClass[scannedItem.status] || 'bg-gray-800 text-gray-300'}`}>
+                                                                {itemStatusLabel[scannedItem.status] || scannedItem.status}
+                                                            </span>
+                                                        </div>
+                                                        <p className="mt-2 text-sm text-gray-500">{scannedItem.id}</p>
+
+                                                        <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                                                            {scannedItem.status !== 'STOCK_HQ' && scannedItem.status !== 'REJECTED' && (
+                                                                <>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void handleLegacyDecision('accept')}
+                                                                        disabled={legacyLoading}
+                                                                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        <CheckCircle2 size={18} />
+                                                                        Принять
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void handleLegacyDecision('reject')}
+                                                                        disabled={legacyLoading}
+                                                                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        <XCircle size={18} />
+                                                                        Отклонить
+                                                                    </button>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-950 px-4 py-8 text-sm text-gray-500">
+                                                После сканирования здесь появится карточка позиции для legacy-проверки.
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="rounded-2xl border border-gray-800 bg-gray-950 p-5">
+                                        <h4 className="text-sm font-semibold uppercase tracking-wide text-amber-200">Legacy-операции</h4>
+                                        <p className="mt-3 text-sm text-gray-400">
+                                            Используйте только если нужен старый сценарий `accept/reject/finish`. Новый поток приемки идет через статус партии и media-полноту.
+                                        </p>
+                                        <div className="mt-4 space-y-2 text-sm text-gray-400">
+                                            <p>Обработано: {mediaStats.processedLegacyCount}/{mediaStats.total}</p>
+                                            <p>Осталось `NEW`: {legacyRemainingCount}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleLegacyFinishBatch()}
+                                            disabled={legacyLoading || legacyRemainingCount > 0}
+                                            className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-amber-700 px-4 py-3 text-sm font-medium text-amber-100 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Завершить legacy-приемку
+                                        </button>
+                                    </div>
+                                </div>
+                            </article>
+                        </>
+                    )}
+                </section>
+            </div>
         </div>
     );
 }
 
-function StatusBadge({ status }: { status: string }) {
-    const colors: Record<string, string> = {
-        'NEW': 'bg-gray-700 text-gray-300',
-        'STOCK_HQ': 'bg-green-900/50 text-green-400 border border-green-500/30',
-        'REJECTED': 'bg-red-900/50 text-red-400 border border-red-500/30',
-    };
-    const labels: Record<string, string> = {
-        NEW: 'НОВЫЙ',
-        STOCK_HQ: 'НА СКЛАДЕ HQ',
-        REJECTED: 'ОТКЛОНЕН',
-    };
+function MetricCard({ title, value }: { title: string; value: number }) {
     return (
-        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${colors[status] || 'bg-gray-700'}`}>
-            {labels[status] || status}
-        </span>
+        <div className="rounded-2xl border border-gray-800 bg-gray-900 px-5 py-4">
+            <p className="text-sm text-gray-500">{title}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+        </div>
     );
 }
 
-function statusLabel(status: string) {
-    if (status === 'NEW') return 'НОВЫЙ';
-    if (status === 'STOCK_HQ') return 'НА СКЛАДЕ HQ';
-    if (status === 'REJECTED') return 'ОТКЛОНЕН';
-    return status;
+function InfoTile({ title, value, note }: { title: string; value: string; note: string }) {
+    return (
+        <div className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4">
+            <p className="text-sm text-gray-500">{title}</p>
+            <p className="mt-2 text-xl font-semibold text-white">{value}</p>
+            <p className="mt-2 text-xs text-gray-500">{note}</p>
+        </div>
+    );
+}
+
+function NoticeCard({ title, text, tone = 'default' }: { title: string; text: string; tone?: 'default' | 'success' | 'warning' }) {
+    const toneClass = tone === 'success'
+        ? 'border-emerald-500/20 bg-emerald-500/10'
+        : tone === 'warning'
+        ? 'border-amber-500/20 bg-amber-500/10'
+        : 'border-gray-800 bg-gray-950';
+
+    return (
+        <div className={`rounded-2xl border px-4 py-4 ${toneClass}`}>
+            <p className="text-sm font-semibold text-white">{title}</p>
+            <p className="mt-2 text-sm text-gray-400">{text}</p>
+        </div>
+    );
 }
