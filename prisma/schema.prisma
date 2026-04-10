@@ -219,6 +219,14 @@ enum CollectionWorkflowStatus {
   CANCELLED
 }
 
+enum BatchStatus {
+  DRAFT
+  TRANSIT
+  RECEIVED
+  ERROR
+  FINISHED
+}
+
 enum VideoProcessingJobStatus {
   UPLOADED
   QUEUED
@@ -274,7 +282,7 @@ model Batch {
   collected_date        DateTime?
   collected_time        String?                  @db.VarChar(5)
   daily_batch_seq       Int?
-  status                CollectionWorkflowStatus @default(IN_PROGRESS)
+  status                BatchStatus              @default(DRAFT)
   created_at            DateTime                 @default(now())
   updated_at            DateTime                 @updatedAt
 

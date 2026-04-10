@@ -96,19 +96,19 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
 };
 
 const batchStatusLabel: Record<string, string> = {
-    IN_PROGRESS: 'В работе',
-    IN_TRANSIT: 'В доставке',
+    DRAFT: 'Черновик',
+    TRANSIT: 'В доставке',
     RECEIVED: 'Получен',
-    IN_STOCK: 'На складе',
-    CANCELLED: 'Отменен'
+    FINISHED: 'Завершен',
+    ERROR: 'Ошибка'
 };
 
 const batchStatusClass: Record<string, string> = {
-    IN_PROGRESS: 'bg-amber-500/20 text-amber-200 border border-amber-500/30',
-    IN_TRANSIT: 'bg-blue-500/20 text-blue-200 border border-blue-500/30',
+    DRAFT: 'bg-amber-500/20 text-amber-200 border border-amber-500/30',
+    TRANSIT: 'bg-blue-500/20 text-blue-200 border border-blue-500/30',
     RECEIVED: 'bg-violet-500/20 text-violet-200 border border-violet-500/30',
-    IN_STOCK: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30',
-    CANCELLED: 'bg-red-500/20 text-red-200 border border-red-500/30'
+    FINISHED: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30',
+    ERROR: 'bg-red-500/20 text-red-200 border border-red-500/30'
 };
 
 const emptyProductForm: ProductForm = {

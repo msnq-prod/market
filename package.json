@@ -11,20 +11,21 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite\"",
     "dev:e2e": "concurrently \"PORT=3101 npm run server\" \"VITE_HOST=127.0.0.1 VITE_PORT=5273 VITE_API_TARGET=http://127.0.0.1:3101 vite --host 127.0.0.1 --port 5273\"",
-    "build": "tsc -b && vite build",
+    "build": "npm run prisma:generate && tsc -b && vite build",
     "lint": "eslint .",
-    "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed",
+    "test:e2e": "npm run prisma:generate && playwright test",
+    "test:e2e:headed": "npm run prisma:generate && playwright test --headed",
     "preview": "vite preview",
-    "server": "tsx server/index.ts",
+    "server": "npm run prisma:generate && tsx server/index.ts",
     "video-processor": "tsx server/videoProcessor.ts",
     "video-export-helper": "node video-export-helper/index.js",
     "video-export-helper:desktop": "electron video-export-helper/desktop/main.cjs",
     "video-export-helper:desktop:dist": "node video-export-helper/build-desktop.mjs",
     "video-export-helper:desktop:dist:raw": "electron-builder --config video-export-helper/electron-builder.json",
     "db:migrate": "prisma migrate dev",
-    "db:seed:languages": "tsx prisma/seed_languages.ts",
-    "db:seed": "tsx prisma/seed.ts"
+    "prisma:generate": "prisma generate",
+    "db:seed:languages": "npm run prisma:generate && tsx prisma/seed_languages.ts",
+    "db:seed": "npm run prisma:generate && tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

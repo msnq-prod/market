@@ -7,12 +7,14 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: stones
+      MYSQL_USER: stones
+      MYSQL_PASSWORD: stones
     ports:
       - "3307:3306"
     volumes:
       - stones_mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -proot --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ustones -pstones --silent"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -28,14 +30,13 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: mysql://root:root@db:3306/stones?connection_limit=20&pool_timeout=30
+      DATABASE_URL: mysql://stones:stones@db:3306/stones?connection_limit=20&pool_timeout=30
       ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:?ACCESS_TOKEN_SECRET is required}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
       PORT: 3001
-      CLIENT_URL: http://localhost:5173
+      CLIENT_URL: http://localhost:3001
     ports:
       - "3001:3001"
-      - "5173:5173"
     volumes:
       - stones_uploads:/app/public/uploads
       - stones_video_jobs:/app/storage/video-jobs
@@ -51,7 +52,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: mysql://root:root@db:3306/stones?connection_limit=20&pool_timeout=30
+      DATABASE_URL: mysql://stones:stones@db:3306/stones?connection_limit=20&pool_timeout=30
       VIDEO_PROCESSOR_POLL_MS: 3000
     volumes:
       - stones_uploads:/app/public/uploads

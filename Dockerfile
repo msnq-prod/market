@@ -40,7 +40,8 @@ RUN rm -rf \
 RUN find node_modules -type f -name '*.map' -delete
 
 COPY . .
+RUN npm run build
 
-EXPOSE 3001 5173
+EXPOSE 3001
 
 CMD ["/bin/sh", "./docker/entrypoint.sh"]

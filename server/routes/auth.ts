@@ -4,20 +4,10 @@ import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
+import { ACCESS_TOKEN_SECRET, REFRESH_TOKEN_SECRET } from '../config/env.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
-
-const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
-
-if (!ACCESS_TOKEN_SECRET) {
-    throw new Error('ACCESS_TOKEN_SECRET is required');
-}
-
-if (!REFRESH_TOKEN_SECRET) {
-    throw new Error('REFRESH_TOKEN_SECRET is required');
-}
 
 const normalizeEmail = (value: unknown): string => {
     if (typeof value !== 'string') return '';

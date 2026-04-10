@@ -76,17 +76,17 @@ type BatchView = {
 };
 
 const statusLabel: Record<string, string> = {
-    IN_TRANSIT: 'В пути',
+    TRANSIT: 'В пути',
     RECEIVED: 'Принята',
-    IN_STOCK: 'На складе',
-    CANCELLED: 'Отменена'
+    FINISHED: 'Завершена',
+    ERROR: 'Ошибка'
 };
 
 const statusClass: Record<string, string> = {
-    IN_TRANSIT: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
+    TRANSIT: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
     RECEIVED: 'bg-violet-500/15 text-violet-200 border border-violet-500/30',
-    IN_STOCK: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
-    CANCELLED: 'bg-red-500/15 text-red-200 border border-red-500/30'
+    FINISHED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
+    ERROR: 'bg-red-500/15 text-red-200 border border-red-500/30'
 };
 
 const itemStatusLabel: Record<string, string> = {
@@ -216,7 +216,7 @@ export function Acceptance() {
     }, []);
 
     const relevantBatches = useMemo(
-        () => batches.filter((batch) => batch.status === 'IN_TRANSIT' || batch.status === 'RECEIVED'),
+        () => batches.filter((batch) => batch.status === 'TRANSIT' || batch.status === 'RECEIVED'),
         [batches]
     );
 
@@ -230,7 +230,7 @@ export function Acceptance() {
 
         const exists = relevantBatches.some((batch) => batch.id === selectedBatchId);
         if (!selectedBatchId || !exists) {
-            const nextBatch = relevantBatches.find((batch) => batch.status === 'IN_TRANSIT') || relevantBatches[0];
+            const nextBatch = relevantBatches.find((batch) => batch.status === 'TRANSIT') || relevantBatches[0];
             setSelectedBatchId(nextBatch.id);
         }
     }, [relevantBatches, selectedBatchId]);
@@ -404,7 +404,7 @@ export function Acceptance() {
             )}
 
             <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-4">
-                <MetricCard title="В пути" value={relevantBatches.filter((batch) => batch.status === 'IN_TRANSIT').length} />
+                <MetricCard title="В пути" value={relevantBatches.filter((batch) => batch.status === 'TRANSIT').length} />
                 <MetricCard title="Приняты" value={relevantBatches.filter((batch) => batch.status === 'RECEIVED').length} />
                 <MetricCard title="Фото готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_photo_url)).length, 0)} />
                 <MetricCard title="Видео готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_video_url)).length, 0)} />
@@ -417,7 +417,7 @@ export function Acceptance() {
                             <PackageCheck size={18} className="text-blue-300" />
                             <h2 className="text-lg font-semibold text-white">Партии приемки</h2>
                         </div>
-                        <p className="mt-1 text-sm text-gray-500">Показываются только партии в стадиях `IN_TRANSIT` и `RECEIVED`.</p>
+                        <p className="mt-1 text-sm text-gray-500">Показываются только партии в стадиях `TRANSIT` и `RECEIVED`.</p>
                     </div>
 
                     <div className="border-b border-gray-800 px-5 py-4">
@@ -527,7 +527,7 @@ export function Acceptance() {
                                         </div>
 
                                         <div className="flex flex-wrap gap-2 lg:justify-end">
-                                            {selectedBatch.status === 'IN_TRANSIT' && (
+                                            {selectedBatch.status === 'TRANSIT' && (
                                                 <Button
                                                     onClick={() => void handleReceiveBatch(selectedBatch.id)}
                                                     disabled={updatingBatchId === selectedBatch.id}

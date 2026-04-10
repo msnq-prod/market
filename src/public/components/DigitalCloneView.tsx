@@ -7,6 +7,7 @@ import { OrbitControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { Earth } from '../../components/Earth';
 import { easing } from 'maath';
+import { hasWebGLSupport } from '../../utils/webgl';
 
 export type CloneItemView = {
     id: string;
@@ -203,6 +204,7 @@ function CloneCameraController({ lat, lng, offsetX }: { lat: number | null, lng:
 
 export function DigitalCloneView({ item, content, cloneUrl, previewMode = false }: DigitalCloneViewProps) {
     const [copied, setCopied] = useState(false);
+    const [hasWebGL] = useState(() => hasWebGLSupport());
     const videoUrl = useMemo(
         () => resolveMediaUrl(item.item_video_url || item.batch.video_url),
         [item.batch.video_url, item.item_video_url]
@@ -253,11 +255,15 @@ export function DigitalCloneView({ item, content, cloneUrl, previewMode = false 
     return (
         <div className="min-h-screen bg-black text-gray-100 flex flex-col relative overflow-hidden">
             <div className="absolute inset-0 z-0">
-                <Canvas camera={{ position: [0, 0, 3.5], fov: 45 }}>
-                    <Suspense fallback={null}>
-                        <CloneScene lat={item.batch.gps_lat} lng={item.batch.gps_lng} />
-                    </Suspense>
-                </Canvas>
+                {hasWebGL ? (
+                    <Canvas camera={{ position: [0, 0, 3.5], fov: 45 }}>
+                        <Suspense fallback={null}>
+                            <CloneScene lat={item.batch.gps_lat} lng={item.batch.gps_lng} />
+                        </Suspense>
+                    </Canvas>
+                ) : (
+                    <div className="h-full w-full bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.22),_transparent_40%),linear-gradient(180deg,_#050816_0%,_#02040a_100%)]" />
+                )}
             </div>
 
             <header className="relative z-10 border-b border-white/10 backdrop-blur-md bg-black/40">

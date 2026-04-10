@@ -22,7 +22,7 @@ export default defineConfig({
         ? undefined
         : {
             command: 'npm run dev:e2e',
-            url: `${e2eBaseUrl}/partner/login`,
+            url: 'http://127.0.0.1:3101/healthz',
             timeout: 180_000,
             reuseExistingServer: true
         }

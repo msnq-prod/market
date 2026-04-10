@@ -47,11 +47,11 @@ type CollectionRequest = {
 };
 
 const batchStatusLabels: Record<string, string> = {
-    IN_PROGRESS: 'В работе',
-    IN_TRANSIT: 'В доставке',
+    DRAFT: 'Черновик',
+    TRANSIT: 'В доставке',
     RECEIVED: 'Получен HQ',
-    IN_STOCK: 'На складе',
-    CANCELLED: 'Отменен'
+    FINISHED: 'Завершена',
+    ERROR: 'Ошибка'
 };
 
 const requestStatusLabels: Record<string, string> = {
@@ -119,9 +119,9 @@ export function Dashboard() {
 
     const openRequests = collectionRequests.filter((request) => request.status === 'OPEN');
     const activeRequests = collectionRequests.filter((request) => request.status === 'IN_PROGRESS');
-    const sentBatches = batches.filter((batch) => batch.status === 'IN_TRANSIT').length;
+    const sentBatches = batches.filter((batch) => batch.status === 'TRANSIT').length;
     const receivedBatches = batches.filter((batch) => batch.status === 'RECEIVED').length;
-    const stockBatches = batches.filter((batch) => batch.status === 'IN_STOCK').length;
+    const stockBatches = batches.filter((batch) => batch.status === 'FINISHED').length;
     const soldItems = useMemo(
         () => batches.reduce((total, batch) => total + batch.items.filter((item) => item.is_sold).length, 0),
         [batches]

@@ -16,13 +16,13 @@ type Batch = {
     items: BatchItem[];
 };
 
-type BatchFilter = 'ALL' | 'SENT' | 'IN_PROGRESS' | 'FINISHED';
+type BatchFilter = 'ALL' | 'SENT' | 'DRAFT' | 'FINISHED';
 type SaleFilter = 'ALL' | 'SOLD' | 'UNSOLD';
 type SortBy = 'NEWEST' | 'OLDEST' | 'MOST_SOLD' | 'LEAST_SOLD';
 
 const SOLD_ITEM_STATUSES = new Set(['SOLD_ONLINE', 'ACTIVATED']);
-const SENT_BATCH_STATUSES = new Set(['IN_TRANSIT', 'RECEIVED', 'IN_STOCK']);
-const IN_PROGRESS_BATCH_STATUSES = new Set(['IN_PROGRESS']);
+const SENT_BATCH_STATUSES = new Set(['TRANSIT', 'RECEIVED', 'FINISHED']);
+const DRAFT_BATCH_STATUSES = new Set(['DRAFT']);
 
 const getSoldCount = (items: BatchItem[]): number => items.filter((item) => SOLD_ITEM_STATUSES.has(item.status)).length;
 
@@ -78,8 +78,8 @@ export function Batches() {
     const summary = useMemo(() => {
         const totalBatches = batches.length;
         const sentBatches = batches.filter((batch) => SENT_BATCH_STATUSES.has(batch.status)).length;
-        const inProgressBatches = batches.filter((batch) => IN_PROGRESS_BATCH_STATUSES.has(batch.status)).length;
-        const finishedBatches = batches.filter((batch) => batch.status === 'IN_STOCK').length;
+        const inProgressBatches = batches.filter((batch) => DRAFT_BATCH_STATUSES.has(batch.status)).length;
+        const finishedBatches = batches.filter((batch) => batch.status === 'FINISHED').length;
         const totalItems = batches.reduce((acc, batch) => acc + batch.items.length, 0);
         const soldItems = batches.reduce((acc, batch) => acc + getSoldCount(batch.items), 0);
         const unsoldItems = totalItems - soldItems;
@@ -102,11 +102,11 @@ export function Batches() {
                 return false;
             }
 
-            if (batchFilter === 'IN_PROGRESS' && !IN_PROGRESS_BATCH_STATUSES.has(batch.status)) {
+            if (batchFilter === 'DRAFT' && !DRAFT_BATCH_STATUSES.has(batch.status)) {
                 return false;
             }
 
-            if (batchFilter === 'FINISHED' && batch.status !== 'IN_STOCK') {
+            if (batchFilter === 'FINISHED' && batch.status !== 'FINISHED') {
                 return false;
             }
 
@@ -263,7 +263,7 @@ export function Batches() {
                     <div className="flex flex-wrap gap-2">
                         <FilterButton label="Все" count={summary.totalBatches} active={batchFilter === 'ALL'} onClick={() => setBatchFilter('ALL')} />
                         <FilterButton label="Отправлены" count={summary.sentBatches} active={batchFilter === 'SENT'} onClick={() => setBatchFilter('SENT')} />
-                        <FilterButton label="В строю" count={summary.inProgressBatches} active={batchFilter === 'IN_PROGRESS'} onClick={() => setBatchFilter('IN_PROGRESS')} />
+                        <FilterButton label="Черновики" count={summary.inProgressBatches} active={batchFilter === 'DRAFT'} onClick={() => setBatchFilter('DRAFT')} />
                         <FilterButton label="Завершены" count={summary.finishedBatches} active={batchFilter === 'FINISHED'} onClick={() => setBatchFilter('FINISHED')} />
                     </div>
 
@@ -475,24 +475,26 @@ function FilterButton({ label, count, active, onClick }: { label: string; count:
 
 function StatusBadge({ status }: { status: string }) {
     const colors: Record<string, string> = {
-        IN_PROGRESS: 'bg-gray-100 text-gray-700',
-        IN_TRANSIT: 'bg-amber-100 text-amber-700',
+        DRAFT: 'bg-gray-100 text-gray-700',
+        TRANSIT: 'bg-amber-100 text-amber-700',
         RECEIVED: 'bg-blue-100 text-blue-700',
-        IN_STOCK: 'bg-emerald-100 text-emerald-700',
+        FINISHED: 'bg-emerald-100 text-emerald-700',
+        ERROR: 'bg-red-100 text-red-700',
         CANCELLED: 'bg-red-100 text-red-700'
     };
     const labels: Record<string, string> = {
-        IN_PROGRESS: 'В РАБОТЕ',
-        IN_TRANSIT: 'В ДОСТАВКЕ',
+        DRAFT: 'ЧЕРНОВИК',
+        TRANSIT: 'В ДОСТАВКЕ',
         RECEIVED: 'ПОЛУЧЕНО',
-        IN_STOCK: 'НА СКЛАДЕ',
+        FINISHED: 'ЗАВЕРШЕНО',
+        ERROR: 'ОШИБКА',
         CANCELLED: 'ОТМЕНЕНО'
     };
 
     return (
         <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${colors[status] || 'bg-gray-100 text-gray-700'}`}>
-            {status === 'IN_TRANSIT' && <Truck size={12} />}
-            {status === 'IN_STOCK' && <Check size={12} />}
+            {status === 'TRANSIT' && <Truck size={12} />}
+            {status === 'FINISHED' && <Check size={12} />}
             {labels[status] || status}
         </span>
     );

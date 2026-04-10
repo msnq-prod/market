@@ -351,8 +351,8 @@ router.patch('/:id', async (req: AuthRequest, res) => {
             }
 
             if (status === 'CANCELLED') {
-                if (existing.batch?.status === 'IN_STOCK') {
-                    return res.status(400).json({ error: 'Нельзя отменить заказ, который уже переведен в склад.' });
+                if (existing.batch?.status === 'FINISHED') {
+                    return res.status(400).json({ error: 'Нельзя отменить заказ, для которого партия уже завершена.' });
                 }
                 updateData.status = 'CANCELLED';
             }
@@ -369,7 +369,14 @@ router.patch('/:id', async (req: AuthRequest, res) => {
                 await prisma.batch.update({
                     where: { id: existing.batch.id },
                     data: {
-                        status: status as RequestRecord['status']
+                        status:
+                            status === 'IN_PROGRESS'
+                                ? 'DRAFT'
+                                : status === 'IN_TRANSIT'
+                                    ? 'TRANSIT'
+                                    : status === 'IN_STOCK'
+                                        ? 'FINISHED'
+                                        : 'RECEIVED'
                     }
                 });
 
@@ -524,7 +531,7 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
             where: {
                 product_id: existing.product_id,
                 collected_date: safeCollectedDate,
-                status: { not: 'CANCELLED' }
+                status: { not: 'ERROR' }
             }
         });
         const dailyBatchSeq = sameDayBatches + 1;
@@ -557,7 +564,7 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
                     collected_date: safeCollectedDate,
                     collected_time: safeCollectedTime,
                     daily_batch_seq: dailyBatchSeq,
-                    status: 'IN_TRANSIT',
+                    status: 'TRANSIT',
                     items: {
                         create: itemCreates
                     }

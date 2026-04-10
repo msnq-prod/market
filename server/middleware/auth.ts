@@ -1,11 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-
-const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
-
-if (!ACCESS_TOKEN_SECRET) {
-    throw new Error('ACCESS_TOKEN_SECRET is required');
-}
+import { ACCESS_TOKEN_SECRET } from '../config/env.ts';
 
 export interface AuthRequest extends Request {
     user?: {

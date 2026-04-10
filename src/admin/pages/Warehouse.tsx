@@ -179,8 +179,12 @@ const workflowStatusMeta: Record<string, { label: string; className: string }> =
     OPEN: { label: 'Открыт', className: 'bg-blue-500/15 text-blue-200 border border-blue-500/30' },
     IN_PROGRESS: { label: 'В работе', className: 'bg-amber-500/15 text-amber-200 border border-amber-500/30' },
     IN_TRANSIT: { label: 'В пути', className: 'bg-sky-500/15 text-sky-200 border border-sky-500/30' },
+    DRAFT: { label: 'Черновик', className: 'bg-amber-500/15 text-amber-200 border border-amber-500/30' },
+    TRANSIT: { label: 'В пути', className: 'bg-sky-500/15 text-sky-200 border border-sky-500/30' },
     RECEIVED: { label: 'Принята', className: 'bg-violet-500/15 text-violet-200 border border-violet-500/30' },
     IN_STOCK: { label: 'На складе', className: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30' },
+    FINISHED: { label: 'Завершена', className: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30' },
+    ERROR: { label: 'Ошибка', className: 'bg-red-500/15 text-red-200 border border-red-500/30' },
     CANCELLED: { label: 'Отменена', className: 'bg-red-500/15 text-red-200 border border-red-500/30' }
 };
 

@@ -129,7 +129,7 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
 
             await tx.batch.update({
                 where: { id: batchId },
-                data: { status: 'IN_STOCK' }
+                data: { status: 'FINISHED' }
             });
 
             if (batch.collection_request_id) {

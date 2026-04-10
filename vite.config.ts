@@ -20,12 +20,6 @@ export default defineConfig({
           if (id.includes('node_modules/framer-motion') || id.includes('node_modules/lucide-react') || id.includes('node_modules/zustand')) {
             return 'vendor-ui'
           }
-          if (id.includes('/src/admin/')) {
-            return 'admin'
-          }
-          if (id.includes('/src/partner/')) {
-            return 'partner'
-          }
         },
       },
     },
@@ -37,6 +31,7 @@ export default defineConfig({
     proxy: {
       '/api': apiProxyTarget,
       '/auth': apiProxyTarget,
+      '/healthz': apiProxyTarget,
       '/uploads': apiProxyTarget
     }
   }

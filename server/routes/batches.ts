@@ -442,7 +442,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res) => {
                 gps_lat: safeLat,
                 gps_lng: safeLng,
                 video_url: typeof video_url === 'string' && video_url.trim() ? video_url.trim() : null,
-                status: 'IN_PROGRESS'
+                status: 'DRAFT'
             },
             include: BATCH_INCLUDE
         });
@@ -570,14 +570,14 @@ router.post('/:id/send', authenticateToken, async (req: AuthRequest, res) => {
             return res.sendStatus(403);
         }
 
-        if (batch.status !== 'IN_PROGRESS') {
-            return res.status(400).json({ error: 'Отправить можно только партию в работе.' });
+        if (batch.status !== 'DRAFT') {
+            return res.status(400).json({ error: 'Отправить можно только партию в статусе DRAFT.' });
         }
 
         await prisma.$transaction([
             prisma.batch.update({
                 where: { id: batch.id },
-                data: { status: 'IN_TRANSIT' }
+                data: { status: 'TRANSIT' }
             }),
             batch.collection_request_id
                 ? prisma.collectionRequest.update({
@@ -619,8 +619,8 @@ router.post('/:id/receive', authenticateToken, async (req: AuthRequest, res) => 
             return res.status(404).json({ error: 'Партия не найдена.' });
         }
 
-        if (batch.status !== 'IN_TRANSIT') {
-            return res.status(400).json({ error: 'В статус RECEIVED можно перевести только партию в доставке.' });
+        if (batch.status !== 'TRANSIT') {
+            return res.status(400).json({ error: 'В статус RECEIVED можно перевести только партию в статусе TRANSIT.' });
         }
 
         await prisma.$transaction([
@@ -1348,24 +1348,24 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
             }
 
             if (batch.status !== 'RECEIVED') {
-                throw createHttpError('На склад можно перевести только партию в статусе RECEIVED.', 400);
+                throw createHttpError('Завершить можно только партию в статусе RECEIVED.', 400);
             }
 
             if (batch.video_processing_jobs.length > 0) {
-                throw createHttpError('Нельзя переводить партию на склад, пока идет обработка видео-комплекта.', 400);
+                throw createHttpError('Нельзя завершить партию, пока идет обработка видео-комплекта.', 400);
             }
 
             if (batch.video_export_sessions.length > 0) {
-                throw createHttpError('Нельзя переводить партию на склад, пока идёт локальный экспорт видео.', 400);
+                throw createHttpError('Нельзя завершить партию, пока идёт локальный экспорт видео.', 400);
             }
 
             if (!hasAllBatchMedia(batch.items)) {
-                throw createHttpError('Для каждого камня обязательны фото и видео перед переводом на склад.', 400);
+                throw createHttpError('Для каждого камня обязательны фото и видео перед завершением партии.', 400);
             }
 
             await tx.batch.update({
                 where: { id: batch.id },
-                data: { status: 'IN_STOCK' }
+                data: { status: 'FINISHED' }
             });
             await tx.item.updateMany({
                 where: { batch_id: batch.id, status: 'NEW' },
@@ -1401,7 +1401,7 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
             : 500;
         const message = error instanceof Error && error.message
             ? error.message
-            : 'Не удалось перевести партию на склад.';
+            : 'Не удалось завершить партию.';
         res.status(statusCode).json({ error: message });
     }
 });

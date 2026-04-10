@@ -17,6 +17,7 @@ import { Dashboard } from './admin/pages/Dashboard'
 import { Locations } from './admin/pages/Locations'
 import { Products } from './admin/pages/Products'
 import { useStore } from './store'
+import { hasWebGLSupport } from './utils/webgl'
 
 type StonesDebugWindow = Window & {
   __STONES_DEBUG__?: {
@@ -55,6 +56,11 @@ function useIsMobileViewport() {
   }, [])
 
   return isMobile
+}
+
+function useHasWebGLSupport() {
+  const [hasSupport] = useState(() => hasWebGLSupport())
+  return hasSupport
 }
 
 function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) {
@@ -160,6 +166,7 @@ function MainApp() {
   const fetchLocations = useStore((state) => state.fetchLocations)
   const selectedLocation = useStore((state) => state.selectedLocation)
   const [showOverviewDelayed, setShowOverviewDelayed] = React.useState(true)
+  const hasWebGL = useHasWebGLSupport()
 
   useEffect(() => {
     void fetchLocations()
@@ -181,23 +188,35 @@ function MainApp() {
 
   return (
     <div className="relative w-full min-h-[100svh] overflow-x-clip bg-black">
-      <LoadingScreen />
+      {hasWebGL && <LoadingScreen />}
 
       <div className="fixed inset-0 z-0">
-        <ErrorBoundary>
-          <Canvas
-            camera={{ position: INITIAL_CAMERA_POSITION, fov: 45 }}
-            fallback={
-              <div className="flex h-full w-full items-center justify-center bg-black text-sm text-white/70">
-                3D-сцена недоступна в этом браузере
-              </div>
-            }
-          >
-            <Suspense fallback={null}>
-              <Scene />
-            </Suspense>
-          </Canvas>
-        </ErrorBoundary>
+        {hasWebGL ? (
+          <ErrorBoundary>
+            <Canvas
+              camera={{ position: INITIAL_CAMERA_POSITION, fov: 45 }}
+              fallback={
+                <div className="flex h-full w-full items-center justify-center bg-black text-sm text-white/70">
+                  3D-сцена недоступна в этом браузере
+                </div>
+              }
+            >
+              <Suspense fallback={null}>
+                <Scene />
+              </Suspense>
+            </Canvas>
+          </ErrorBoundary>
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.24),_transparent_38%),linear-gradient(180deg,_#050816_0%,_#02040a_100%)] px-6 text-center text-white">
+            <div className="max-w-xl rounded-3xl border border-white/10 bg-black/35 p-6 backdrop-blur-md">
+              <h1 className="text-2xl font-semibold">3D-сцена недоступна</h1>
+              <p className="mt-3 text-sm leading-relaxed text-white/70">
+                В этом браузере не удалось запустить WebGL. Попробуйте обновить страницу, включить аппаратное ускорение
+                или открыть кабинет по прямой ссылке: <span className="font-mono text-white">/admin/login</span> или <span className="font-mono text-white">/partner/login</span>.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="relative z-10 pointer-events-none">

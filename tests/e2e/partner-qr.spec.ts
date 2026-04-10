@@ -79,6 +79,81 @@ async function setPartnerSession(page: Page, loginPayload: LoginPayload) {
     }, loginPayload);
 }
 
+test('API hardening: healthz works, /api/user is sanitized, catalog mutations require staff ACL', async ({ request }) => {
+    const healthzResponse = await request.get('/healthz');
+    expect(healthzResponse.status()).toBe(200);
+    const healthz = await healthzResponse.json() as { status: string };
+    expect(healthz.status).toBe('ok');
+
+    const guestUserResponse = await request.get('/api/user');
+    expect(guestUserResponse.status()).toBe(401);
+
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+
+    const currentUserResponse = await request.get('/api/user', {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(currentUserResponse.status()).toBe(200);
+    const currentUser = await currentUserResponse.json() as Record<string, unknown>;
+    expect(currentUser.email).toBe(ADMIN_EMAIL);
+    expect(currentUser).not.toHaveProperty('password_hash');
+    expect(currentUser).not.toHaveProperty('balance');
+    expect(currentUser).not.toHaveProperty('commission_rate');
+
+    const locationPayload = {
+        lat: 55.75,
+        lng: 37.61,
+        image: '/locations/crystal-caves.jpg',
+        translations: [
+            {
+                language_id: 1,
+                name: `Secured location ${randomKey()}`,
+                country: 'Russia',
+                description: 'ACL test'
+            }
+        ]
+    };
+
+    const guestCreateLocation = await request.post('/api/locations', {
+        data: locationPayload
+    });
+    expect(guestCreateLocation.status()).toBe(401);
+
+    const partnerCreateLocation = await request.post('/api/locations', {
+        headers: authHeaders(partner.accessToken),
+        data: locationPayload
+    });
+    expect(partnerCreateLocation.status()).toBe(403);
+
+    const productPayload = {
+        price: 1000,
+        image: '/locations/crystal-caves.jpg',
+        wildberries_url: '',
+        ozon_url: '',
+        location_id: 'loc-yakutia',
+        category_id: 'cat-polished',
+        translations: [
+            {
+                language_id: 1,
+                name: `Secured product ${randomKey()}`,
+                description: 'ACL test'
+            }
+        ]
+    };
+
+    const guestCreateProduct = await request.post('/api/products', {
+        data: productPayload
+    });
+    expect(guestCreateProduct.status()).toBe(401);
+
+    const partnerCreateProduct = await request.post('/api/products', {
+        headers: authHeaders(partner.accessToken),
+        data: productPayload
+    });
+    expect(partnerCreateProduct.status()).toBe(403);
+});
+
 test('API ACL: qr-pack недоступен чужому франчайзи и содержит clone_url/qr_url', async ({ request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
@@ -167,7 +242,66 @@ test('UI e2e: партнер печатает выбранные QR и выгр�
     expect(normalized).toContain(targetTempId);
 });
 
-test('Regression API: жизненный цикл партии (IN_PROGRESS -> IN_TRANSIT -> RECEIVED -> IN_STOCK)', async ({ request }) => {
+test('Public activation only records activation and does not mutate ledger balances', async ({ request }) => {
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const { batchId, items } = await seedBatchWithItems(request, partner.accessToken, 1);
+
+    const sendBatchResponse = await request.post(`/api/batches/${batchId}/send`, {
+        headers: { Authorization: `Bearer ${partner.accessToken}` }
+    });
+    expect(sendBatchResponse.status()).toBe(200);
+
+    const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(receiveBatchResponse.status()).toBe(200);
+
+    const acceptItemResponse = await request.post(`/api/hq/items/${items[0].id}/accept`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(acceptItemResponse.status()).toBe(200);
+
+    const ledgerBeforeResponse = await request.get('/api/financials/ledger', {
+        headers: { Authorization: `Bearer ${partner.accessToken}` }
+    });
+    expect(ledgerBeforeResponse.status()).toBe(200);
+    const ledgerBefore = await ledgerBeforeResponse.json() as Array<{ id: string }>;
+
+    const allocateResponse = await request.post(`/api/financials/items/${items[0].id}/allocate`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            channel: 'MARKETPLACE'
+        }
+    });
+    expect(allocateResponse.status()).toBe(200);
+
+    const activationResponse = await request.post(`/api/public/items/${items[0].public_token}/activate`);
+    expect(activationResponse.status()).toBe(200);
+    const activationPayload = await activationResponse.json() as { success: boolean; message: string };
+    expect(activationPayload.success).toBeTruthy();
+    expect(activationPayload.message).toContain('Financial settlement');
+
+    const activatedItemResponse = await request.get(`/api/public/items/${items[0].public_token}`);
+    expect(activatedItemResponse.status()).toBe(200);
+    const activatedItem = await activatedItemResponse.json() as { status: string; activation_date: string | null };
+    expect(activatedItem.status).toBe('ACTIVATED');
+    expect(activatedItem.activation_date).not.toBeNull();
+
+    const ledgerAfterResponse = await request.get('/api/financials/ledger', {
+        headers: { Authorization: `Bearer ${partner.accessToken}` }
+    });
+    expect(ledgerAfterResponse.status()).toBe(200);
+    const ledgerAfter = await ledgerAfterResponse.json() as Array<{ id: string }>;
+    expect(ledgerAfter).toHaveLength(ledgerBefore.length);
+
+    const repeatedActivationResponse = await request.post(`/api/public/items/${items[0].public_token}/activate`);
+    expect(repeatedActivationResponse.status()).toBe(200);
+    const repeatedActivationPayload = await repeatedActivationResponse.json() as { message: string };
+    expect(repeatedActivationPayload.message).toContain('already activated');
+});
+
+test('Regression API: жизненный цикл партии (DRAFT -> TRANSIT -> RECEIVED -> FINISHED)', async ({ request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const { batchId, items } = await seedBatchWithItems(request, partner.accessToken, 1);
@@ -192,5 +326,5 @@ test('Regression API: жизненный цикл партии (IN_PROGRESS -> I
     });
     expect(finishBatchResponse.status()).toBe(200);
     const finishedBatch = await finishBatchResponse.json() as { status: string };
-    expect(finishedBatch.status).toBe('IN_STOCK');
+    expect(finishedBatch.status).toBe('FINISHED');
 });

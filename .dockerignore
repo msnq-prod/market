@@ -25,3 +25,5 @@ README.md
 AGENTS.md
 dev.db
 marketplace
+test-results
+playwright-report

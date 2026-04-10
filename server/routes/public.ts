@@ -5,6 +5,7 @@ import { buildCloneUrl } from '../utils/cloneUrls.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const PUBLIC_ACTIVATION_ALLOWED_STATUSES = new Set(['ON_CONSIGNMENT', 'STOCK_ONLINE', 'SOLD_ONLINE']);
 
 router.get('/items/:publicToken/qr', async (req, res) => {
     try {
@@ -121,81 +122,32 @@ router.post('/items/:publicToken/activate', async (req, res) => {
 
         if (item.status === 'ACTIVATED') {
             return res.json({
-                message: 'Камень уже активирован.',
+                message: 'Item already activated.',
                 activation_date: item.activation_date
             });
         }
 
         const now = new Date();
-        const franchiseeId = item.batch.owner_id;
 
-        if (item.status === 'ON_CONSIGNMENT') {
-            const franchisee = await prisma.user.findUnique({ where: { id: franchiseeId } });
-            const royaltyAmount = Number(franchisee?.commission_rate) || 50;
-
-            await prisma.$transaction([
-                prisma.item.update({
-                    where: { id: item.id },
-                    data: {
-                        status: 'ACTIVATED',
-                        activation_date: now,
-                        is_sold: true
-                    }
-                }),
-                prisma.ledger.create({
-                    data: {
-                        user_id: franchiseeId,
-                        item_id: item.id,
-                        operation: 'ROYALTY_CHARGE',
-                        amount: -royaltyAmount
-                    }
-                }),
-                prisma.user.update({
-                    where: { id: franchiseeId },
-                    data: {
-                        balance: { decrement: royaltyAmount }
-                    }
-                })
-            ]);
-        } else if (item.status === 'STOCK_ONLINE' || item.status === 'SOLD_ONLINE') {
-            const payoutAmount = Number(item.price_sold || 500);
-
-            await prisma.$transaction([
-                prisma.item.update({
-                    where: { id: item.id },
-                    data: {
-                        status: 'ACTIVATED',
-                        activation_date: now,
-                        is_sold: true
-                    }
-                }),
-                prisma.ledger.create({
-                    data: {
-                        user_id: franchiseeId,
-                        item_id: item.id,
-                        operation: 'SALES_PAYOUT',
-                        amount: payoutAmount
-                    }
-                }),
-                prisma.user.update({
-                    where: { id: franchiseeId },
-                    data: {
-                        balance: { increment: payoutAmount }
-                    }
-                })
-            ]);
-        } else {
-            await prisma.item.update({
-                where: { id: item.id },
-                data: {
-                    status: 'ACTIVATED',
-                    activation_date: now,
-                    is_sold: true
-                }
+        if (!PUBLIC_ACTIVATION_ALLOWED_STATUSES.has(item.status)) {
+            return res.status(409).json({
+                error: 'Item is not available for public activation.'
             });
         }
 
-        res.json({ success: true, message: 'Камень активирован.' });
+        await prisma.item.update({
+            where: { id: item.id },
+            data: {
+                status: 'ACTIVATED',
+                activation_date: now,
+                is_sold: true
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Item activated. Financial settlement must be completed in a protected staff workflow.'
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Не удалось активировать камень.' });
