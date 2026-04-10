@@ -8,6 +8,7 @@ export function Sidebar() {
     const navigate = useNavigate();
     const role = localStorage.getItem('userRole');
     const isSalesManager = role === 'SALES_MANAGER';
+    const canAccessOrders = role === 'ADMIN' || role === 'SALES_MANAGER';
 
     const handleLogout = () => {
         clearAuthSession();
@@ -32,8 +33,12 @@ export function Sidebar() {
                     <>
                         <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Дашборд" active={location.pathname === '/admin'} />
 
-                        <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Продажи</div>
-                        <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                        {canAccessOrders && (
+                            <>
+                                <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Продажи</div>
+                                <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                            </>
+                        )}
 
                         <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Логистика</div>
                         <NavItem to="/admin/acceptance" icon={<Truck size={20} />} label="Приемка" active={location.pathname === '/admin/acceptance'} />

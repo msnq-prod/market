@@ -26,6 +26,10 @@ export function AdminLayout() {
         return <Navigate to="/admin/orders" replace />;
     }
 
+    if (role === 'MANAGER' && location.pathname === '/admin/orders') {
+        return <Navigate to="/admin" replace />;
+    }
+
     return (
         <div className="flex h-screen bg-gray-950 text-gray-100 font-sans selection:bg-blue-500/30">
             <Sidebar />

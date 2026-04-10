@@ -6,6 +6,7 @@ import {
     sanitizeClonePageContent,
     type ClonePageContent
 } from '../../shared/clonePageContent';
+import { authFetch } from '../../utils/authFetch';
 
 const FIELD_CONFIG: Array<{
     key: keyof ClonePageContent;
@@ -99,18 +100,17 @@ export function CloneContent() {
         setSaving(true);
         setStatusText('');
         try {
-            const token = localStorage.getItem('accessToken');
-            const res = await fetch('/api/content/clone-page', {
+            const res = await authFetch('/api/content/clone-page', {
                 method: 'PUT',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(draft)
             });
 
             if (!res.ok) {
-                setStatusText('Не удалось сохранить текст страницы.');
+                const payload = await res.json().catch(() => ({ error: 'Не удалось сохранить текст страницы.' }));
+                setStatusText(payload.error || 'Не удалось сохранить текст страницы.');
                 return;
             }
 
@@ -255,4 +255,3 @@ export function CloneContent() {
         </div>
     );
 }
-

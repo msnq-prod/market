@@ -1,4 +1,5 @@
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { BatchVideoExportSession, Prisma } from '@prisma/client';
@@ -62,6 +63,19 @@ export const ensureVideoExportDirectories = () => {
             fs.mkdirSync(dir, { recursive: true });
         }
     });
+};
+
+export const moveFileSafely = async (sourcePath: string, targetPath: string) => {
+    try {
+        await fsp.rename(sourcePath, targetPath);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== 'EXDEV') {
+            throw error;
+        }
+
+        await fsp.copyFile(sourcePath, targetPath);
+        await fsp.unlink(sourcePath);
+    }
 };
 
 export const buildVideoExportStagingPath = (filename: string) => path.join(VIDEO_EXPORT_STAGING_ROOT, filename);

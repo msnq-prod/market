@@ -1,30 +1,30 @@
 import { useEffect, useState } from 'react';
 import { authFetch } from '../../utils/authFetch';
 
-type DashboardLocation = { id: string };
-type DashboardProduct = { id: string };
-type DashboardBatch = {
-    status: string;
-    items: { status: string }[];
-};
-type DashboardUser = { role: string };
-
 type DashboardStats = {
-    locations: number;
-    products: number;
-    users: number;
-    franchisees: number;
+    locationsTotal: number;
+    locationsPublished: number;
+    productsTotal: number;
+    productsPublished: number;
+    usersTotal: number;
+    franchiseesTotal: number;
     inTransitBatches: number;
+    receivedBatches: number;
     stockHQItems: number;
+    stockOnlineItems: number;
 };
 
 const initialStats: DashboardStats = {
-    locations: 0,
-    products: 0,
-    users: 0,
-    franchisees: 0,
+    locationsTotal: 0,
+    locationsPublished: 0,
+    productsTotal: 0,
+    productsPublished: 0,
+    usersTotal: 0,
+    franchiseesTotal: 0,
     inTransitBatches: 0,
+    receivedBatches: 0,
     stockHQItems: 0,
+    stockOnlineItems: 0,
 };
 
 export function Dashboard() {
@@ -38,31 +38,36 @@ export function Dashboard() {
             setError('');
 
             try {
-                const [locationsRes, productsRes, batchRes, usersRes] = await Promise.all([
-                    authFetch('/api/locations'),
-                    authFetch('/api/products'),
-                    authFetch('/api/batches'),
-                    authFetch('/api/users'),
-                ]);
+                const response = await authFetch('/api/admin/dashboard-summary');
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить дашборд' }));
+                    throw new Error(payload.error || 'Не удалось загрузить дашборд');
+                }
 
-                const locations = locationsRes.ok ? await locationsRes.json() as DashboardLocation[] : [];
-                const products = productsRes.ok ? await productsRes.json() as DashboardProduct[] : [];
-                const batches = batchRes.ok ? await batchRes.json() as DashboardBatch[] : [];
-                const users = usersRes.ok ? await usersRes.json() as DashboardUser[] : [];
-
-                const inTransitBatches = batches.filter((batch) => batch.status === 'IN_TRANSIT').length;
-                const stockHQItems = batches.reduce(
-                    (acc, batch) => acc + batch.items.filter((item) => item.status === 'STOCK_HQ').length,
-                    0
-                );
+                const summary = await response.json() as {
+                    locations_total: number;
+                    locations_published: number;
+                    products_total: number;
+                    products_published: number;
+                    users_total: number;
+                    franchisees_total: number;
+                    batches_in_transit: number;
+                    batches_received: number;
+                    items_stock_hq: number;
+                    items_stock_online: number;
+                };
 
                 setStats({
-                    locations: locations.length,
-                    products: products.length,
-                    users: users.length,
-                    franchisees: users.filter((user) => user.role === 'FRANCHISEE').length,
-                    inTransitBatches,
-                    stockHQItems,
+                    locationsTotal: summary.locations_total,
+                    locationsPublished: summary.locations_published,
+                    productsTotal: summary.products_total,
+                    productsPublished: summary.products_published,
+                    usersTotal: summary.users_total,
+                    franchiseesTotal: summary.franchisees_total,
+                    inTransitBatches: summary.batches_in_transit,
+                    receivedBatches: summary.batches_received,
+                    stockHQItems: summary.items_stock_hq,
+                    stockOnlineItems: summary.items_stock_online,
                 });
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'Не удалось загрузить дашборд');
@@ -88,12 +93,12 @@ export function Dashboard() {
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                <StatCard title="Локации" value={stats.locations} accent="blue" loading={loading} subtitle="Опубликованы на глобусе" />
-                <StatCard title="Товары" value={stats.products} accent="green" loading={loading} subtitle="По всем локациям" />
-                <StatCard title="Пользователи" value={stats.users} accent="purple" loading={loading} subtitle="Все зарегистрированные роли" />
-                <StatCard title="Франчайзи" value={stats.franchisees} accent="sky" loading={loading} subtitle="Активные партнерские аккаунты" />
-                <StatCard title="Партии в пути" value={stats.inTransitBatches} accent="yellow" loading={loading} subtitle="Ожидают приемки" />
-                <StatCard title="Товары на складе HQ" value={stats.stockHQItems} accent="emerald" loading={loading} subtitle="Готовы к распределению" />
+                <StatCard title="Локации" value={stats.locationsTotal} accent="blue" loading={loading} subtitle={`С опубликованными товарами: ${stats.locationsPublished}`} />
+                <StatCard title="Товары" value={stats.productsTotal} accent="green" loading={loading} subtitle={`Опубликовано: ${stats.productsPublished}`} />
+                <StatCard title="Пользователи" value={stats.usersTotal} accent="purple" loading={loading} subtitle="Все зарегистрированные роли" />
+                <StatCard title="Франчайзи" value={stats.franchiseesTotal} accent="sky" loading={loading} subtitle="Активные партнерские аккаунты" />
+                <StatCard title="Партии в пути" value={stats.inTransitBatches} accent="yellow" loading={loading} subtitle={`Уже получены HQ: ${stats.receivedBatches}`} />
+                <StatCard title="Товары на складе HQ" value={stats.stockHQItems} accent="emerald" loading={loading} subtitle={`В онлайне: ${stats.stockOnlineItems}`} />
             </div>
         </div>
     );

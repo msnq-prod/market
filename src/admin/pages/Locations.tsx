@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Input, Modal } from '../components/ui';
 import { TranslationModal } from '../components/TranslationModal';
 import { authFetch } from '../../utils/authFetch';
+
+const BASE_LANGUAGE_ID = 2;
 
 interface Location {
     id: string;
@@ -19,6 +21,7 @@ interface Location {
 export function Locations() {
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [screenError, setScreenError] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isTranslationOpen, setIsTranslationOpen] = useState(false);
     const [selectedLocationForTranslation, setSelectedLocationForTranslation] = useState<Location | null>(null);
@@ -36,22 +39,32 @@ export function Locations() {
         description: ''
     });
 
-    const fetchLocations = async () => {
+    const getErrorMessage = async (response: Response, fallback: string) => {
+        const payload = await response.json().catch(() => ({ error: fallback }));
+        return payload.error || fallback;
+    };
+
+    const fetchLocations = useCallback(async () => {
         setIsLoading(true);
+        setScreenError('');
         try {
             const res = await authFetch('/api/locations');
+            if (!res.ok) {
+                throw new Error(await getErrorMessage(res, 'Не удалось загрузить локации.'));
+            }
             const data = await res.json();
             setLocations(data);
         } catch (error) {
             console.error('Failed to fetch locations', error);
+            setScreenError(error instanceof Error ? error.message : 'Не удалось загрузить локации.');
         } finally {
             setIsLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        fetchLocations();
-    }, []);
+        void fetchLocations();
+    }, [fetchLocations]);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -62,17 +75,20 @@ export function Locations() {
         uploadData.append('file', file);
 
         try {
-            const res = await fetch('/api/upload/photo', {
+            const res = await authFetch('/api/upload/photo', {
                 method: 'POST',
                 body: uploadData,
             });
-            const data = await res.json();
-            if (data.url) {
-                setFormData(prev => ({ ...prev, image: data.url }));
+
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.url) {
+                throw new Error(data.error || 'Не удалось загрузить изображение');
             }
+
+            setFormData(prev => ({ ...prev, image: data.url }));
         } catch (error) {
             console.error('Upload failed', error);
-            alert('Не удалось загрузить изображение');
+            alert(error instanceof Error ? error.message : 'Не удалось загрузить изображение');
         } finally {
             setIsUploading(false);
         }
@@ -81,14 +97,16 @@ export function Locations() {
     const handleEdit = (loc: Location) => {
         setIsEditing(true);
         setEditingId(loc.id);
-        const en = loc.translations.find(t => t.language_id === 1) || { name: '', country: '', description: '' };
+        const baseTranslation = loc.translations.find(t => t.language_id === BASE_LANGUAGE_ID)
+            || loc.translations.find(t => t.language_id === 1)
+            || { name: '', country: '', description: '' };
         setFormData({
-            name: en.name,
-            country: en.country,
+            name: baseTranslation.name,
+            country: baseTranslation.country,
             lat: loc.lat.toString(),
             lng: loc.lng.toString(),
             image: loc.image || '',
-            description: en.description || ''
+            description: baseTranslation.description || ''
         });
         setIsModalOpen(true);
     };
@@ -106,22 +124,18 @@ export function Locations() {
             const url = isEditing ? `/api/locations/${editingId}` : '/api/locations';
             const method = isEditing ? 'PUT' : 'POST';
 
-            // Prepare base translations (English)
             const baseTranslation = {
-                language_id: 1,
+                language_id: BASE_LANGUAGE_ID,
                 name: formData.name,
                 country: formData.country,
                 description: formData.description || ''
             };
 
-            // If editing, we should preserve other translations if they exist? 
-            // The server implementation of PUT currently deletes all and re-creates.
-            // So we need to send ALL translations if we want to keep them.
             let allTranslations = [baseTranslation];
             if (isEditing && editingId) {
                 const currentLoc = locations.find(l => l.id === editingId);
                 if (currentLoc) {
-                    const others = currentLoc.translations.filter(t => t.language_id !== 1).map(t => ({
+                    const others = currentLoc.translations.filter(t => t.language_id !== BASE_LANGUAGE_ID).map(t => ({
                         ...t,
                         description: t.description || ''
                     }));
@@ -129,7 +143,7 @@ export function Locations() {
                 }
             }
 
-            await authFetch(url, {
+            const response = await authFetch(url, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -139,21 +153,32 @@ export function Locations() {
                     translations: allTranslations
                 })
             });
+
+            if (!response.ok) {
+                throw new Error(await getErrorMessage(response, 'Не удалось сохранить локацию.'));
+            }
+
             setFormData({ name: '', country: '', lat: '', lng: '', image: '', description: '' });
             setIsModalOpen(false);
-            fetchLocations();
+            await fetchLocations();
         } catch (error) {
             console.error(error);
+            alert(error instanceof Error ? error.message : 'Не удалось сохранить локацию.');
         }
     };
 
     const handleDelete = async (id: string) => {
         if (!confirm('Вы уверены, что хотите удалить эту локацию?')) return;
         try {
-            await authFetch(`/api/locations/${id}`, { method: 'DELETE' });
-            fetchLocations();
+            const response = await authFetch(`/api/locations/${id}`, { method: 'DELETE' });
+            if (!response.ok) {
+                throw new Error(await getErrorMessage(response, 'Не удалось удалить локацию.'));
+            }
+
+            await fetchLocations();
         } catch (error) {
             console.error(error);
+            alert(error instanceof Error ? error.message : 'Не удалось удалить локацию.');
         }
     };
 
@@ -168,6 +193,12 @@ export function Locations() {
                     + Добавить локацию
                 </Button>
             </div>
+
+            {screenError && (
+                <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
+                    {screenError}
+                </div>
+            )}
 
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
                 <table className="w-full text-left border-collapse">
@@ -190,10 +221,10 @@ export function Locations() {
                                     <td className="p-4 text-white font-medium">
                                         <div className="flex items-center gap-3">
                                             {loc.image && <img src={loc.image} alt="" className="w-8 h-8 rounded object-cover bg-gray-700" />}
-                                            {loc.translations.find(t => t.language_id === 1)?.name || 'Без названия'}
+                                            {loc.translations.find(t => t.language_id === BASE_LANGUAGE_ID)?.name || 'Без названия'}
                                         </div>
                                     </td>
-                                    <td className="p-4 text-gray-400">{loc.translations.find(t => t.language_id === 1)?.country || 'Неизвестно'}</td>
+                                    <td className="p-4 text-gray-400">{loc.translations.find(t => t.language_id === BASE_LANGUAGE_ID)?.country || 'Неизвестно'}</td>
                                     <td className="p-4 text-gray-500 font-mono text-xs">
                                         {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
                                     </td>
@@ -334,21 +365,22 @@ export function Locations() {
                     baseData={selectedLocationForTranslation}
                     type="LOCATION"
                     onSave={async (newTranslations) => {
-                        try {
-                            await authFetch(`/api/locations/${selectedLocationForTranslation.id}`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    lat: selectedLocationForTranslation.lat,
-                                    lng: selectedLocationForTranslation.lng,
-                                    image: selectedLocationForTranslation.image,
-                                    translations: newTranslations
-                                })
-                            });
-                            fetchLocations();
-                        } catch (error) {
-                            console.error('Не удалось сохранить переводы', error);
+                        const response = await authFetch(`/api/locations/${selectedLocationForTranslation.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                lat: selectedLocationForTranslation.lat,
+                                lng: selectedLocationForTranslation.lng,
+                                image: selectedLocationForTranslation.image,
+                                translations: newTranslations
+                            })
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(await getErrorMessage(response, 'Не удалось сохранить переводы.'));
                         }
+
+                        await fetchLocations();
                     }}
                 />
             )}

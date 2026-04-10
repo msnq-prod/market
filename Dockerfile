@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM public.ecr.aws/docker/library/node:22-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 

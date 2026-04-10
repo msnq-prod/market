@@ -144,10 +144,7 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
             where: { id: batchId }
         });
 
-        res.json({
-            ...updatedBatch,
-            status: 'FINISHED'
-        });
+        res.json(updatedBatch);
     } catch (_error) {
         res.status(500).json({ error: 'Failed to finish batch' });
     }

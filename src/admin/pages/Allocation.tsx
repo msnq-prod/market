@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Store, Globe, ArrowRight } from 'lucide-react';
+import { Globe, ArrowRight } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 
 type StockItem = {
@@ -9,12 +9,6 @@ type StockItem = {
     status: string;
 };
 
-type Franchisee = {
-    id: string;
-    name: string;
-    role: string;
-};
-
 type BatchWithItems = {
     items: StockItem[];
 };
@@ -22,15 +16,12 @@ type BatchWithItems = {
 export function Allocation() {
     const [stockItems, setStockItems] = useState<StockItem[]>([]);
     const [selectedItems, setSelectedItems] = useState<string[]>([]);
-    const [franchisees, setFranchisees] = useState<Franchisee[]>([]);
-    const [targetUserId, setTargetUserId] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [query, setQuery] = useState('');
 
     useEffect(() => {
-        loadStock();
-        loadFranchisees();
+        void loadStock();
     }, []);
 
     const loadStock = async () => {
@@ -39,7 +30,10 @@ export function Allocation() {
         try {
             const res = await authFetch('/api/batches');
 
-            if (!res.ok) return;
+            if (!res.ok) {
+                const payload = await res.json().catch(() => ({ error: 'Не удалось загрузить складские позиции' }));
+                throw new Error(payload.error || 'Не удалось загрузить складские позиции');
+            }
             const batches = await res.json();
 
             const allItems = (batches as BatchWithItems[]).flatMap((batch) =>
@@ -49,24 +43,9 @@ export function Allocation() {
             setStockItems(allItems);
         } catch (error) {
             console.error(error);
-            setError('Не удалось загрузить складские позиции');
+            setError(error instanceof Error ? error.message : 'Не удалось загрузить складские позиции');
         } finally {
             setLoading(false);
-        }
-    };
-
-    const loadFranchisees = async () => {
-        try {
-            const res = await authFetch('/api/users');
-
-            if (!res.ok) return;
-            const users = await res.json();
-            const filtered = users.filter((u: Franchisee) => u.role === 'FRANCHISEE');
-            setFranchisees(filtered);
-            if (filtered.length > 0) setTargetUserId(filtered[0].id);
-        } catch (error) {
-            console.error(error);
-            setError('Не удалось загрузить франчайзи');
         }
     };
 
@@ -78,17 +57,13 @@ export function Allocation() {
         }
     };
 
-    const handleAllocate = async (channel: 'MARKETPLACE' | 'OFFLINE_POINT') => {
+    const handleAllocate = async () => {
         if (selectedItems.length === 0) return;
-        if (channel === 'OFFLINE_POINT' && !targetUserId) {
-            alert('Сначала выберите франчайзи');
-            return;
-        }
 
         setLoading(true);
         setError('');
         try {
-            await Promise.all(
+            const responses = await Promise.all(
                 selectedItems.map((id) =>
                     authFetch(`/api/financials/items/${id}/allocate`, {
                         method: 'POST',
@@ -96,19 +71,24 @@ export function Allocation() {
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            channel,
-                            target_user_id: channel === 'OFFLINE_POINT' ? targetUserId : undefined
+                            channel: 'MARKETPLACE'
                         })
                     })
                 )
             );
+
+            const failed = responses.find((response) => !response.ok);
+            if (failed) {
+                const payload = await failed.json().catch(() => ({ error: 'Не удалось распределить позиции.' }));
+                throw new Error(payload.error || 'Не удалось распределить позиции.');
+            }
 
             alert('Распределение выполнено');
             setSelectedItems([]);
             await loadStock();
         } catch (error) {
             console.error(error);
-            setError('Не удалось распределить позиции. Повторите попытку.');
+            setError(error instanceof Error ? error.message : 'Не удалось распределить позиции. Повторите попытку.');
         } finally {
             setLoading(false);
         }
@@ -138,37 +118,15 @@ export function Allocation() {
                 <div className="lg:col-span-1 space-y-4">
                     <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
                         <h3 className="font-bold text-white mb-4">Выбрано: {selectedItems.length} позиций</h3>
+                        <p className="mb-4 text-sm text-gray-400">В MVP доступно только онлайн-распределение на витрину.</p>
 
                         <div className="space-y-3">
                             <button
-                                onClick={() => handleAllocate('MARKETPLACE')}
+                                onClick={() => void handleAllocate()}
                                 disabled={selectedItems.length === 0 || loading}
                                 className="w-full bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-lg flex items-center justify-between group disabled:opacity-50"
                             >
                                 <span className="flex items-center gap-2"><Globe size={18} /> Онлайн-маркетплейс</span>
-                                <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </button>
-
-                            <div className="bg-gray-800/70 rounded-lg p-3 border border-gray-700">
-                                <label className="block text-xs text-gray-400 mb-2">Получатель консигнации</label>
-                                <select
-                                    value={targetUserId}
-                                    onChange={(e) => setTargetUserId(e.target.value)}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white"
-                                >
-                                    {franchisees.length === 0 && <option value="">Нет доступных франчайзи</option>}
-                                    {franchisees.map((user) => (
-                                        <option key={user.id} value={user.id}>{user.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <button
-                                onClick={() => handleAllocate('OFFLINE_POINT')}
-                                disabled={selectedItems.length === 0 || loading || !targetUserId}
-                                className="w-full bg-purple-600 hover:bg-purple-500 text-white p-3 rounded-lg flex items-center justify-between group disabled:opacity-50"
-                            >
-                                <span className="flex items-center gap-2"><Store size={18} /> Оффлайн-консигнация</span>
                                 <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                             </button>
                         </div>

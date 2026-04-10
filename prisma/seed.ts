@@ -132,6 +132,34 @@ async function seedUsers() {
     });
 }
 
+async function seedCategories() {
+    await db.category.createMany({
+        data: [
+            {
+                id: 'cat-stones',
+                slug: 'stones'
+            }
+        ]
+    });
+
+    await db.categoryTranslation.createMany({
+        data: [
+            {
+                id: 'cat-tr-stones-en',
+                category_id: 'cat-stones',
+                language_id: 1,
+                name: 'Stones'
+            },
+            {
+                id: 'cat-tr-stones-ru',
+                category_id: 'cat-stones',
+                language_id: 2,
+                name: 'Камни'
+            }
+        ]
+    });
+}
+
 async function seedClonePage() {
     try {
         await db.contentPage.create({
@@ -155,11 +183,13 @@ async function main() {
     await seedLanguages();
     await cleanupBusinessData();
     await seedUsers();
+    await seedCategories();
     await seedClonePage();
 
     console.log('Minimal seed completed.');
     console.log('Users: 5 (ADMIN, MANAGER, SALES_MANAGER, FRANCHISEE, USER)');
-    console.log('Categories/locations/products/orders/batches/items: 0');
+    console.log('Categories: 1');
+    console.log('Locations/products/orders/batches/items: 0');
 }
 
 main()

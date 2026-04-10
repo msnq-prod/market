@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, CheckCircle2, PackageCheck, QrCode, ScanSearch, Search, Video, XCircle } from 'lucide-react';
+import { Camera, PackageCheck, QrCode, Search, Video } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -73,13 +73,6 @@ type BatchView = {
         }>;
     } | null;
     items: BatchItem[];
-};
-
-type LegacyScannedItem = {
-    id: string;
-    temp_id: string;
-    photo_url: string | null;
-    status: string;
 };
 
 const statusLabel: Record<string, string> = {
@@ -169,22 +162,19 @@ const countBatchMedia = (batch: BatchView | null) => {
             total: 0,
             photoReady: 0,
             videoReady: 0,
-            fullyReady: 0,
-            processedLegacyCount: 0
+            fullyReady: 0
         };
     }
 
     const photoReady = batch.items.filter((item) => Boolean(item.item_photo_url)).length;
     const videoReady = batch.items.filter((item) => Boolean(item.item_video_url)).length;
     const fullyReady = batch.items.filter((item) => Boolean(item.item_photo_url) && Boolean(item.item_video_url)).length;
-    const processedLegacyCount = batch.items.filter((item) => item.status !== 'NEW').length;
 
     return {
         total: batch.items.length,
         photoReady,
         videoReady,
-        fullyReady,
-        processedLegacyCount
+        fullyReady
     };
 };
 
@@ -196,9 +186,6 @@ export function Acceptance() {
     const [batchQuery, setBatchQuery] = useState('');
     const [updatingBatchId, setUpdatingBatchId] = useState('');
     const [photoUploadingBatchId, setPhotoUploadingBatchId] = useState('');
-    const [tempId, setTempId] = useState('');
-    const [legacyLoading, setLegacyLoading] = useState(false);
-    const [scannedItem, setScannedItem] = useState<LegacyScannedItem | null>(null);
 
     const loadBatches = async (showSpinner = true) => {
         if (showSpinner) {
@@ -301,7 +288,6 @@ export function Acceptance() {
         && !hasActiveVideoExport
         && missingMediaCount === 0
     );
-    const legacyRemainingCount = Math.max(0, mediaStats.total - mediaStats.processedLegacyCount);
 
     const refreshAndKeepBatch = async (batchId: string) => {
         await loadBatches(false);
@@ -311,8 +297,6 @@ export function Acceptance() {
     const handleSelectBatch = (batchId: string) => {
         setSelectedBatchId(batchId);
         setError('');
-        setScannedItem(null);
-        setTempId('');
     };
 
     const handleReceiveBatch = async (batchId: string) => {
@@ -346,8 +330,6 @@ export function Acceptance() {
                 throw new Error(payload.error || 'Не удалось перевести партию на склад.');
             }
 
-            setScannedItem(null);
-            setTempId('');
             await loadBatches(false);
         } catch (finalizeError) {
             console.error(finalizeError);
@@ -370,7 +352,7 @@ export function Acceptance() {
                 const form = new FormData();
                 form.append('file', file);
 
-                const uploadResponse = await fetch('/api/upload', {
+                const uploadResponse = await authFetch('/api/upload', {
                     method: 'POST',
                     body: form
                 });
@@ -406,110 +388,12 @@ export function Acceptance() {
         }
     };
 
-    const handleLegacyVerify = async (event: React.FormEvent) => {
-        event.preventDefault();
-        if (!selectedBatch) {
-            setError('Сначала выберите партию.');
-            return;
-        }
-        if (!tempId.trim()) {
-            setError('Укажите `temp_id` для сверки.');
-            return;
-        }
-
-        setLegacyLoading(true);
-        setError('');
-        setScannedItem(null);
-
-        try {
-            const response = await authFetch(`/api/hq/acceptance/${selectedBatch.id}/verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ temp_id: tempId.trim() })
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Позиция не найдена в партии.' }));
-                throw new Error(payload.error || 'Позиция не найдена в партии.');
-            }
-
-            const item = await response.json() as LegacyScannedItem;
-            setScannedItem(item);
-            setTempId('');
-        } catch (verifyError) {
-            console.error(verifyError);
-            setError(verifyError instanceof Error ? verifyError.message : 'Не удалось проверить позицию.');
-        } finally {
-            setLegacyLoading(false);
-        }
-    };
-
-    const handleLegacyDecision = async (decision: 'accept' | 'reject') => {
-        if (!selectedBatch || !scannedItem) return;
-
-        setLegacyLoading(true);
-        setError('');
-
-        try {
-            const endpoint = decision === 'accept' ? 'accept' : 'reject';
-            const response = await authFetch(`/api/hq/items/${scannedItem.id}/${endpoint}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(decision === 'reject'
-                    ? { reason: 'Не пройден контроль качества' }
-                    : {})
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось обновить статус позиции.' }));
-                throw new Error(payload.error || 'Не удалось обновить статус позиции.');
-            }
-
-            const updatedItem = await response.json() as LegacyScannedItem;
-            setScannedItem(updatedItem);
-            await refreshAndKeepBatch(selectedBatch.id);
-        } catch (decisionError) {
-            console.error(decisionError);
-            setError(decisionError instanceof Error ? decisionError.message : 'Не удалось обновить статус позиции.');
-        } finally {
-            setLegacyLoading(false);
-        }
-    };
-
-    const handleLegacyFinishBatch = async () => {
-        if (!selectedBatch) return;
-        if (!window.confirm('Завершить legacy-сценарий приемки для выбранной партии?')) return;
-
-        setLegacyLoading(true);
-        setError('');
-
-        try {
-            const response = await authFetch(`/api/hq/batches/${selectedBatch.id}/finish`, {
-                method: 'POST'
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось завершить legacy-приемку.' }));
-                throw new Error(payload.error || 'Не удалось завершить legacy-приемку.');
-            }
-
-            setScannedItem(null);
-            setTempId('');
-            await loadBatches(false);
-        } catch (finishError) {
-            console.error(finishError);
-            setError(finishError instanceof Error ? finishError.message : 'Не удалось завершить legacy-приемку.');
-        } finally {
-            setLegacyLoading(false);
-        }
-    };
-
     return (
         <div className="space-y-8">
             <header className="space-y-2">
                 <h1 className="text-2xl font-bold text-white">Складская приемка</h1>
                 <p className="text-gray-500">
-                    Единый экран приемки HQ: выбор партии, перевод в статус получено, media-полнота и вспомогательная сверка по `temp_id`.
+                    Единый экран приемки HQ: выбор партии, перевод в статус получено, media-полнота и перевод на склад без legacy-операций.
                 </p>
             </header>
 
@@ -695,7 +579,7 @@ export function Acceptance() {
                                     <InfoTile title="Фото готовы" value={`${mediaStats.photoReady}/${mediaStats.total}`} note="Файлы по `serial_number`" />
                                     <InfoTile title="Видео готовы" value={`${mediaStats.videoReady}/${mediaStats.total}`} note="Финальные ролики по item" />
                                     <InfoTile title="Media полностью" value={`${mediaStats.fullyReady}/${mediaStats.total}`} note="Готово к переводу на склад" />
-                                    <InfoTile title="Legacy обработано" value={`${mediaStats.processedLegacyCount}/${mediaStats.total}`} note="Сверка по `temp_id`" />
+                                    <InfoTile title="Позиции в партии" value={`${mediaStats.total}`} note="Все экземпляры текущей партии" />
                                 </div>
 
                                 {selectedBatch.status === 'RECEIVED' && (
@@ -780,109 +664,6 @@ export function Acceptance() {
                                 </div>
                             </article>
 
-                            <article className="rounded-2xl border border-amber-500/20 bg-gray-900">
-                                <div className="border-b border-amber-500/20 px-6 py-4">
-                                    <div className="flex items-center gap-2">
-                                        <ScanSearch size={18} className="text-amber-200" />
-                                        <h3 className="text-lg font-semibold text-white">Legacy-сверка по `temp_id`</h3>
-                                    </div>
-                                    <p className="mt-1 text-sm text-gray-400">
-                                        Вспомогательный сценарий для старых процессов и e2e. Основная приемка идет через блок партии выше.
-                                    </p>
-                                </div>
-
-                                <div className="grid gap-6 px-6 py-5 lg:grid-cols-[minmax(0,1fr),360px]">
-                                    <div className="space-y-5">
-                                        <form onSubmit={handleLegacyVerify} className="rounded-2xl border border-gray-800 bg-gray-950 p-4">
-                                            <label className="block text-sm font-medium text-gray-400 mb-2">Скан позиции (`temp_id`)</label>
-                                            <div className="flex flex-col gap-3 sm:flex-row">
-                                                <div className="relative flex-1">
-                                                    <Search className="absolute left-3 top-3 text-gray-500" size={18} />
-                                                    <input
-                                                        value={tempId}
-                                                        onChange={(event) => setTempId(event.target.value)}
-                                                        className="w-full rounded-xl border border-gray-700 bg-gray-900 py-2.5 pl-10 pr-4 text-white outline-none transition focus:border-amber-500"
-                                                        placeholder="Введите или сканируйте temp_id"
-                                                        autoFocus
-                                                    />
-                                                </div>
-                                                <Button type="submit" variant="secondary" disabled={legacyLoading}>
-                                                    Проверить
-                                                </Button>
-                                            </div>
-                                        </form>
-
-                                        {scannedItem ? (
-                                            <div className="rounded-2xl border border-gray-800 bg-gray-950 p-5">
-                                                <div className="flex flex-col gap-5 sm:flex-row">
-                                                    <img
-                                                        src={scannedItem.photo_url || 'https://placehold.co/320x320?text=No+Photo'}
-                                                        alt={scannedItem.temp_id}
-                                                        className="h-36 w-36 rounded-xl bg-gray-900 object-cover"
-                                                    />
-                                                    <div className="flex-1">
-                                                        <div className="flex flex-wrap items-center gap-3">
-                                                            <h4 className="text-lg font-semibold text-white">Позиция #{scannedItem.temp_id}</h4>
-                                                            <span className={`rounded-full px-2.5 py-1 text-xs ${itemStatusClass[scannedItem.status] || 'bg-gray-800 text-gray-300'}`}>
-                                                                {itemStatusLabel[scannedItem.status] || scannedItem.status}
-                                                            </span>
-                                                        </div>
-                                                        <p className="mt-2 text-sm text-gray-500">{scannedItem.id}</p>
-
-                                                        <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-                                                            {scannedItem.status !== 'STOCK_HQ' && scannedItem.status !== 'REJECTED' && (
-                                                                <>
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => void handleLegacyDecision('accept')}
-                                                                        disabled={legacyLoading}
-                                                                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                    >
-                                                                        <CheckCircle2 size={18} />
-                                                                        Принять
-                                                                    </button>
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => void handleLegacyDecision('reject')}
-                                                                        disabled={legacyLoading}
-                                                                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                    >
-                                                                        <XCircle size={18} />
-                                                                        Отклонить
-                                                                    </button>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-950 px-4 py-8 text-sm text-gray-500">
-                                                После сканирования здесь появится карточка позиции для legacy-проверки.
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="rounded-2xl border border-gray-800 bg-gray-950 p-5">
-                                        <h4 className="text-sm font-semibold uppercase tracking-wide text-amber-200">Legacy-операции</h4>
-                                        <p className="mt-3 text-sm text-gray-400">
-                                            Используйте только если нужен старый сценарий `accept/reject/finish`. Новый поток приемки идет через статус партии и media-полноту.
-                                        </p>
-                                        <div className="mt-4 space-y-2 text-sm text-gray-400">
-                                            <p>Обработано: {mediaStats.processedLegacyCount}/{mediaStats.total}</p>
-                                            <p>Осталось `NEW`: {legacyRemainingCount}</p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => void handleLegacyFinishBatch()}
-                                            disabled={legacyLoading || legacyRemainingCount > 0}
-                                            className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-amber-700 px-4 py-3 text-sm font-medium text-amber-100 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-                                        >
-                                            Завершить legacy-приемку
-                                        </button>
-                                    </div>
-                                </div>
-                            </article>
                         </>
                     )}
                 </section>

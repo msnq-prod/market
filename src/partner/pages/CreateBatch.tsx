@@ -110,7 +110,7 @@ export function CreateBatch() {
                 const form = new FormData();
                 form.append('file', videoFile);
 
-                const uploadResponse = await fetch('/api/upload/video', {
+                const uploadResponse = await authFetch('/api/upload/video', {
                     method: 'POST',
                     body: form
                 });

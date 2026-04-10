@@ -167,15 +167,27 @@ export function Products() {
                 authFetch('/api/users')
             ]);
 
+            if (!locRes.ok) {
+                const payload = await locRes.json().catch(() => ({ error: 'Не удалось загрузить локации.' }));
+                throw new Error(payload.error || 'Не удалось загрузить локации.');
+            }
             if (!prodRes.ok) {
                 const payload = await prodRes.json().catch(() => ({ error: 'Не удалось загрузить товары.' }));
                 throw new Error(payload.error || 'Не удалось загрузить товары.');
+            }
+            if (!catRes.ok) {
+                const payload = await catRes.json().catch(() => ({ error: 'Не удалось загрузить категории.' }));
+                throw new Error(payload.error || 'Не удалось загрузить категории.');
+            }
+            if (!usersRes.ok) {
+                const payload = await usersRes.json().catch(() => ({ error: 'Не удалось загрузить пользователей.' }));
+                throw new Error(payload.error || 'Не удалось загрузить пользователей.');
             }
 
             const locData = await locRes.json() as Location[];
             const prodData = await prodRes.json() as ProductView[];
             const catData = await catRes.json() as Category[];
-            const usersData = usersRes.ok ? await usersRes.json() as UserOption[] : [];
+            const usersData = await usersRes.json() as UserOption[];
 
             setLocations(locData);
             setProducts(prodData);
@@ -216,7 +228,7 @@ export function Products() {
 
         setIsUploading(true);
         try {
-            const response = await fetch('/api/upload/photo', {
+            const response = await authFetch('/api/upload/photo', {
                 method: 'POST',
                 body: form
             });

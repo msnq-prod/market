@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -1492,6 +1492,8 @@ export function VideoTool() {
     const selectedSegmentRow = selectedSegment ? segmentRows[selectedSegmentIndex] ?? null : null;
     const totalSegments = activeProductCount;
     const clipCounterText = `Товарных клипов: ${totalSegments} / ${expectedOutputCount}`;
+    const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
+    const hasExportError = Boolean(error || session?.error_message || exportPhase === 'error');
     const helperStatusLabel = helperStatus === 'ready'
         ? 'Готов'
         : helperStatus === 'checking'
@@ -1506,10 +1508,22 @@ export function VideoTool() {
             : helperStatus === 'version_mismatch'
                 ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
                 : 'border-red-400/20 bg-red-400/10 text-red-200';
-    const blockingStatusLabel = exportBlockedReason || 'Готово к экспорту';
-    const blockingStatusToneClass = exportBlockedReason
-        ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
-        : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
+    const blockingStatusLabel = hasExportError
+        ? 'Ошибка экспорта'
+        : exportPhase === 'completed'
+            ? 'Экспорт завершён'
+            : exportPhase !== 'idle'
+                ? exportPhaseLabel[exportPhase]
+                : exportBlockedReason || 'Готово к экспорту';
+    const blockingStatusToneClass = hasExportError
+        ? 'border-red-500/30 bg-red-500/10 text-red-100'
+        : exportPhase === 'completed'
+            ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100'
+            : exportPhase !== 'idle' && exportPhase !== 'cancelled'
+                ? 'border-sky-400/20 bg-sky-400/10 text-sky-100'
+                : exportBlockedReason || exportPhase === 'cancelled'
+                    ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
+                    : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
     const helperInstallTitle = helperStatus === 'version_mismatch'
         ? 'Обновите Stones Video Helper'
         : 'Установите Stones Video Helper';
@@ -1902,15 +1916,17 @@ export function VideoTool() {
                                         </Button>
                                         <Button
                                             data-testid="action-delete"
-                                            aria-label="Удалить"
-                                            variant="danger"
+                                            aria-label={selectedSegmentIsDeleted ? 'Вернуть фрагмент' : 'Удалить фрагмент'}
+                                            variant={selectedSegmentIsDeleted ? 'ghost' : 'danger'}
                                             size="sm"
                                             onClick={() => applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex))}
                                             disabled={!selectedSegment}
-                                            className="disabled:opacity-40"
+                                            className={selectedSegmentIsDeleted
+                                                ? 'border border-emerald-400/30 bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/20 hover:text-emerald-50 disabled:opacity-40'
+                                                : 'disabled:opacity-40'}
                                         >
-                                            <Trash2 size={16} />
-                                            {selectedSegmentRow?.isDeleted ? 'Вернуть' : 'Удалить'}
+                                            {selectedSegmentIsDeleted ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                                            {selectedSegmentIsDeleted ? 'Вернуть' : 'Удалить'}
                                         </Button>
                                         <Button
                                             data-testid="action-export"

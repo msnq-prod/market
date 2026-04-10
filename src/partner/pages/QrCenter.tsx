@@ -61,11 +61,17 @@ export function QrCenter() {
     const [qrPreview, setQrPreview] = useState<QrPackItem | null>(null);
 
     useEffect(() => {
+        let active = true;
+
         const loadBatches = async () => {
             setLoadingBatches(true);
             setError('');
             try {
                 const res = await authFetch('/api/batches');
+
+                if (!active) {
+                    return;
+                }
 
                 if (!res.ok) {
                     setError(res.status === 401 || res.status === 403 ? 'Сессия истекла. Войдите снова.' : 'Не удалось загрузить партии.');
@@ -73,6 +79,10 @@ export function QrCenter() {
                 }
 
                 const data = await res.json() as BatchOption[];
+                if (!active) {
+                    return;
+                }
+
                 setBatches(data);
 
                 if (data.length > 0) {
@@ -80,20 +90,32 @@ export function QrCenter() {
                     setSelectedBatchId(firstBatchId);
                 }
             } catch (_error) {
-                setError('Ошибка загрузки партий.');
+                if (active) {
+                    setError('Ошибка загрузки партий.');
+                }
             } finally {
-                setLoadingBatches(false);
+                if (active) {
+                    setLoadingBatches(false);
+                }
             }
         };
 
         void loadBatches();
+
+        return () => {
+            active = false;
+        };
     }, []);
 
     useEffect(() => {
+        let active = true;
+
         const loadPack = async () => {
             if (!selectedBatchId) {
-                setPack(null);
-                setSelectedIds([]);
+                if (active) {
+                    setPack(null);
+                    setSelectedIds([]);
+                }
                 return;
             }
 
@@ -102,6 +124,10 @@ export function QrCenter() {
             setPage(1);
             try {
                 const res = await authFetch(`/api/batches/${selectedBatchId}/qr-pack`);
+
+                if (!active) {
+                    return;
+                }
 
                 if (res.status === 403) {
                     setError('Нет доступа к выбранной партии.');
@@ -123,18 +149,30 @@ export function QrCenter() {
                 }
 
                 const data = await res.json() as QrPackResponse;
+                if (!active) {
+                    return;
+                }
+
                 setPack(data);
                 setSelectedIds([]);
             } catch (_error) {
-                setError('Сетевая ошибка при загрузке QR-пакета.');
-                setPack(null);
-                setSelectedIds([]);
+                if (active) {
+                    setError('Сетевая ошибка при загрузке QR-пакета.');
+                    setPack(null);
+                    setSelectedIds([]);
+                }
             } finally {
-                setLoadingPack(false);
+                if (active) {
+                    setLoadingPack(false);
+                }
             }
         };
 
         void loadPack();
+
+        return () => {
+            active = false;
+        };
     }, [selectedBatchId]);
 
     const filteredItems = useMemo(() => {

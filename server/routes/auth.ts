@@ -8,8 +8,16 @@ import type { AuthRequest } from '../middleware/auth.ts';
 const router = express.Router();
 const prisma = new PrismaClient();
 
-const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || 'access_secret_123';
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || 'refresh_secret_123';
+const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
+
+if (!ACCESS_TOKEN_SECRET) {
+    throw new Error('ACCESS_TOKEN_SECRET is required');
+}
+
+if (!REFRESH_TOKEN_SECRET) {
+    throw new Error('REFRESH_TOKEN_SECRET is required');
+}
 
 const normalizeEmail = (value: unknown): string => {
     if (typeof value !== 'string') return '';

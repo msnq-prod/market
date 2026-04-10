@@ -55,15 +55,16 @@ interface ModalProps {
     onClose: () => void;
     title: string;
     children: React.ReactNode;
+    className?: string;
 }
 
-export function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, className = '' }: ModalProps) {
     if (!isOpen) return null;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
             <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
-            <div className="relative bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className={`relative max-h-[90vh] w-full overflow-y-auto rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200 ${className || 'max-w-lg'}`}>
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-xl font-bold text-white">{title}</h2>
                     <button onClick={onClose} className="text-gray-500 hover:text-white transition">

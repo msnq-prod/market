@@ -26,6 +26,8 @@ const initialForm: CreateUserForm = {
 };
 
 export function Users() {
+    const currentRole = localStorage.getItem('userRole');
+    const canCreateAdmin = currentRole === 'ADMIN';
     const [users, setUsers] = useState<UserRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -214,9 +216,9 @@ export function Users() {
                                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
                                 >
                                     <option value="FRANCHISEE">ФРАНЧАЙЗИ</option>
-                                    <option value="MANAGER">МЕНЕДЖЕР</option>
+                                    {canCreateAdmin && <option value="MANAGER">МЕНЕДЖЕР</option>}
                                     <option value="SALES_MANAGER">МЕНЕДЖЕР ПРОДАЖ</option>
-                                    <option value="ADMIN">АДМИН</option>
+                                    {canCreateAdmin && <option value="ADMIN">АДМИН</option>}
                                 </select>
                             </div>
 

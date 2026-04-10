@@ -7,7 +7,7 @@ interface TranslationModalProps {
     baseData: {
         translations?: TranslationRecord[];
     };
-    onSave: (translatedData: TranslationRecord[]) => void;
+    onSave: (translatedData: TranslationRecord[]) => Promise<void> | void;
     type: 'LOCATION' | 'PRODUCT';
 }
 
@@ -30,13 +30,20 @@ export function TranslationModal({ isOpen, onClose, baseData, onSave, type }: Tr
     const [languages, setLanguages] = useState<Language[]>([]);
     const [selectedLangId, setSelectedLangId] = useState<number | null>(null);
     const [translations, setTranslations] = useState<TranslationRecord[]>([]);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveError, setSaveError] = useState('');
+    const [defaultLangId, setDefaultLangId] = useState<number | null>(2);
 
     useEffect(() => {
         if (isOpen) {
+            setSaveError('');
+            setIsSaving(false);
             fetch('/api/languages')
                 .then(res => res.json())
                 .then((data: Language[]) => {
+                    const defaultLanguage = data.find((language) => language.is_default) || null;
                     const available = data.filter((l) => !l.is_default);
+                    setDefaultLangId(defaultLanguage?.id ?? 2);
                     setLanguages(available);
                     setSelectedLangId((prev) => prev ?? available[0]?.id ?? null);
                 });
@@ -51,9 +58,19 @@ export function TranslationModal({ isOpen, onClose, baseData, onSave, type }: Tr
 
     if (!isOpen) return null;
 
-    const handleSave = () => {
-        onSave(translations);
-        onClose();
+    const handleSave = async () => {
+        setIsSaving(true);
+        setSaveError('');
+
+        try {
+            await onSave(translations);
+            onClose();
+        } catch (error) {
+            console.error('Не удалось сохранить переводы', error);
+            setSaveError(error instanceof Error ? error.message : 'Не удалось сохранить переводы.');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleChange = (field: string, value: string) => {
@@ -76,7 +93,8 @@ export function TranslationModal({ isOpen, onClose, baseData, onSave, type }: Tr
     };
 
     const getOriginalValue = (field: string) => {
-        const t = baseData.translations?.find((translation) => translation.language_id === 1); // Assuming 1 is default
+        const t = baseData.translations?.find((translation) => translation.language_id === defaultLangId)
+            || baseData.translations?.[0];
         const value = t?.[field as keyof TranslationRecord];
         return typeof value === 'string' ? value : '—';
     };
@@ -163,14 +181,20 @@ export function TranslationModal({ isOpen, onClose, baseData, onSave, type }: Tr
                             )}
                         </div>
                     )}
+
+                    {saveError && (
+                        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                            {saveError}
+                        </div>
+                    )}
                 </div>
 
                 <div className="p-6 border-t border-white/10 flex justify-end gap-4">
-                    <button onClick={onClose} className="px-6 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors">
+                    <button onClick={onClose} disabled={isSaving} className="px-6 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50">
                         Отмена
                     </button>
-                    <button onClick={handleSave} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors">
-                        Сохранить переводы
+                    <button onClick={() => void handleSave()} disabled={isSaving} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+                        {isSaving ? 'Сохранение...' : 'Сохранить переводы'}
                     </button>
                 </div>
             </div>

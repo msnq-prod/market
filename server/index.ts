@@ -41,6 +41,34 @@ const getPrismaErrorMessage = (error: unknown, fallback: string) => {
     return fallback;
 };
 
+const getPrismaDeleteErrorMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2003') {
+            return 'Удаление невозможно: запись связана с другими данными.';
+        }
+        if (error.code === 'P2025') {
+            return 'Запись не найдена.';
+        }
+    }
+
+    return fallback;
+};
+
+const pluralize = (count: number, one: string, few: string, many: string) => {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+
+    if (mod10 === 1 && mod100 !== 11) {
+        return one;
+    }
+
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+        return few;
+    }
+
+    return many;
+};
+
 const normalizeOptionalUrl = (value: unknown) => {
     if (typeof value !== 'string') {
         return null;
@@ -143,6 +171,16 @@ app.use((req, res, next) => {
 app.use('/uploads', express.static(uploadDir));
 app.use('/locations', express.static(locationsDir));
 
+app.get('/healthz', async (_req, res) => {
+    try {
+        await prisma.$queryRaw`SELECT 1`;
+        res.json({ ok: true });
+    } catch (error) {
+        console.error(error);
+        res.status(503).json({ ok: false, error: 'Database unavailable' });
+    }
+});
+
 app.use('/auth', authRoutes);
 app.use('/api/batches', batchRoutes);
 app.use('/api/items', itemRoutes);
@@ -190,17 +228,59 @@ app.get('/api/locations', async (req, res) => {
     }
 });
 
-// Get user (mock/first user for now)
-app.get('/api/user', async (req, res) => {
+app.all('/api/user', (_req, res) => {
+    res.status(404).json({ error: 'Endpoint removed.' });
+});
+
+app.get('/api/admin/dashboard-summary', authenticateToken, async (req: AuthRequest, res) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+        return res.sendStatus(403);
+    }
+
     try {
-        const user = await prisma.user.findFirst();
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        res.json(user);
+        const [
+            totalLocations,
+            totalProducts,
+            publishedProducts,
+            totalUsers,
+            franchisees,
+            inTransitBatches,
+            receivedBatches,
+            stockHqItems,
+            stockOnlineItems,
+            publishedLocationRows
+        ] = await prisma.$transaction([
+            prisma.location.count(),
+            prisma.product.count(),
+            prisma.product.count({ where: { is_published: true } }),
+            prisma.user.count(),
+            prisma.user.count({ where: { role: 'FRANCHISEE' } }),
+            prisma.batch.count({ where: { status: 'IN_TRANSIT' } }),
+            prisma.batch.count({ where: { status: 'RECEIVED' } }),
+            prisma.item.count({ where: { status: 'STOCK_HQ', is_sold: false } }),
+            prisma.item.count({ where: { status: 'STOCK_ONLINE', is_sold: false } }),
+            prisma.product.findMany({
+                where: { is_published: true },
+                distinct: ['location_id'],
+                select: { location_id: true }
+            })
+        ]);
+
+        res.json({
+            locations_total: totalLocations,
+            locations_published: publishedLocationRows.length,
+            products_total: totalProducts,
+            products_published: publishedProducts,
+            users_total: totalUsers,
+            franchisees_total: franchisees,
+            batches_in_transit: inTransitBatches,
+            batches_received: receivedBatches,
+            items_stock_hq: stockHqItems,
+            items_stock_online: stockOnlineItems
+        });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to fetch user' });
+        res.status(500).json({ error: 'Не удалось загрузить сводку дашборда.' });
     }
 });
 
@@ -246,7 +326,9 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
     const safeEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     const safePassword = typeof password === 'string' ? password : '';
     const safeRole = typeof role === 'string' ? role.trim() : '';
-    const allowedRoles = new Set(['ADMIN', 'MANAGER', 'SALES_MANAGER', 'FRANCHISEE']);
+    const allowedRoles = req.user.role === 'ADMIN'
+        ? new Set(['ADMIN', 'MANAGER', 'SALES_MANAGER', 'FRANCHISEE'])
+        : new Set(['SALES_MANAGER', 'FRANCHISEE']);
 
     if (!safeName) {
         return res.status(400).json({ error: 'Укажите имя пользователя.' });
@@ -261,7 +343,7 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
     }
 
     if (!allowedRoles.has(safeRole)) {
-        return res.status(400).json({ error: 'Недопустимая роль для создания из админки.' });
+        return res.status(403).json({ error: 'Недостаточно прав для создания пользователя с этой ролью.' });
     }
 
     try {
@@ -382,11 +464,33 @@ app.delete('/api/locations/:id', authenticateToken, async (req: AuthRequest, res
 
     try {
         const { id } = req.params;
+        const location = await prisma.location.findUnique({
+            where: { id },
+            select: {
+                _count: {
+                    select: {
+                        products: true
+                    }
+                }
+            }
+        });
+
+        if (!location) {
+            return res.status(404).json({ error: 'Локация не найдена.' });
+        }
+
+        if (location._count.products > 0) {
+            const count = location._count.products;
+            return res.status(409).json({
+                error: `Нельзя удалить локацию: к ней привязано ${count} ${pluralize(count, 'товарный шаблон', 'товарных шаблона', 'товарных шаблонов')}. Сначала удалите или перенесите эти шаблоны.`
+            });
+        }
+
         await prisma.location.delete({ where: { id } });
         res.json({ success: true });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to delete location' });
+        res.status(500).json({ error: getPrismaDeleteErrorMessage(error, 'Не удалось удалить локацию.') });
     }
 });
 
@@ -607,11 +711,50 @@ app.delete('/api/products/:id', authenticateToken, async (req: AuthRequest, res)
 
     try {
         const { id } = req.params;
+        const product = await prisma.product.findUnique({
+            where: { id },
+            select: {
+                _count: {
+                    select: {
+                        items: true,
+                        batches: true,
+                        order_items: true,
+                        collection_requests: true
+                    }
+                }
+            }
+        });
+
+        if (!product) {
+            return res.status(404).json({ error: 'Товар-шаблон не найден.' });
+        }
+
+        const blockers = [
+            product._count.items > 0
+                ? `${product._count.items} ${pluralize(product._count.items, 'позиция', 'позиции', 'позиций')}`
+                : null,
+            product._count.batches > 0
+                ? `${product._count.batches} ${pluralize(product._count.batches, 'партия', 'партии', 'партий')}`
+                : null,
+            product._count.order_items > 0
+                ? `${product._count.order_items} ${pluralize(product._count.order_items, 'строка заказа', 'строки заказа', 'строк заказа')}`
+                : null,
+            product._count.collection_requests > 0
+                ? `${product._count.collection_requests} ${pluralize(product._count.collection_requests, 'заказ на сбор', 'заказа на сбор', 'заказов на сбор')}`
+                : null
+        ].filter((value): value is string => Boolean(value));
+
+        if (blockers.length > 0) {
+            return res.status(409).json({
+                error: `Нельзя удалить товар-шаблон: с ним связаны ${blockers.join(', ')}.`
+            });
+        }
+
         await prisma.product.delete({ where: { id } });
         res.json({ success: true });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to delete product' });
+        res.status(500).json({ error: getPrismaDeleteErrorMessage(error, 'Не удалось удалить товар-шаблон.') });
     }
 });
 

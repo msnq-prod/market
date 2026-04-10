@@ -376,7 +376,7 @@ router.patch('/:id', async (req: AuthRequest, res) => {
                 if (status === 'IN_STOCK') {
                     await prisma.item.updateMany({
                         where: { batch_id: existing.batch.id, status: 'NEW' },
-                        data: { status: 'STOCK_ONLINE' }
+                        data: { status: 'STOCK_HQ' }
                     });
                 }
 

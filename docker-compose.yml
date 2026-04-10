@@ -1,6 +1,6 @@
 services:
   db:
-    image: public.ecr.aws/docker/library/mysql:8.0
+    image: mysql:8.0
     pull_policy: always
     container_name: stones-db
     restart: unless-stopped
@@ -29,8 +29,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: mysql://root:root@db:3306/stones?connection_limit=20&pool_timeout=30
-      ACCESS_TOKEN_SECRET: access_secret_123
-      REFRESH_TOKEN_SECRET: refresh_secret_123
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:?ACCESS_TOKEN_SECRET is required}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
       PORT: 3001
       CLIENT_URL: http://localhost:5173
     ports:

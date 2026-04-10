@@ -18,6 +18,7 @@ import {
     ACTIVE_VIDEO_EXPORT_STATUSES,
     RECOVERABLE_VIDEO_EXPORT_STATUSES,
     buildVideoExportFilename,
+    moveFileSafely,
     buildVideoExportPublicOutputDir,
     buildVideoExportPublicRelativePath,
     buildVideoExportPublicUrl,
@@ -113,16 +114,26 @@ const serializeBatch = (req: AuthRequest, batch: BatchRecord) => ({
     } : null,
     items: batch.items.map((item) => ({
         id: item.id,
+        batch_id: item.batch_id,
+        product_id: item.product_id,
         temp_id: item.temp_id,
         serial_number: item.serial_number,
         public_token: item.public_token,
         status: item.status,
         is_sold: item.is_sold,
+        sales_channel: item.sales_channel,
         photo_url: item.item_photo_url || item.photo_url,
+        source_photo_url: item.photo_url,
         item_photo_url: item.item_photo_url,
         item_video_url: item.item_video_url,
         item_seq: item.item_seq,
+        activation_date: item.activation_date,
+        price_sold: item.price_sold == null ? null : Number(item.price_sold),
+        commission_hq: item.commission_hq == null ? null : Number(item.commission_hq),
+        collected_date: item.collected_date,
+        collected_time: item.collected_time,
         created_at: item.created_at,
+        updated_at: item.updated_at,
         clone_url: buildCloneUrl(req, item.public_token),
         qr_url: buildQrUrl(item.public_token)
     }))
@@ -229,8 +240,8 @@ const normalizeVideoExportManifest = (
 
         if (index > 0) {
             const previous = sortedSegments[index - 1];
-            if (Math.abs(previous.end_ms - segment.start_ms) > 1) {
-                throw createHttpError('Сегменты render_manifest должны идти последовательно без разрывов.', 400);
+            if ((previous.end_ms - segment.start_ms) > 1) {
+                throw createHttpError('Сегменты render_manifest не должны пересекаться.', 400);
             }
         }
     });
@@ -710,7 +721,7 @@ router.post('/:id/video-jobs', authenticateToken, async (req: AuthRequest, res) 
         for (const clip of validatedBundle.orderedFiles) {
             const storedName = clip.normalizedBaseName;
             const targetPath = path.join(sourceDir, storedName);
-            await fs.rename(clip.stagingPath, targetPath);
+            await moveFileSafely(clip.stagingPath, targetPath);
 
             sourceManifest.push({
                 sequence: clip.sequence,
@@ -1000,7 +1011,7 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
             const fileName = buildVideoExportFilename(serialNumber);
             const targetPath = path.join(outputDir, fileName);
             await fs.rm(targetPath, { force: true });
-            await fs.rename(uploadedFile!.path, targetPath);
+            await moveFileSafely(uploadedFile!.path, targetPath);
             uploadedFile = undefined;
 
             const nextManifestEntry: UploadedVideoExportManifestEntry = {
@@ -1358,7 +1369,7 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
             });
             await tx.item.updateMany({
                 where: { batch_id: batch.id, status: 'NEW' },
-                data: { status: 'STOCK_ONLINE' }
+                data: { status: 'STOCK_HQ' }
             });
 
             if (batch.collection_request_id) {

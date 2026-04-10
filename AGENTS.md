@@ -47,13 +47,14 @@
 ### 5.1 Роли
 - `ADMIN`
 - `MANAGER`
+- `SALES_MANAGER`
 - `FRANCHISEE`
 - `USER`
 
 ### 5.2 Статусы партии
-`DRAFT -> TRANSIT -> RECEIVED -> FINISHED`
+`OPEN -> IN_PROGRESS -> IN_TRANSIT -> RECEIVED -> IN_STOCK`
 
-Также возможен `ERROR`.
+Также возможен `CANCELLED`.
 
 ### 5.3 Статусы item
 `NEW`, `REJECTED`, `STOCK_HQ`, `STOCK_ONLINE`, `ON_CONSIGNMENT`, `SOLD_ONLINE`, `ACTIVATED`.
@@ -118,7 +119,7 @@
 1. обновить этот документ;
 2. проверить, не сломаны ли e2e-тесты с хардкодом логинов.
 
-Примечание: в `tests/e2e/partner-qr.spec.ts` захардкожен `partner@stones.com`.
+Примечание: в `tests/e2e/partner-qr.spec.ts` используется seeded-франчайзи `yakutia.partner@stones.com`.
 Если этот аккаунт отсутствует в сид-данных, тест нужно адаптировать или вернуть совместимый аккаунт в seed.
 
 ## 10. Безопасность

@@ -76,66 +76,36 @@ router.use(authenticateToken, requireStaff);
 // Allocate Item (Assign Channel)
 router.post('/items/:itemId/allocate', async (req: AuthRequest, res) => {
     const { itemId } = req.params;
-    const { channel, target_user_id } = req.body as {
-        channel: 'OFFLINE_POINT' | 'MARKETPLACE' | 'DIRECT_SITE';
-        target_user_id?: string;
-    };
-
-    // channel: 'OFFLINE_POINT' | 'MARKETPLACE' | 'DIRECT_SITE'
+    const channel = typeof req.body?.channel === 'string' ? req.body.channel.trim() : '';
 
     try {
         const item = await prisma.item.findUnique({ where: { id: itemId } });
-        if (!item) return res.status(404).json({ error: 'Item not found' });
+        if (!item) return res.status(404).json({ error: 'Item не найден.' });
 
         if (item.status !== 'STOCK_HQ') {
-            return res.status(400).json({ error: 'Item must be in STOCK_HQ to be allocated' });
+            return res.status(400).json({ error: 'Распределять можно только Item в статусе STOCK_HQ.' });
         }
 
-        const updateData: {
-            sales_channel: 'OFFLINE_POINT' | 'MARKETPLACE' | 'DIRECT_SITE';
-            status?: 'ON_CONSIGNMENT' | 'STOCK_ONLINE';
-        } = { sales_channel: channel };
-
         if (channel === 'OFFLINE_POINT') {
-            if (!target_user_id) return res.status(400).json({ error: 'Target User ID required for Offline Point' });
+            return res.status(400).json({ error: 'Оффлайн-консигнация отключена в MVP. Используйте только онлайн-распределение.' });
+        }
 
-            // Check if franchisee exists
-            const franchisee = await prisma.user.findUnique({ where: { id: target_user_id } });
-            if (!franchisee) return res.status(404).json({ error: 'Franchisee not found' });
-
-            // Assign back to franchisee (consignment)
-            // Ideally we might want to track who holds it, currently item only has batch owner.
-            // But for consignment, the item is physically with the franchisee.
-            // We'll update status to ON_CONSIGNMENT.
-            // And maybe we need a field 'current_holder_id'? 
-            // For now, let's assume it goes back to batch owner or we use target_user_id for logic?
-            // The item schema doesn't have `holder_id`. It has `batch.owner_id`.
-            // If we send it to a *different* franchisee, we might need a transfer record or update batch ownership? 
-            // Stick to simple: Consignment implies it goes to a shop. 
-            // Let's assume it goes to `target_user_id`. 
-            // We should probably add `holder_id` to Item or just rely on `batch.owner_id` if it's always the same person.
-            // Spec says: "Offline Point: Item sent to specific Franchisee".
-            // Let's assume for MVP we just change status. 
-            // Detailed logic: If sold offline, we charge royalty from... whom? The one who sold it. 
-            // So we need to know who has it.
-            // Let's rely on `batch.owner_id` for now, assuming franchise stores their own collected items.
-            // If they trade between franchisees, that's complex.
-
-            updateData.status = 'ON_CONSIGNMENT';
-        } else {
-            // Online
-            updateData.status = 'STOCK_ONLINE';
+        if (!['MARKETPLACE', 'DIRECT_SITE'].includes(channel)) {
+            return res.status(400).json({ error: 'Поддерживаются только онлайн-каналы распределения.' });
         }
 
         const updatedItem = await prisma.item.update({
             where: { id: itemId },
-            data: updateData
+            data: {
+                sales_channel: channel as 'MARKETPLACE' | 'DIRECT_SITE',
+                status: 'STOCK_ONLINE'
+            }
         });
 
         res.json(updatedItem);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to allocate item' });
+        res.status(500).json({ error: 'Не удалось распределить Item.' });
     }
 });
 

@@ -541,3 +541,140 @@ test('UI: admin edits fragments and retries only missing tail uploads after relo
     await expect(page.getByText('Экспорт завершён: все финальные ролики загружены.')).toBeVisible({ timeout: 15000 });
     expect(renderJobs[1]?.outputsCount).toBe(1);
 });
+
+test('UI: export works with deleted fragments that leave source timeline gaps', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+    const renderJobs: Array<{
+        outputsCount: number;
+        segments: Array<{ start_ms: number; end_ms: number }>;
+    }> = [];
+    let renderStatusPoll = 0;
+
+    await setAdminSession(page, admin);
+
+    await page.route('http://127.0.0.1:3012/health', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                ok: true,
+                ffmpeg: true,
+                ffprobe: true,
+                helper_version: '1.0.0',
+                protocol_version: 'stones-video-export-helper-v2',
+                storage_root: '/tmp/stones-helper',
+                free_bytes: 1024 * 1024 * 1024 * 10,
+                allowed_origins: ['http://127.0.0.1:5273'],
+                queued_jobs: 0
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/sources', async (route) => {
+        await route.fulfill({
+            status: 201,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                source_id: `source-${randomKey()}`,
+                duration_ms: 8000,
+                has_audio: true,
+                fingerprint: {
+                    name: 'source.mp4',
+                    size: 10,
+                    lastModified: 123456,
+                    durationMs: 8000
+                }
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/render-jobs', async (route) => {
+        const payload = route.request().postDataJSON() as {
+            outputs: unknown[];
+            segments: Array<{ start_ms: number; end_ms: number }>;
+        };
+        renderJobs.push({
+            outputsCount: payload.outputs.length,
+            segments: payload.segments
+        });
+
+        await route.fulfill({
+            status: 202,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                job_id: 'job-gap',
+                status: 'QUEUED',
+                processed_count: 0,
+                total_count: payload.outputs.length
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/render-jobs/job-gap', async (route) => {
+        renderStatusPoll += 1;
+        const isCompleted = renderStatusPoll > 1;
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                job_id: 'job-gap',
+                status: isCompleted ? 'COMPLETED' : 'PROCESSING',
+                processed_count: isCompleted ? renderJobs.at(-1)?.outputsCount ?? 0 : 1,
+                total_count: renderJobs.at(-1)?.outputsCount ?? 0,
+                outputs: []
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/render-jobs/job-gap/files/**', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'video/mp4',
+            body: makeFakeMp4('helper-output-gap')
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/render-jobs/job-gap/cleanup', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ success: true })
+        });
+    });
+
+    await page.goto(`/admin/video-tool/${batchId}`);
+    await expect(page.getByTestId('video-tool-heading')).toBeVisible();
+
+    await page.getByTestId('source-input').setInputFiles({
+        name: 'source.mp4',
+        mimeType: 'video/mp4',
+        buffer: makeFakeMp4('source-gap'),
+        lastModified: 123456
+    });
+    await expect(page.getByTestId('clip-card-000')).toBeVisible();
+
+    await seekTimelineToRatio(page, 0.25);
+    await page.getByTestId('action-cut').click();
+    await seekTimelineToRatio(page, 0.5);
+    await page.getByTestId('action-cut').click();
+    await seekTimelineToRatio(page, 0.75);
+    await page.getByTestId('action-cut').click();
+    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 3 / 2');
+
+    await page.getByTestId('clip-card-002').evaluate((element: HTMLElement) => element.click());
+    await page.getByTestId('action-delete').click();
+    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 2 / 2');
+    await expect(page.getByTestId('blocking-status')).toHaveText('Готово к экспорту');
+    await expect(page.getByTestId('action-delete')).toHaveAttribute('aria-label', 'Вернуть фрагмент');
+
+    await page.getByTestId('action-export').click();
+    await expect(page.getByText('Экспорт завершён: все финальные ролики загружены.')).toBeVisible({ timeout: 15000 });
+
+    expect(renderJobs[0]?.outputsCount).toBe(2);
+    expect(renderJobs[0]?.segments).toHaveLength(3);
+    expect((renderJobs[0]?.segments[2]?.start_ms ?? 0)).toBeGreaterThan(renderJobs[0]?.segments[1]?.end_ms ?? 0);
+});
