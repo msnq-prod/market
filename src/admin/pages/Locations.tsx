@@ -168,7 +168,7 @@ export function Locations() {
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm('Вы уверены, что хотите удалить эту локацию?')) return;
+        if (!confirm('Скрыть эту локацию из интерфейса? Восстановление возможно только напрямую из БД.')) return;
         try {
             const response = await authFetch(`/api/locations/${id}`, { method: 'DELETE' });
             if (!response.ok) {

@@ -237,8 +237,6 @@ import { Login as PartnerLogin } from './partner/pages/Login'
 import { Dashboard as PartnerDashboard } from './partner/pages/Dashboard'
 import { Batches as PartnerBatches } from './partner/pages/Batches'
 import { CreateBatch } from './partner/pages/CreateBatch'
-import { QrCenter } from './partner/pages/QrCenter'
-import { QrPrint } from './partner/pages/QrPrint'
 import { Finance } from './partner/pages/Finance'
 import { Acceptance } from './admin/pages/Acceptance'
 import { Allocation } from './admin/pages/Allocation'
@@ -248,13 +246,14 @@ import { CloneContent } from './admin/pages/CloneContent'
 import { Warehouse } from './admin/pages/Warehouse'
 import { Orders } from './admin/pages/Orders'
 import { VideoTool } from './admin/pages/VideoTool'
+import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
 
 function App() {
   return (
     <BrowserRouter>
         <Routes>
         <Route path="/" element={<MainApp />} />
-        <Route path="/clone/:publicToken" element={<DigitalClone />} />
+        <Route path="/clone/:serialNumber" element={<DigitalClone />} />
 
         {/* Admin Routes */}
         <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
@@ -263,6 +262,14 @@ function App() {
           element={(
             <AdminFullscreenRoute>
               <VideoTool />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/qr/print"
+          element={(
+            <AdminFullscreenRoute>
+              <AdminQrPrint />
             </AdminFullscreenRoute>
           )}
         />
@@ -284,8 +291,6 @@ function App() {
           <Route path="dashboard" element={<PartnerDashboard />} />
           <Route path="batches" element={<PartnerBatches />} />
           <Route path="batches/new" element={<CreateBatch />} />
-          <Route path="qr" element={<QrCenter />} />
-          <Route path="qr/print" element={<QrPrint />} />
           <Route path="finance" element={<Finance />} />
           <Route index element={<PartnerDashboard />} />
         </Route>

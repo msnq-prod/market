@@ -160,8 +160,10 @@ test.describe('Mobile landing page', () => {
         await page.evaluate(() => {
             const store = (window as Window & {
                 __STONES_STORE__?: {
-                    getState: () => { locations: Array<Record<string, unknown>> };
-                    getState: () => { locations: Array<Record<string, unknown>>; selectLocation: (location: Record<string, unknown>) => void };
+                    getState: () => {
+                        locations: Array<Record<string, unknown> & { products?: unknown[] }>;
+                        selectLocation: (location: Record<string, unknown>) => void;
+                    };
                 };
             }).__STONES_STORE__;
 
@@ -170,10 +172,10 @@ test.describe('Mobile landing page', () => {
             }
 
             const state = store.getState();
-            const firstLocation = state.locations[0];
+            const firstLocation = state.locations.find((location) => Array.isArray(location.products) && location.products.length > 0);
 
             if (!firstLocation) {
-                throw new Error('No location found for orbit exit test.');
+                throw new Error('No published location with products found for orbit exit test.');
             }
 
             state.selectLocation(firstLocation);
@@ -187,9 +189,18 @@ test.describe('Mobile landing page', () => {
         });
         expect(selectedLocationId).not.toBeNull();
 
+        const focusedCanvasBox = await canvas.boundingBox();
+        expect(focusedCanvasBox).not.toBeNull();
+        if (!focusedCanvasBox) {
+            throw new Error('Canvas is not visible after focusing location.');
+        }
+
+        const focusedCenterX = focusedCanvasBox.x + (focusedCanvasBox.width / 2);
+        const focusedCenterY = focusedCanvasBox.y + (focusedCanvasBox.height * 0.45);
+
         await swipe(
-            { x: centerX + 110, y: centerY - 10 },
-            { x: centerX - 110, y: centerY + 4 },
+            { x: focusedCenterX + 110, y: focusedCenterY - 10 },
+            { x: focusedCenterX - 110, y: focusedCenterY + 4 },
             12
         );
         await page.waitForTimeout(200);

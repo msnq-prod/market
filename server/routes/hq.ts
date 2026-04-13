@@ -28,11 +28,15 @@ router.post('/acceptance/:batchId/verify', async (req: AuthRequest, res) => {
     const { temp_id } = req.body;
 
     try {
-        const item = await prisma.item.findUnique({
+        const item = await prisma.item.findFirst({
             where: {
-                batch_id_temp_id: {
-                    batch_id: batchId,
-                    temp_id: temp_id
+                batch_id: batchId,
+                temp_id,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
                 }
             },
             include: { batch: true }
@@ -53,8 +57,28 @@ router.post('/items/:itemId/reject', async (req: AuthRequest, res) => {
 
     try {
         if (!req.user) return res.sendStatus(401);
+        const existingItem = await prisma.item.findFirst({
+            where: {
+                id: itemId,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                }
+            },
+            select: {
+                id: true,
+                batch_id: true
+            }
+        });
+
+        if (!existingItem) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
         const item = await prisma.item.update({
-            where: { id: itemId },
+            where: { id: existingItem.id },
             data: {
                 status: 'REJECTED'
             }
@@ -65,7 +89,7 @@ router.post('/items/:itemId/reject', async (req: AuthRequest, res) => {
             data: {
                 user_id: req.user.id,
                 action: 'ITEM_REJECTED',
-                details: { itemId, reason, batchId: item.batch_id }
+                details: { itemId, reason, batchId: existingItem.batch_id }
             }
         });
 
@@ -80,8 +104,25 @@ router.post('/items/:itemId/accept', async (req: AuthRequest, res) => {
     const { itemId } = req.params;
 
     try {
+        const existingItem = await prisma.item.findFirst({
+            where: {
+                id: itemId,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                }
+            },
+            select: { id: true }
+        });
+
+        if (!existingItem) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
         const item = await prisma.item.update({
-            where: { id: itemId },
+            where: { id: existingItem.id },
             data: {
                 status: 'STOCK_HQ'
             }
@@ -98,9 +139,19 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
     const { batchId } = req.params;
 
     try {
-        const batch = await prisma.batch.findUnique({
-            where: { id: batchId },
-            include: { items: true, collection_request: true }
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: batchId,
+                deleted_at: null
+            },
+            include: {
+                items: {
+                    where: {
+                        deleted_at: null
+                    }
+                },
+                collection_request: true
+            }
         });
         if (!batch) return res.status(404).json({ error: 'Batch not found' });
 
@@ -140,8 +191,11 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
             }
         });
 
-        const updatedBatch = await prisma.batch.findUnique({
-            where: { id: batchId }
+        const updatedBatch = await prisma.batch.findFirst({
+            where: {
+                id: batchId,
+                deleted_at: null
+            }
         });
 
         res.json(updatedBatch);

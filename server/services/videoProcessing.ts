@@ -1,11 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import type { Prisma, VideoProcessingJob } from '@prisma/client';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '../..');
+import { projectRoot } from '../utils/projectPaths.ts';
 
 export const VIDEO_JOB_STORAGE_ROOT = path.join(projectRoot, 'storage/video-jobs');
 export const VIDEO_JOB_STAGING_ROOT = path.join(VIDEO_JOB_STORAGE_ROOT, 'staging');
@@ -74,7 +70,6 @@ export const buildVideoJobPublicRelativePath = (batchId: string, version: number
     toPosixPath(path.join('uploads/videos/generated', batchId, `v${version}`, filename));
 export const buildVideoJobPublicUrl = (batchId: string, version: number, filename: string) =>
     `${VIDEO_JOB_PUBLIC_URL_ROOT}/${encodeURIComponent(batchId)}/v${version}/${encodeURIComponent(filename)}`;
-export const resolveProjectPath = (relativePath: string) => path.join(projectRoot, relativePath);
 
 export const parseStrictNumberedFilename = (filename: string): { sequence: number; extension: string; normalizedBaseName: string } | null => {
     const baseName = path.basename(filename).trim();

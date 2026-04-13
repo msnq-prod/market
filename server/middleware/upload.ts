@@ -1,17 +1,13 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import type { Request } from 'express';
-import type { FileFilterCallback } from 'multer';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { resolveProjectPath } from '../utils/projectPaths.ts';
 
 // Ensure directories exist
-const uploadDir = path.join(__dirname, '../../public/uploads');
-const videoDir = path.join(__dirname, '../../public/uploads/videos');
-const photoDir = path.join(__dirname, '../../public/uploads/photos');
+const uploadDir = resolveProjectPath('public', 'uploads');
+const videoDir = resolveProjectPath('public', 'uploads', 'videos');
+const photoDir = resolveProjectPath('public', 'uploads', 'photos');
 
 [uploadDir, videoDir, photoDir].forEach(dir => {
     if (!fs.existsSync(dir)) {
@@ -20,26 +16,26 @@ const photoDir = path.join(__dirname, '../../public/uploads/photos');
 });
 
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: (_req, file, cb) => {
         if (file.mimetype.startsWith('video/')) {
             cb(null, videoDir);
         } else {
             cb(null, photoDir);
         }
     },
-    filename: (req, file, cb) => {
+    filename: (_req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, uniqueSuffix + path.extname(file.originalname));
     }
 });
 
-const fileFilter = (_req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     if (file.mimetype.startsWith('image/')) {
         cb(null, true);
     } else if (file.mimetype.startsWith('video/')) {
         cb(null, true);
     } else {
-        cb(new Error('Invalid file type. Only images and videos are allowed.'), false);
+        cb(new Error('Invalid file type. Only images and videos are allowed.'));
     }
 };
 

@@ -1,4 +1,3 @@
-import { promises as fs } from 'node:fs';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 type LoginPayload = {
@@ -8,12 +7,14 @@ type LoginPayload = {
     name: string;
 };
 
-type CreatedItemPayload = {
+type BatchItemSummary = {
     id: string;
     temp_id: string;
-    public_token: string;
-    clone_url: string;
-    qr_url: string;
+    serial_number: string | null;
+    clone_url?: string;
+    qr_url?: string;
+    status?: string;
+    activation_date?: string | null;
 };
 
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
@@ -36,41 +37,55 @@ async function login(request: APIRequestContext, email: string, password: string
     return await response.json() as LoginPayload;
 }
 
-async function seedBatchWithItems(
+async function createTransitBatchFromRequest(
     request: APIRequestContext,
-    token: string,
+    adminToken: string,
+    partnerToken: string,
     itemCount: number
-): Promise<{ batchId: string; items: CreatedItemPayload[] }> {
-    const batchResponse = await request.post('/api/batches', {
-        headers: authHeaders(token),
+): Promise<{ batchId: string; items: BatchItemSummary[] }> {
+    const createRequestResponse = await request.post('/api/collection-requests', {
+        headers: authHeaders(adminToken),
+        data: {
+            product_id: 'prod-yak-001',
+            requested_qty: itemCount
+        }
+    });
+    expect(createRequestResponse.status()).toBe(201);
+    const createdRequest = await createRequestResponse.json() as { id: string };
+
+    const ackResponse = await request.post(`/api/collection-requests/${createdRequest.id}/ack`, {
+        headers: { Authorization: `Bearer ${partnerToken}` }
+    });
+    expect(ackResponse.status()).toBe(200);
+
+    const completeResponse = await request.post(`/api/collection-requests/${createdRequest.id}/complete`, {
+        headers: authHeaders(partnerToken),
         data: {
             gps_lat: 55.75,
             gps_lng: 37.61,
-            video_url: '/uploads/videos/mock.mp4'
+            collected_date: '2026-04-10',
+            collected_time: '13:45'
         }
     });
-    expect(batchResponse.ok()).toBeTruthy();
-    const batch = await batchResponse.json() as { id: string };
+    expect(completeResponse.status()).toBe(200);
+    const completePayload = await completeResponse.json() as {
+        batch: { id: string; status: string };
+    };
+    expect(completePayload.batch.status).toBe('TRANSIT');
 
-    const items: CreatedItemPayload[] = [];
-    for (let index = 0; index < itemCount; index += 1) {
-        const tempId = `QR-${randomKey()}-${index + 1}`;
-        const itemResponse = await request.post(`/api/items/batch/${batch.id}/items`, {
-            headers: authHeaders(token),
-            data: {
-                temp_id: tempId,
-                photo_url: '/locations/crystal-caves.jpg'
-            }
-        });
-        expect(itemResponse.ok()).toBeTruthy();
-        const itemData = await itemResponse.json() as CreatedItemPayload;
-        items.push(itemData);
-    }
+    const itemsResponse = await request.get(`/api/items/batch/${completePayload.batch.id}`, {
+        headers: { Authorization: `Bearer ${partnerToken}` }
+    });
+    expect(itemsResponse.status()).toBe(200);
+    const items = await itemsResponse.json() as BatchItemSummary[];
 
-    return { batchId: batch.id, items };
+    return {
+        batchId: completePayload.batch.id,
+        items
+    };
 }
 
-async function setPartnerSession(page: Page, loginPayload: LoginPayload) {
+async function setSession(page: Page, loginPayload: LoginPayload) {
     await page.addInitScript((payload) => {
         localStorage.setItem('accessToken', payload.accessToken);
         localStorage.setItem('refreshToken', payload.refreshToken);
@@ -154,46 +169,41 @@ test('API hardening: healthz works, /api/user is sanitized, catalog mutations re
     expect(partnerCreateProduct.status()).toBe(403);
 });
 
-test('API ACL: qr-pack недоступен чужому франчайзи и содержит clone_url/qr_url', async ({ request }) => {
+test('API ACL: qr-pack доступен только staff и не включает rejected item', async ({ request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
 
-    const outsiderEmail = `outsider-${randomKey()}@stones.test`;
-    const registerResponse = await request.post('/api/users', {
+    const { batchId, items } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
+
+    const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(receiveBatchResponse.status()).toBe(200);
+
+    const rejectItemResponse = await request.post(`/api/hq/items/${items[1].id}/reject`, {
         headers: authHeaders(admin.accessToken),
         data: {
-            name: 'QR Outsider',
-            email: outsiderEmail,
-            password: PARTNER_PASSWORD,
-            role: 'FRANCHISEE'
+            reason: 'QR ACL regression'
         }
     });
-    expect(registerResponse.ok()).toBeTruthy();
-    const outsider = await login(request, outsiderEmail, PARTNER_PASSWORD);
+    expect(rejectItemResponse.status()).toBe(200);
 
-    const { batchId, items } = await seedBatchWithItems(request, partner.accessToken, 1);
-
-    const ownerPackResponse = await request.get(`/api/batches/${batchId}/qr-pack`, {
+    const partnerPackResponse = await request.get(`/api/batches/${batchId}/qr-pack`, {
         headers: { Authorization: `Bearer ${partner.accessToken}` }
     });
-    expect(ownerPackResponse.status()).toBe(200);
-    const ownerPack = await ownerPackResponse.json() as {
-        items: Array<{ id: string; clone_url: string; qr_url: string }>;
-    };
-    expect(ownerPack.items).toHaveLength(1);
-    expect(ownerPack.items[0].id).toBe(items[0].id);
-    expect(ownerPack.items[0].clone_url).toContain('/clone/');
-    expect(ownerPack.items[0].qr_url).toContain('/api/public/items/');
-
-    const outsiderPackResponse = await request.get(`/api/batches/${batchId}/qr-pack`, {
-        headers: { Authorization: `Bearer ${outsider.accessToken}` }
-    });
-    expect(outsiderPackResponse.status()).toBe(403);
+    expect(partnerPackResponse.status()).toBe(403);
 
     const adminPackResponse = await request.get(`/api/batches/${batchId}/qr-pack`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }
     });
     expect(adminPackResponse.status()).toBe(200);
+    const adminPack = await adminPackResponse.json() as {
+        items: Array<{ id: string; clone_url: string; qr_url: string }>;
+    };
+    expect(adminPack.items).toHaveLength(1);
+    expect(adminPack.items[0].id).toBe(items[0].id);
+    expect(adminPack.items[0].clone_url).toContain('/clone/');
+    expect(adminPack.items[0].qr_url).toContain('/api/public/items/');
 
     const itemsByBatchResponse = await request.get(`/api/items/batch/${batchId}`, {
         headers: { Authorization: `Bearer ${partner.accessToken}` }
@@ -202,60 +212,131 @@ test('API ACL: qr-pack недоступен чужому франчайзи и �
     const itemsByBatch = await itemsByBatchResponse.json() as Array<{ clone_url?: string; qr_url?: string }>;
     expect(itemsByBatch[0].clone_url).toContain('/clone/');
     expect(itemsByBatch[0].qr_url).toContain('/api/public/items/');
+
+    const rejectedPassportResponse = await request.get(`/api/public/items/${items[1].serial_number}`);
+    expect(rejectedPassportResponse.status()).toBe(404);
+
+    const rejectedQrResponse = await request.get(`/api/public/items/${items[1].serial_number}/qr`);
+    expect(rejectedQrResponse.status()).toBe(404);
 });
 
-test('UI e2e: партнер печатает выбранные QR и выгружает CSV', async ({ page, request }) => {
-    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
-    const { batchId, items } = await seedBatchWithItems(request, partner.accessToken, 2);
-
-    await setPartnerSession(page, partner);
-    await page.goto('/partner/qr');
-    await expect(page.getByRole('heading', { name: 'QR-пакеты' })).toBeVisible();
-
-    await page.locator('select').selectOption(batchId);
-    const targetTempId = items[0].temp_id;
-    const row = page.locator('tbody tr').filter({ hasText: `#${targetTempId}` }).first();
-    await expect(row).toBeVisible();
-
-    const checkbox = row.locator('input[type="checkbox"]');
-    await checkbox.check();
-
-    const [printPage] = await Promise.all([
-        page.waitForEvent('popup'),
-        page.getByRole('button', { name: 'Печать выбранных' }).click()
-    ]);
-    await printPage.waitForURL(/\/partner\/qr\/print/);
-    await expect(printPage.getByText(`Позиция #${targetTempId}`)).toBeVisible();
-    await printPage.close();
-
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'CSV выбранных' }).click();
-    const download = await downloadPromise;
-
-    const downloadedPath = await download.path();
-    expect(downloadedPath).not.toBeNull();
-    const fileContent = await fs.readFile(downloadedPath as string, 'utf8');
-    const normalized = fileContent.replace(/^\uFEFF/, '');
-
-    expect(normalized).toContain('batch_id,temp_id,public_token,status,clone_url,qr_url,photo_url,created_at');
-    expect(normalized).toContain(batchId);
-    expect(normalized).toContain(targetTempId);
-});
-
-test('Public activation only records activation and does not mutate ledger balances', async ({ request }) => {
-    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+test('API: партнер завершает заказ на сбор без video_url', async ({ request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
-    const { batchId, items } = await seedBatchWithItems(request, partner.accessToken, 1);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
 
-    const sendBatchResponse = await request.post(`/api/batches/${batchId}/send`, {
+    const createRequestResponse = await request.post('/api/collection-requests', {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            product_id: 'prod-yak-001',
+            requested_qty: 2
+        }
+    });
+    expect(createRequestResponse.status()).toBe(201);
+    const createdRequest = await createRequestResponse.json() as { id: string };
+
+    const ackResponse = await request.post(`/api/collection-requests/${createdRequest.id}/ack`, {
         headers: { Authorization: `Bearer ${partner.accessToken}` }
     });
-    expect(sendBatchResponse.status()).toBe(200);
+    expect(ackResponse.status()).toBe(200);
+
+    const completeResponse = await request.post(`/api/collection-requests/${createdRequest.id}/complete`, {
+        headers: authHeaders(partner.accessToken),
+        data: {
+            gps_lat: 55.75,
+            gps_lng: 37.61,
+            collected_date: '2026-04-10',
+            collected_time: '13:45'
+        }
+    });
+    expect(completeResponse.status()).toBe(200);
+    const payload = await completeResponse.json() as {
+        batch: { id: string; status: string };
+    };
+    expect(payload.batch.status).toBe('TRANSIT');
+});
+
+test('UI e2e: партнер не видит QR-раздел, HQ печатает QR из приемки', async ({ page, request }) => {
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const { batchId, items } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
+
+    await setSession(page, partner);
+    await page.goto('/partner/dashboard');
+    await expect(page.getByText('QR-пакеты')).toHaveCount(0);
 
     const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }
     });
     expect(receiveBatchResponse.status()).toBe(200);
+
+    await setSession(page, admin);
+    await page.goto('/admin/acceptance');
+    await expect(page.getByRole('heading', { name: 'Складская приемка' })).toBeVisible();
+
+    await page.getByPlaceholder('ID партии, товар или партнер').fill(batchId);
+    await page.getByRole('button').filter({ hasText: batchId }).first().click();
+
+    const [printPage] = await Promise.all([
+        page.waitForEvent('popup'),
+        page.getByRole('button', { name: 'Печать всех QR' }).click()
+    ]);
+    await printPage.waitForURL(/\/admin\/qr\/print/);
+    await expect(printPage.getByText(`Позиция #${items[0].temp_id}`)).toBeVisible();
+    await printPage.close();
+});
+
+test('Public passport is gated until RECEIVED and activation only records activation', async ({ request }) => {
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const { batchId, items } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 1);
+
+    const hiddenPassportResponse = await request.get(`/api/public/items/${items[0].serial_number}`);
+    expect(hiddenPassportResponse.status()).toBe(404);
+
+    const hiddenQrResponse = await request.get(`/api/public/items/${items[0].serial_number}/qr`);
+    expect(hiddenQrResponse.status()).toBe(404);
+
+    const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(receiveBatchResponse.status()).toBe(200);
+
+    const attachPhotoResponse = await request.patch(`/api/items/${items[0].id}`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            item_photo_url: '/locations/crystal-caves.jpg'
+        }
+    });
+    expect(attachPhotoResponse.status()).toBe(200);
+
+    const publicPassportResponse = await request.get(`/api/public/items/${items[0].serial_number}`);
+    expect(publicPassportResponse.status()).toBe(200);
+    const publicPassport = await publicPassportResponse.json() as {
+        serial_number: string | null;
+        product_name: string;
+        product_description: string;
+        collection_date: string | null;
+        collection_time: string | null;
+        gps_lat: number | null;
+        gps_lng: number | null;
+        clone_url: string;
+        photo_url: string | null;
+        video_url: string | null;
+        has_photo: boolean;
+        has_video: boolean;
+    };
+    expect(publicPassport.serial_number).toBe(items[0].serial_number);
+    expect(publicPassport.clone_url).toContain(`/clone/${items[0].serial_number}`);
+    expect(publicPassport.product_name).toBeTruthy();
+    expect(publicPassport.product_description).toBeTruthy();
+    expect(publicPassport.collection_date).toBeTruthy();
+    expect(publicPassport.collection_time).toBe('13:45');
+    expect(publicPassport.gps_lat).toBe(55.75);
+    expect(publicPassport.gps_lng).toBe(37.61);
+    expect(publicPassport.photo_url).toContain('/locations/crystal-caves.jpg');
+    expect(publicPassport.video_url).toBeNull();
+    expect(publicPassport.has_photo).toBeTruthy();
+    expect(publicPassport.has_video).toBeFalsy();
 
     const acceptItemResponse = await request.post(`/api/hq/items/${items[0].id}/accept`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }
@@ -276,15 +357,17 @@ test('Public activation only records activation and does not mutate ledger balan
     });
     expect(allocateResponse.status()).toBe(200);
 
-    const activationResponse = await request.post(`/api/public/items/${items[0].public_token}/activate`);
+    const activationResponse = await request.post(`/api/public/items/${items[0].serial_number}/activate`);
     expect(activationResponse.status()).toBe(200);
     const activationPayload = await activationResponse.json() as { success: boolean; message: string };
     expect(activationPayload.success).toBeTruthy();
     expect(activationPayload.message).toContain('Financial settlement');
 
-    const activatedItemResponse = await request.get(`/api/public/items/${items[0].public_token}`);
+    const activatedItemResponse = await request.get(`/api/items/batch/${batchId}`, {
+        headers: { Authorization: `Bearer ${partner.accessToken}` }
+    });
     expect(activatedItemResponse.status()).toBe(200);
-    const activatedItem = await activatedItemResponse.json() as { status: string; activation_date: string | null };
+    const [activatedItem] = await activatedItemResponse.json() as Array<{ status: string; activation_date: string | null }>;
     expect(activatedItem.status).toBe('ACTIVATED');
     expect(activatedItem.activation_date).not.toBeNull();
 
@@ -295,21 +378,67 @@ test('Public activation only records activation and does not mutate ledger balan
     const ledgerAfter = await ledgerAfterResponse.json() as Array<{ id: string }>;
     expect(ledgerAfter).toHaveLength(ledgerBefore.length);
 
-    const repeatedActivationResponse = await request.post(`/api/public/items/${items[0].public_token}/activate`);
+    const repeatedActivationResponse = await request.post(`/api/public/items/${items[0].serial_number}/activate`);
     expect(repeatedActivationResponse.status()).toBe(200);
     const repeatedActivationPayload = await repeatedActivationResponse.json() as { message: string };
     expect(repeatedActivationPayload.message).toContain('already activated');
 });
 
-test('Regression API: жизненный цикл партии (DRAFT -> TRANSIT -> RECEIVED -> FINISHED)', async ({ request }) => {
+test('Public passport picks up item_video_url after HQ processing without changing serial number', async ({ request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
-    const { batchId, items } = await seedBatchWithItems(request, partner.accessToken, 1);
+    const { batchId, items } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 1);
 
-    const sendBatchResponse = await request.post(`/api/batches/${batchId}/send`, {
-        headers: { Authorization: `Bearer ${partner.accessToken}` }
+    const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
     });
-    expect(sendBatchResponse.status()).toBe(200);
+    expect(receiveBatchResponse.status()).toBe(200);
+
+    const attachPhotoResponse = await request.patch(`/api/items/${items[0].id}`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            item_photo_url: '/locations/crystal-caves.jpg'
+        }
+    });
+    expect(attachPhotoResponse.status()).toBe(200);
+
+    const passportBeforeVideoResponse = await request.get(`/api/public/items/${items[0].serial_number}`);
+    expect(passportBeforeVideoResponse.status()).toBe(200);
+    const passportBeforeVideo = await passportBeforeVideoResponse.json() as {
+        serial_number: string | null;
+        video_url: string | null;
+        has_photo: boolean;
+        has_video: boolean;
+    };
+    expect(passportBeforeVideo.serial_number).toBe(items[0].serial_number);
+    expect(passportBeforeVideo.has_photo).toBeTruthy();
+    expect(passportBeforeVideo.has_video).toBeFalsy();
+    expect(passportBeforeVideo.video_url).toBeNull();
+
+    const attachVideoResponse = await request.patch(`/api/items/${items[0].id}`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            item_video_url: '/uploads/videos/item-1.mp4'
+        }
+    });
+    expect(attachVideoResponse.status()).toBe(200);
+
+    const passportAfterVideoResponse = await request.get(`/api/public/items/${items[0].serial_number}`);
+    expect(passportAfterVideoResponse.status()).toBe(200);
+    const passportAfterVideo = await passportAfterVideoResponse.json() as {
+        serial_number: string | null;
+        video_url: string | null;
+        has_video: boolean;
+    };
+    expect(passportAfterVideo.serial_number).toBe(items[0].serial_number);
+    expect(passportAfterVideo.video_url).toContain('/uploads/videos/item-1.mp4');
+    expect(passportAfterVideo.has_video).toBeTruthy();
+});
+
+test('Regression API: жизненный цикл партии (TRANSIT -> RECEIVED -> FINISHED)', async ({ request }) => {
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const { batchId, items } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 1);
 
     const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }

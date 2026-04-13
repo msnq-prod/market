@@ -10,6 +10,7 @@ let isQuitting = false;
 let startupErrorMessage = '';
 
 const DESKTOP_STATE_FILE = 'desktop-state.json';
+const PLACEHOLDER_HELPER_VERSION = '0.0.0';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -204,12 +205,21 @@ const configureLaunchAtLogin = () => {
     });
 };
 
+const resolveDesktopHelperVersion = () => {
+    const appVersion = typeof app.getVersion === 'function' ? app.getVersion().trim() : '';
+    if (appVersion && appVersion !== PLACEHOLDER_HELPER_VERSION) {
+        return appVersion;
+    }
+
+    return process.versions.electron || appVersion || 'desktop';
+};
+
 const startHelper = async () => {
     const helperModule = await import(pathToFileURL(path.join(__dirname, '..', 'server.js')).href);
     const allowedOrigins = await readBundledAllowedOrigins();
     const nextController = await helperModule.startVideoExportHelperServer({
         storageRoot: getStorageRoot(),
-        helperVersion: app.getVersion(),
+        helperVersion: resolveDesktopHelperVersion(),
         allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined
     });
 

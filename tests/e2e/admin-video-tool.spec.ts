@@ -135,8 +135,7 @@ async function createReceivedBatchWithSerials(
             gps_lat: 55.75,
             gps_lng: 37.61,
             collected_date: '2026-04-06',
-            collected_time: '12:00',
-            video_url: null
+            collected_time: '12:00'
         }
     });
     expect(completeResponse.ok()).toBeTruthy();
@@ -677,4 +676,74 @@ test('UI: export works with deleted fragments that leave source timeline gaps', 
     expect(renderJobs[0]?.outputsCount).toBe(2);
     expect(renderJobs[0]?.segments).toHaveLength(3);
     expect((renderJobs[0]?.segments[2]?.start_ms ?? 0)).toBeGreaterThan(renderJobs[0]?.segments[1]?.end_ms ?? 0);
+});
+
+test('UI: keyboard shortcuts stay active when focus is on tool controls', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+
+    await page.route('http://127.0.0.1:3012/health', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                ok: true,
+                ffmpeg: true,
+                ffprobe: true,
+                helper_version: '1.0.0',
+                protocol_version: 'stones-video-export-helper-v2',
+                storage_root: '/tmp/stones-helper',
+                free_bytes: 1024 * 1024 * 1024 * 10,
+                allowed_origins: ['http://127.0.0.1:5273'],
+                queued_jobs: 0
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/sources', async (route) => {
+        await route.fulfill({
+            status: 201,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                source_id: `source-${randomKey()}`,
+                duration_ms: 8000,
+                has_audio: true,
+                fingerprint: {
+                    name: 'source.mp4',
+                    size: 10,
+                    lastModified: 123456,
+                    durationMs: 8000
+                }
+            })
+        });
+    });
+
+    await page.goto(`/admin/video-tool/${batchId}`);
+    await expect(page.getByTestId('video-tool-heading')).toBeVisible();
+
+    await page.getByTestId('source-input').setInputFiles({
+        name: 'source.mp4',
+        mimeType: 'video/mp4',
+        buffer: makeFakeMp4('source-hotkeys'),
+        lastModified: 123456
+    });
+    await expect(page.getByTestId('clip-card-000')).toBeVisible();
+
+    await seekTimelineToRatio(page, 0.25);
+    await page.getByTestId('action-export').focus();
+    await page.keyboard.press('c');
+    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 1 / 2');
+
+    await page.getByTestId('action-delete').focus();
+    await page.keyboard.press('Delete');
+    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 0 / 2');
+
+    await page.getByTestId('clip-card-000').focus();
+    await page.keyboard.press('z');
+    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 1 / 2');
 });

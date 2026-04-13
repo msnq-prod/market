@@ -16,14 +16,12 @@ type Batch = {
     items: BatchItem[];
 };
 
-type BatchFilter = 'ALL' | 'SENT' | 'DRAFT' | 'FINISHED';
+type BatchFilter = 'ALL' | 'SENT' | 'FINISHED';
 type SaleFilter = 'ALL' | 'SOLD' | 'UNSOLD';
 type SortBy = 'NEWEST' | 'OLDEST' | 'MOST_SOLD' | 'LEAST_SOLD';
 
 const SOLD_ITEM_STATUSES = new Set(['SOLD_ONLINE', 'ACTIVATED']);
 const SENT_BATCH_STATUSES = new Set(['TRANSIT', 'RECEIVED', 'FINISHED']);
-const DRAFT_BATCH_STATUSES = new Set(['DRAFT']);
-
 const getSoldCount = (items: BatchItem[]): number => items.filter((item) => SOLD_ITEM_STATUSES.has(item.status)).length;
 
 const toDateValue = (value: string): number => {
@@ -78,7 +76,6 @@ export function Batches() {
     const summary = useMemo(() => {
         const totalBatches = batches.length;
         const sentBatches = batches.filter((batch) => SENT_BATCH_STATUSES.has(batch.status)).length;
-        const inProgressBatches = batches.filter((batch) => DRAFT_BATCH_STATUSES.has(batch.status)).length;
         const finishedBatches = batches.filter((batch) => batch.status === 'FINISHED').length;
         const totalItems = batches.reduce((acc, batch) => acc + batch.items.length, 0);
         const soldItems = batches.reduce((acc, batch) => acc + getSoldCount(batch.items), 0);
@@ -87,7 +84,6 @@ export function Batches() {
         return {
             totalBatches,
             sentBatches,
-            inProgressBatches,
             finishedBatches,
             totalItems,
             soldItems,
@@ -99,10 +95,6 @@ export function Batches() {
         const term = query.trim().toLowerCase();
         const filtered = batches.filter((batch) => {
             if (batchFilter === 'SENT' && !SENT_BATCH_STATUSES.has(batch.status)) {
-                return false;
-            }
-
-            if (batchFilter === 'DRAFT' && !DRAFT_BATCH_STATUSES.has(batch.status)) {
                 return false;
             }
 
@@ -238,7 +230,6 @@ export function Batches() {
             <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <SummaryCard title="Всего партий" value={summary.totalBatches} />
                 <SummaryCard title="Отправлены" value={summary.sentBatches} />
-                <SummaryCard title="В строю" value={summary.inProgressBatches} />
                 <SummaryCard title="Завершены" value={summary.finishedBatches} />
             </section>
 
@@ -263,7 +254,6 @@ export function Batches() {
                     <div className="flex flex-wrap gap-2">
                         <FilterButton label="Все" count={summary.totalBatches} active={batchFilter === 'ALL'} onClick={() => setBatchFilter('ALL')} />
                         <FilterButton label="Отправлены" count={summary.sentBatches} active={batchFilter === 'SENT'} onClick={() => setBatchFilter('SENT')} />
-                        <FilterButton label="Черновики" count={summary.inProgressBatches} active={batchFilter === 'DRAFT'} onClick={() => setBatchFilter('DRAFT')} />
                         <FilterButton label="Завершены" count={summary.finishedBatches} active={batchFilter === 'FINISHED'} onClick={() => setBatchFilter('FINISHED')} />
                     </div>
 
@@ -475,7 +465,6 @@ function FilterButton({ label, count, active, onClick }: { label: string; count:
 
 function StatusBadge({ status }: { status: string }) {
     const colors: Record<string, string> = {
-        DRAFT: 'bg-gray-100 text-gray-700',
         TRANSIT: 'bg-amber-100 text-amber-700',
         RECEIVED: 'bg-blue-100 text-blue-700',
         FINISHED: 'bg-emerald-100 text-emerald-700',
@@ -483,7 +472,6 @@ function StatusBadge({ status }: { status: string }) {
         CANCELLED: 'bg-red-100 text-red-700'
     };
     const labels: Record<string, string> = {
-        DRAFT: 'ЧЕРНОВИК',
         TRANSIT: 'В ДОСТАВКЕ',
         RECEIVED: 'ПОЛУЧЕНО',
         FINISHED: 'ЗАВЕРШЕНО',

@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import type { Product, ProductTranslation } from '@prisma/client';
 
 export const STAFF_ROLES = new Set(['ADMIN', 'MANAGER']);
@@ -11,12 +10,24 @@ export const COLLECTION_STATUSES = new Set([
     'IN_STOCK',
     'CANCELLED'
 ]);
+export const PUBLIC_PASSPORT_BATCH_STATUSES = new Set(['RECEIVED', 'FINISHED']);
+const LEGACY_ITEM_SERIAL_PATTERNS = [
+    /^e2e-token-/i,
+    /^[0-9a-f]{20,}$/i,
+];
 
 export const isStaffRole = (role?: string): boolean => STAFF_ROLES.has(role || '');
 export const isSalesStaffRole = (role?: string): boolean => SALES_STAFF_ROLES.has(role || '');
+export const isPublicPassportAvailable = (itemStatus?: string | null, batchStatus?: string | null): boolean =>
+    PUBLIC_PASSPORT_BATCH_STATUSES.has(batchStatus || '') && itemStatus !== 'REJECTED';
+export const looksLikeLegacyItemSerial = (value?: string | null): boolean => {
+    const normalized = value?.trim();
+    if (!normalized) {
+        return false;
+    }
 
-export const createPublicToken = (): string =>
-    crypto.createHash('sha256').update(`${Date.now()}-${Math.random()}-${crypto.randomUUID()}`).digest('hex').slice(0, 20);
+    return LEGACY_ITEM_SERIAL_PATTERNS.some((pattern) => pattern.test(normalized));
+};
 
 export const normalizeCode = (value: string, fallback: string, maxLength: number): string => {
     const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');

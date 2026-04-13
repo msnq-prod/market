@@ -1,44 +1,40 @@
-# Полная инструкция по использованию системы Stones
+# Полное руководство по использованию Stones
 
-Актуально для проекта из директории `/Users/nikitamysnik/Desktop/progs/stones`.
+Актуально для текущего репозитория в директории `/Users/nikitamysnik/Desktop/progs/stones`.
 
 ## 1. Назначение системы
 
 Stones — это система для:
-- публичного каталога товаров с геопривязкой (глобус, локации, товары);
-- операционной работы HQ (админ-кабинет);
-- работы франчайзи с партиями товаров (partner-кабинет);
-- финансового учета операций по активации товаров.
 
-Система покрывает полный цикл:
-1. Франчайзи создает партию и товары.
-2. HQ принимает и проверяет товары.
-3. HQ распределяет товар в каналы продаж.
-4. Товар активируется, проводятся финансовые операции.
+- публичной витрины уникальных камней;
+- работы HQ с каталогом, партиями, складом и пользователями;
+- работы франчайзи с задачами на сбор;
+- публикации цифрового паспорта конкретного камня;
+- базового учета финансов партнера.
 
-## 2. Технологический стек
+Система покрывает полный путь:
 
-- Frontend: React + TypeScript + Vite + Tailwind
-- Backend: Node.js + Express + TypeScript
-- ORM/БД: Prisma + MySQL
-- Хранение медиа: локальные файлы в `public/uploads`
+1. HQ создает каталог и задачу на сбор.
+2. Франчайзи принимает задачу и создает партию.
+3. HQ получает партию, принимает item, загружает фото/видео и завершает партию.
+4. HQ выводит item в онлайн-продажу.
+5. Покупатель видит товар, отправляет заявку и позже может открыть цифровой паспорт.
 
-## 3. Требования к окружению
+## 2. Требования к окружению
 
-- Node.js 22+ (LTS)
-- npm
+- Node.js 22+
+- npm 10+
 - MySQL 8+
-- Доступ к БД, указанной в `DATABASE_URL`
 
-## 4. Быстрый старт (локально)
+## 3. Быстрый локальный запуск
 
-### 4.1 Установить зависимости
+### 3.1 Установка
 
 ```bash
 npm install
 ```
 
-### 4.2 Настроить `.env`
+### 3.2 Настройка `.env`
 
 Минимальный пример:
 
@@ -48,11 +44,12 @@ CLIENT_URL=http://localhost:5173
 DATABASE_URL="mysql://stones:stones@localhost:3307/stones?connection_limit=20&pool_timeout=30"
 ACCESS_TOKEN_SECRET="change_me_access"
 REFRESH_TOKEN_SECRET="change_me_refresh"
+VITE_HOST=127.0.0.1
+VITE_PORT=5173
+VITE_API_TARGET=http://127.0.0.1:3001
 ```
 
-### 4.3 Подготовить БД
-
-#### Вариант A: новая пустая БД
+### 3.3 Подготовка базы
 
 ```bash
 npm run db:migrate
@@ -60,345 +57,401 @@ npm run db:seed:languages
 npm run db:seed
 ```
 
-#### Вариант B: существующая БД без истории Prisma (clean baseline)
-
-Использовать, если схема уже создана, но `prisma migrate status` показывает pending migration:
-
-```bash
-npx prisma migrate resolve --applied 20260206_init_mysql
-npx prisma migrate status
-npx prisma migrate deploy
-```
-
-После baseline можно выполнить сиды:
-
-```bash
-npm run db:seed:languages
-npm run db:seed
-```
-
-## 5. Запуск системы
-
-### 5.1 Режим разработки (frontend + backend)
+### 3.4 Запуск
 
 ```bash
 npm run dev
 ```
 
-Откроется:
-- Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:3001`
+После запуска:
 
-### 5.2 Отдельно backend
+- frontend: `http://localhost:5173`
+- backend: `http://localhost:3001`
 
-```bash
-npm run server
-```
-
-Если в проекте уже собран `dist/`, Express также раздает production-фронтенд и SPA-маршруты с того же origin.
-
-### 5.3 Проверка качества
+## 4. Полезные команды
 
 ```bash
 npm run lint
 npm run build
-npx playwright install chromium
 npm run test:e2e
+npm run test:e2e:headed
+npm run server
+npm run video-processor
 ```
 
-## 6. Тестовые учетные записи
+Для изолированного e2e-режима:
+
+```bash
+npm run dev:e2e
+```
+
+## 5. Роли и доступ
+
+- `ADMIN` — полный HQ-контур
+- `MANAGER` — HQ-операции без очереди заказов сайта
+- `SALES_MANAGER` — только `/admin/orders`
+- `FRANCHISEE` — только `/partner/*`
+- `USER` — публичная витрина и история собственных заказов
+
+## 6. Тестовые аккаунты
 
 После `npm run db:seed` доступны:
 
-- Админ:
-  - email: `admin@stones.com`
-  - password: `admin123`
-- Менеджер продаж:
-  - email: `sales@stones.com`
-  - password: `partner123`
-- Франчайзи:
-  - email: `yakutia.partner@stones.com`
-  - password: `partner123`
-- Публичный покупатель:
-  - login: `anna`
-  - password: `partner123`
+- `admin@stones.com` / `admin123`
+- `manager@stones.com` / `partner123`
+- `sales@stones.com` / `partner123`
+- `yakutia.partner@stones.com` / `partner123`
+- `ural.partner@stones.com` / `partner123`
+- `baltic.partner@stones.com` / `partner123`
+- buyer-логины: `anna`, `maxim`, `olga`, `kirill` / `partner123`
 
-Рекомендуется сменить пароли и секреты сразу после первичного запуска.
+Подробности: [TEST_CREDENTIALS_AND_TECH_INFO_RU.md](./TEST_CREDENTIALS_AND_TECH_INFO_RU.md)
 
-## 7. Роли и доступ
+## 7. Основные маршруты
 
-- `ADMIN` / `MANAGER`
-  - доступ в `/admin`
-  - управление контентом, пользователями, приемкой, распределением
-- `SALES_MANAGER`
-  - доступ в `/admin/orders`
-  - обработка интернет-заказов и смена их статусов
-- `FRANCHISEE`
-  - доступ в `/partner`
-  - создание партий, просмотр финансов
-- Публичный пользователь
-  - доступ на `/`
-  - просмотр локаций/товаров, регистрация по `username + password`, оформление заказа
+### Публичная часть
 
-Маршруты защищены UI-guard’ами:
-- если staff логинится, его ведет в `/admin`;
-- если франчайзи логинится, его ведет в `/partner/dashboard`.
-- для входа в админку доступен отдельный маршрут `/admin/login`.
+- `/` — витрина
+- `/clone/:serialNumber` — цифровой паспорт
 
-## 8. Работа в админ-кабинете (`/admin`)
+### HQ
 
-## 8.1 Dashboard
+- `/admin/login`
+- `/admin`
+- `/admin/orders`
+- `/admin/acceptance`
+- `/admin/allocation`
+- `/admin/warehouse`
+- `/admin/locations`
+- `/admin/products`
+- `/admin/users`
+- `/admin/clone-content`
+- `/admin/video-tool/:batchId`
+- `/admin/qr/print`
 
-Показывает ключевые метрики:
+### Франчайзи
+
+- `/partner/login`
+- `/partner/dashboard`
+- `/partner/batches`
+- `/partner/batches/new`
+- `/partner/finance`
+
+## 8. Публичная витрина
+
+### Что видит покупатель
+
+- глобус с локациями;
+- карточки товаров;
+- остаток по доступным item;
+- кнопки внешних площадок, если заполнены ссылки;
+- корзину и личный кабинет.
+
+### Как работает покупка
+
+1. Покупатель регистрируется или входит.
+2. Добавляет товары в корзину.
+3. Заполняет адрес, телефон, email и комментарий.
+4. Нажимает кнопку оформления.
+
+Результат:
+
+- создается `Order` в статусе `NEW`.
+
+Важно:
+
+- это не реальная оплата;
+- Telegram login пока не подключен.
+
+## 9. Работа HQ
+
+## 9.1 Dashboard
+
+Показывает:
+
 - количество локаций;
 - количество товаров;
-- количество пользователей/франчайзи;
+- количество пользователей и франчайзи;
 - партии в `TRANSIT`;
-- товары в `STOCK_HQ`.
+- партии в `RECEIVED`;
+- item в `STOCK_HQ`;
+- item в `STOCK_ONLINE`.
 
-## 8.2 Users
+## 9.2 Orders
 
-Раздел позволяет:
-- просматривать пользователей;
-- создавать staff/partner-аккаунты через форму (`name`, `email`, `password`, `role`);
-- обновлять список кнопкой `Refresh`.
+Доступно:
 
-Создание пользователя вызывает защищённый `POST /api/users`.
+- `ADMIN`
+- `SALES_MANAGER`
 
-## 8.3 Orders
+Что можно:
 
-Раздел `/admin/orders` показывает интернет-заказы с сайта.
+- искать заказы;
+- фильтровать по статусу;
+- редактировать клиентские поля у незакрытых заказов;
+- вести внутреннюю заметку;
+- менять статус по допустимым переходам.
+- мягко скрывать заказ из интерфейса без физического удаления из БД.
 
-Возможности:
-- серверный поиск по `order id`, `user.name`, `user.username`, `contact_phone`, `contact_email`, `delivery_address`;
-- фильтры `Активные`, `Новые`, `В работе`, `Закрытые`;
-- master-detail интерфейс: слева список заявок, справа рабочая карточка выбранного заказа;
-- просмотр и редактирование контактов, адреса доставки, комментария клиента и `internal_note`;
-- внутренние заметки менеджера не отдаются покупателю в `GET /api/orders/my`;
-- клиентские поля заказа доступны для редактирования только пока заказ не закрыт;
-- переходы статусов:
-  - `NEW -> IN_PROGRESS`
-  - `IN_PROGRESS -> COMPLETED`
-  - `NEW|IN_PROGRESS -> CANCELLED`
+## 9.3 Locations
 
-## 8.4 Locations
+Можно:
 
-Позволяет:
-- создать/редактировать/удалить локацию;
-- добавить изображение;
-- редактировать переводы.
+- создавать локации;
+- редактировать координаты, изображение и базовый перевод;
+- редактировать переводы;
+- мягко скрывать локации из интерфейса. Связанные товарные шаблоны и партии тоже уходят из UI, но остаются в БД.
 
-## 8.5 Products
+## 9.4 Products
 
-Позволяет:
-- создать/редактировать/удалить товар;
-- назначить локацию/категорию;
-- загружать изображение;
-- задавать ссылки Wildberries и Ozon для карточки товара;
-- редактировать переводы.
+Можно:
 
-## 8.6 Acceptance (приемка)
+- создавать товарные шаблоны;
+- редактировать цену, фото, коды и переводы;
+- публиковать/снимать с публикации;
+- задавать ссылки Wildberries и Ozon;
+- создавать задачу на сбор по товару;
+- мягко скрывать товарный шаблон из интерфейса без физического удаления.
 
-Шаги:
-1. Открыть `/admin/acceptance`.
-2. Выбрать партию из списка `TRANSIT` или ввести ID вручную.
-3. Сканировать/ввести `temp_id`.
-4. Для найденного товара нажать:
-   - `Accept` -> статус товара `STOCK_HQ`
-   - `Reject` -> статус товара `REJECTED`
-5. После обработки всех товаров нажать `Finish Batch` (кнопка блокируется, пока есть `NEW`).
+### 9.4.1 Soft delete и очистка каталога
 
-## 8.7 Allocation (распределение)
+- Для разовой очистки текущей БД от каталога и связанных операционных сущностей используйте `npm run db:soft-delete:business`.
+- Скрипт не удаляет строки физически: проставляет `deleted_at` у локаций, товаров, партий, item, заказов на сбор и заказов покупателей.
+- Публичные клоны для скрытых сущностей перестают открываться и возвращают `404`, а не `500`.
 
-Шаги:
-1. Открыть `/admin/allocation`.
-2. Выбрать товары со склада HQ (`STOCK_HQ`).
-3. Назначить канал:
-   - `Online Marketplace` -> `STOCK_ONLINE`
-   - `Offline Consignment` + выбрать франчайзи -> `ON_CONSIGNMENT`
-4. Нажать действие распределения.
+## 9.5 Acceptance
+
+Рабочий путь:
+
+1. Открыть партию в `TRANSIT` или `RECEIVED`.
+2. Если партия еще в пути, перевести ее в `RECEIVED`.
+3. Проверить item внутри партии.
+4. Принять item или отклонить.
+5. Подготовить итоговые фото и видео.
+6. При необходимости распечатать QR.
+7. Завершить партию только после полной media-готовности.
 
 Дополнительно:
-- есть поиск по item id/temp_id;
-- `Select Visible` и `Clear` для массовых действий.
 
-## 9. Работа в кабинете франчайзи (`/partner`)
+- в складской структуре администратор может мягко скрыть партию;
+- скрытая партия и связанные item исчезают из интерфейса, но остаются в БД.
 
-## 9.1 Login
+## 9.6 Video Tool
 
-Авторизация через `/partner/login`.
+Используется HQ для подготовки финальных item-видео.
 
-## 9.2 Dashboard
+Сценарий:
+
+1. открыть `/admin/video-tool/:batchId`
+2. создать export-session
+3. подготовить нарезку
+4. загрузить готовые `.mp4` обратно в backend
+
+## 9.7 QR Print
+
+HQ-печать QR работает через:
+
+- `/api/batches/:batchId/qr-pack`
+- `/admin/qr/print?batchId=<ID>`
+
+В QR-пакет попадают только item, которые уже могут иметь публичный паспорт.
+
+## 9.8 Allocation
+
+Позволяет брать item из `STOCK_HQ` и переводить их в онлайн-продажу.
+
+Текущий UI-сценарий:
+
+- `STOCK_HQ -> MARKETPLACE -> STOCK_ONLINE`
+
+## 9.9 Warehouse
+
+Складской экран позволяет:
+
+- смотреть партии и item по локациям и товарам;
+- открывать карточку item;
+- видеть `serial_number`, `temp_id`, media, статус, канал продажи;
+- staff-only просматривать QR и clone URL.
+
+Ручное изменение item:
+
+- разрешено только `ADMIN`
+- только для ограниченного набора полей
+
+## 9.10 Users
+
+Позволяет:
+
+- создавать staff и franchisee-аккаунты;
+- видеть роли и balances;
+- ограничивать создание ролей по текущему пользователю.
+
+`MANAGER` может создавать:
+
+- `SALES_MANAGER`
+- `FRANCHISEE`
+
+`ADMIN` может создавать:
+
+- `ADMIN`
+- `MANAGER`
+- `SALES_MANAGER`
+- `FRANCHISEE`
+
+## 9.11 Clone Content
+
+Позволяет менять тексты публичной страницы цифрового паспорта без правки кода.
+
+Есть:
+
+- live preview
+- demo preview
+- preview по реальному `serial_number`
+
+## 10. Работа франчайзи
+
+## 10.1 Dashboard
 
 Показывает:
-- текущий баланс;
-- активные черновики (`DRAFT`);
-- партии в пути (`TRANSIT`);
-- завершенные партии (`FINISHED`);
-- таблицу последних партий.
 
-Есть быстрые кнопки:
-- `New Batch`
-- `Finances`
+- баланс;
+- открытые задачи на сбор;
+- задачи в работе;
+- партии в `TRANSIT`;
+- партии в `RECEIVED`;
+- партии в `FINISHED`;
+- последние партии.
 
-## 9.3 New Batch (`/partner/batches/new`)
+## 10.2 Принятие задачи
 
-Шаги:
-1. Заполнить GPS координаты и загрузить видео.
-2. Создать партию (статус `DRAFT`).
-3. Добавить фото товаров.
-4. Указать `temp_id` для каждого товара.
-5. Отправить партию в HQ (`Send to HQ`) -> статус партии `TRANSIT`.
+Партнер видит доступные `CollectionRequest` и может взять задачу в работу.
 
-## 9.4 Finances (`/partner/finance`)
+Результат:
+
+- `OPEN -> IN_PROGRESS`
+
+## 10.3 Создание партии
+
+Партнер:
+
+1. выбирает задачу в работе;
+2. заполняет координаты;
+3. указывает дату и время сбора;
+4. создает партию.
+
+Система:
+
+- создает batch в `TRANSIT`
+- создает item
+- генерирует `serial_number`
+
+## 10.4 My Batches
+
+Партнер может:
+
+- смотреть только свои партии;
+- фильтровать по статусу;
+- искать по `batch id`, `item id`, `temp_id`;
+- выгружать текущую выборку в CSV;
+- видеть количество проданных и непроданных позиций.
+
+## 10.5 Finance
 
 Показывает:
+
 - текущий баланс;
-- сводные карточки (кол-во операций, доход, расход);
-- историю операций ledger;
-- фильтр по типу операции;
-- кнопку `Refresh`.
+- `commission_rate`;
+- ledger;
+- фильтры по периоду и типу операции;
+- экспорт в CSV.
 
-## 9.5 QR-пакеты (`/partner/qr`)
+## 11. Публичный цифровой паспорт
 
-Операционный центр для массовой выдачи QR:
-1. Выбор партии.
-2. Отметка позиций чекбоксами.
-3. Массовые действия:
-   - `Печать выбранных`;
-   - `Печать всей партии`;
-   - `CSV выбранных`.
-4. Быстрые действия по строке:
-   - `Копировать ссылку клона`;
-   - `Открыть клон`;
-   - `Показать QR`.
+### URL и API
 
-CSV формат:
-- `batch_id,temp_id,public_token,status,clone_url,qr_url,photo_url,created_at`
-- UTF-8 с BOM.
+- страница: `/clone/:serialNumber`
+- данные: `GET /api/public/items/:serialNumber`
+- QR PNG: `GET /api/public/items/:serialNumber/qr`
 
-## 9.6 Печатный режим (`/partner/qr/print`)
+### Когда паспорт доступен
 
-- источник данных: `GET /api/batches/:batchId/qr-pack`;
-- макет: 8 карточек на A4;
-- карточка: QR, `temp_id`, короткий token, короткая clone-ссылка, превью фото;
-- поддерживается browser print-to-PDF.
+- batch в `RECEIVED` или `FINISHED`
+- item не `REJECTED`
+- `serial_number` не legacy
 
-## 10. Публичная часть (`/`)
+### Что видно в паспорте
 
-Возможности:
-- просмотр глобуса с локациями;
-- просмотр карточек товаров;
-- мультиязычность (доступные языки из БД);
-- корзина и checkout;
-- регистрация/вход покупателя через логин и пароль;
-- кнопка Telegram-авторизации как заглушка;
-- история заказов в личном кабинете;
-- базовые UI-разделы (account/cart/contacts и т.д.).
+- название товара;
+- описание;
+- дата и время сбора;
+- координаты;
+- фото;
+- видео;
+- серийный номер.
 
-Checkout flow:
-1. Покупатель добавляет товар в корзину.
-2. В корзине он либо входит, либо регистрирует аккаунт через `POST /auth/register`.
-3. После авторизации заполняет адрес доставки, телефон, email и комментарий.
-4. Кнопка оплаты пока работает как заглушка и создаёт заявку через `POST /api/orders`.
-5. Заявка появляется в `/admin/orders` у `ADMIN` и `SALES_MANAGER`.
+## 12. Публичная активация
 
-## 11. Финансовая логика (вкратце)
+Endpoint:
 
-Публичная активация (`POST /api/public/items/:publicToken/activate`) больше не проводит финансовые операции.
+- `POST /api/public/items/:serialNumber/activate`
 
-- endpoint только фиксирует факт активации для товаров в `ON_CONSIGNMENT`, `STOCK_ONLINE` или `SOLD_ONLINE`;
-- повторный вызов остается идемпотентным и возвращает сообщение `Item already activated`;
-- финансовое списание/начисление должно выполняться только в защищенном staff-сценарии.
+Он:
 
-## 12. Основные API (для отладки)
+- ставит `ACTIVATED`;
+- пишет `activation_date`;
+- отмечает item как `is_sold`.
 
-- Auth:
-  - `GET /healthz`
-  - `GET /auth/me`
-  - `POST /auth/register`
-  - `POST /auth/login`
-  - `POST /auth/refresh`
-- Admin/Public data:
-  - `GET /api/users`
-  - `POST /api/users`
-  - `GET /api/locations`
-  - `POST|PUT|DELETE /api/locations` (`ADMIN` / `MANAGER`)
-  - `GET /api/products`
-  - `POST|PUT|DELETE /api/products` (`ADMIN` / `MANAGER`)
-  - `GET /api/languages`
-- Orders:
-  - `POST /api/orders`
-  - `GET /api/orders/my` (`internal_note` скрыт)
-  - `GET /api/orders` (`q`, `status`)
-  - `PATCH /api/orders/:id` (`status`, `delivery_address`, `contact_phone`, `contact_email`, `comment`, `internal_note`)
-- Logistics:
-  - `GET /api/batches`
-  - `POST /api/batches`
-  - `GET /api/batches/:batchId/qr-pack`
-  - `POST /api/batches/:id/send`
-  - `GET /api/items/batch/:batchId` (включает `clone_url`, `qr_url`)
-  - `POST /api/hq/acceptance/:batchId/verify`
-  - `POST /api/hq/items/:itemId/accept`
-  - `POST /api/hq/items/:itemId/reject`
-  - `POST /api/financials/items/:itemId/allocate`
-- Financials:
-  - `GET /api/financials/me`
-  - `GET /api/financials/ledger`
-- Upload:
-  - `POST /api/upload/photo`
-  - `POST /api/upload/video`
-  - `POST /api/upload` (совместимый endpoint)
+Он не:
 
-## 13. Где хранятся данные и файлы
+- создает бухгалтерскую проводку;
+- меняет баланс франчайзи.
 
-- Схема Prisma: `prisma/schema.prisma`
-- Миграции: `prisma/migrations/`
-- Сиды: `prisma/seed.ts`, `prisma/seed_languages.ts`
-- Загрузки:
-  - фото: `public/uploads/photos`
-  - видео: `public/uploads/videos`
-- Публичные изображения локаций: `public/locations`
+## 13. Файлы и медиа
 
-## 14. Типовые проблемы и решения
+Основные папки:
 
-### 14.1 `prisma migrate deploy` ругается на не пустую БД
+- `public/uploads/photos`
+- `public/uploads/videos`
+- `storage/video-jobs`
+- `storage/video-export`
 
-Сделать baseline:
+## 14. Частые проблемы
 
-```bash
-npx prisma migrate resolve --applied 20260206_init_mysql
-npx prisma migrate status
-```
+### 14.1 Не поднимается backend
 
-### 14.2 Не удается войти
+Проверьте:
 
-Проверить:
-- правильный `DATABASE_URL`;
-- что сиды выполнены (`npm run db:seed`);
-- что backend запущен (`npm run server` или `npm run dev`).
+- заполнены ли `ACCESS_TOKEN_SECRET` и `REFRESH_TOKEN_SECRET`
+- доступна ли MySQL
+- корректен ли `DATABASE_URL`
 
-### 14.3 Не загружаются изображения/видео
+### 14.2 Не работает buyer login/register
 
-Проверить:
-- backend на порту `3001`;
-- доступность `/uploads/...`;
-- что директории `public/uploads/photos` и `public/uploads/videos` существуют.
+Проверьте:
 
-### 14.4 CORS/прокси проблемы
+- используется ли `username` для buyer-регистрации
+- не занят ли уже логин
+- корректно ли сохранены access/refresh tokens
 
-Проверить соответствие:
-- `CLIENT_URL` в `.env`;
-- proxy в `vite.config.ts` (`/api`, `/auth`, `/uploads`).
+### 14.3 Партия не финализируется
 
-## 15. Рекомендации для продакшена
+Проверьте:
 
-- задать обязательные `ACCESS_TOKEN_SECRET` и `REFRESH_TOKEN_SECRET` с длинными случайными значениями;
-- сменить дефолтные пароли;
-- добавить rate limit/anti-bruteforce на `POST /auth/register` и `POST /auth/login`;
-- вынести медиа в объектное хранилище (S3/MinIO) при росте нагрузки;
-- включить регулярные бэкапы БД.
+- batch уже в `RECEIVED`
+- нет активной video-задачи
+- у каждого item есть фото и видео
 
----
+### 14.4 QR не открывается
 
-Если нужно, можно сделать отдельную версию этого документа для конечных пользователей (без технических разделов) и отдельный runbook для DevOps.
+Проверьте:
+
+- item не `REJECTED`
+- batch в `RECEIVED` или `FINISHED`
+- у item есть актуальный `serial_number`
+
+## 15. Что не реализовано полностью
+
+- реальная онлайн-оплата;
+- Telegram login;
+- автоматический финансовый расчет из публичной активации;
+- новый UI-поток для офлайн-консигнации.

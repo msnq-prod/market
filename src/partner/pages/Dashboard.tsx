@@ -46,14 +46,6 @@ type CollectionRequest = {
     };
 };
 
-const batchStatusLabels: Record<string, string> = {
-    DRAFT: 'Черновик',
-    TRANSIT: 'В доставке',
-    RECEIVED: 'Получен HQ',
-    FINISHED: 'Завершена',
-    ERROR: 'Ошибка'
-};
-
 const requestStatusLabels: Record<string, string> = {
     OPEN: 'Открыт',
     IN_PROGRESS: 'В работе',
@@ -70,6 +62,17 @@ const requestStatusClass: Record<string, string> = {
     RECEIVED: 'bg-violet-50 text-violet-700',
     IN_STOCK: 'bg-emerald-50 text-emerald-700',
     CANCELLED: 'bg-red-50 text-red-700'
+};
+
+const batchStatusLabels: Record<string, string> = {
+    OPEN: 'Открыта',
+    IN_PROGRESS: 'В работе',
+    IN_TRANSIT: 'В доставке',
+    RECEIVED: 'Получена',
+    IN_STOCK: 'На складе',
+    CANCELLED: 'Отменена',
+    TRANSIT: 'В доставке',
+    FINISHED: 'На складе'
 };
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {

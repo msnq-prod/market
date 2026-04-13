@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Printer } from 'lucide-react';
+import { authFetch } from '../../utils/authFetch';
 
 type QrPackItem = {
     id: string;
     temp_id: string;
-    public_token: string;
+    serial_number: string | null;
     status: string;
-    photo_url: string;
+    photo_url: string | null;
     created_at: string;
-    clone_url: string;
-    qr_url: string;
+    clone_url: string | null;
+    qr_url: string | null;
 };
 
 type QrPackBatch = {
@@ -37,12 +38,16 @@ const splitByPages = <T,>(items: T[], size: number): T[][] => {
     return pages;
 };
 
-const shortToken = (value: string) => {
-    if (value.length <= 12) return value;
+const shortSerialNumber = (value: string | null) => {
+    if (!value) return 'Не указан';
+    if (value.length <= 18) return value;
     return `${value.slice(0, 6)}...${value.slice(-4)}`;
 };
 
-const shortCloneUrl = (value: string) => {
+const shortCloneUrl = (value: string | null) => {
+    if (!value) {
+        return 'Ссылка недоступна';
+    }
     try {
         const parsed = new URL(value);
         return `${parsed.host}${parsed.pathname}`;
@@ -81,10 +86,7 @@ export function QrPrint() {
             setError('');
 
             try {
-                const token = localStorage.getItem('accessToken');
-                const response = await fetch(`/api/batches/${batchId}/qr-pack`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+                const response = await authFetch(`/api/batches/${batchId}/qr-pack`);
 
                 if (response.status === 403) {
                     setError('Нет прав доступа к выбранной партии.');
@@ -186,10 +188,10 @@ export function QrPrint() {
 
             <div className="print-controls max-w-5xl mx-auto mb-4 md:mb-6 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 px-4 py-4 md:px-6 md:py-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <h1 className="text-xl md:text-2xl font-bold">Печать QR-пакета</h1>
+                    <h1 className="text-xl md:text-2xl font-bold">HQ-печать QR</h1>
                     {pack && (
                         <p className="text-sm text-slate-300 mt-1">
-                            Партия {pack.batch.id.slice(0, 8)}... | Позиций к печати: {printableItems.length}
+                            Партия {pack.batch.id.slice(0, 8)}... | Публичных позиций к печати: {printableItems.length}
                         </p>
                     )}
                 </div>
@@ -203,10 +205,10 @@ export function QrPrint() {
                         Печать / PDF
                     </button>
                     <Link
-                        to="/partner/qr"
+                        to="/admin/acceptance"
                         className="rounded-lg border border-slate-500 px-4 py-2 text-sm hover:bg-slate-700"
                     >
-                        Назад в QR-центр
+                        Назад в приемку
                     </Link>
                 </div>
             </div>
@@ -223,7 +225,7 @@ export function QrPrint() {
 
             {!loading && !error && printableItems.length === 0 && (
                 <div className="max-w-3xl mx-auto rounded-lg border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3">
-                    Для печати не выбрано ни одной позиции.
+                    Для печати не выбрано ни одной публичной позиции.
                 </div>
             )}
 
@@ -243,20 +245,30 @@ export function QrPrint() {
                                         <header className="flex items-start justify-between gap-3">
                                             <div>
                                                 <p className="text-sm font-semibold">Позиция #{item.temp_id}</p>
-                                                <p className="text-xs text-slate-500">Token: {shortToken(item.public_token)}</p>
+                                                <p className="text-xs text-slate-500">Серийный номер: {shortSerialNumber(item.serial_number)}</p>
                                             </div>
-                                            <img src={item.photo_url} alt="" className="w-14 h-14 rounded-md object-cover border border-slate-200" />
+                                            {item.photo_url ? (
+                                                <img src={item.photo_url} alt="" className="w-14 h-14 rounded-md object-cover border border-slate-200" />
+                                            ) : (
+                                                <div className="flex h-14 w-14 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-[10px] text-slate-400">
+                                                    Нет фото
+                                                </div>
+                                            )}
                                         </header>
 
                                         <div className="flex-1 flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                            <img src={item.qr_url} alt={`QR ${item.temp_id}`} className="w-40 h-40 object-contain" />
+                                            {item.qr_url ? (
+                                                <img src={item.qr_url} alt={`QR ${item.temp_id}`} className="w-40 h-40 object-contain" />
+                                            ) : (
+                                                <span className="text-xs text-slate-400">QR недоступен</span>
+                                            )}
                                         </div>
 
                                         <footer className="space-y-1">
                                             <p className="text-[11px] font-medium text-slate-700 break-all">
-                                                Ссылка клона: {shortCloneUrl(item.clone_url)}
+                                                Ссылка паспорта: {shortCloneUrl(item.clone_url)}
                                             </p>
-                                            <p className="text-[10px] text-slate-500 break-all">{item.clone_url}</p>
+                                            {item.clone_url && <p className="text-[10px] text-slate-500 break-all">{item.clone_url}</p>}
                                         </footer>
                                     </article>
                                 ))}

@@ -11,7 +11,7 @@ type LedgerEntry = {
     item?: {
         id: string;
         temp_id: string;
-        public_token?: string;
+        serial_number?: string | null;
     } | null;
 };
 
@@ -159,13 +159,13 @@ export function Finance() {
 
             const label = getOperationLabel(entry.operation).toLowerCase();
             const itemTempId = entry.item?.temp_id?.toLowerCase() || '';
-            const publicToken = entry.item?.public_token?.toLowerCase() || '';
+            const serialNumber = entry.item?.serial_number?.toLowerCase() || '';
 
             return (
                 label.includes(normalizedQuery)
                 || entry.id.toLowerCase().includes(normalizedQuery)
                 || itemTempId.includes(normalizedQuery)
-                || publicToken.includes(normalizedQuery)
+                || serialNumber.includes(normalizedQuery)
             );
         });
     }, [operationFilter, periodFilter, query, transactions]);
@@ -188,14 +188,14 @@ export function Finance() {
     const handleExportCsv = () => {
         if (filteredTransactions.length === 0) return;
 
-        const header = 'timestamp,operation,operation_label,entry_id,item_temp_id,public_token,amount';
+        const header = 'timestamp,operation,operation_label,entry_id,item_temp_id,serial_number,amount';
         const rows = filteredTransactions.map((entry) => [
             csvEscape(entry.timestamp),
             csvEscape(entry.operation),
             csvEscape(getOperationLabel(entry.operation)),
             csvEscape(entry.id),
             csvEscape(entry.item?.temp_id),
-            csvEscape(entry.item?.public_token),
+            csvEscape(entry.item?.serial_number),
             csvEscape(entry.amount),
         ].join(','));
 
@@ -286,13 +286,13 @@ export function Finance() {
             <section className="ui-card p-5">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                     <div className="w-full xl:max-w-md">
-                        <label className="mb-2 block text-sm font-medium text-slate-700">Поиск по item/token/операции</label>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">Поиск по item/серийнику/операции</label>
                         <div className="relative">
                             <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                             <input
                                 value={query}
                                 onChange={(event) => setQuery(event.target.value)}
-                                placeholder="Например, ural102token или вывод"
+                                placeholder="Например, RUSABC001234 или вывод"
                                 className="ui-input pl-10 text-slate-900 bg-white"
                             />
                         </div>
@@ -407,7 +407,7 @@ export function Finance() {
                                                         <div>
                                                             <p className="font-semibold text-slate-800">#{entry.item.temp_id}</p>
                                                             <p className="font-mono text-xs text-slate-500">
-                                                                {entry.item.public_token || entry.item.id}
+                                                                {entry.item.serial_number || entry.item.id}
                                                             </p>
                                                         </div>
                                                     ) : (
@@ -451,7 +451,7 @@ export function Finance() {
                                                 <>
                                                     <p className="font-semibold text-slate-900">Позиция #{entry.item.temp_id}</p>
                                                     <p className="mt-1 font-mono text-xs text-slate-500">
-                                                        {entry.item.public_token || entry.item.id}
+                                                        {entry.item.serial_number || entry.item.id}
                                                     </p>
                                                 </>
                                             ) : (

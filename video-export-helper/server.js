@@ -19,7 +19,11 @@ export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024;
 export const DEFAULT_MAX_SOURCE_DURATION_MS = 60 * 60 * 1000;
+export const DEFAULT_PREVIEW_WIDTH = 540;
+export const DEFAULT_PREVIEW_HEIGHT = 960;
 export const DEFAULT_ALLOWED_ORIGINS = [
+    'http://127.0.0.1:3001',
+    'http://localhost:3001',
     'http://127.0.0.1:5173',
     'http://localhost:5173',
     'http://127.0.0.1:5273',
@@ -30,6 +34,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const packageJsonPath = path.join(projectRoot, 'package.json');
+const PLACEHOLDER_HELPER_VERSION = '0.0.0';
 
 const secondsFromMs = (value) => (value / 1000).toFixed(3);
 
@@ -37,13 +42,28 @@ const buildVideoFilter = (labelPrefix, inputIndex, startMs, endMs) => (
     `[${inputIndex}:v]trim=start=${secondsFromMs(startMs)}:end=${secondsFromMs(endMs)},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,fps=24,setsar=1[${labelPrefix}]`
 );
 
+const buildPreviewFilter = () => (
+    `scale=${DEFAULT_PREVIEW_WIDTH}:${DEFAULT_PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${DEFAULT_PREVIEW_WIDTH}:${DEFAULT_PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps=24,setsar=1`
+);
+
+const normalizeVersion = (value) => typeof value === 'string' ? value.trim() : '';
+const getRuntimeHelperVersion = () => normalizeVersion(process.versions.electron);
+const resolveHelperVersion = (value) => {
+    const normalized = normalizeVersion(value);
+    if (normalized && normalized !== PLACEHOLDER_HELPER_VERSION) {
+        return normalized;
+    }
+
+    return getRuntimeHelperVersion() || 'dev';
+};
+
 const readPackageVersion = async () => {
     try {
         const raw = await fsp.readFile(packageJsonPath, 'utf8');
         const parsed = JSON.parse(raw);
-        return typeof parsed.version === 'string' ? parsed.version : '0.0.0';
+        return resolveHelperVersion(parsed.version);
     } catch {
-        return '0.0.0';
+        return resolveHelperVersion('');
     }
 };
 
@@ -104,6 +124,13 @@ const getFreeBytes = async (targetPath) => {
 };
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const mergeAllowedOrigins = (...entries) => Array.from(new Set(
+    entries
+        .flat()
+        .map((item) => typeof item === 'string' ? item.trim() : '')
+        .filter(Boolean)
+));
 
 const normalizeSegments = (segments) => {
     if (!Array.isArray(segments) || segments.length < 2) {
@@ -166,7 +193,7 @@ const normalizeOutputs = (outputs) => {
 const readHelperConfig = async (storageRoot, explicitAllowedOrigins) => {
     const fromOptions = Array.isArray(explicitAllowedOrigins) ? explicitAllowedOrigins : null;
     if (fromOptions && fromOptions.length > 0) {
-        return fromOptions;
+        return mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, fromOptions);
     }
 
     const fromEnv = (process.env.VIDEO_EXPORT_HELPER_ALLOWED_ORIGINS || '')
@@ -174,7 +201,7 @@ const readHelperConfig = async (storageRoot, explicitAllowedOrigins) => {
         .map((item) => item.trim())
         .filter(Boolean);
     if (fromEnv.length > 0) {
-        return fromEnv;
+        return mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, fromEnv);
     }
 
     try {
@@ -185,7 +212,7 @@ const readHelperConfig = async (storageRoot, explicitAllowedOrigins) => {
                 .map((item) => typeof item === 'string' ? item.trim() : '')
                 .filter(Boolean);
             if (origins.length > 0) {
-                return origins;
+                return mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, origins);
             }
         }
     } catch {
@@ -218,6 +245,54 @@ const probeSource = async (ffprobePath, filePath) => {
         videoCodec: typeof videoStream.codec_name === 'string' ? videoStream.codec_name : '',
         formatName: typeof parsed.format?.format_name === 'string' ? parsed.format.format_name : ''
     };
+};
+
+const shouldGeneratePreview = (originalName, probe) => {
+    const extension = path.extname(originalName).toLowerCase();
+    const codec = (probe.videoCodec || '').toLowerCase();
+    const formatName = (probe.formatName || '').toLowerCase();
+
+    if (extension === '.mp4' && ['h264', 'avc1'].includes(codec)) {
+        return false;
+    }
+
+    if (extension === '.webm' && ['vp8', 'vp9', 'av1'].includes(codec)) {
+        return false;
+    }
+
+    return formatName.includes('mov')
+        || ['hevc', 'h265', 'prores', 'dnxhd'].some((part) => codec.includes(part))
+        || extension === '.m4v';
+};
+
+const renderPreviewFile = async (ffmpegPath, source, outputPath) => {
+    const args = [
+        '-y',
+        '-i', source.file_path,
+        '-vf', buildPreviewFilter(),
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '24',
+        '-pix_fmt', 'yuv420p'
+    ];
+
+    if (source.has_audio) {
+        args.push(
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-ar', '48000',
+            '-ac', '2'
+        );
+    } else {
+        args.push('-an');
+    }
+
+    args.push(
+        '-movflags', '+faststart',
+        outputPath
+    );
+
+    await runBinary(ffmpegPath, args);
 };
 
 const renderOutputFile = async (
@@ -295,23 +370,30 @@ export async function startVideoExportHelperServer(options = {}) {
     const host = typeof options.host === 'string' ? options.host : DEFAULT_HOST;
     const storageRoot = options.storageRoot || process.env.VIDEO_EXPORT_HELPER_STORAGE_ROOT || getDefaultStorageRoot();
     const sourceRoot = path.join(storageRoot, 'sources');
+    const previewRoot = path.join(storageRoot, 'previews');
     const jobRoot = path.join(storageRoot, 'jobs');
     const stateFilePath = path.join(storageRoot, 'state.json');
     const cleanupMaxAgeMs = Number(options.cleanupMaxAgeMs || process.env.VIDEO_EXPORT_HELPER_CLEANUP_MAX_AGE_MS || DEFAULT_CLEANUP_MAX_AGE_MS);
     const minFreeBytes = Number(options.minFreeBytes || process.env.VIDEO_EXPORT_HELPER_MIN_FREE_BYTES || DEFAULT_MIN_FREE_BYTES);
     const maxSourceDurationMs = Number(options.maxSourceDurationMs || process.env.VIDEO_EXPORT_HELPER_MAX_SOURCE_DURATION_MS || DEFAULT_MAX_SOURCE_DURATION_MS);
-    const helperVersion = typeof options.helperVersion === 'string' ? options.helperVersion : await readPackageVersion();
+    const helperVersion = resolveHelperVersion(
+        typeof options.helperVersion === 'string'
+            ? options.helperVersion
+            : await readPackageVersion()
+    );
     const ffmpegPath = resolveExecutablePath(options.ffmpegPath || process.env.VIDEO_EXPORT_HELPER_FFMPEG_BIN || ffmpegStatic || 'ffmpeg');
     const ffprobePath = resolveExecutablePath(options.ffprobePath || process.env.VIDEO_EXPORT_HELPER_FFPROBE_BIN || ffprobeStatic.path || 'ffprobe');
 
     await ensureDirectory(storageRoot);
     await ensureDirectory(sourceRoot);
+    await ensureDirectory(previewRoot);
     await ensureDirectory(jobRoot);
 
     const allowedOrigins = await readHelperConfig(storageRoot, options.allowedOrigins);
     const allowedOriginSet = new Set(allowedOrigins);
     const sources = new Map();
     const jobs = new Map();
+    const buildHelperUrl = (pathname) => `http://${host}:${port}${pathname}`;
 
     let stateWritePromise = Promise.resolve();
     const persistState = async () => {
@@ -325,6 +407,20 @@ export async function startVideoExportHelperServer(options = {}) {
             .then(() => fsp.writeFile(stateFilePath, JSON.stringify(snapshot, null, 2), 'utf8'));
 
         await stateWritePromise;
+    };
+
+    const removeSourceArtifacts = async (source) => {
+        if (!source) {
+            return;
+        }
+
+        await Promise.all([
+            fsp.rm(source.file_path, { force: true }).catch(() => undefined),
+            source.preview_path
+                ? fsp.rm(source.preview_path, { force: true }).catch(() => undefined)
+                : Promise.resolve()
+        ]);
+        sources.delete(source.id);
     };
 
     const removeJobArtifacts = async (jobId) => {
@@ -341,8 +437,7 @@ export async function startVideoExportHelperServer(options = {}) {
         if (!sourceStillUsed) {
             const source = sources.get(job.source_id);
             if (source) {
-                await fsp.rm(source.file_path, { force: true }).catch(() => undefined);
-                sources.delete(job.source_id);
+                await removeSourceArtifacts(source);
             }
         }
 
@@ -370,8 +465,7 @@ export async function startVideoExportHelperServer(options = {}) {
             if (!sourceStillUsed) {
                 const source = sources.get(sourceId);
                 if (source) {
-                    await fsp.rm(source.file_path, { force: true }).catch(() => undefined);
-                    sources.delete(sourceId);
+                    await removeSourceArtifacts(source);
                     removedSources += 1;
                 }
             }
@@ -384,8 +478,7 @@ export async function startVideoExportHelperServer(options = {}) {
                 continue;
             }
 
-            await fsp.rm(source.file_path, { force: true }).catch(() => undefined);
-            sources.delete(source.id);
+            await removeSourceArtifacts(source);
             removedSources += 1;
         }
 
@@ -509,7 +602,12 @@ export async function startVideoExportHelperServer(options = {}) {
                 continue;
             }
 
-            sources.set(source.id, source);
+            sources.set(source.id, {
+                ...source,
+                preview_path: typeof source.preview_path === 'string' && fs.existsSync(source.preview_path)
+                    ? source.preview_path
+                    : null
+            });
         }
 
         for (const job of loadedJobs) {
@@ -687,11 +785,24 @@ export async function startVideoExportHelperServer(options = {}) {
                 id: sourceId,
                 original_name: req.file.originalname,
                 file_path: req.file.path,
+                preview_path: null,
                 size: req.file.size,
                 duration_ms: probe.durationMs,
                 has_audio: probe.hasAudio,
                 created_at: new Date().toISOString()
             };
+
+            if (shouldGeneratePreview(req.file.originalname, probe)) {
+                const previewPath = path.join(previewRoot, `${sourceId}.mp4`);
+                try {
+                    await renderPreviewFile(ffmpegPath, sourceRecord, previewPath);
+                    sourceRecord.preview_path = previewPath;
+                } catch (previewError) {
+                    console.warn('[video-export-helper] preview render failed', previewError);
+                    await fsp.rm(previewPath, { force: true }).catch(() => undefined);
+                }
+            }
+
             sources.set(sourceId, sourceRecord);
             await persistState();
 
@@ -701,6 +812,9 @@ export async function startVideoExportHelperServer(options = {}) {
                 has_audio: sourceRecord.has_audio,
                 video_codec: probe.videoCodec,
                 format_name: probe.formatName,
+                preview_url: sourceRecord.preview_path
+                    ? buildHelperUrl(`/sources/${sourceRecord.id}/preview`)
+                    : undefined,
                 fingerprint: {
                     name: sourceRecord.original_name,
                     size: sourceRecord.size,
@@ -717,6 +831,20 @@ export async function startVideoExportHelperServer(options = {}) {
                 error: error instanceof Error ? error.message : 'Не удалось принять исходный видеофайл.'
             });
         }
+    });
+
+    app.get('/sources/:id/preview', (req, res) => {
+        const source = sources.get(req.params.id);
+        if (!source || !source.preview_path) {
+            return res.status(404).json({ error: 'Preview для исходника не найден.' });
+        }
+
+        if (!fs.existsSync(source.preview_path)) {
+            return res.status(404).json({ error: 'Preview-файл отсутствует на диске.' });
+        }
+
+        res.setHeader('Content-Type', 'video/mp4');
+        res.sendFile(source.preview_path);
     });
 
     app.post('/render-jobs', async (req, res) => {

@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { PencilLine, RefreshCw, Save, Search, X } from 'lucide-react';
+import { PencilLine, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
 
@@ -158,6 +158,7 @@ export function Orders() {
     const [form, setForm] = useState<OrderEditForm>(createEditForm(null));
     const [saving, setSaving] = useState(false);
     const [updatingStatus, setUpdatingStatus] = useState('');
+    const [deletingOrderId, setDeletingOrderId] = useState('');
     const requestIdRef = useRef(0);
     const deferredQuery = useDeferredValue(query);
 
@@ -344,6 +345,37 @@ export function Orders() {
         }
     };
 
+    const handleDelete = async () => {
+        if (!selectedOrder) return;
+        if (!window.confirm(`Скрыть заказ #${selectedOrder.id.slice(0, 8)} из интерфейса? Восстановление возможно только напрямую из БД.`)) {
+            return;
+        }
+
+        setDeletingOrderId(selectedOrder.id);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/orders/${selectedOrder.id}`, {
+                method: 'DELETE'
+            });
+
+            const result = await response.json().catch(() => ({ error: 'Не удалось удалить заказ.' }));
+            if (!response.ok) {
+                setError(result.error || 'Не удалось удалить заказ.');
+                return;
+            }
+
+            setOrders((prev) => prev.filter((order) => order.id !== selectedOrder.id));
+            setSelectedOrderId('');
+            setIsEditing(false);
+            setForm(createEditForm(null));
+        } catch (_error) {
+            setError('Сетевая ошибка при удалении заказа.');
+        } finally {
+            setDeletingOrderId('');
+        }
+    };
+
     return (
         <div className="space-y-6">
             <header className="flex flex-wrap items-start justify-between gap-4">
@@ -517,6 +549,16 @@ export function Orders() {
                                                 </button>
                                             </>
                                         )}
+
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleDelete()}
+                                            disabled={Boolean(updatingStatus) || saving || deletingOrderId === selectedOrder.id}
+                                            className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 px-3 py-2 text-sm text-red-200 hover:bg-red-500/10 disabled:opacity-50"
+                                        >
+                                            <Trash2 size={15} />
+                                            {deletingOrderId === selectedOrder.id ? 'Скрываем...' : 'Скрыть'}
+                                        </button>
 
                                         {selectedOrder.status === 'NEW' && (
                                             <ActionButton

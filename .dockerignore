@@ -4,6 +4,7 @@
 .idea
 .codex
 node_modules
+build
 dist
 dist-electron
 coverage
@@ -17,6 +18,7 @@ yarn-error.log*
 test-results
 playwright-report
 storage
+ops/backups
 docs
 tests
 video-export-helper

@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import { buildSerialNumber } from '../server/utils/collectionWorkflow.ts';
 import { DEFAULT_CLONE_PAGE_CONTENT } from '../src/shared/clonePageContent.ts';
 
 const db = new PrismaClient();
@@ -205,6 +206,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-yak-001/640/480',
             location_id: 'loc-yakutia',
             category_id: 'cat-polished',
+            country_code: 'RUS',
+            location_code: 'YAK',
+            item_code: 'ALMZ001',
             name: 'Алмазный кристалл «Северное сияние»',
             description: 'Крупный прозрачный кристалл с лабораторной проверкой чистоты.',
         },
@@ -214,6 +218,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-yak-002/640/480',
             location_id: 'loc-yakutia',
             category_id: 'cat-sets',
+            country_code: 'RUS',
+            location_code: 'YAK',
+            item_code: 'KIMB002',
             name: 'Набор кимберлитов «Якутская глубина»',
             description: 'Серия образцов кимберлита для коллекционеров и экспозиций.',
         },
@@ -223,6 +230,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-ural-001/640/480',
             location_id: 'loc-ural',
             category_id: 'cat-jewelry',
+            country_code: 'RUS',
+            location_code: 'URA',
+            item_code: 'MALA001',
             name: 'Малахитовая шкатулка «Уральский узор»',
             description: 'Ручная работа из уральского малахита с латунной фурнитурой.',
         },
@@ -232,6 +242,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-ural-002/640/480',
             location_id: 'loc-ural',
             category_id: 'cat-raw-stones',
+            country_code: 'RUS',
+            location_code: 'URA',
+            item_code: 'CRYS002',
             name: 'Горный хрусталь «Чистая грань»',
             description: 'Натуральный кристалл хрусталя в сырьевом виде.',
         },
@@ -241,6 +254,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-baltic-001/640/480',
             location_id: 'loc-baltic',
             category_id: 'cat-amber',
+            country_code: 'RUS',
+            location_code: 'BAL',
+            item_code: 'AMBR001',
             name: 'Янтарь с включением «Балтийская капля»',
             description: 'Фрагмент янтаря с сохраненной древней органикой.',
         },
@@ -250,6 +266,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-baltic-002/640/480',
             location_id: 'loc-baltic',
             category_id: 'cat-jewelry',
+            country_code: 'RUS',
+            location_code: 'BAL',
+            item_code: 'BUSY002',
             name: 'Бусы «Свет Балтики»',
             description: 'Полированная янтарная нить с серебряной застежкой.',
         },
@@ -259,6 +278,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-altai-001/640/480',
             location_id: 'loc-altai',
             category_id: 'cat-polished',
+            country_code: 'RUS',
+            location_code: 'ALT',
+            item_code: 'CHAL001',
             name: 'Халцедон «Голубой Алтай»',
             description: 'Ограненный халцедон с ровной геометрией фасетов.',
         },
@@ -268,6 +290,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-altai-002/640/480',
             location_id: 'loc-altai',
             category_id: 'cat-sets',
+            country_code: 'RUS',
+            location_code: 'ALT',
+            item_code: 'QUAR002',
             name: 'Набор кварца «Алтайский горизонт»',
             description: 'Три образца кварца разных оттенков для частной коллекции.',
         },
@@ -277,6 +302,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-kola-001/640/480',
             location_id: 'loc-kola',
             category_id: 'cat-raw-stones',
+            country_code: 'RUS',
+            location_code: 'KOL',
+            item_code: 'APAT001',
             name: 'Апатит «Полярный лед»',
             description: 'Северный апатит с высоким содержанием фосфатов.',
         },
@@ -286,6 +314,9 @@ async function main() {
             image: 'https://picsum.photos/seed/prod-kola-002/640/480',
             location_id: 'loc-kola',
             category_id: 'cat-polished',
+            country_code: 'RUS',
+            location_code: 'KOL',
+            item_code: 'EUDI002',
             name: 'Эвдиалит «Северный рубин»',
             description: 'Ограненный эвдиалит с насыщенным винным оттенком.',
         },
@@ -299,6 +330,9 @@ async function main() {
                 image: product.image,
                 location_id: product.location_id,
                 category_id: product.category_id,
+                country_code: product.country_code,
+                location_code: product.location_code,
+                item_code: product.item_code,
                 translations: {
                     create: [
                         {
@@ -316,6 +350,8 @@ async function main() {
             },
         });
     }
+
+    const productsById = new Map(products.map((product) => [product.id, product]));
 
     // 6) Users
     await db.user.createMany({
@@ -435,17 +471,22 @@ async function main() {
         {
             id: 'batch-yak-2026-01',
             owner_id: 'usr-fr-yakutia',
+            product_id: 'prod-yak-001',
             status: 'FINISHED' as const,
             video_url: '/uploads/videos/yakutia-2026-01.mp4',
             gps_lat: 62.5353,
             gps_lng: 113.9611,
+            collected_date: daysAgo(48, 10),
+            collected_time: '10:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(48, 10),
             items: [
                 {
                     id: 'item-yak-001',
                     temp_id: 'ЯК-001',
-                    public_token: 'yak001token',
                     photo_url: 'https://picsum.photos/seed/item-yak-001/600/600',
+                    item_photo_url: '/locations/crystal-caves.jpg',
+                    item_video_url: '/uploads/videos/items/yak-001.mp4',
                     status: 'ACTIVATED' as const,
                     sales_channel: 'MARKETPLACE' as const,
                     activation_date: daysAgo(20, 14),
@@ -456,8 +497,8 @@ async function main() {
                 {
                     id: 'item-yak-002',
                     temp_id: 'ЯК-002',
-                    public_token: 'yak002token',
                     photo_url: 'https://picsum.photos/seed/item-yak-002/600/600',
+                    item_photo_url: '/locations/crystal-caves.jpg',
                     status: 'STOCK_ONLINE' as const,
                     sales_channel: 'MARKETPLACE' as const,
                     price_sold: 92000,
@@ -467,7 +508,6 @@ async function main() {
                 {
                     id: 'item-yak-003',
                     temp_id: 'ЯК-003',
-                    public_token: 'yak003token',
                     photo_url: 'https://picsum.photos/seed/item-yak-003/600/600',
                     status: 'ON_CONSIGNMENT' as const,
                     sales_channel: 'OFFLINE_POINT' as const,
@@ -476,7 +516,6 @@ async function main() {
                 {
                     id: 'item-yak-004',
                     temp_id: 'ЯК-004',
-                    public_token: 'yak004token',
                     photo_url: 'https://picsum.photos/seed/item-yak-004/600/600',
                     status: 'STOCK_HQ' as const,
                     created_at: daysAgo(46, 11),
@@ -484,7 +523,6 @@ async function main() {
                 {
                     id: 'item-yak-005',
                     temp_id: 'ЯК-005',
-                    public_token: 'yak005token',
                     photo_url: 'https://picsum.photos/seed/item-yak-005/600/600',
                     status: 'REJECTED' as const,
                     created_at: daysAgo(46, 12),
@@ -492,8 +530,9 @@ async function main() {
                 {
                     id: 'item-yak-006',
                     temp_id: 'ЯК-006',
-                    public_token: 'yak006token',
                     photo_url: 'https://picsum.photos/seed/item-yak-006/600/600',
+                    item_photo_url: '/locations/crystal-caves.jpg',
+                    item_video_url: '/uploads/videos/items/yak-006.mp4',
                     status: 'ACTIVATED' as const,
                     sales_channel: 'OFFLINE_POINT' as const,
                     activation_date: daysAgo(28, 18),
@@ -506,16 +545,19 @@ async function main() {
         {
             id: 'batch-yak-2026-02',
             owner_id: 'usr-fr-yakutia',
+            product_id: 'prod-yak-002',
             status: 'TRANSIT' as const,
             video_url: '/uploads/videos/yakutia-2026-02.mp4',
             gps_lat: 63.02,
             gps_lng: 112.45,
+            collected_date: daysAgo(7, 8),
+            collected_time: '08:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(7, 8),
             items: [
                 {
                     id: 'item-yak-101',
                     temp_id: 'ЯК-Т-101',
-                    public_token: 'yakt101token',
                     photo_url: 'https://picsum.photos/seed/item-yak-101/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(7, 9),
@@ -523,7 +565,6 @@ async function main() {
                 {
                     id: 'item-yak-102',
                     temp_id: 'ЯК-Т-102',
-                    public_token: 'yakt102token',
                     photo_url: 'https://picsum.photos/seed/item-yak-102/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(7, 10),
@@ -531,7 +572,6 @@ async function main() {
                 {
                     id: 'item-yak-103',
                     temp_id: 'ЯК-Т-103',
-                    public_token: 'yakt103token',
                     photo_url: 'https://picsum.photos/seed/item-yak-103/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(7, 11),
@@ -539,7 +579,6 @@ async function main() {
                 {
                     id: 'item-yak-104',
                     temp_id: 'ЯК-Т-104',
-                    public_token: 'yakt104token',
                     photo_url: 'https://picsum.photos/seed/item-yak-104/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(7, 12),
@@ -549,16 +588,19 @@ async function main() {
         {
             id: 'batch-ural-2026-03',
             owner_id: 'usr-fr-ural',
-            status: 'DRAFT' as const,
+            product_id: 'prod-ural-002',
+            status: 'TRANSIT' as const,
             video_url: '/uploads/videos/ural-2026-03.mp4',
             gps_lat: 57.22,
             gps_lng: 59.96,
+            collected_date: daysAgo(2, 13),
+            collected_time: '13:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(2, 13),
             items: [
                 {
                     id: 'item-ural-101',
                     temp_id: 'УР-101',
-                    public_token: 'ural101token',
                     photo_url: 'https://picsum.photos/seed/item-ural-101/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(2, 13),
@@ -566,7 +608,6 @@ async function main() {
                 {
                     id: 'item-ural-102',
                     temp_id: 'УР-102',
-                    public_token: 'ural102token',
                     photo_url: 'https://picsum.photos/seed/item-ural-102/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(2, 14),
@@ -574,7 +615,6 @@ async function main() {
                 {
                     id: 'item-ural-103',
                     temp_id: 'УР-103',
-                    public_token: 'ural103token',
                     photo_url: 'https://picsum.photos/seed/item-ural-103/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(2, 15),
@@ -584,17 +624,22 @@ async function main() {
         {
             id: 'batch-ural-2026-01',
             owner_id: 'usr-fr-ural',
+            product_id: 'prod-ural-001',
             status: 'FINISHED' as const,
             video_url: '/uploads/videos/ural-2026-01.mp4',
             gps_lat: 56.8389,
             gps_lng: 60.6057,
+            collected_date: daysAgo(34, 9),
+            collected_time: '09:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(34, 9),
             items: [
                 {
                     id: 'item-ural-201',
                     temp_id: 'УР-201',
-                    public_token: 'ural201token',
                     photo_url: 'https://picsum.photos/seed/item-ural-201/600/600',
+                    item_photo_url: '/locations/moscow-market.jpg',
+                    item_video_url: '/uploads/videos/items/ural-201.mp4',
                     status: 'ACTIVATED' as const,
                     sales_channel: 'MARKETPLACE' as const,
                     activation_date: daysAgo(12, 16),
@@ -605,7 +650,6 @@ async function main() {
                 {
                     id: 'item-ural-202',
                     temp_id: 'УР-202',
-                    public_token: 'ural202token',
                     photo_url: 'https://picsum.photos/seed/item-ural-202/600/600',
                     status: 'STOCK_HQ' as const,
                     created_at: daysAgo(33, 11),
@@ -613,7 +657,6 @@ async function main() {
                 {
                     id: 'item-ural-203',
                     temp_id: 'УР-203',
-                    public_token: 'ural203token',
                     photo_url: 'https://picsum.photos/seed/item-ural-203/600/600',
                     status: 'STOCK_ONLINE' as const,
                     sales_channel: 'MARKETPLACE' as const,
@@ -624,7 +667,6 @@ async function main() {
                 {
                     id: 'item-ural-204',
                     temp_id: 'УР-204',
-                    public_token: 'ural204token',
                     photo_url: 'https://picsum.photos/seed/item-ural-204/600/600',
                     status: 'REJECTED' as const,
                     created_at: daysAgo(32, 9),
@@ -632,7 +674,6 @@ async function main() {
                 {
                     id: 'item-ural-205',
                     temp_id: 'УР-205',
-                    public_token: 'ural205token',
                     photo_url: 'https://picsum.photos/seed/item-ural-205/600/600',
                     status: 'SOLD_ONLINE' as const,
                     sales_channel: 'MARKETPLACE' as const,
@@ -645,17 +686,22 @@ async function main() {
         {
             id: 'batch-baltic-2026-01',
             owner_id: 'usr-fr-baltic',
+            product_id: 'prod-baltic-001',
             status: 'FINISHED' as const,
             video_url: '/uploads/videos/baltic-2026-01.mp4',
             gps_lat: 54.7104,
             gps_lng: 20.4522,
+            collected_date: daysAgo(30, 10),
+            collected_time: '10:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(30, 10),
             items: [
                 {
                     id: 'item-baltic-301',
                     temp_id: 'БЛ-301',
-                    public_token: 'balt301token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-301/600/600',
+                    item_photo_url: '/locations/kyoto-village.jpg',
+                    item_video_url: '/uploads/videos/items/baltic-301.mp4',
                     status: 'ACTIVATED' as const,
                     sales_channel: 'MARKETPLACE' as const,
                     activation_date: daysAgo(10, 12),
@@ -666,7 +712,6 @@ async function main() {
                 {
                     id: 'item-baltic-302',
                     temp_id: 'БЛ-302',
-                    public_token: 'balt302token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-302/600/600',
                     status: 'ACTIVATED' as const,
                     sales_channel: 'OFFLINE_POINT' as const,
@@ -678,7 +723,6 @@ async function main() {
                 {
                     id: 'item-baltic-303',
                     temp_id: 'БЛ-303',
-                    public_token: 'balt303token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-303/600/600',
                     status: 'ON_CONSIGNMENT' as const,
                     sales_channel: 'OFFLINE_POINT' as const,
@@ -687,7 +731,6 @@ async function main() {
                 {
                     id: 'item-baltic-304',
                     temp_id: 'БЛ-304',
-                    public_token: 'balt304token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-304/600/600',
                     status: 'REJECTED' as const,
                     created_at: daysAgo(28, 9),
@@ -697,16 +740,19 @@ async function main() {
         {
             id: 'batch-baltic-2026-02',
             owner_id: 'usr-fr-baltic',
+            product_id: 'prod-baltic-002',
             status: 'ERROR' as const,
             video_url: '/uploads/videos/baltic-2026-02.mp4',
             gps_lat: 54.95,
             gps_lng: 20.1,
+            collected_date: daysAgo(10, 10),
+            collected_time: '10:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(10, 10),
             items: [
                 {
                     id: 'item-baltic-401',
                     temp_id: 'БЛ-401',
-                    public_token: 'balt401token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-401/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(10, 11),
@@ -714,7 +760,6 @@ async function main() {
                 {
                     id: 'item-baltic-402',
                     temp_id: 'БЛ-402',
-                    public_token: 'balt402token',
                     photo_url: 'https://picsum.photos/seed/item-baltic-402/600/600',
                     status: 'NEW' as const,
                     created_at: daysAgo(10, 12),
@@ -724,32 +769,36 @@ async function main() {
         {
             id: 'batch-ural-2026-02',
             owner_id: 'usr-fr-ural',
+            product_id: 'prod-ural-002',
             status: 'RECEIVED' as const,
             video_url: '/uploads/videos/ural-2026-02.mp4',
             gps_lat: 57.0,
             gps_lng: 60.2,
+            collected_date: daysAgo(16, 8),
+            collected_time: '08:00',
+            daily_batch_seq: 1,
             created_at: daysAgo(16, 8),
             items: [
                 {
                     id: 'item-ural-301',
                     temp_id: 'УР-301',
-                    public_token: 'ural301token',
                     photo_url: 'https://picsum.photos/seed/item-ural-301/600/600',
+                    item_photo_url: '/locations/moscow-market.jpg',
+                    item_video_url: '/uploads/videos/items/ural-301.mp4',
                     status: 'STOCK_HQ' as const,
                     created_at: daysAgo(16, 9),
                 },
                 {
                     id: 'item-ural-302',
                     temp_id: 'УР-302',
-                    public_token: 'ural302token',
                     photo_url: 'https://picsum.photos/seed/item-ural-302/600/600',
+                    item_photo_url: '/locations/moscow-market.jpg',
                     status: 'STOCK_HQ' as const,
                     created_at: daysAgo(16, 10),
                 },
                 {
                     id: 'item-ural-303',
                     temp_id: 'УР-303',
-                    public_token: 'ural303token',
                     photo_url: 'https://picsum.photos/seed/item-ural-303/600/600',
                     status: 'REJECTED' as const,
                     created_at: daysAgo(16, 11),
@@ -759,17 +808,42 @@ async function main() {
     ];
 
     for (const batch of batchSeeds) {
+        const product = productsById.get(batch.product_id);
+        if (!product) {
+            throw new Error(`Seed batch ${batch.id} references unknown product ${batch.product_id}.`);
+        }
+
         await db.batch.create({
             data: {
                 id: batch.id,
                 owner_id: batch.owner_id,
+                product_id: batch.product_id,
                 status: batch.status,
                 video_url: batch.video_url,
                 gps_lat: batch.gps_lat,
                 gps_lng: batch.gps_lng,
+                collected_date: batch.collected_date,
+                collected_time: batch.collected_time,
+                daily_batch_seq: batch.daily_batch_seq,
                 created_at: batch.created_at,
                 items: {
-                    create: batch.items,
+                    create: batch.items.map((item, index) => {
+                        const serialNumber = buildSerialNumber(
+                            product,
+                            batch.collected_date,
+                            index + 1,
+                            batch.daily_batch_seq
+                        );
+
+                        return {
+                            ...item,
+                            serial_number: serialNumber,
+                            product_id: batch.product_id,
+                            item_seq: index + 1,
+                            collected_date: batch.collected_date,
+                            collected_time: batch.collected_time
+                        };
+                    }),
                 },
             },
         });

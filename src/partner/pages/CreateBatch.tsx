@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Check, Copy, ExternalLink, Upload } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Copy } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 
 type CollectionRequest = {
@@ -32,9 +32,6 @@ type CreatedItem = {
     id: string;
     temp_id: string;
     serial_number?: string | null;
-    public_token: string;
-    clone_url: string;
-    qr_url: string;
 };
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
@@ -56,13 +53,12 @@ export function CreateBatch() {
     const [gpsLng, setGpsLng] = useState('');
     const [collectedDate, setCollectedDate] = useState('');
     const [collectedTime, setCollectedTime] = useState('');
-    const [videoFile, setVideoFile] = useState<File | null>(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
     const [createdBatchId, setCreatedBatchId] = useState('');
     const [createdItems, setCreatedItems] = useState<CreatedItem[]>([]);
-    const [copiedToken, setCopiedToken] = useState('');
+    const [copiedSerialNumber, setCopiedSerialNumber] = useState('');
 
     const selectedRequest = useMemo(
         () => requests.find((request) => request.id === selectedRequestId) || null,
@@ -105,24 +101,6 @@ export function CreateBatch() {
         setSubmitting(true);
         setError('');
         try {
-            let videoUrl = '';
-            if (videoFile) {
-                const form = new FormData();
-                form.append('file', videoFile);
-
-                const uploadResponse = await authFetch('/api/upload/video', {
-                    method: 'POST',
-                    body: form
-                });
-
-                const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось загрузить видео.' }));
-                if (!uploadResponse.ok || !uploadPayload.url) {
-                    throw new Error(uploadPayload.error || 'Не удалось загрузить видео.');
-                }
-
-                videoUrl = uploadPayload.url;
-            }
-
             const response = await authFetch(`/api/collection-requests/${selectedRequest.id}/complete`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -130,8 +108,7 @@ export function CreateBatch() {
                     gps_lat: Number(gpsLat),
                     gps_lng: Number(gpsLng),
                     collected_date: collectedDate,
-                    collected_time: collectedTime,
-                    video_url: videoUrl || null
+                    collected_time: collectedTime
                 })
             });
 
@@ -156,13 +133,16 @@ export function CreateBatch() {
         }
     };
 
-    const handleCopyCloneLink = async (item: CreatedItem) => {
+    const handleCopySerialNumber = async (item: CreatedItem) => {
+        if (!item.serial_number) {
+            return;
+        }
         try {
-            await navigator.clipboard.writeText(item.clone_url);
-            setCopiedToken(item.public_token);
-            setTimeout(() => setCopiedToken(''), 1500);
+            await navigator.clipboard.writeText(item.serial_number);
+            setCopiedSerialNumber(item.serial_number);
+            setTimeout(() => setCopiedSerialNumber(''), 1500);
         } catch {
-            setCopiedToken('');
+            setCopiedSerialNumber('');
         }
     };
 
@@ -187,9 +167,13 @@ export function CreateBatch() {
                 ) : requests.length === 0 ? (
                     <div className="space-y-4">
                         <p className="text-sm text-slate-500">У вас нет заказов в статусе «В работе».</p>
-                        <Link to="/partner/dashboard" className="ui-btn ui-btn-secondary">
+                        <button
+                            type="button"
+                            onClick={() => navigate('/partner/dashboard')}
+                            className="ui-btn ui-btn-secondary"
+                        >
                             Вернуться в дашборд
-                        </Link>
+                        </button>
                     </div>
                 ) : (
                     <form onSubmit={handleSubmit} className="space-y-5">
@@ -269,20 +253,6 @@ export function CreateBatch() {
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="block text-sm font-medium text-slate-700">Видео локации</label>
-                            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600 hover:bg-slate-100">
-                                <Upload size={16} />
-                                {videoFile ? videoFile.name : 'Загрузить видео'}
-                                <input
-                                    type="file"
-                                    accept="video/*"
-                                    className="hidden"
-                                    onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
-                                />
-                            </label>
-                        </div>
-
                         <div className="flex justify-end">
                             <button
                                 type="submit"
@@ -303,18 +273,13 @@ export function CreateBatch() {
                             <h2 className="text-lg font-semibold text-slate-900">Партия создана</h2>
                             <p className="text-sm text-slate-500">ID партии: {createdBatchId}</p>
                         </div>
-                        <div className="flex gap-2">
-                            <Link to={`/partner/qr`} className="ui-btn ui-btn-secondary">
-                                Открыть QR-центр
-                            </Link>
-                            <button
-                                type="button"
-                                onClick={() => navigate('/partner/dashboard')}
-                                className="ui-btn ui-btn-primary"
-                            >
-                                В дашборд
-                            </button>
-                        </div>
+                        <button
+                            type="button"
+                            onClick={() => navigate('/partner/dashboard')}
+                            className="ui-btn ui-btn-primary"
+                        >
+                            В дашборд
+                        </button>
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -323,35 +288,17 @@ export function CreateBatch() {
                                 <div className="space-y-1">
                                     <p className="text-sm font-semibold text-slate-900">{item.serial_number || item.temp_id}</p>
                                     <p className="text-xs text-slate-500">Пакет: {item.temp_id}</p>
-                                    <p className="text-xs text-slate-500 break-all">{item.public_token}</p>
                                 </div>
                                 <div className="mt-4 flex flex-wrap gap-2">
                                     <button
                                         type="button"
-                                        onClick={() => void handleCopyCloneLink(item)}
+                                        onClick={() => void handleCopySerialNumber(item)}
+                                        disabled={!item.serial_number}
                                         className="ui-btn ui-btn-secondary"
                                     >
                                         <Copy size={14} />
-                                        {copiedToken === item.public_token ? 'Скопировано' : 'Копировать ссылку'}
+                                        {copiedSerialNumber === item.serial_number ? 'Скопировано' : 'Копировать серийный номер'}
                                     </button>
-                                    <a
-                                        href={item.clone_url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="ui-btn ui-btn-primary"
-                                    >
-                                        <ExternalLink size={14} />
-                                        Паспорт
-                                    </a>
-                                    <a
-                                        href={item.qr_url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="ui-btn ui-btn-secondary"
-                                    >
-                                        <Check size={14} />
-                                        QR
-                                    </a>
                                 </div>
                             </div>
                         ))}

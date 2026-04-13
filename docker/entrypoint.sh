@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 
-printf '\n[entrypoint] Applying Prisma migrations...\n'
-npx prisma migrate deploy
+mkdir -p /app/public/uploads /app/storage/video-jobs /app/storage/video-export
+chown -R node:node /app/public/uploads /app/storage/video-jobs /app/storage/video-export
 
-printf '\n[entrypoint] Starting API + built frontend...\n'
-exec npm run server
+if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
+    printf '\n[entrypoint] Applying Prisma migrations...\n'
+    npx prisma migrate deploy
+fi
+
+printf '\n[entrypoint] Starting: %s\n' "$*"
+exec su-exec node "$@"

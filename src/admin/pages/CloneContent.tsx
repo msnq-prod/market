@@ -15,47 +15,41 @@ const FIELD_CONFIG: Array<{
     multiline?: boolean;
 }> = [
     { key: 'hero_badge', label: 'Бейдж в шапке' },
-    { key: 'hero_title_template', label: 'Заголовок (шаблон)', hint: 'Можно использовать {{temp_id}}, {{token}}, {{status}}, {{partner}}' },
     { key: 'hero_description', label: 'Описание в hero', multiline: true },
     { key: 'details_heading', label: 'Заголовок блока данных' },
-    { key: 'video_heading', label: 'Заголовок блока видео' },
-    { key: 'video_empty_text', label: 'Текст, если видео нет' },
+    { key: 'field_collection_date_label', label: 'Подпись даты сбора' },
+    { key: 'field_collection_time_label', label: 'Подпись времени сбора' },
+    { key: 'field_coords_label', label: 'Подпись координат' },
+    { key: 'media_heading', label: 'Заголовок media-блока' },
+    { key: 'media_empty_text', label: 'Текст, если media нет' },
+    { key: 'photo_button_text', label: 'Кнопка фото' },
+    { key: 'video_button_text', label: 'Кнопка видео' },
     { key: 'authenticity_heading', label: 'Заголовок блока подлинности' },
     { key: 'authenticity_text', label: 'Текст блока подлинности', multiline: true },
-    { key: 'field_token_label', label: 'Подпись поля токена' },
-    { key: 'field_status_label', label: 'Подпись поля статуса' },
-    { key: 'field_activation_label', label: 'Подпись поля даты активации' },
-    { key: 'field_coords_label', label: 'Подпись поля координат' },
-    { key: 'field_partner_label', label: 'Подпись поля партнера' },
-    { key: 'field_batch_date_label', label: 'Подпись поля даты партии' },
-    { key: 'link_label', label: 'Подпись ссылки' },
-    { key: 'copy_button_text', label: 'Кнопка копирования' },
-    { key: 'copied_button_text', label: 'Кнопка после копирования' }
+    { key: 'field_serial_number_label', label: 'Подпись серийного номера' }
 ];
 
 const PREVIEW_ITEM: CloneItemView = {
-    id: 'preview-item',
-    temp_id: 'A-1024',
-    public_token: 'preview-token-001',
-    photo_url: 'https://placehold.co/1200x900/png',
-    status: 'STOCK_ONLINE',
-    activation_date: null,
-    batch: {
-        gps_lat: 55.751244,
-        gps_lng: 37.618423,
-        video_url: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
-        created_at: new Date().toISOString(),
-        owner: {
-            name: 'Демо франчайзи'
-        }
-    }
+    serial_number: 'RUSPREVIEW000001',
+    clone_url: `${window.location.origin}/clone/RUSPREVIEW000001`,
+    product_name: 'Демо-товар Stones',
+    product_description: 'Короткое описание карточки товара, которое наследуется публичным паспортом.',
+    location_name: 'Москва, тестовая локация',
+    collection_date: new Date().toISOString(),
+    collection_time: '14:30',
+    gps_lat: 55.751244,
+    gps_lng: 37.618423,
+    photo_url: null,
+    video_url: null,
+    has_photo: false,
+    has_video: false
 };
 
 export function CloneContent() {
     const [draft, setDraft] = useState<ClonePageContent>(DEFAULT_CLONE_PAGE_CONTENT);
     const [saved, setSaved] = useState<ClonePageContent>(DEFAULT_CLONE_PAGE_CONTENT);
     const [previewItem, setPreviewItem] = useState<CloneItemView>(PREVIEW_ITEM);
-    const [previewToken, setPreviewToken] = useState('');
+    const [previewSerialNumber, setPreviewSerialNumber] = useState('');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [loadingPreview, setLoadingPreview] = useState(false);
@@ -131,8 +125,8 @@ export function CloneContent() {
     };
 
     const handleLoadPreviewItem = async () => {
-        const token = previewToken.trim();
-        if (!token) {
+        const serialNumber = previewSerialNumber.trim().toUpperCase();
+        if (!serialNumber) {
             setPreviewItem(PREVIEW_ITEM);
             setPreviewStatus('Показан демо-предмет.');
             return;
@@ -141,9 +135,9 @@ export function CloneContent() {
         setLoadingPreview(true);
         setPreviewStatus('');
         try {
-            const res = await fetch(`/api/public/items/${encodeURIComponent(token)}`);
+            const res = await fetch(`/api/public/items/${encodeURIComponent(serialNumber)}`);
             if (!res.ok) {
-                setPreviewStatus('Предмет по токену не найден, показан демо-предмет.');
+                setPreviewStatus('Предмет по серийному номеру не найден, показан демо-предмет.');
                 setPreviewItem(PREVIEW_ITEM);
                 return;
             }
@@ -198,13 +192,13 @@ export function CloneContent() {
             <div className="grid grid-cols-1 xl:grid-cols-[460px_1fr] gap-6">
                 <section className="space-y-4">
                     <div className="rounded-2xl border border-gray-800 bg-gray-900 p-4 space-y-3">
-                        <h2 className="text-sm uppercase tracking-wider text-gray-400">Предпросмотр на реальном токене</h2>
+                        <h2 className="text-sm uppercase tracking-wider text-gray-400">Предпросмотр по серийному номеру</h2>
                         <div className="flex gap-2">
                             <input
-                                value={previewToken}
-                                onChange={(e) => setPreviewToken(e.target.value)}
+                                value={previewSerialNumber}
+                                onChange={(e) => setPreviewSerialNumber(e.target.value)}
                                 className="flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white"
-                                placeholder="Введите public_token (необязательно)"
+                                placeholder="Введите serial_number (необязательно)"
                             />
                             <button
                                 onClick={() => void handleLoadPreviewItem()}
@@ -241,14 +235,15 @@ export function CloneContent() {
                     </div>
                 </section>
 
-                <section className="rounded-2xl border border-gray-800 overflow-hidden bg-black">
-                    <div className="max-h-[calc(100vh-170px)] overflow-auto">
-                        <DigitalCloneView
-                            item={previewItem}
-                            content={draft}
-                            cloneUrl={`${window.location.origin}/clone/${previewItem.public_token}`}
-                            previewMode
-                        />
+                <section className="rounded-2xl border border-gray-800 bg-black/60 p-4">
+                    <div className="max-h-[calc(100vh-170px)] overflow-auto rounded-[28px] bg-[#02040a]">
+                        <div className="mx-auto max-w-[430px]">
+                            <DigitalCloneView
+                                item={previewItem}
+                                content={draft}
+                                previewMode
+                            />
+                        </div>
                     </div>
                 </section>
             </div>

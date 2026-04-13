@@ -1,7 +1,6 @@
 import multer from 'multer';
 import path from 'path';
 import type { Request, Response } from 'express';
-import type { FileFilterCallback } from 'multer';
 import { ensureVideoProcessingDirectories, SUPPORTED_VIDEO_EXTENSIONS, VIDEO_JOB_STAGING_ROOT } from '../services/videoProcessing.ts';
 
 ensureVideoProcessingDirectories();
@@ -16,14 +15,14 @@ const storage = multer.diskStorage({
     }
 });
 
-const fileFilter = (_req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     const extension = path.extname(file.originalname).toLowerCase();
     if (file.mimetype.startsWith('video/') && SUPPORTED_VIDEO_EXTENSIONS.has(extension)) {
         cb(null, true);
         return;
     }
 
-    cb(new Error('Для автосклейки разрешены только видео mp4, mov, m4v и webm.'), false);
+    cb(new Error('Для автосклейки разрешены только видео mp4, mov, m4v и webm.'));
 };
 
 const videoJobUpload = multer({

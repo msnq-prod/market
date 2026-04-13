@@ -30,9 +30,7 @@ async function login(request: APIRequestContext, email: string, password: string
 
 test('API guardrails: removed /api/user and uploads require authentication', async ({ request }) => {
     const removedUserEndpoint = await request.get('/api/user');
-    expect(removedUserEndpoint.status()).toBe(404);
-    const removedPayload = await removedUserEndpoint.json() as { error?: string };
-    expect(removedPayload.error || '').toContain('Endpoint removed');
+    expect(removedUserEndpoint.status()).toBe(401);
 
     const unauthenticatedUpload = await request.post('/api/upload/photo', {
         multipart: {
@@ -46,6 +44,17 @@ test('API guardrails: removed /api/user and uploads require authentication', asy
     expect(unauthenticatedUpload.status()).toBe(401);
 
     const partner = await login(request, PARTNER_EMAIL, DEFAULT_PASSWORD);
+    const currentUserResponse = await request.get('/api/user', {
+        headers: {
+            Authorization: `Bearer ${partner.accessToken}`
+        }
+    });
+    expect(currentUserResponse.status()).toBe(200);
+    const currentUser = await currentUserResponse.json() as Record<string, unknown>;
+    expect(currentUser.email).toBe(PARTNER_EMAIL);
+    expect(currentUser).not.toHaveProperty('password_hash');
+    expect(currentUser).not.toHaveProperty('balance');
+
     const authenticatedUpload = await request.post('/api/upload/video', {
         headers: {
             Authorization: `Bearer ${partner.accessToken}`

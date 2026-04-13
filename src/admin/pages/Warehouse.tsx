@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode } from 'lucide-react';
+import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode, Trash2 } from 'lucide-react';
 import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -16,7 +16,6 @@ type BatchItem = {
     product_id: string | null;
     temp_id: string;
     serial_number: string | null;
-    public_token: string;
     status: string;
     is_sold: boolean;
     sales_channel?: string | null;
@@ -32,8 +31,8 @@ type BatchItem = {
     collected_time?: string | null;
     created_at: string;
     updated_at?: string | null;
-    clone_url: string;
-    qr_url: string;
+    clone_url: string | null;
+    qr_url: string | null;
 };
 
 type BatchView = {
@@ -265,7 +264,7 @@ const sortItems = (items: BatchItem[]) => [...items].sort((left, right) => {
     return leftKey.localeCompare(rightKey, 'ru');
 });
 
-const createItemPath = (publicToken: string) => `/clone/${encodeURIComponent(publicToken)}`;
+const createItemPath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
 
 const createFallbackImage = '/locations/crystal-caves.jpg';
 
@@ -285,6 +284,7 @@ export function Warehouse() {
     const [itemForm, setItemForm] = useState<ItemFormState | null>(null);
     const [itemLoading, setItemLoading] = useState(false);
     const [itemError, setItemError] = useState('');
+    const [deletingBatchId, setDeletingBatchId] = useState('');
 
     const loadData = async (showSpinner = true) => {
         if (showSpinner) {
@@ -439,6 +439,33 @@ export function Warehouse() {
     const setProductMode = (productKey: string, mode: 'batches' | 'all-items') => {
         setProductModes((current) => ({ ...current, [productKey]: mode }));
         setExpandedProductKeys((current) => ({ ...current, [productKey]: true }));
+    };
+
+    const handleDeleteBatch = async (batchId: string) => {
+        if (!window.confirm(`Скрыть партию ${batchId} из интерфейса? Восстановление возможно только напрямую из БД.`)) {
+            return;
+        }
+
+        setDeletingBatchId(batchId);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/batches/${batchId}`, {
+                method: 'DELETE'
+            });
+
+            const payload = await response.json().catch(() => ({ error: 'Не удалось удалить партию.' }));
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось удалить партию.');
+            }
+
+            await loadData(false);
+        } catch (deleteError) {
+            console.error(deleteError);
+            setError(deleteError instanceof Error ? deleteError.message : 'Не удалось удалить партию.');
+        } finally {
+            setDeletingBatchId('');
+        }
     };
 
     const renderGroupedItems = (items: BatchItem[]) => {
@@ -604,12 +631,12 @@ export function Warehouse() {
 
                                                                             return (
                                                                                 <div key={batch.id} className="rounded-2xl border border-gray-800 bg-gray-900">
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        className="flex w-full flex-col gap-3 px-4 py-4 text-left lg:flex-row lg:items-start lg:justify-between"
-                                                                                        onClick={() => setExpandedBatchIds((current) => ({ ...current, [batch.id]: !isBatchExpanded }))}
-                                                                                    >
-                                                                                        <div className="flex items-start gap-3">
+                                                                                    <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                                                                                            onClick={() => setExpandedBatchIds((current) => ({ ...current, [batch.id]: !isBatchExpanded }))}
+                                                                                        >
                                                                                             <div className="mt-1 text-gray-500">
                                                                                                 {isBatchExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                                                                                             </div>
@@ -627,8 +654,17 @@ export function Warehouse() {
                                                                                                     <span className="rounded-full border border-gray-700 px-3 py-1">Проданных: {soldCount}</span>
                                                                                                 </div>
                                                                                             </div>
-                                                                                        </div>
-                                                                                    </button>
+                                                                                        </button>
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => void handleDeleteBatch(batch.id)}
+                                                                                            disabled={deletingBatchId === batch.id}
+                                                                                            className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-50"
+                                                                                        >
+                                                                                            <Trash2 size={14} />
+                                                                                            {deletingBatchId === batch.id ? 'Скрываем...' : 'Скрыть'}
+                                                                                        </button>
+                                                                                    </div>
 
                                                                                     {isBatchExpanded && (
                                                                                         <ItemGrid items={batch.items} onSelectItem={openItemModal} />
@@ -734,14 +770,16 @@ export function Warehouse() {
                                 )}
                             </div>
                             <p className="mt-3 text-xs text-gray-500">ID: {selectedItem.id}</p>
-                            <p className="mt-1 text-xs text-gray-500">Public token: {selectedItem.public_token}</p>
+                            <p className="mt-1 text-xs text-gray-500">Серийный номер: {selectedItem.serial_number || 'Не указан'}</p>
                             <div className="mt-3 flex flex-wrap gap-2">
-                                <a href={selectedItem.qr_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500">
+                                <a href={selectedItem.qr_url || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500">
                                     <QrCode size={16} /> QR
                                 </a>
-                                <a href={createItemPath(selectedItem.public_token)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800">
-                                    <ExternalLink size={16} /> Клон
-                                </a>
+                                {createItemPath(selectedItem.serial_number) && (
+                                    <a href={createItemPath(selectedItem.serial_number) || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800">
+                                        <ExternalLink size={16} /> Клон
+                                    </a>
+                                )}
                             </div>
                         </div>
 

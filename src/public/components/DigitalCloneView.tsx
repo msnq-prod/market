@@ -1,386 +1,350 @@
-import { Suspense, useMemo, useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Clapperboard, Expand, Image as ImageIcon, Play, X } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import type { ClonePageContent } from '../../shared/clonePageContent';
-import { applyCloneTemplate } from '../../shared/clonePageContent';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Html } from '@react-three/drei';
-import * as THREE from 'three';
-import { Earth } from '../../components/Earth';
-import { easing } from 'maath';
-import { hasWebGLSupport } from '../../utils/webgl';
+import { PassportPlanetScene } from './PassportPlanetScene';
 
 export type CloneItemView = {
-    id: string;
-    temp_id: string;
-    serial_number?: string | null;
-    public_token: string;
-    photo_url?: string | null;
-    item_photo_url?: string | null;
-    item_video_url?: string | null;
-    status: string;
-    is_sold?: boolean;
-    activation_date: string | null;
-    collected_date?: string | null;
-    collected_time?: string | null;
-    batch: {
-        gps_lat: number | null;
-        gps_lng: number | null;
-        video_url: string | null;
-        collected_date?: string | null;
-        collected_time?: string | null;
-        created_at: string;
-        owner?: {
-            name: string;
-        };
-    };
-    product?: {
-        id: string;
-        country_code: string;
-        location_code: string;
-        item_code: string;
-        location_description?: string | null;
-        translations: Array<{
-            language_id: number;
-            name: string;
-            description: string;
-        }>;
-        location?: {
-            translations: Array<{
-                language_id: number;
-                name: string;
-                country?: string;
-                description?: string;
-            }>;
-        };
-    } | null;
-};
-
-const resolveMediaUrl = (value: string | null | undefined): string | null => {
-    if (!value) return null;
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-        return value;
-    }
-    return value;
+    serial_number: string | null;
+    clone_url: string | null;
+    product_name: string;
+    product_description: string;
+    location_name?: string | null;
+    collection_date: string | null;
+    collection_time: string | null;
+    gps_lat: number | null;
+    gps_lng: number | null;
+    photo_url: string | null;
+    video_url: string | null;
+    has_photo: boolean;
+    has_video: boolean;
 };
 
 type DigitalCloneViewProps = {
     item: CloneItemView;
     content: ClonePageContent;
-    cloneUrl: string;
     previewMode?: boolean;
 };
 
-function CloneScene({ lat, lng }: { lat: number | null, lng: number | null }) {
-    const [offsetX, setOffsetX] = useState(0);
+const resolveMediaUrl = (value: string | null): string | null => {
+    if (!value) return null;
+    return value;
+};
 
-    // Calculate offset based on window width after mount
+const formatCollectionDate = (value: string | null): string | null => {
+    if (!value) return null;
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleDateString('ru-RU');
+};
+
+const formatCoordinates = (lat: number | null, lng: number | null): string | null => {
+    if (lat == null || lng == null) {
+        return null;
+    }
+
+    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+};
+
+export function DigitalCloneView({ item, content, previewMode = false }: DigitalCloneViewProps) {
+    const photoUrl = resolveMediaUrl(item.photo_url);
+    const videoUrl = resolveMediaUrl(item.video_url);
+    const hasPhotoAsset = item.has_photo && photoUrl !== null;
+    const hasVideoAsset = item.has_video && videoUrl !== null;
+    const itemKey = item.serial_number || item.clone_url || item.product_name;
+    const [activeOverlay, setActiveOverlay] = useState<null | { kind: 'photo' | 'video'; itemKey: string }>(null);
+    const description = item.product_description || content.hero_description;
+    const collectionDate = formatCollectionDate(item.collection_date);
+    const coordinatesLabel = formatCoordinates(item.gps_lat, item.gps_lng);
+    const photoLightboxOpen = activeOverlay?.kind === 'photo' && activeOverlay.itemKey === itemKey;
+    const videoOverlayOpen = activeOverlay?.kind === 'video' && activeOverlay.itemKey === itemKey;
+
     useEffect(() => {
-        const handleResize = () => setOffsetX(window.innerWidth >= 1024 ? 1.0 : 0);
-        handleResize();
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
+        if (!photoLightboxOpen && !videoOverlayOpen) {
+            return;
+        }
+
+        const originalOverflow = document.body.style.overflow;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            setActiveOverlay(null);
+        };
+
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', onKeyDown);
+
+        return () => {
+            document.body.style.overflow = originalOverflow;
+            window.removeEventListener('keydown', onKeyDown);
+        };
+    }, [photoLightboxOpen, videoOverlayOpen]);
 
     return (
         <>
-            <ambientLight intensity={0.5} />
-            <directionalLight position={[8, 3, 2]} intensity={2} />
+            <div className="relative min-h-screen overflow-hidden bg-black text-white">
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(94,215,255,0.12),transparent_26%),linear-gradient(180deg,rgba(0,0,0,0.22)_0%,rgba(0,0,0,0.44)_44%,rgba(0,0,0,0.72)_100%)]" />
 
-            <group position={[offsetX, 0, 0]}>
-                <Earth />
-                {lat != null && lng != null && (
-                    <CloneMarker lat={lat} lng={lng} offsetX={offsetX} />
-                )}
-            </group>
+                <div className="absolute inset-0">
+                    <PassportPlanetScene
+                        className="-translate-x-[12%] sm:-translate-x-[10%] lg:-translate-x-[6%]"
+                        lat={item.gps_lat}
+                        lng={item.gps_lng}
+                        locationName={item.location_name}
+                    />
+                </div>
 
-            <CloneCameraController lat={lat} lng={lng} offsetX={offsetX} />
+                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(1,4,10,0.1)_0%,rgba(1,4,10,0.22)_24%,rgba(1,4,10,0.42)_52%,rgba(1,4,10,0.82)_100%)]" />
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_left_top,rgba(2,8,20,0.62),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(2,6,14,0.78),transparent_32%)]" />
 
-            <OrbitControls
-                enablePan={false}
-                enableZoom={false}
-                enableRotate={true}
-                rotateSpeed={0.5}
-                autoRotate={lat == null || lng == null}
-                autoRotateSpeed={0.5}
-                target={[offsetX, 0, 0]}
-            />
+                <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:px-8">
+                    <div className="grid grid-cols-[minmax(0,1fr)_8.75rem] items-start gap-4 sm:grid-cols-[minmax(0,1fr)_10rem] sm:gap-6 lg:grid-cols-[minmax(0,34rem)_14rem]">
+                        <section className="max-w-[34rem] pt-3 sm:pt-5 lg:pt-8">
+                            <h1 className="max-w-[12ch] text-[clamp(2.2rem,5.9vw,5rem)] font-light leading-[0.92] tracking-[-0.07em] text-white [overflow-wrap:anywhere]">
+                                {item.product_name}
+                            </h1>
+
+                            {item.serial_number ? (
+                                <p className="mt-4 font-mono text-[11px] tracking-[0.26em] text-white/72 sm:text-[12px]">
+                                    {item.serial_number}
+                                </p>
+                            ) : null}
+
+                            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[15px] font-semibold text-white/82 sm:text-[17px]">
+                                {collectionDate ? <span>{collectionDate}</span> : null}
+                                {item.collection_time ? <span>{item.collection_time}</span> : null}
+                            </div>
+                        </section>
+
+                        <div className="justify-self-end pt-3 sm:pt-5 lg:pt-8">
+                            <div className="flex w-[8.75rem] flex-col gap-3 sm:w-[10rem] lg:w-[14rem]">
+                                <PhotoWindow
+                                    photoUrl={photoUrl}
+                                    hasPhotoAsset={hasPhotoAsset}
+                                    previewMode={previewMode}
+                                    onOpen={() => setActiveOverlay({ kind: 'photo', itemKey })}
+                                    actionLabel={content.photo_button_text}
+                                />
+
+                                <VideoButton
+                                    hasVideoAsset={hasVideoAsset}
+                                    previewMode={previewMode}
+                                    title={content.video_button_text}
+                                    subtitle={hasVideoAsset ? 'Открыть видеоматериал' : 'Пока не загружено'}
+                                    onOpen={() => setActiveOverlay({ kind: 'video', itemKey })}
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 min-h-[18rem]" />
+
+                    <div className="pb-1">
+                        <DescriptionCard
+                            description={description}
+                            extraText={content.authenticity_text}
+                        />
+                    </div>
+
+                    {coordinatesLabel ? (
+                        <p className="sr-only">Координаты: {coordinatesLabel}</p>
+                    ) : null}
+                </div>
+            </div>
+
+            {photoLightboxOpen && hasPhotoAsset && photoUrl ? (
+                <MediaOverlay title={content.photo_button_text} onClose={() => setActiveOverlay(null)}>
+                    <img
+                        src={photoUrl}
+                        alt={item.product_name}
+                        className="max-h-[78svh] w-auto max-w-full rounded-[1.5rem] object-contain shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+                    />
+                </MediaOverlay>
+            ) : null}
+
+            {videoOverlayOpen && hasVideoAsset && videoUrl ? (
+                <MediaOverlay title={content.video_button_text} onClose={() => setActiveOverlay(null)}>
+                    <video
+                        src={videoUrl}
+                        poster={photoUrl || undefined}
+                        controls
+                        playsInline
+                        autoPlay
+                        className="max-h-[78svh] w-full max-w-4xl rounded-[1.5rem] bg-black shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+                    />
+                </MediaOverlay>
+            ) : null}
         </>
     );
 }
 
-function CloneMarker({ lat, lng, offsetX }: { lat: number, lng: number, offsetX: number }) {
-    const ref = useRef<HTMLDivElement>(null)
-
-    const position = useMemo(() => {
-        const phi = (90 - lat) * (Math.PI / 180)
-        const theta = (lng + 180) * (Math.PI / 180)
-        const radius = 1.001
-
-        const x = -(radius * Math.sin(phi) * Math.cos(theta))
-        const z = (radius * Math.sin(phi) * Math.sin(theta))
-        const y = (radius * Math.cos(phi))
-
-        return new THREE.Vector3(x, y, z)
-    }, [lat, lng])
-
-    useFrame(({ camera }) => {
-        if (!ref.current) return
-        const camFromCenter = camera.position.clone().sub(new THREE.Vector3(offsetX, 0, 0)).normalize();
-        const posDir = position.clone().normalize();
-
-        const dot = camFromCenter.dot(posDir)
-
-        let opacity = 0
-        if (dot > 0.2) {
-            opacity = 1
-        } else if (dot < -0.1) {
-            opacity = 0
-        } else {
-            opacity = (dot + 0.1) / 0.3
-        }
-
-        ref.current.style.opacity = opacity.toString()
-        ref.current.style.pointerEvents = opacity > 0.1 ? 'auto' : 'none'
-    })
-
-    return (
-        <group position={position}>
-            <Html center style={{ pointerEvents: 'none' }}>
-                <div
-                    ref={ref}
-                    className="relative select-none transition-opacity duration-300"
-                    style={{ width: '0px', height: '0px', opacity: 1 }}
-                >
-                    <div className="absolute top-0 left-0 -translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-blue-400 border-2 border-white shadow-[0_0_10px_rgba(96,165,250,0.8)]" />
-                    <svg width="120" height="40" className="absolute top-0 left-0 overflow-visible pointer-events-none" style={{ transform: 'translate(0px, -20px)' }}>
-                        <path d="M 1 20 L 15 5 L 100 5" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-blue-400" />
-                    </svg>
-                    <div className="absolute left-[15px] bottom-[15px] text-xs font-bold whitespace-nowrap px-1 text-white uppercase tracking-[0.1em] drop-shadow-md">
-                        Место добычи
-                    </div>
+function PhotoWindow({
+    photoUrl,
+    hasPhotoAsset,
+    previewMode,
+    onOpen,
+    actionLabel
+}: {
+    photoUrl: string | null;
+    hasPhotoAsset: boolean;
+    previewMode: boolean;
+    onOpen: () => void;
+    actionLabel: string;
+}) {
+    if (hasPhotoAsset && photoUrl) {
+        const image = (
+            <div className="relative h-[10.5rem] w-full overflow-hidden rounded-[1.55rem] border border-white/10 bg-black/20 shadow-[0_18px_48px_rgba(0,0,0,0.32)] sm:h-[12rem] lg:h-[16rem]">
+                <img
+                    src={photoUrl}
+                    alt={actionLabel}
+                    className="h-full w-full object-cover"
+                />
+                <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-[linear-gradient(180deg,rgba(0,0,0,0)_0%,rgba(0,0,0,0.78)_100%)] px-3 pb-2 pt-8">
+                    <span className="text-[10px] uppercase tracking-[0.22em] text-white/74">Фото</span>
+                    {!previewMode ? <Expand className="h-3.5 w-3.5 text-white/72" strokeWidth={1.8} /> : null}
                 </div>
-            </Html>
-        </group>
-    )
-}
-
-function CloneCameraController({ lat, lng, offsetX }: { lat: number | null, lng: number | null, offsetX: number }) {
-    const [startAnim, setStartAnim] = useState(false);
-
-    useEffect(() => {
-        const timer = setTimeout(() => setStartAnim(true), 500);
-        return () => clearTimeout(timer);
-    }, []);
-
-    useFrame((state, delta) => {
-        if (startAnim && lat != null && lng != null) {
-            const phi = (90 - lat) * (Math.PI / 180)
-            const theta = (lng + 180) * (Math.PI / 180)
-            const distance = 2.0
-
-            const x = -(distance * Math.sin(phi) * Math.cos(theta)) + offsetX
-            const z = (distance * Math.sin(phi) * Math.sin(theta))
-            const y = (distance * Math.cos(phi))
-
-            const targetPos = new THREE.Vector3(x, y, z)
-
-            const dist = state.camera.position.distanceTo(targetPos)
-            if (dist > 0.01) {
-                easing.damp3(state.camera.position, targetPos, 0.5, delta)
-            }
-            state.camera.lookAt(offsetX, 0, 0)
-        } else {
-            const currentDist = state.camera.position.distanceTo(new THREE.Vector3(offsetX, 0, 0))
-            if (currentDist < 3.4) {
-                const dir = state.camera.position.clone().sub(new THREE.Vector3(offsetX, 0, 0)).normalize()
-                const targetPos = dir.multiplyScalar(3.5).add(new THREE.Vector3(offsetX, 0, 0))
-                easing.damp3(state.camera.position, targetPos, 0.5, delta)
-                state.camera.lookAt(offsetX, 0, 0)
-            }
-        }
-    })
-    return null;
-}
-
-export function DigitalCloneView({ item, content, cloneUrl, previewMode = false }: DigitalCloneViewProps) {
-    const [copied, setCopied] = useState(false);
-    const [hasWebGL] = useState(() => hasWebGLSupport());
-    const videoUrl = useMemo(
-        () => resolveMediaUrl(item.item_video_url || item.batch.video_url),
-        [item.batch.video_url, item.item_video_url]
-    );
-    const photoUrl = useMemo(
-        () => resolveMediaUrl(item.item_photo_url || item.photo_url),
-        [item.item_photo_url, item.photo_url]
-    );
-
-    const productName = useMemo(() => (
-        item.product?.translations.find((translation) => translation.language_id === 2)?.name
-        || item.product?.translations.find((translation) => translation.language_id === 1)?.name
-        || item.product?.translations[0]?.name
-        || 'Камень'
-    ), [item.product?.translations]);
-
-    const productDescription = useMemo(() => (
-        item.product?.translations.find((translation) => translation.language_id === 2)?.description
-        || item.product?.translations.find((translation) => translation.language_id === 1)?.description
-        || item.product?.translations[0]?.description
-        || ''
-    ), [item.product?.translations]);
-
-    const locationName = useMemo(() => (
-        item.product?.location?.translations.find((translation) => translation.language_id === 2)?.name
-        || item.product?.location?.translations.find((translation) => translation.language_id === 1)?.name
-        || item.product?.location?.translations[0]?.name
-        || 'Локация'
-    ), [item.product?.location?.translations]);
-
-    const heroTitle = applyCloneTemplate(content.hero_title_template, {
-        temp_id: item.serial_number || item.temp_id,
-        token: item.public_token,
-        status: item.status,
-        partner: item.batch.owner?.name ?? ''
-    });
-
-    const handleCopyLink = async () => {
-        try {
-            await navigator.clipboard.writeText(cloneUrl);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch (_error) {
-            setCopied(false);
-        }
-    };
-
-    return (
-        <div className="min-h-screen bg-black text-gray-100 flex flex-col relative overflow-hidden">
-            <div className="absolute inset-0 z-0">
-                {hasWebGL ? (
-                    <Canvas camera={{ position: [0, 0, 3.5], fov: 45 }}>
-                        <Suspense fallback={null}>
-                            <CloneScene lat={item.batch.gps_lat} lng={item.batch.gps_lng} />
-                        </Suspense>
-                    </Canvas>
-                ) : (
-                    <div className="h-full w-full bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.22),_transparent_40%),linear-gradient(180deg,_#050816_0%,_#02040a_100%)]" />
-                )}
             </div>
+        );
 
-            <header className="relative z-10 border-b border-white/10 backdrop-blur-md bg-black/40">
-                <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
-                    <Link to="/" className="text-xl font-bold tracking-[0.18em] text-white">
-                        STONES
-                    </Link>
-                    <span className="text-xs uppercase tracking-[0.22em] text-blue-400">{content.hero_badge}</span>
-                </div>
-            </header>
+        if (previewMode) {
+            return image;
+        }
 
-            <main className="relative z-10 mx-auto w-full max-w-7xl px-4 md:px-6 py-6 lg:py-10 flex-1 flex flex-col lg:flex-row gap-6 lg:gap-8 xl:gap-12 pointer-events-none">
-                <div className="w-full lg:w-[50%] xl:w-[45%] shrink-0 flex flex-col pointer-events-auto">
-                    <div className="mb-6 lg:mb-8 p-5 lg:p-6 rounded-3xl bg-black/20 backdrop-blur-md border border-white/5">
-                        <h1 className="text-4xl md:text-5xl font-semibold text-white leading-tight drop-shadow-md">{heroTitle}</h1>
-                        <p className="mt-4 text-gray-300 text-base md:text-lg drop-shadow">{content.hero_description}</p>
-                        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                            <p className="text-sm font-semibold text-white">{productName}</p>
-                            {productDescription && <p className="mt-2 text-sm text-gray-300">{productDescription}</p>}
-                            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-blue-300">
-                                {locationName}
-                            </p>
-                        </div>
-                    </div>
+        return (
+            <button
+                type="button"
+                onClick={onOpen}
+                className="transition-transform hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
+                aria-label={actionLabel}
+            >
+                {image}
+            </button>
+        );
+    }
 
-                    <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-4 lg:p-5 shadow-[0_20px_60px_rgba(0,0,0,0.8)]">
-                        <h2 className="text-lg font-semibold text-white mb-4 ml-1">{content.video_heading}</h2>
-                        <div className="rounded-2xl overflow-hidden bg-gray-950 border border-white/10 flex items-center justify-center relative aspect-[9/16] max-h-[70vh] lg:max-h-none lg:h-[500px] xl:h-[650px]">
-                            {videoUrl ? (
-                                <video
-                                    src={videoUrl}
-                                    poster={photoUrl || undefined}
-                                    controls
-                                    playsInline
-                                    className="absolute inset-0 w-full h-full object-cover bg-black"
-                                />
-                            ) : photoUrl ? (
-                                <img
-                                    src={photoUrl}
-                                    alt={productName}
-                                    className="absolute inset-0 h-full w-full object-cover bg-black"
-                                />
-                            ) : (
-                                <div className="p-8 flex items-center justify-center text-gray-500 text-center">
-                                    {content.video_empty_text}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="w-full lg:w-[35%] xl:w-[32%] lg:ml-auto space-y-6 mt-4 lg:mt-64 pointer-events-auto">
-                    <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-5 lg:p-6 shadow-xl">
-                        <h2 className="text-lg font-semibold text-white mb-4">{content.details_heading}</h2>
-                        <div className="flex flex-col text-sm space-y-3">
-                            <InfoRow label="Серийный номер" value={item.serial_number || 'Не сгенерирован'} mono />
-                            <InfoRow label={content.field_token_label} value={item.public_token} mono />
-                            <InfoRow label={content.field_status_label} value={item.status} />
-                            <InfoRow label="Продажа" value={item.is_sold ? 'Продан' : 'Не продан'} />
-                            <InfoRow label={content.field_activation_label} value={item.activation_date ? new Date(item.activation_date).toLocaleString('ru-RU') : 'Не активирован'} />
-                            <InfoRow
-                                label="Дата и время сбора"
-                                value={[
-                                    item.collected_date ? new Date(item.collected_date).toLocaleDateString('ru-RU') : null,
-                                    item.collected_time || null
-                                ].filter(Boolean).join(' ') || 'Не указаны'}
-                            />
-                            <InfoRow
-                                label={content.field_coords_label}
-                                value={(item.batch.gps_lat != null && item.batch.gps_lng != null)
-                                    ? `${item.batch.gps_lat.toFixed(5)}, ${item.batch.gps_lng.toFixed(5)}`
-                                    : 'Не указаны'}
-                            />
-                            <InfoRow label={content.field_batch_date_label} value={new Date(item.batch.created_at).toLocaleDateString('ru-RU')} />
-                            <InfoRow label="Шаблон" value={productName} />
-                            <InfoRow label="Локация" value={locationName} />
-                        </div>
-                    </div>
-
-                    <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-5 lg:p-6 shadow-xl">
-                        <h2 className="text-lg font-semibold text-white mb-4">Описание происхождения</h2>
-                        <p className="text-sm text-gray-300 leading-relaxed">
-                            {item.product?.location_description || 'Описание локации будет добавлено позже.'}
-                        </p>
-                    </div>
-
-                    <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md p-5 lg:p-6 space-y-4 shadow-xl">
-                        <h2 className="text-lg font-semibold text-blue-400">{content.authenticity_heading}</h2>
-                        <p className="text-sm text-gray-300 leading-relaxed">{content.authenticity_text}</p>
-
-                        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                            <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">{content.link_label}</p>
-                            <div className="flex items-center gap-3">
-                                <div className="flex-1 bg-black/40 rounded-lg px-3 py-2 text-xs text-gray-300 truncate font-mono border border-white/5">
-                                    {cloneUrl}
-                                </div>
-                                <button
-                                    onClick={() => void handleCopyLink()}
-                                    disabled={previewMode}
-                                    className="px-4 py-2 text-xs rounded-lg bg-blue-600/20 hover:bg-blue-500/40 border border-blue-500/30 text-blue-50 disabled:opacity-50 transition-colors whitespace-nowrap font-medium"
-                                >
-                                    {copied ? content.copied_button_text : content.copy_button_text}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </main>
+    return (
+        <div className="flex h-[10.5rem] w-full flex-col items-center justify-center rounded-[1.55rem] border border-dashed border-white/14 bg-black/18 px-3 text-center shadow-[0_18px_48px_rgba(0,0,0,0.28)] sm:h-[12rem] lg:h-[16rem]">
+            <ImageIcon className="h-5 w-5 text-white/42 lg:h-6 lg:w-6" strokeWidth={1.6} />
+            <p className="mt-2 text-[11px] leading-4 text-white/34 lg:text-xs lg:leading-5">
+                Фото появится после загрузки
+            </p>
         </div>
     );
 }
 
-function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function DescriptionCard({
+    description,
+    extraText
+}: {
+    description: string;
+    extraText: string;
+}) {
     return (
-        <div className="flex flex-col border-b border-white/5 pb-3 last:border-0 last:pb-0">
-            <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">{label}</p>
-            <p className={`text-sm text-white break-words ${mono ? 'font-mono tracking-wider' : ''}`}>{value}</p>
+        <div className="rounded-[1.75rem] border border-white/10 bg-black/28 px-4 py-5 shadow-[0_22px_70px_rgba(0,0,0,0.28)] backdrop-blur-md sm:px-5 sm:py-6 lg:max-w-[34rem]">
+            <p className="text-base leading-7 text-white/82 sm:text-[17px] sm:leading-8">
+                {description}
+            </p>
+
+            {extraText ? (
+                <div className="mt-4 border-t border-white/8 pt-4">
+                    <p className="text-sm leading-7 text-white/54">
+                        {extraText}
+                    </p>
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function VideoButton({
+    hasVideoAsset,
+    previewMode,
+    title,
+    subtitle,
+    onOpen
+}: {
+    hasVideoAsset: boolean;
+    previewMode: boolean;
+    title: string;
+    subtitle: string;
+    onOpen: () => void;
+}) {
+    const className = hasVideoAsset
+        ? 'border-white/12 bg-black/34 text-white shadow-[0_18px_50px_rgba(0,0,0,0.28)]'
+        : 'border-white/8 bg-black/18 text-white/44 shadow-[0_18px_50px_rgba(0,0,0,0.2)]';
+
+    const content = (
+        <div className={`flex min-h-[4.75rem] w-full items-center gap-3 rounded-[1.5rem] border px-3.5 py-3.5 backdrop-blur-md transition-colors ${className}`}>
+            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${hasVideoAsset ? 'bg-white/10 text-white' : 'bg-white/6 text-white/28'}`}>
+                <Play className="ml-0.5 h-5 w-5" fill="currentColor" strokeWidth={1.6} />
+            </div>
+
+            <div className="min-w-0 flex-1 text-left">
+                <p className={`text-[13px] font-medium ${hasVideoAsset ? 'text-white' : 'text-white/42'} sm:text-sm`}>
+                    {title}
+                </p>
+                <p className={`mt-1 text-[11px] leading-4 ${hasVideoAsset ? 'text-white/52' : 'text-white/26'} sm:text-xs sm:leading-5`}>
+                    {subtitle}
+                </p>
+            </div>
+
+            <Clapperboard className={`h-5 w-5 shrink-0 ${hasVideoAsset ? 'text-white/46' : 'text-white/20'}`} strokeWidth={1.6} />
+        </div>
+    );
+
+    if (!hasVideoAsset || previewMode) {
+        return (
+            <div aria-disabled="true" className={previewMode ? 'cursor-default' : 'cursor-not-allowed'}>
+                {content}
+            </div>
+        );
+    }
+
+    return (
+        <button
+            type="button"
+            onClick={onOpen}
+            className="w-full text-left transition-transform hover:scale-[1.01] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
+        >
+            {content}
+        </button>
+    );
+}
+
+function MediaOverlay({
+    title,
+    onClose,
+    children
+}: {
+    title: string;
+    onClose: () => void;
+    children: ReactNode;
+}) {
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/88 px-4 py-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md">
+            <button
+                type="button"
+                aria-label="Закрыть"
+                className="absolute inset-0"
+                onClick={onClose}
+            />
+
+            <div className="relative z-10 flex w-full max-w-5xl flex-col items-center">
+                <div className="mb-4 flex w-full items-center justify-between rounded-full border border-white/10 bg-black/45 px-4 py-3 text-white/72 backdrop-blur-md">
+                    <span className="text-xs uppercase tracking-[0.24em]">{title}</span>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-white/8 text-white/76 transition-colors hover:bg-white/14"
+                        aria-label="Закрыть overlay"
+                    >
+                        <X className="h-4 w-4" strokeWidth={1.8} />
+                    </button>
+                </div>
+
+                <div className="relative z-10 flex w-full items-center justify-center">
+                    {children}
+                </div>
+            </div>
         </div>
     );
 }

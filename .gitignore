@@ -11,6 +11,7 @@ lerna-debug.log*
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.local
 *.db
 coverage
@@ -18,6 +19,9 @@ public/uploads
 storage/video-jobs
 storage/video-export
 storage/video-export-helper
+build
+ops/backups/mysql/*
+!ops/backups/mysql/.gitkeep
 
 node_modules
 dist

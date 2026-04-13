@@ -13,8 +13,9 @@ import {
     parseSourceManifest,
     sanitizeVideoOutputSegment,
     sortBatchItemsForVideoAssignment,
-    resolveProjectPath
+    type VideoResultManifestEntry
 } from './services/videoProcessing.ts';
+import { resolveProjectPath } from './utils/projectPaths.ts';
 
 const prisma = new PrismaClient();
 const execFileAsync = promisify(execFile);
@@ -313,7 +314,7 @@ const processJob = async (job: ClaimedVideoJob) => {
         const normalizedBasePath = path.join(workDir, `normalized-${baseSource.stored_name}.mp4`);
         await normalizeClip(baseSource.absolutePath, normalizedBasePath, baseProbe, baseProbe);
 
-        const resultManifest = [];
+        const resultManifest: VideoResultManifestEntry[] = [];
         const subsequentFiles = sourceFiles.slice(1);
         for (let index = 0; index < subsequentFiles.length; index += 1) {
             const inputFile = subsequentFiles[index];

@@ -24,6 +24,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_VIDEO_HELPER_DOWNLOAD_URL: ${VITE_VIDEO_HELPER_DOWNLOAD_URL:-}
     container_name: stones-app
     restart: unless-stopped
     depends_on:
@@ -35,29 +37,45 @@ services:
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
       PORT: 3001
       CLIENT_URL: http://localhost:3001
+      RUN_MIGRATIONS: "1"
+      NODE_ENV: production
     ports:
       - "3001:3001"
     volumes:
       - stones_uploads:/app/public/uploads
       - stones_video_jobs:/app/storage/video-jobs
       - stones_video_exports:/app/storage/video-export
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || '3001') + '/healthz').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   video-processor:
     image: stones-runtime:local
     pull_policy: never
     container_name: stones-video-processor
     restart: unless-stopped
-    command: ["npm", "run", "video-processor"]
+    command: ["node", "build/server/videoProcessor.js"]
     depends_on:
       db:
+        condition: service_healthy
+      app:
         condition: service_healthy
     environment:
       DATABASE_URL: mysql://stones:stones@db:3306/stones?connection_limit=20&pool_timeout=30
       VIDEO_PROCESSOR_POLL_MS: 3000
+      RUN_MIGRATIONS: "0"
+      NODE_ENV: production
     volumes:
       - stones_uploads:/app/public/uploads
       - stones_video_jobs:/app/storage/video-jobs
       - stones_video_exports:/app/storage/video-export
+    healthcheck:
+      test: ["CMD-SHELL", "ps -o args | grep -q '[n]ode build/server/videoProcessor.js'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
   stones_mysql_data:

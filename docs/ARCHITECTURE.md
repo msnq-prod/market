@@ -1,27 +1,251 @@
-# Архитектура
+# Архитектура Stones
 
-## Обзор
-- Backend: Node.js + Express + Prisma
-- База данных: MySQL (целевая), SQLite используется только локально
-- Frontend: SPA (Vite)
+Документ описывает фактическую архитектуру текущего репозитория, а не целевую модель "на будущее".
 
-## Модули домена
-- catalog: категории, товары, локации, переводы
-- users: пользователи, роли
-- orders: заказы и позиции
-- content: медиа и описательные материалы
+## 1. Общая схема
 
-## Границы модулей
-- Модуль владеет своими таблицами и миграциями
-- Кросс-модульные связи возможны только через FK и документированные контракты
-- Никаких циклических зависимостей между модулями
+Stones состоит из четырех основных частей:
 
-## Доступ к данным
-- Все запросы к БД проходят через сервисный слой
-- Роуты не содержат ORM-логики
-- Для чтения больших коллекций используется ограничение и пагинация
+1. SPA-клиент на React.
+2. Express API.
+3. MySQL + Prisma.
+4. Отдельный worker для обработки batch-видео.
 
-## Локализация
-- Все пользовательские тексты хранятся в таблицах переводов
-- Переводы связываются через `language_id`
+В development:
 
+- frontend поднимается Vite;
+- backend поднимается `tsx server/index.ts`;
+- клиент ходит в API через `VITE_API_TARGET`.
+
+В production:
+
+- клиент собирается в `dist/`;
+- Express раздает API, статические uploads и собранный SPA;
+- отдельный процесс `video-processor` обрабатывает задания по видео;
+- в production compose трафик идет через Caddy.
+
+## 2. Frontend
+
+### Основные контуры
+
+- публичная витрина: `src/App.tsx`, `src/components/*`
+- HQ: `src/admin/*`
+- франчайзи: `src/partner/*`
+- публичный цифровой паспорт: `src/public/*`
+
+### Ключевые маршруты
+
+- `/` — витрина
+- `/clone/:serialNumber` — публичный цифровой паспорт
+- `/admin/login`
+- `/admin/*`
+- `/partner/login`
+- `/partner/dashboard`
+- `/partner/batches`
+- `/partner/batches/new`
+- `/partner/finance`
+
+### Frontend state
+
+- глобальное клиентское состояние витрины хранится в Zustand: `src/store.ts`
+- auth-сессия хранится в localStorage и используется через `authFetch`
+- routing основан на `react-router-dom`
+
+## 3. Backend
+
+### Основной entrypoint
+
+- `server/index.ts`
+
+Он отвечает за:
+
+- настройку `helmet`, `cors`, `express.json()`
+- `/healthz`
+- раздачу `public/uploads` и `public/locations`
+- регистрацию route-модулей
+- часть CRUD-эндпоинтов напрямую в самом `index.ts`
+- SPA fallback для production-сборки
+
+### Route-модули
+
+- `server/routes/auth.ts` — buyer login/register + refresh + me
+- `server/routes/orders.ts` — заявки покупателей
+- `server/routes/collectionRequests.ts` — задачи на сбор
+- `server/routes/batches.ts` — партии, QR-pack, receive, finalize, video workflows
+- `server/routes/items.ts` — staff/item detail и support-only patch
+- `server/routes/hq.ts` — verify / accept / reject / legacy finish
+- `server/routes/financials.ts` — профиль, ledger, allocation
+- `server/routes/public.ts` — публичный паспорт, QR, activation
+- `server/routes/content.ts` — тексты страницы цифрового паспорта
+- `server/routes/upload.ts` — загрузка файлов
+
+### Важная особенность текущей реализации
+
+В проекте нет единого backend service layer для всех модулей.
+
+Сейчас используется смешанный подход:
+
+- значительная часть ORM-логики находится прямо в роутерах;
+- часть общей логики вынесена в `server/utils/*` и `server/services/*`;
+- для видео есть отдельные service-модули.
+
+Это важно учитывать при планировании дальнейшего рефакторинга и при описании системы заказчику.
+
+## 4. База данных
+
+### Технология
+
+- Prisma ORM
+- MySQL как целевая БД
+
+### Источник истины
+
+- `prisma/schema.prisma`
+
+### Главные группы сущностей
+
+Каталог:
+- `Language`
+- `Category`
+- `CategoryTranslation`
+- `Location`
+- `LocationTranslation`
+- `Product`
+- `ProductTranslation`
+
+Пользователи и доступ:
+- `User`
+- `Role`
+
+Продажи:
+- `Order`
+- `OrderItem`
+- `OrderStatus`
+
+Операционный контур:
+- `CollectionRequest`
+- `CollectionWorkflowStatus`
+- `Batch`
+- `BatchStatus`
+- `Item`
+- `ItemStatus`
+- `SalesChannel`
+
+Финансы и аудит:
+- `Ledger`
+- `LedgerOperation`
+- `AuditLog`
+
+Контент:
+- `ContentPage`
+
+Видео:
+- `VideoProcessingJob`
+- `VideoProcessingJobStatus`
+- `BatchVideoExportSession`
+- `BatchVideoExportStatus`
+
+## 5. Аутентификация и доступ
+
+### Механика
+
+- access token и refresh token — JWT
+- защищенные запросы используют `Authorization: Bearer <token>`
+- middleware: `authenticateToken`, `requireRole`
+
+### Роли
+
+- `USER`
+- `ADMIN`
+- `MANAGER`
+- `SALES_MANAGER`
+- `FRANCHISEE`
+
+### Практические ограничения
+
+- `SALES_MANAGER` в UI ограничен разделом `/admin/orders`
+- `MANAGER` не работает с очередью заказов сайта
+- ручное редактирование `Item` доступно только `ADMIN`
+
+## 6. Медиа и файлы
+
+### Что хранится локально
+
+- пользовательские загрузки: `public/uploads`
+- изображения локаций: `public/locations`
+- staging и служебные каталоги для видео: `storage/video-jobs`, `storage/video-export`
+
+### Публичные URL
+
+- uploaded media раздаются через `/uploads/*`
+- изображения локаций раздаются через `/locations/*`
+- QR генерируется на лету через `/api/public/items/:serialNumber/qr`
+
+## 7. Видео-контур
+
+В проекте есть два разных сценария работы с видео:
+
+1. server-side processing через `server/videoProcessor.ts`
+2. локальный export-flow через HQ Video Tool и desktop helper
+
+### Backend video processing
+
+- задания создаются через `/api/batches/:id/video-jobs`
+- worker читает задания из БД
+- результат может обновлять `item_video_url`
+
+### Локальный export-flow
+
+- HQ открывает `/admin/video-tool/:batchId`
+- создается `BatchVideoExportSession`
+- локальный helper рендерит ролики по item
+- готовые `.mp4` дозагружаются обратно в backend
+
+## 8. Публичный цифровой паспорт
+
+Источник данных:
+
+- `Item`
+- связанный `Batch`
+- связанный `Product`
+- `ContentPage` с ключом `clone_page`
+
+Паспорт доступен только если:
+
+- item имеет актуальный `serial_number`
+- batch находится в `RECEIVED` или `FINISHED`
+- item не находится в `REJECTED`
+
+## 9. Docker и deployment topology
+
+### Local compose
+
+- `db`
+- `app`
+- `video-processor`
+
+### Production compose
+
+- `caddy`
+- `db`
+- `app`
+- `video-processor`
+
+## 10. Тестирование
+
+- lint: `npm run lint`
+- type/build: `npm run build`
+- e2e: `npm run test:e2e`
+
+Playwright-конфиг:
+
+- тесты: `tests/e2e`
+- отдельный dev server для e2e поднимается через `npm run dev:e2e`
+
+## 11. Ограничения текущей архитектуры
+
+- часть бизнес-логики и CRUD находится в роутерах, а не в выделенном domain/service слое;
+- часть старых сценариев все еще видна в модели данных и seed, хотя в UI уже недоступна;
+- checkout пока работает как заявка, а не как полноценная платежная воронка;
+- финансовый расчет не запускается автоматически из публичной активации;
+- есть смешение operational batch-flow и legacy HQ-route flow (`server/routes/hq.ts` и `server/routes/batches.ts`).

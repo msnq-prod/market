@@ -2,23 +2,71 @@ import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import QRCode from 'qrcode';
 import { buildCloneUrl } from '../utils/cloneUrls.ts';
+import { getDefaultProductTranslation, isPublicPassportAvailable, looksLikeLegacyItemSerial } from '../utils/collectionWorkflow.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const PUBLIC_ACTIVATION_ALLOWED_STATUSES = new Set(['ON_CONSIGNMENT', 'STOCK_ONLINE', 'SOLD_ONLINE']);
 
-router.get('/items/:publicToken/qr', async (req, res) => {
-    try {
-        const item = await prisma.item.findUnique({
-            where: { public_token: req.params.publicToken },
-            select: { id: true }
-        });
+const pickCollectionDate = (batchDate: Date | null, itemDate: Date | null): Date | null => batchDate || itemDate || null;
+const pickCollectionTime = (batchTime: string | null, itemTime: string | null): string | null => batchTime || itemTime || null;
+const normalizeSerialNumber = (value: string): string => value.trim().toUpperCase();
+const isResolvableCurrentSerial = (value: string): boolean => !looksLikeLegacyItemSerial(value);
+const getPreferredLocationName = (
+    translations: Array<{ language_id: number; name: string }>
+): string | null => (
+    translations.find((translation) => translation.language_id === 2)?.name
+    || translations.find((translation) => translation.language_id === 1)?.name
+    || translations[0]?.name
+    || null
+);
 
-        if (!item) {
+router.get('/items/:serialNumber/qr', async (req, res) => {
+    try {
+        const serialNumber = normalizeSerialNumber(req.params.serialNumber);
+        if (!isResolvableCurrentSerial(serialNumber)) {
             return res.status(404).json({ error: 'Камень не найден.' });
         }
 
-        const qrPayload = buildCloneUrl(req, req.params.publicToken);
+        const item = await prisma.item.findFirst({
+            where: {
+                serial_number: serialNumber,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                },
+                product: {
+                    is: {
+                        deleted_at: null,
+                        location: {
+                            is: {
+                                deleted_at: null
+                            }
+                        }
+                    }
+                }
+            },
+            select: {
+                serial_number: true,
+                status: true,
+                batch: {
+                    select: {
+                        status: true
+                    }
+                }
+            }
+        });
+
+        if (!item || !isPublicPassportAvailable(item.status, item.batch?.status)) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
+
+        const qrPayload = buildCloneUrl(req, item.serial_number);
+        if (!qrPayload) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
         const pngBuffer = await QRCode.toBuffer(qrPayload, {
             type: 'png',
             width: 512,
@@ -35,16 +83,41 @@ router.get('/items/:publicToken/qr', async (req, res) => {
     }
 });
 
-router.get('/items/:publicToken', async (req, res) => {
+router.get('/items/:serialNumber', async (req, res) => {
     try {
-        const item = await prisma.item.findUnique({
-            where: { public_token: req.params.publicToken },
+        const serialNumber = normalizeSerialNumber(req.params.serialNumber);
+        if (!isResolvableCurrentSerial(serialNumber)) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
+
+        const item = await prisma.item.findFirst({
+            where: {
+                serial_number: serialNumber,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                },
+                product: {
+                    is: {
+                        deleted_at: null,
+                        location: {
+                            is: {
+                                deleted_at: null
+                            }
+                        }
+                    }
+                }
+            },
             include: {
                 batch: {
-                    include: {
-                        owner: {
-                            select: { id: true, name: true }
-                        }
+                    select: {
+                        status: true,
+                        gps_lat: true,
+                        gps_lng: true,
+                        collected_date: true,
+                        collected_time: true
                     }
                 },
                 product: {
@@ -60,46 +133,33 @@ router.get('/items/:publicToken', async (req, res) => {
             }
         });
 
-        if (!item) {
+        if (!item || !item.product || !isPublicPassportAvailable(item.status, item.batch?.status)) {
             return res.status(404).json({ error: 'Камень не найден.' });
         }
 
+        const preferredTranslation = item.product ? getDefaultProductTranslation(item.product.translations) : null;
+        const collectionDate = pickCollectionDate(item.batch.collected_date, item.collected_date);
+        const collectionTime = pickCollectionTime(item.batch.collected_time, item.collected_time);
+        const photoUrl = item.item_photo_url || item.photo_url || null;
+        const videoUrl = item.item_video_url || null;
+        const locationName = item.product.location
+            ? getPreferredLocationName(item.product.location.translations)
+            : null;
+
         res.json({
-            id: item.id,
-            temp_id: item.temp_id,
             serial_number: item.serial_number,
-            public_token: item.public_token,
-            status: item.status,
-            is_sold: item.is_sold,
-            activation_date: item.activation_date,
-            photo_url: item.item_photo_url || item.photo_url,
-            item_photo_url: item.item_photo_url,
-            item_video_url: item.item_video_url,
-            collected_date: item.collected_date,
-            collected_time: item.collected_time,
-            clone_url: buildCloneUrl(req, req.params.publicToken),
-            batch: {
-                id: item.batch.id,
-                gps_lat: item.batch.gps_lat,
-                gps_lng: item.batch.gps_lng,
-                video_url: item.batch.video_url,
-                collected_date: item.batch.collected_date,
-                collected_time: item.batch.collected_time,
-                created_at: item.batch.created_at,
-                owner: item.batch.owner
-            },
-            product: item.product ? {
-                id: item.product.id,
-                price: Number(item.product.price),
-                image: item.product.image,
-                country_code: item.product.country_code,
-                location_code: item.product.location_code,
-                item_code: item.product.item_code,
-                location_description: item.product.location_description,
-                is_published: item.product.is_published,
-                translations: item.product.translations,
-                location: item.product.location
-            } : null
+            clone_url: buildCloneUrl(req, item.serial_number),
+            product_name: preferredTranslation?.name || 'Товар',
+            product_description: preferredTranslation?.description || '',
+            location_name: locationName,
+            collection_date: collectionDate?.toISOString() || null,
+            collection_time: collectionTime,
+            gps_lat: item.batch.gps_lat,
+            gps_lng: item.batch.gps_lng,
+            photo_url: photoUrl,
+            video_url: videoUrl,
+            has_photo: Boolean(photoUrl),
+            has_video: Boolean(videoUrl)
         });
     } catch (error) {
         console.error(error);
@@ -107,10 +167,33 @@ router.get('/items/:publicToken', async (req, res) => {
     }
 });
 
-router.post('/items/:publicToken/activate', async (req, res) => {
+router.post('/items/:serialNumber/activate', async (req, res) => {
     try {
-        const item = await prisma.item.findUnique({
-            where: { public_token: req.params.publicToken },
+        const serialNumber = normalizeSerialNumber(req.params.serialNumber);
+        if (!isResolvableCurrentSerial(serialNumber)) {
+            return res.status(404).json({ error: 'Камень не найден.' });
+        }
+
+        const item = await prisma.item.findFirst({
+            where: {
+                serial_number: serialNumber,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                },
+                product: {
+                    is: {
+                        deleted_at: null,
+                        location: {
+                            is: {
+                                deleted_at: null
+                            }
+                        }
+                    }
+                }
+            },
             include: {
                 batch: true
             }

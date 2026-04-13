@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, PackageCheck, QrCode, Search, Video } from 'lucide-react';
+import { Camera, PackageCheck, Printer, QrCode, Search, Video } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -8,7 +8,6 @@ type BatchItem = {
     id: string;
     temp_id: string;
     serial_number: string | null;
-    public_token: string;
     status: string;
     is_sold: boolean;
     photo_url?: string | null;
@@ -16,8 +15,8 @@ type BatchItem = {
     item_video_url?: string | null;
     item_seq?: number | null;
     created_at: string;
-    clone_url: string;
-    qr_url: string;
+    clone_url: string | null;
+    qr_url: string | null;
 };
 
 type VideoProcessingState = {
@@ -145,6 +144,8 @@ const videoExportClass: Record<string, string> = {
 
 const activeVideoProcessingStatuses = new Set(['QUEUED', 'PROCESSING']);
 const activeVideoExportStatuses = new Set(['OPEN', 'UPLOADING']);
+const isPublicPassportItem = (batchStatus: string, itemStatus: string) =>
+    (batchStatus === 'RECEIVED' || batchStatus === 'FINISHED') && itemStatus !== 'REJECTED';
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
     const translation = translations.find((item) => item.language_id === 2)
@@ -154,7 +155,7 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
     return typeof value === 'string' ? value : '';
 };
 
-const createClonePath = (publicToken: string) => `/clone/${encodeURIComponent(publicToken)}`;
+const createClonePath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
 
 const countBatchMedia = (batch: BatchView | null) => {
     if (!batch) {
@@ -183,6 +184,7 @@ export function Acceptance() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [selectedBatchId, setSelectedBatchId] = useState('');
+    const [selectedQrItemIds, setSelectedQrItemIds] = useState<string[]>([]);
     const [batchQuery, setBatchQuery] = useState('');
     const [updatingBatchId, setUpdatingBatchId] = useState('');
     const [photoUploadingBatchId, setPhotoUploadingBatchId] = useState('');
@@ -272,6 +274,16 @@ export function Acceptance() {
         () => relevantBatches.find((batch) => batch.id === selectedBatchId) || null,
         [relevantBatches, selectedBatchId]
     );
+    const printableItemIds = useMemo(
+        () => selectedBatch
+            ? selectedBatch.items
+                .filter((item) => isPublicPassportItem(selectedBatch.status, item.status))
+                .map((item) => item.id)
+            : [],
+        [selectedBatch]
+    );
+    const printableItemIdSet = useMemo(() => new Set(printableItemIds), [printableItemIds]);
+    const hasPrintableItems = printableItemIds.length > 0;
 
     const mediaStats = useMemo(() => countBatchMedia(selectedBatch), [selectedBatch]);
     const missingMediaCount = Math.max(0, mediaStats.total - mediaStats.fullyReady);
@@ -288,6 +300,10 @@ export function Acceptance() {
         && !hasActiveVideoExport
         && missingMediaCount === 0
     );
+
+    useEffect(() => {
+        setSelectedQrItemIds((current) => current.filter((itemId) => printableItemIdSet.has(itemId)));
+    }, [printableItemIdSet, selectedBatchId]);
 
     const refreshAndKeepBatch = async (batchId: string) => {
         await loadBatches(false);
@@ -386,6 +402,37 @@ export function Acceptance() {
         } finally {
             setPhotoUploadingBatchId('');
         }
+    };
+
+    const toggleQrItem = (itemId: string) => {
+        if (!printableItemIdSet.has(itemId)) {
+            return;
+        }
+
+        setSelectedQrItemIds((current) => (
+            current.includes(itemId)
+                ? current.filter((value) => value !== itemId)
+                : [...current, itemId]
+        ));
+    };
+
+    const handlePrintAllQr = () => {
+        if (!selectedBatch || !hasPrintableItems) {
+            setError('Для печати нет публичных QR-позиций.');
+            return;
+        }
+
+        window.open(`/admin/qr/print?batchId=${encodeURIComponent(selectedBatch.id)}`, '_blank', 'noopener,noreferrer');
+    };
+
+    const handlePrintSelectedQr = () => {
+        if (!selectedBatch || selectedQrItemIds.length === 0) {
+            setError('Выберите позиции для печати QR.');
+            return;
+        }
+
+        const params = new URLSearchParams({ batchId: selectedBatch.id, ids: selectedQrItemIds.join(',') });
+        window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
     };
 
     return (
@@ -538,6 +585,22 @@ export function Acceptance() {
 
                                             {selectedBatch.status === 'RECEIVED' && (
                                                 <>
+                                                    <Button
+                                                        variant="ghost"
+                                                        onClick={handlePrintSelectedQr}
+                                                        disabled={selectedQrItemIds.length === 0}
+                                                    >
+                                                        <Printer size={16} />
+                                                        Печать выбранных QR
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        onClick={handlePrintAllQr}
+                                                        disabled={!hasPrintableItems}
+                                                    >
+                                                        <Printer size={16} />
+                                                        Печать всех QR
+                                                    </Button>
                                                     <label className={`inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm ${photoUploadingBatchId === selectedBatch.id
                                                         ? 'cursor-default text-gray-400'
                                                         : 'cursor-pointer text-gray-100 hover:bg-gray-800'
@@ -603,25 +666,62 @@ export function Acceptance() {
                                                 tone={canFinalize ? 'success' : 'warning'}
                                             />
                                         </div>
+                                        {selectedBatch.status === 'RECEIVED' && (
+                                            <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                                                <span>Публичные QR: {printableItemIds.length}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedQrItemIds(printableItemIds)}
+                                                    className="rounded-full border border-gray-700 px-3 py-1 hover:bg-gray-800"
+                                                >
+                                                    Выбрать все
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedQrItemIds([])}
+                                                    className="rounded-full border border-gray-700 px-3 py-1 hover:bg-gray-800"
+                                                >
+                                                    Сбросить выбор
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </article>
 
                             <article className="rounded-2xl border border-gray-800 bg-gray-900">
-                                <div className="border-b border-gray-800 px-6 py-4">
-                                    <h3 className="text-lg font-semibold text-white">Позиции партии</h3>
-                                    <p className="mt-1 text-sm text-gray-500">Здесь находится вся приемка товара на склад: серийники, media-статус и быстрые ссылки.</p>
-                                </div>
+                                    <div className="border-b border-gray-800 px-6 py-4">
+                                        <h3 className="text-lg font-semibold text-white">Позиции партии</h3>
+                                        <p className="mt-1 text-sm text-gray-500">Здесь находится вся приемка товара на склад: серийники, media-статус и быстрые ссылки.</p>
+                                    </div>
 
-                                <div className="divide-y divide-gray-800">
-                                    {selectedBatch.items.map((item) => (
+                                    <div className="divide-y divide-gray-800">
+                                        {selectedBatch.items.map((item) => (
                                         <div key={item.id} className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between">
                                             <div className="min-w-0 space-y-2">
                                                 <div className="flex flex-wrap items-center gap-2">
+                                                    {selectedBatch.status === 'RECEIVED' && (
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={selectedQrItemIds.includes(item.id)}
+                                                            onChange={() => toggleQrItem(item.id)}
+                                                            disabled={!isPublicPassportItem(selectedBatch.status, item.status)}
+                                                            className="h-4 w-4 rounded border-gray-600 bg-gray-900"
+                                                        />
+                                                    )}
                                                     <p className="font-semibold text-white">{item.serial_number || item.temp_id}</p>
                                                     <span className={`rounded-full px-2.5 py-1 text-xs ${itemStatusClass[item.status] || 'bg-gray-800 text-gray-300'}`}>
                                                         {itemStatusLabel[item.status] || item.status}
                                                     </span>
+                                                    {isPublicPassportItem(selectedBatch.status, item.status) ? (
+                                                        <span className="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs text-blue-200">
+                                                            Публичный паспорт доступен
+                                                        </span>
+                                                    ) : (
+                                                        <span className="rounded-full bg-gray-800 px-2.5 py-1 text-xs text-gray-400">
+                                                            QR недоступен
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="flex flex-wrap gap-2 text-xs text-gray-500">
                                                     <span className="rounded-full border border-gray-700 px-2.5 py-1">Пакет: {item.temp_id}</span>
@@ -641,23 +741,34 @@ export function Acceptance() {
                                             </div>
 
                                             <div className="flex flex-wrap gap-2">
-                                                <a
-                                                    href={item.qr_url}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500"
-                                                >
-                                                    <QrCode size={16} />
-                                                    QR
-                                                </a>
-                                                <a
-                                                    href={createClonePath(item.public_token)}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
-                                                >
-                                                    Просмотр
-                                                </a>
+                                                {isPublicPassportItem(selectedBatch.status, item.status) ? (
+                                                    <>
+                                                        <a
+                                                            href={item.qr_url || '#'}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            aria-disabled={!item.qr_url}
+                                                            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500"
+                                                        >
+                                                            <QrCode size={16} />
+                                                            QR
+                                                        </a>
+                                                        {createClonePath(item.serial_number) && (
+                                                            <a
+                                                                href={createClonePath(item.serial_number) || '#'}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                                                            >
+                                                                Просмотр
+                                                            </a>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    <span className="inline-flex items-center rounded-lg border border-gray-800 px-3 py-2 text-sm text-gray-500">
+                                                        Паспорт появится после публикации
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                     ))}

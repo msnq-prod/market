@@ -44,7 +44,7 @@ router.get('/ledger', authenticateToken, async (req: AuthRequest, res) => {
                     select: {
                         id: true,
                         temp_id: true,
-                        public_token: true
+                        serial_number: true
                     }
                 }
             },
@@ -79,7 +79,17 @@ router.post('/items/:itemId/allocate', async (req: AuthRequest, res) => {
     const channel = typeof req.body?.channel === 'string' ? req.body.channel.trim() : '';
 
     try {
-        const item = await prisma.item.findUnique({ where: { id: itemId } });
+        const item = await prisma.item.findFirst({
+            where: {
+                id: itemId,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                }
+            }
+        });
         if (!item) return res.status(404).json({ error: 'Item не найден.' });
 
         if (item.status !== 'STOCK_HQ') {

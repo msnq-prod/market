@@ -35,7 +35,8 @@ import {
     type VideoExportManifest
 } from '../services/videoExport.ts';
 import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
-import { hasAllBatchMedia, isStaffRole } from '../utils/collectionWorkflow.ts';
+import { hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../utils/collectionWorkflow.ts';
+import { softDeleteBatch } from '../utils/softDelete.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -71,6 +72,9 @@ const BATCH_INCLUDE = Prisma.validator<Prisma.BatchInclude>()({
         }
     },
     items: {
+        where: {
+            deleted_at: null
+        },
         orderBy: { item_seq: 'asc' }
     },
     video_processing_jobs: {
@@ -118,7 +122,6 @@ const serializeBatch = (req: AuthRequest, batch: BatchRecord) => ({
         product_id: item.product_id,
         temp_id: item.temp_id,
         serial_number: item.serial_number,
-        public_token: item.public_token,
         status: item.status,
         is_sold: item.is_sold,
         sales_channel: item.sales_channel,
@@ -134,8 +137,8 @@ const serializeBatch = (req: AuthRequest, batch: BatchRecord) => ({
         collected_time: item.collected_time,
         created_at: item.created_at,
         updated_at: item.updated_at,
-        clone_url: buildCloneUrl(req, item.public_token),
-        qr_url: buildQrUrl(item.public_token)
+        clone_url: buildCloneUrl(req, item.serial_number),
+        qr_url: buildQrUrl(item.serial_number)
     }))
 });
 
@@ -184,6 +187,9 @@ const buildVideoExportSessionInclude = Prisma.validator<Prisma.BatchVideoExportS
     batch: {
         include: {
             items: {
+                where: {
+                    deleted_at: null
+                },
                 orderBy: { item_seq: 'asc' }
             }
         }
@@ -298,7 +304,12 @@ const loadVideoExportSession = async (db: PrismaDbClient, batchId: string, sessi
     return db.batchVideoExportSession.findFirst({
         where: {
             id: sessionId,
-            batch_id: batchId
+            batch_id: batchId,
+            batch: {
+                is: {
+                    deleted_at: null
+                }
+            }
         },
         include: buildVideoExportSessionInclude
     });
@@ -402,7 +413,10 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
         }
 
         const batches = await prisma.batch.findMany({
-            where,
+            where: {
+                ...where,
+                deleted_at: null
+            },
             include: BATCH_INCLUDE,
             orderBy: { created_at: 'desc' }
         });
@@ -414,64 +428,21 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
     }
 });
 
-router.post('/', authenticateToken, async (req: AuthRequest, res) => {
-    try {
-        if (!req.user) return res.sendStatus(401);
-        if (req.user.role !== 'FRANCHISEE') return res.sendStatus(403);
-
-        const { gps_lat, gps_lng, video_url } = req.body as {
-            gps_lat?: number | string;
-            gps_lng?: number | string;
-            video_url?: string | null;
-        };
-
-        const safeLat = typeof gps_lat === 'number' ? gps_lat : Number(gps_lat);
-        const safeLng = typeof gps_lng === 'number' ? gps_lng : Number(gps_lng);
-
-        if (!Number.isFinite(safeLat) || safeLat < -90 || safeLat > 90) {
-            return res.status(400).json({ error: 'Широта должна быть числом от -90 до 90.' });
-        }
-
-        if (!Number.isFinite(safeLng) || safeLng < -180 || safeLng > 180) {
-            return res.status(400).json({ error: 'Долгота должна быть числом от -180 до 180.' });
-        }
-
-        const created = await prisma.batch.create({
-            data: {
-                owner_id: req.user.id,
-                gps_lat: safeLat,
-                gps_lng: safeLng,
-                video_url: typeof video_url === 'string' && video_url.trim() ? video_url.trim() : null,
-                status: 'DRAFT'
-            },
-            include: BATCH_INCLUDE
-        });
-
-        res.status(201).json(serializeBatch(req, created));
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Не удалось создать партию.' });
-    }
-});
-
 router.get('/:batchId/qr-pack', authenticateToken, async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.batchId },
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: req.params.batchId,
+                deleted_at: null
+            },
             include: BATCH_INCLUDE
         });
 
         if (!batch) {
             return res.status(404).json({ error: 'Партия не найдена.' });
-        }
-
-        if (req.user.role === 'FRANCHISEE' && batch.owner_id !== req.user.id) {
-            return res.sendStatus(403);
-        }
-        if (req.user.role !== 'FRANCHISEE' && !isStaffRole(req.user.role)) {
-            return res.sendStatus(403);
         }
 
         const serialized = serializeBatch(req, batch);
@@ -489,7 +460,12 @@ router.get('/:batchId/qr-pack', authenticateToken, async (req: AuthRequest, res)
                 video_processing: serialized.video_processing
             },
             product: serialized.product,
-            items: serialized.items
+            items: serialized.items.filter((item) =>
+                isPublicPassportAvailable(item.status, serialized.status)
+                && Boolean(item.serial_number)
+                && Boolean(item.clone_url)
+                && Boolean(item.qr_url)
+            )
         });
     } catch (error) {
         console.error(error);
@@ -504,8 +480,11 @@ router.get('/:id/video-tool', authenticateToken, async (req: AuthRequest, res) =
 
         await markStaleVideoExportSessions(prisma, req.params.id);
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.id },
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: BATCH_INCLUDE
         });
 
@@ -550,58 +529,20 @@ router.get('/:id/video-tool', authenticateToken, async (req: AuthRequest, res) =
     }
 });
 
-router.post('/:id/send', authenticateToken, async (req: AuthRequest, res) => {
+router.delete('/:id', authenticateToken, async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.id },
-            include: { collection_request: true }
-        });
-
-        if (!batch) {
+        const deleted = await prisma.$transaction((tx) => softDeleteBatch(tx, req.params.id));
+        if (!deleted) {
             return res.status(404).json({ error: 'Партия не найдена.' });
         }
 
-        if (req.user.role === 'FRANCHISEE' && batch.owner_id !== req.user.id) {
-            return res.sendStatus(403);
-        }
-        if (req.user.role !== 'FRANCHISEE' && !isStaffRole(req.user.role)) {
-            return res.sendStatus(403);
-        }
-
-        if (batch.status !== 'DRAFT') {
-            return res.status(400).json({ error: 'Отправить можно только партию в статусе DRAFT.' });
-        }
-
-        await prisma.$transaction([
-            prisma.batch.update({
-                where: { id: batch.id },
-                data: { status: 'TRANSIT' }
-            }),
-            batch.collection_request_id
-                ? prisma.collectionRequest.update({
-                    where: { id: batch.collection_request_id },
-                    data: { status: 'IN_TRANSIT' }
-                })
-                : prisma.auditLog.create({
-                    data: {
-                        user_id: req.user.id,
-                        action: 'LEGACY_BATCH_SENT',
-                        details: { batchId: batch.id }
-                    }
-                })
-        ]);
-
-        const updated = await prisma.batch.findUnique({
-            where: { id: batch.id },
-            include: BATCH_INCLUDE
-        });
-
-        res.json(updated ? serializeBatch(req, updated) : { success: true });
+        res.json({ success: true });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Не удалось отправить партию.' });
+        res.status(500).json({ error: 'Не удалось удалить партию.' });
     }
 });
 
@@ -610,8 +551,11 @@ router.post('/:id/receive', authenticateToken, async (req: AuthRequest, res) => 
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.id },
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: { collection_request: true }
         });
 
@@ -642,8 +586,11 @@ router.post('/:id/receive', authenticateToken, async (req: AuthRequest, res) => 
                 })
         ]);
 
-        const updated = await prisma.batch.findUnique({
-            where: { id: batch.id },
+        const updated = await prisma.batch.findFirst({
+            where: {
+                id: batch.id,
+                deleted_at: null
+            },
             include: BATCH_INCLUDE
         });
 
@@ -670,10 +617,17 @@ router.post('/:id/video-jobs', authenticateToken, async (req: AuthRequest, res) 
             throw createHttpError('Не передан видео-комплект для обработки.', 400);
         }
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.id },
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: {
-                items: true,
+                items: {
+                    where: {
+                        deleted_at: null
+                    }
+                },
                 video_processing_jobs: {
                     where: {
                         status: {
@@ -747,8 +701,11 @@ router.post('/:id/video-jobs', authenticateToken, async (req: AuthRequest, res) 
         });
         jobCreated = true;
 
-        const updatedBatch = await prisma.batch.findUnique({
-            where: { id: batch.id },
+        const updatedBatch = await prisma.batch.findFirst({
+            where: {
+                id: batch.id,
+                deleted_at: null
+            },
             include: BATCH_INCLUDE
         });
 
@@ -809,10 +766,16 @@ router.post('/:id/video-export-sessions', authenticateToken, async (req: AuthReq
         const result = await withVideoExportBatchLock(req.params.id, async (tx) => {
             await markStaleVideoExportSessions(tx, req.params.id);
 
-            const batch = await tx.batch.findUnique({
-                where: { id: req.params.id },
+            const batch = await tx.batch.findFirst({
+                where: {
+                    id: req.params.id,
+                    deleted_at: null
+                },
                 include: {
                     items: {
+                        where: {
+                            deleted_at: null
+                        },
                         orderBy: { item_seq: 'asc' }
                     }
                 }
@@ -945,7 +908,7 @@ router.get('/:id/video-export-sessions/:sessionId', authenticateToken, async (re
 
 router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, async (req: AuthRequest, res) => {
     let uploadedFile: Express.Multer.File | undefined;
-    let loadedSession: VideoExportSessionRecord | null = null;
+    let loadedSessionId: string | null = null;
 
     try {
         if (!req.user) return res.sendStatus(401);
@@ -967,10 +930,11 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
         const result = await withVideoExportBatchLock(req.params.id, async (tx) => {
             await markStaleVideoExportSessions(tx, req.params.id);
 
-            loadedSession = await loadVideoExportSession(tx, req.params.id, req.params.sessionId);
+            const loadedSession = await loadVideoExportSession(tx, req.params.id, req.params.sessionId);
             if (!loadedSession) {
                 throw createHttpError('Сессия экспорта не найдена.', 404);
             }
+            loadedSessionId = loadedSession.id;
 
             if (loadedSession.batch.status !== 'RECEIVED') {
                 throw createHttpError('Дозагрузка финальных роликов доступна только для партии в статусе RECEIVED.', 400);
@@ -1001,6 +965,9 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
             if (existingEntry) {
                 return {
                     duplicate: true,
+                    batchId: loadedSession.batch_id,
+                    version: loadedSession.version,
+                    shouldComplete: false as const,
                     session: serializeVideoExportSessionDetails(loadedSession)
                 };
             }
@@ -1068,13 +1035,15 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
 
             return {
                 duplicate: false,
+                batchId: loadedSession.batch_id,
                 shouldComplete,
+                version: loadedSession.version,
                 session: serializeVideoExportSessionDetails(updatedSession)
             };
         });
 
-        if (!result.duplicate && result.shouldComplete && loadedSession) {
-            await cleanupOlderCompletedVideoExports(loadedSession.batch_id, loadedSession.version);
+        if (!result.duplicate && result.shouldComplete) {
+            await cleanupOlderCompletedVideoExports(result.batchId, result.version);
         }
 
         res.json(result);
@@ -1088,9 +1057,9 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
             ? error.message
             : 'Не удалось загрузить финальный ролик.';
 
-        if (loadedSession && statusCode >= 500) {
+        if (loadedSessionId && statusCode >= 500) {
             await prisma.batchVideoExportSession.update({
-                where: { id: loadedSession.id },
+                where: { id: loadedSessionId },
                 data: {
                     status: 'FAILED',
                     error_message: message
@@ -1247,10 +1216,17 @@ router.post('/:id/media-sync', authenticateToken, async (req: AuthRequest, res) 
             return res.status(400).json({ error: 'Не передан список файлов для сопоставления.' });
         }
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.id },
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: {
-                items: true
+                items: {
+                    where: {
+                        deleted_at: null
+                    }
+                }
             }
         });
 
@@ -1296,8 +1272,11 @@ router.post('/:id/media-sync', authenticateToken, async (req: AuthRequest, res) 
             }
         });
 
-        const updated = await prisma.batch.findUnique({
-            where: { id: req.params.id },
+        const updated = await prisma.batch.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: BATCH_INCLUDE
         });
 
@@ -1319,10 +1298,17 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
         const updated = await withVideoExportBatchLock(req.params.id, async (tx) => {
             await markStaleVideoExportSessions(tx, req.params.id);
 
-            const batch = await tx.batch.findUnique({
-                where: { id: req.params.id },
+            const batch = await tx.batch.findFirst({
+                where: {
+                    id: req.params.id,
+                    deleted_at: null
+                },
                 include: {
-                    items: true,
+                    items: {
+                        where: {
+                            deleted_at: null
+                        }
+                    },
                     collection_request: true,
                     video_processing_jobs: {
                         where: {
@@ -1368,7 +1354,11 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
                 data: { status: 'FINISHED' }
             });
             await tx.item.updateMany({
-                where: { batch_id: batch.id, status: 'NEW' },
+                where: {
+                    batch_id: batch.id,
+                    status: 'NEW',
+                    deleted_at: null
+                },
                 data: { status: 'STOCK_HQ' }
             });
 
@@ -1387,8 +1377,11 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
                 });
             }
 
-            return tx.batch.findUnique({
-                where: { id: batch.id },
+            return tx.batch.findFirst({
+                where: {
+                    id: batch.id,
+                    deleted_at: null
+                },
                 include: BATCH_INCLUDE
             });
         });

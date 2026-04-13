@@ -1,12 +1,8 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import type { BatchVideoExportSession, Prisma } from '@prisma/client';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '../..');
+import { projectRoot } from '../utils/projectPaths.ts';
 
 export const VIDEO_EXPORT_STORAGE_ROOT = path.join(projectRoot, 'storage/video-export');
 export const VIDEO_EXPORT_STAGING_ROOT = path.join(VIDEO_EXPORT_STORAGE_ROOT, 'staging');

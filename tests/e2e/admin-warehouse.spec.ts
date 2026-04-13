@@ -128,10 +128,6 @@ test('UI: admin navigates warehouse tree, sees grouped items and opens item moda
     await expect(page.getByText('В MVP карточка item доступна только для просмотра.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Сохранить' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Закрыть' }).click();
-
-    const fallbackLocationButton = page.getByRole('button').filter({ hasText: 'Без локации' }).first();
-    await fallbackLocationButton.click();
-    await expect(page.getByText('Без товара')).toBeVisible();
 });
 
 test.afterAll(async () => {

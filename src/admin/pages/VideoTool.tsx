@@ -157,6 +157,7 @@ type HelperSourceUploadPayload = {
     has_audio: boolean;
     video_codec?: string;
     format_name?: string;
+    preview_url?: string;
     fingerprint: SourceFingerprint;
 };
 
@@ -460,6 +461,24 @@ const helperFetch = async (input: string, init?: RequestInit) => {
     return response;
 };
 
+const revokeObjectUrl = (value: string | null) => {
+    if (value?.startsWith('blob:')) {
+        URL.revokeObjectURL(value);
+    }
+};
+
+const isEditableHotkeyTarget = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+
+    if (target.isContentEditable) {
+        return true;
+    }
+
+    return Boolean(target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
+};
+
 export function VideoTool() {
     const navigate = useNavigate();
     const params = useParams<{ batchId: string }>();
@@ -471,6 +490,7 @@ export function VideoTool() {
     const dragPlayheadRef = useRef(false);
     const panViewportRef = useRef<{ source: 'timeline' | 'scrollbar'; startClientX: number; startVisibleStartMs: number } | null>(null);
     const segmentHistoryRef = useRef<Segment[][]>([]);
+    const sourceObjectUrlRef = useRef<string | null>(null);
 
     const [data, setData] = useState<VideoToolPayload | null>(null);
     const [loading, setLoading] = useState(true);
@@ -801,11 +821,10 @@ export function VideoTool() {
 
     useEffect(() => {
         return () => {
-            if (sourceUrl) {
-                URL.revokeObjectURL(sourceUrl);
-            }
+            revokeObjectUrl(sourceObjectUrlRef.current);
+            sourceObjectUrlRef.current = null;
         };
-    }, [sourceUrl]);
+    }, []);
 
     useEffect(() => {
         if (!durationMs) {
@@ -927,8 +946,7 @@ export function VideoTool() {
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
-            const target = event.target as HTMLElement | null;
-            if (target && (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName) || target.isContentEditable)) {
+            if (isEditableHotkeyTarget(event.target)) {
                 return;
             }
 
@@ -1037,10 +1055,10 @@ export function VideoTool() {
         setIsPlaying(false);
         setSourceFile(file);
 
-        if (sourceUrl) {
-            URL.revokeObjectURL(sourceUrl);
-        }
-        setSourceUrl(URL.createObjectURL(file));
+        revokeObjectUrl(sourceObjectUrlRef.current);
+        const nextObjectUrl = URL.createObjectURL(file);
+        sourceObjectUrlRef.current = nextObjectUrl;
+        setSourceUrl(nextObjectUrl);
         void importSourceIntoHelper(file);
     };
 
@@ -1101,6 +1119,14 @@ export function VideoTool() {
             return;
         }
 
+        if (sourceFingerprint
+            && sourceFingerprint.name === sourceFile.name
+            && sourceFingerprint.size === sourceFile.size
+            && sourceFingerprint.lastModified === sourceFile.lastModified) {
+            setSourcePreviewUnavailable(false);
+            return;
+        }
+
         const nextFingerprint: SourceFingerprint = {
             name: sourceFile.name,
             size: sourceFile.size,
@@ -1140,10 +1166,19 @@ export function VideoTool() {
             const codec = (payload.video_codec || '').toLowerCase();
             const formatName = (payload.format_name || '').toLowerCase();
             const isHevcMov = (codec === 'hevc' || codec === 'h265') && formatName.includes('mov');
+            if (payload.preview_url) {
+                revokeObjectUrl(sourceObjectUrlRef.current);
+                sourceObjectUrlRef.current = null;
+                setSourceUrl(payload.preview_url);
+                setSourcePreviewUnavailable(false);
+            }
+
             if (isHevcMov) {
                 setNotice({
                     tone: 'info',
-                    message: 'Исходник MOV/H.265 принят через helper. Если браузер не покажет preview, экспорт всё равно будет доступен.'
+                    message: payload.preview_url
+                        ? 'Исходник MOV/H.265 принят. Helper подготовил совместимое превью и экспорт остаётся доступным.'
+                        : 'Исходник MOV/H.265 принят через helper. Если браузер не покажет preview, экспорт всё равно будет доступен.'
                 });
             }
 
@@ -1615,8 +1650,8 @@ export function VideoTool() {
                     className="grid min-h-0 flex-1 transition-[grid-template-columns] duration-300"
                     style={{
                         gridTemplateColumns: leftRailOpen
-                            ? '224px minmax(0,2.9fr) minmax(360px,1.45fr)'
-                            : '68px minmax(0,2.9fr) minmax(360px,1.45fr)'
+                            ? 'minmax(196px,224px) minmax(0,3.4fr) minmax(300px,1.15fr)'
+                            : '68px minmax(0,3.8fr) minmax(280px,1fr)'
                     }}
                 >
                     <aside className="min-h-0 border-r border-zinc-800 bg-[#17181c] p-3">
@@ -2232,11 +2267,13 @@ export function VideoTool() {
                             </div>
 
                             <div className="flex h-full w-full items-center justify-center p-4">
-                                <div className="relative h-full max-h-full aspect-[9/16] overflow-hidden rounded-[28px] border border-zinc-900 bg-black shadow-[0_18px_80px_rgba(0,0,0,0.55)]">
+                                <div className="relative aspect-[9/16] w-full max-w-[360px] max-h-full overflow-hidden rounded-[28px] border border-zinc-900 bg-black shadow-[0_18px_80px_rgba(0,0,0,0.55)] 2xl:max-w-[400px]">
                                     {sourceUrl && !sourcePreviewUnavailable ? (
                                         <video
                                             ref={videoRef}
                                             src={sourceUrl}
+                                            preload="metadata"
+                                            playsInline
                                             className="h-full w-full object-contain"
                                             onLoadedMetadata={handleLoadedMetadata}
                                             onPlay={() => setIsPlaying(true)}
@@ -2255,7 +2292,7 @@ export function VideoTool() {
                                         />
                                     ) : (
                                         <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(42,45,54,0.55),rgba(4,5,8,1))] p-8 text-center">
-                                            <div>
+                                            <div className="max-w-[18rem]">
                                                 <p className="text-base font-medium text-zinc-100">
                                                     {sourceUrl && sourcePreviewUnavailable ? 'Превью недоступно' : 'Загрузите вертикальный исходник'}
                                                 </p>

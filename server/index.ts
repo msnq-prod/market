@@ -5,7 +5,6 @@ import bcrypt from 'bcryptjs';
 import { PrismaClient, Prisma } from '@prisma/client';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { authenticateToken, requireRole } from './middleware/auth.ts';
 import type { AuthRequest } from './middleware/auth.ts';
 import authRoutes from './routes/auth.ts';
@@ -19,14 +18,17 @@ import contentRoutes from './routes/content.ts';
 import collectionRequestsRoutes from './routes/collectionRequests.ts';
 import ordersRoutes from './routes/orders.ts';
 import { isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { resolveProjectPath } from './utils/projectPaths.ts';
+import { softDeleteLocation, softDeleteProduct } from './utils/softDelete.ts';
 
 const prisma = new PrismaClient();
 const app = express();
 const port = process.env.PORT || 3001;
 const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+const helperConnectOrigins = [
+    'http://127.0.0.1:3012',
+    'http://localhost:3012'
+];
 
 const getPrismaErrorMessage = (error: unknown, fallback: string) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
@@ -41,21 +43,6 @@ const getPrismaErrorMessage = (error: unknown, fallback: string) => {
     return fallback;
 };
 
-const pluralize = (count: number, one: string, few: string, many: string) => {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-
-    if (mod10 === 1 && mod100 !== 11) {
-        return one;
-    }
-
-    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
-        return few;
-    }
-
-    return many;
-};
-
 const normalizeOptionalUrl = (value: unknown) => {
     if (typeof value !== 'string') {
         return null;
@@ -65,12 +52,8 @@ const normalizeOptionalUrl = (value: unknown) => {
     return trimmed.length > 0 ? trimmed : null;
 };
 
-const getDeleteErrorResponse = (error: unknown, conflictMessage: string, fallback: string) => {
+const getDeleteErrorResponse = (error: unknown, fallback: string) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-        if (error.code === 'P2003') {
-            return { status: 409, error: conflictMessage };
-        }
-
         if (error.code === 'P2025') {
             return { status: 404, error: 'Запись не найдена.' };
         }
@@ -140,9 +123,9 @@ const serializeProduct = <T extends {
 };
 
 // Ensure uploads directory exists
-const uploadDir = path.join(__dirname, '../public/uploads');
-const locationsDir = path.join(__dirname, '../public/locations');
-const distDir = path.join(__dirname, '../dist');
+const uploadDir = resolveProjectPath('public', 'uploads');
+const locationsDir = resolveProjectPath('public', 'locations');
+const distDir = resolveProjectPath('dist');
 const distIndexPath = path.join(distDir, 'index.html');
 
 [uploadDir, locationsDir].forEach(dir => {
@@ -152,8 +135,16 @@ const distIndexPath = path.join(distDir, 'index.html');
 });
 
 app.use(helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" } // Allow serving images
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow serving images
+    contentSecurityPolicy: {
+        directives: {
+            connectSrc: ["'self'", ...helperConnectOrigins],
+            mediaSrc: ["'self'", 'blob:', ...helperConnectOrigins],
+            upgradeInsecureRequests: null
+        }
+    }
 }));
+app.set('trust proxy', 1);
 app.use(cors({
     origin: clientUrl,
     credentials: true
@@ -197,12 +188,18 @@ app.use('/api/orders', ordersRoutes);
 app.use('/api/upload', uploadRoutes);
 
 // Get all locations with products and translations
-app.get('/api/locations', async (req, res) => {
+app.get('/api/locations', async (_req, res) => {
     try {
         const locations = await prisma.location.findMany({
+            where: {
+                deleted_at: null
+            },
             include: {
                 products: {
-                    where: { is_published: true },
+                    where: {
+                        is_published: true,
+                        deleted_at: null
+                    },
                     include: {
                         translations: true,
                         category: {
@@ -210,6 +207,7 @@ app.get('/api/locations', async (req, res) => {
                         },
                         items: {
                             where: {
+                                deleted_at: null,
                                 status: 'STOCK_ONLINE',
                                 is_sold: false
                             },
@@ -277,17 +275,20 @@ app.get('/api/admin/dashboard-summary', authenticateToken, async (req: AuthReque
             stockOnlineItems,
             publishedLocationRows
         ] = await prisma.$transaction([
-            prisma.location.count(),
-            prisma.product.count(),
-            prisma.product.count({ where: { is_published: true } }),
+            prisma.location.count({ where: { deleted_at: null } }),
+            prisma.product.count({ where: { deleted_at: null } }),
+            prisma.product.count({ where: { is_published: true, deleted_at: null } }),
             prisma.user.count(),
             prisma.user.count({ where: { role: 'FRANCHISEE' } }),
-            prisma.batch.count({ where: { status: 'TRANSIT' } }),
-            prisma.batch.count({ where: { status: 'RECEIVED' } }),
-            prisma.item.count({ where: { status: 'STOCK_HQ', is_sold: false } }),
-            prisma.item.count({ where: { status: 'STOCK_ONLINE', is_sold: false } }),
+            prisma.batch.count({ where: { status: 'TRANSIT', deleted_at: null } }),
+            prisma.batch.count({ where: { status: 'RECEIVED', deleted_at: null } }),
+            prisma.item.count({ where: { status: 'STOCK_HQ', is_sold: false, deleted_at: null } }),
+            prisma.item.count({ where: { status: 'STOCK_ONLINE', is_sold: false, deleted_at: null } }),
             prisma.product.findMany({
-                where: { is_published: true },
+                where: {
+                    is_published: true,
+                    deleted_at: null
+                },
                 distinct: ['location_id'],
                 select: { location_id: true }
             })
@@ -401,12 +402,12 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 // Cart
-app.get('/api/cart', async (req, res) => {
+app.get('/api/cart', async (_req, res) => {
     res.json([]);
 });
 
 // Categories
-app.get('/api/categories', async (req, res) => {
+app.get('/api/categories', async (_req, res) => {
     try {
         const categories = await prisma.category.findMany({
             include: { translations: true }
@@ -453,6 +454,18 @@ app.put('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER'
             lat, lng, image, translations
         } = req.body;
 
+        const existingLocation = await prisma.location.findFirst({
+            where: {
+                id,
+                deleted_at: null
+            },
+            select: { id: true }
+        });
+
+        if (!existingLocation) {
+            return res.status(404).json({ error: 'Локация не найдена.' });
+        }
+
         // Update basic info and translations
         // Simplest way for translations: delete all and re-create, or update individually
         const location = await prisma.location.update({
@@ -479,51 +492,16 @@ app.put('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER'
 app.delete('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await prisma.$transaction(async (tx) => {
-            const location = await tx.location.findUnique({
-                where: { id },
-                select: {
-                    _count: {
-                        select: {
-                            products: true
-                        }
-                    }
-                }
-            });
-
-            if (!location) {
-                return { status: 404, error: 'Локация не найдена.' };
-            }
-
-            if (location._count.products > 0) {
-                const count = location._count.products;
-                return {
-                    status: 409,
-                    error: `Нельзя удалить локацию: к ней привязано ${count} ${pluralize(count, 'товарный шаблон', 'товарных шаблона', 'товарных шаблонов')}. Сначала удалите или перенесите эти шаблоны.`
-                };
-            }
-
-            await tx.locationTranslation.deleteMany({
-                where: { location_id: id }
-            });
-            await tx.location.delete({ where: { id } });
-
-            return { status: 200 };
-        });
-
-        if (result.status !== 200) {
-            res.status(result.status).json({ error: result.error });
+        const deleted = await prisma.$transaction((tx) => softDeleteLocation(tx, id));
+        if (!deleted) {
+            res.status(404).json({ error: 'Локация не найдена.' });
             return;
         }
 
         res.json({ success: true });
     } catch (error) {
         console.error(error);
-        const errorResponse = getDeleteErrorResponse(
-            error,
-            'Нельзя удалить локацию, пока к ней привязаны товары.',
-            'Не удалось удалить локацию.'
-        );
+        const errorResponse = getDeleteErrorResponse(error, 'Не удалось удалить локацию.');
         res.status(errorResponse.status).json({ error: errorResponse.error });
     }
 });
@@ -536,12 +514,16 @@ app.get('/api/products', authenticateToken, async (req: AuthRequest, res) => {
 
     try {
         const products = await prisma.product.findMany({
+            where: {
+                deleted_at: null
+            },
             include: {
                 location: { include: { translations: true } },
                 category: { include: { translations: true } },
                 translations: true,
                 items: {
                     where: {
+                        deleted_at: null,
                         status: 'STOCK_ONLINE',
                         is_sold: false
                     },
@@ -580,6 +562,18 @@ app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), 
             is_published
         } = req.body;
 
+        const location = await prisma.location.findFirst({
+            where: {
+                id: location_id,
+                deleted_at: null
+            },
+            select: { id: true }
+        });
+
+        if (!location) {
+            return res.status(400).json({ error: 'Связанная категория или локация не найдена.' });
+        }
+
         const product = await prisma.product.create({
             data: {
                 price: parseFloat(price),
@@ -606,6 +600,7 @@ app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), 
                 items: {
                     where: {
                         status: 'STOCK_ONLINE',
+                        deleted_at: null,
                         is_sold: false
                     },
                     select: { id: true }
@@ -644,6 +639,30 @@ app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']
             is_published
         } = req.body;
 
+        const existingProduct = await prisma.product.findFirst({
+            where: {
+                id,
+                deleted_at: null
+            },
+            select: { id: true }
+        });
+
+        if (!existingProduct) {
+            return res.status(404).json({ error: 'Товар-шаблон не найден.' });
+        }
+
+        const location = await prisma.location.findFirst({
+            where: {
+                id: location_id,
+                deleted_at: null
+            },
+            select: { id: true }
+        });
+
+        if (!location) {
+            return res.status(400).json({ error: 'Связанная категория или локация не найдена.' });
+        }
+
         const product = await prisma.product.update({
             where: { id },
             data: {
@@ -672,6 +691,7 @@ app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']
                 items: {
                     where: {
                         status: 'STOCK_ONLINE',
+                        deleted_at: null,
                         is_sold: false
                     },
                     select: { id: true }
@@ -697,8 +717,20 @@ app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthReques
     }
 
     try {
+        const existingProduct = await prisma.product.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
+            select: { id: true }
+        });
+
+        if (!existingProduct) {
+            return res.status(404).json({ error: 'Товар-шаблон не найден.' });
+        }
+
         const product = await prisma.product.update({
-            where: { id: req.params.id },
+            where: { id: existingProduct.id },
             data: {
                 is_published: Boolean(req.body?.is_published)
             },
@@ -708,6 +740,7 @@ app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthReques
                 translations: true,
                 items: {
                     where: {
+                        deleted_at: null,
                         status: 'STOCK_ONLINE',
                         is_sold: false
                     },
@@ -733,68 +766,16 @@ app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthReques
 app.delete('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await prisma.$transaction(async (tx) => {
-            const product = await tx.product.findUnique({
-                where: { id },
-                select: {
-                    _count: {
-                        select: {
-                            items: true,
-                            batches: true,
-                            order_items: true,
-                            collection_requests: true
-                        }
-                    }
-                }
-            });
-
-            if (!product) {
-                return { status: 404, error: 'Товар-шаблон не найден.' };
-            }
-
-            const blockers = [
-                product._count.items > 0
-                    ? `${product._count.items} ${pluralize(product._count.items, 'позиция', 'позиции', 'позиций')}`
-                    : null,
-                product._count.batches > 0
-                    ? `${product._count.batches} ${pluralize(product._count.batches, 'партия', 'партии', 'партий')}`
-                    : null,
-                product._count.order_items > 0
-                    ? `${product._count.order_items} ${pluralize(product._count.order_items, 'строка заказа', 'строки заказа', 'строк заказа')}`
-                    : null,
-                product._count.collection_requests > 0
-                    ? `${product._count.collection_requests} ${pluralize(product._count.collection_requests, 'заказ на сбор', 'заказа на сбор', 'заказов на сбор')}`
-                    : null
-            ].filter((value): value is string => Boolean(value));
-
-            if (blockers.length > 0) {
-                return {
-                    status: 409,
-                    error: `Нельзя удалить товар-шаблон: с ним связаны ${blockers.join(', ')}.`
-                };
-            }
-
-            await tx.productTranslation.deleteMany({
-                where: { product_id: id }
-            });
-            await tx.product.delete({ where: { id } });
-
-            return { status: 200 };
-        });
-
-        if (result.status !== 200) {
-            res.status(result.status).json({ error: result.error });
+        const deleted = await prisma.$transaction((tx) => softDeleteProduct(tx, id));
+        if (!deleted) {
+            res.status(404).json({ error: 'Товар-шаблон не найден.' });
             return;
         }
 
         res.json({ success: true });
     } catch (error) {
         console.error(error);
-        const errorResponse = getDeleteErrorResponse(
-            error,
-            'Нельзя удалить товар, пока он используется в заказах.',
-            'Не удалось удалить товар-шаблон.'
-        );
+        const errorResponse = getDeleteErrorResponse(error, 'Не удалось удалить товар-шаблон.');
         res.status(errorResponse.status).json({ error: errorResponse.error });
     }
 });
@@ -802,7 +783,7 @@ app.delete('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGE
 // ===== LANGUAGE API =====
 
 // Get all languages
-app.get('/api/languages', async (req, res) => {
+app.get('/api/languages', async (_req, res) => {
     try {
         const languages = await prisma.language.findMany();
         res.json(languages);
@@ -836,5 +817,5 @@ if (fs.existsSync(distIndexPath)) {
 }
 
 app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+    console.log(`Server listening on port ${port}`);
 });

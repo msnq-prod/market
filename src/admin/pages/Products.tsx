@@ -341,7 +341,7 @@ export function Products() {
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm('Удалить товар-шаблон?')) return;
+        if (!confirm('Скрыть товар-шаблон из интерфейса? Восстановление возможно только напрямую из БД.')) return;
 
         try {
             const response = await authFetch(`/api/products/${id}`, { method: 'DELETE' });
@@ -520,7 +520,7 @@ export function Products() {
                                                         Изменить
                                                     </Button>
                                                     <Button variant="danger" onClick={() => void handleDelete(product.id)}>
-                                                        Удалить
+                                                        Скрыть
                                                     </Button>
                                                     <Button
                                                         variant="ghost"

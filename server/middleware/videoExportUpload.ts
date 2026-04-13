@@ -1,7 +1,6 @@
 import multer from 'multer';
 import path from 'path';
 import type { Request, Response } from 'express';
-import type { FileFilterCallback } from 'multer';
 import { ensureVideoExportDirectories, VIDEO_EXPORT_STAGING_ROOT } from '../services/videoExport.ts';
 
 ensureVideoExportDirectories();
@@ -16,14 +15,14 @@ const storage = multer.diskStorage({
     }
 });
 
-const fileFilter = (_req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     const extension = path.extname(file.originalname).toLowerCase();
     if ((file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream') && extension === '.mp4') {
         cb(null, true);
         return;
     }
 
-    cb(new Error('Для финального экспорта разрешены только MP4-файлы.'), false);
+    cb(new Error('Для финального экспорта разрешены только MP4-файлы.'));
 };
 
 const videoExportUpload = multer({

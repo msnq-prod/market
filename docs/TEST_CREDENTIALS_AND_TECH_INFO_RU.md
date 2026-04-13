@@ -1,24 +1,29 @@
-# Stones: Тестовые креды и техническая информация
+# Stones: тестовые креды и техническая информация
 
-## 1. Что это за файл
-Этот файл нужен для быстрого старта тестирования локального окружения: вход в роли, запуск проекта, проверка БД, ключевые URL и API.
+Документ описывает текущее локальное окружение, seed-аккаунты, демонстрационные данные и полезные URL.
 
-## 2. Требования окружения
-- Node.js: `>=22.0.0`
-- npm: `>=10.5.1`
-- БД: MySQL (локально используется `127.0.0.1:3307`)
-- Рабочая БД: `stones`
+## 1. Требования окружения
 
-## 3. Переменные окружения
-Минимальные обязательные значения в `.env`:
+- Node.js `>=22.0.0`
+- npm `>=10.5.1`
+- MySQL 8+
+- локальная БД по умолчанию: `localhost:3307`
+
+## 2. Минимальный `.env`
 
 ```env
+PORT=3001
+CLIENT_URL=http://localhost:5173
 DATABASE_URL="mysql://stones:stones@localhost:3307/stones?connection_limit=20&pool_timeout=30"
 ACCESS_TOKEN_SECRET="replace_with_a_long_random_access_secret"
 REFRESH_TOKEN_SECRET="replace_with_a_long_random_refresh_secret"
+VITE_HOST=127.0.0.1
+VITE_PORT=5173
+VITE_API_TARGET=http://127.0.0.1:3001
 ```
 
-## 4. Быстрый запуск
+## 3. Локальный запуск
+
 ```bash
 npm install
 npm run db:migrate
@@ -27,130 +32,200 @@ npm run db:seed
 npm run dev
 ```
 
-После `npm run dev`:
-- Frontend (Vite): `http://localhost:5173`
-- Backend (Express API): `http://localhost:3001`
+После запуска:
 
-Если запускать только `npm run server` при наличии собранного `dist/`, фронтенд также будет доступен с `http://localhost:3001`.
+- frontend: `http://localhost:5173`
+- backend: `http://localhost:3001`
 
-## 5. Тестовые креды
-Пароли из актуального `prisma/seed.ts`:
-- `admin123` для `admin@stones.com`
-- `partner123` для остальных seeded-пользователей
+## 4. Seed-аккаунты
 
-Роли и логины:
+Пароли из `prisma/seed.ts`:
 
-| Роль | Логин / Email | Пароль | Где использовать |
-|---|---|---|---|
-| ADMIN | `admin@stones.com` | `admin123` | `/admin/login`, `/admin/*`, доступ к админским API |
-| MANAGER | `manager@stones.com` | `partner123` | `/admin/login`, складские/операционные сценарии |
-| SALES_MANAGER | `sales@stones.com` | `partner123` | `/admin/login`, очередь заказов `/admin/orders` |
-| FRANCHISEE | `yakutia.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| FRANCHISEE | `ural.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| FRANCHISEE | `baltic.partner@stones.com` | `partner123` | `/partner/login`, партнёрский кабинет |
-| USER | `anna` | `partner123` | Публичная витрина `/`, checkout, история заказов |
-| USER | `maxim` | `partner123` | Публичная витрина `/`, checkout, история заказов |
-| USER | `olga` | `partner123` | Публичная витрина `/`, checkout, история заказов |
-| USER | `kirill` | `partner123` | Публичная витрина `/`, checkout, история заказов |
+- `admin123` — только для `admin@stones.com`
+- `partner123` — для остальных seeded-аккаунтов
 
-## 6. Важные UI-маршруты
-- Публичная витрина: `/`
-- Цифровой двойник по токену: `/clone/:publicToken`
-- Логин админки: `/admin/login`
-- Логин партнера/персонала: `/partner/login`
-- Партнёрский дашборд: `/partner/dashboard`
-- Создание партии: `/partner/batches/new`
-- QR центр: `/partner/qr`
-- Печать QR: `/partner/qr/print?batchId=<ID>`
-- Финансы партнёра: `/partner/finance`
-- Админ дашборд: `/admin`
-- Заказы с сайта: `/admin/orders`
-- Приемка: `/admin/acceptance`
-- Аллокация: `/admin/allocation`
-- Пользователи: `/admin/users`
-- Редактор страницы цифрового двойника: `/admin/clone-content`
+### Staff и партнеры
 
-## 7. API, которые чаще всего нужны во время тестов
+| Роль | Логин | Пароль | Основное использование |
+| --- | --- | --- | --- |
+| `ADMIN` | `admin@stones.com` | `admin123` | `/admin/login`, полный HQ-доступ |
+| `MANAGER` | `manager@stones.com` | `partner123` | `/admin/login`, HQ без очереди заказов |
+| `SALES_MANAGER` | `sales@stones.com` | `partner123` | `/admin/login`, `/admin/orders` |
+| `FRANCHISEE` | `yakutia.partner@stones.com` | `partner123` | `/partner/login` |
+| `FRANCHISEE` | `ural.partner@stones.com` | `partner123` | `/partner/login` |
+| `FRANCHISEE` | `baltic.partner@stones.com` | `partner123` | `/partner/login` |
 
-Аутентификация:
+### Покупатели
+
+| Роль | Логин | Email | Пароль |
+| --- | --- | --- | --- |
+| `USER` | `anna` | `anna.smirnova@example.ru` | `partner123` |
+| `USER` | `maxim` | `maxim.lebedev@example.ru` | `partner123` |
+| `USER` | `olga` | `olga.kuznetsova@example.ru` | `partner123` |
+| `USER` | `kirill` | `kirill.volkov@example.ru` | `partner123` |
+
+## 5. Основные UI-маршруты
+
+### Публичный контур
+
+- `/`
+- `/clone/:serialNumber`
+
+### HQ
+
+- `/admin/login`
+- `/admin`
+- `/admin/orders`
+- `/admin/acceptance`
+- `/admin/allocation`
+- `/admin/warehouse`
+- `/admin/locations`
+- `/admin/products`
+- `/admin/users`
+- `/admin/clone-content`
+- `/admin/video-tool/:batchId`
+- `/admin/qr/print?batchId=<ID>`
+
+### Франчайзи
+
+- `/partner/login`
+- `/partner/dashboard`
+- `/partner/batches`
+- `/partner/batches/new`
+- `/partner/finance`
+
+## 6. Наиболее полезные API
+
+### Аутентификация
+
 - `GET /healthz`
-- `GET /auth/me`
 - `POST /auth/login`
-- `POST /auth/refresh`
 - `POST /auth/register`
-- `POST /api/users`
+- `POST /auth/refresh`
+- `GET /auth/me`
+
+### Заказы покупателей
+
 - `POST /api/orders`
 - `GET /api/orders/my`
 - `GET /api/orders`
 - `PATCH /api/orders/:id`
 
-Операции партнёра и HQ:
+### Каталог и контент
+
+- `GET /api/locations`
+- `GET /api/categories`
+- `GET /api/products`
+- `GET /api/languages`
+- `GET /api/content/clone-page`
+- `PUT /api/content/clone-page`
+
+### Пользователи
+
+- `GET /api/users`
+- `POST /api/users`
+
+### Сбор и партии
+
+- `GET /api/collection-requests`
+- `POST /api/collection-requests`
+- `PATCH /api/collection-requests/:id`
+- `DELETE /api/collection-requests/:id`
+- `POST /api/collection-requests/:id/ack`
+- `POST /api/collection-requests/:id/complete`
 - `GET /api/batches`
-- `POST /api/batches`
-- `POST /api/batches/:id/send`
 - `POST /api/batches/:id/receive`
+- `POST /api/batches/:id/finalize`
+- `POST /api/batches/:id/media-sync`
 - `GET /api/batches/:batchId/qr-pack`
-- `POST /api/items/batch/:batchId/items`
 - `GET /api/items/batch/:batchId`
+- `GET /api/items/:itemId`
+- `PATCH /api/items/:itemId`
+
+### Приемка HQ
+
 - `POST /api/hq/acceptance/:batchId/verify`
 - `POST /api/hq/items/:itemId/accept`
 - `POST /api/hq/items/:itemId/reject`
 - `POST /api/hq/batches/:batchId/finish`
-- `POST /api/financials/items/:itemId/allocate`
+
+### Видео
+
+- `GET /api/batches/:id/video-tool`
+- `POST /api/batches/:id/video-jobs`
+- `POST /api/batches/:id/video-export-sessions`
+- `GET /api/batches/:id/video-export-sessions/:sessionId`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/files`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
+
+### Финансы и allocation
+
 - `GET /api/financials/me`
 - `GET /api/financials/ledger`
+- `POST /api/financials/items/:itemId/allocate`
 
-Публичный цифровой двойник:
-- `GET /api/public/items/:publicToken`
-- `GET /api/public/items/:publicToken/qr`
-- `POST /api/public/items/:publicToken/activate`
+### Публичный паспорт
 
-Каталог:
-- `GET /api/locations`
-- `GET /api/products`
-- `GET /api/categories`
-- `GET /api/languages`
+- `GET /api/public/items/:serialNumber`
+- `GET /api/public/items/:serialNumber/qr`
+- `POST /api/public/items/:serialNumber/activate`
 
-## 8. Ожидаемое состояние БД после `npm run db:seed`
-Сид создаёт предсказуемый набор данных:
-- Локации: `5`
-- Товары: `10`
-- Пользователи: `10`
-- Партии: `7`
-- Item-позиции: `27`
-- Ledger-записи: `10`
-- Заказы: `4`
+## 7. Что создает seed
 
-Статусы демо-заказов:
-- `order-anna-001`: `COMPLETED`
-- `order-maxim-001`: `IN_PROGRESS`
-- `order-olga-001`: `NEW`
-- `order-kirill-001`: `CANCELLED`
+Seed создает:
 
-Ключевые статусы партий в тестовых данных:
-- `batch-yak-2026-01`: `FINISHED`
-- `batch-ural-2026-01`: `FINISHED`
-- `batch-baltic-2026-01`: `FINISHED`
-- `batch-ural-2026-02`: `RECEIVED`
-- `batch-baltic-2026-02`: `ERROR`
-- `batch-yak-2026-02`: `TRANSIT`
-- `batch-ural-2026-03`: `DRAFT`
+- staff-аккаунты;
+- партнеров;
+- buyer-аккаунты;
+- каталог локаций, категорий и товаров;
+- партии с разными статусами;
+- ledger-записи;
+- демо-заказы покупателей.
 
-## 9. Проверка цифрового двойника (быстрый сценарий)
-1. Войти как франчайзи: `yakutia.partner@stones.com / partner123`.
-2. Открыть `/partner/qr`.
-3. Выбрать партию и взять `clone_url` или `public_token`.
-4. Открыть `/clone/:publicToken`.
-5. Проверить QR-картинку через `GET /api/public/items/:publicToken/qr`.
+### Примеры batch-данных
 
-## 10. Известный нюанс текущей БД
-Если в локальной БД нет таблицы `content_pages`, сид не падает: блок сидирования контента цифрового двойника пропускается с предупреждением.
+- `batch-yak-2026-01` — `FINISHED`
+- `batch-yak-2026-02` — `TRANSIT`
+- `batch-ural-2026-01` — `FINISHED`
+- `batch-ural-2026-02` — `RECEIVED`
+- `batch-ural-2026-03` — `TRANSIT`
+- `batch-baltic-2026-01` — `FINISHED`
+- `batch-baltic-2026-02` — `ERROR`
 
-Отдельный нюанс checkout:
-- открытый `POST /auth/register` теперь создает только buyer-аккаунт с ролью `USER` и логином `username`;
-- staff и франчайзи создаются только через защищённый `POST /api/users`.
+### Примеры заказов покупателей
 
-Нюанс публичной активации:
-- `POST /api/public/items/:publicToken/activate` больше не меняет ledger и баланс;
-- endpoint только фиксирует `ACTIVATED` для допустимых складских статусов;
-- финансовые операции должны проводиться отдельным защищённым staff-flow.
+- `order-anna-001` — `COMPLETED`
+- `order-maxim-001` — `IN_PROGRESS`
+- `order-olga-001` — `NEW`
+- `order-kirill-001` — `CANCELLED`
+
+## 8. Быстрые smoke-сценарии
+
+### Проверка HQ-приемки
+
+1. Войти как `manager@stones.com` или `admin@stones.com`.
+2. Открыть `/admin/acceptance`.
+3. Проверить batch в `TRANSIT` или `RECEIVED`.
+
+### Проверка публичного паспорта
+
+1. Войти как HQ staff.
+2. Взять `serial_number` из `Warehouse`, `Acceptance` или `QR Print`.
+3. Открыть `/clone/:serialNumber`.
+4. Проверить `GET /api/public/items/:serialNumber/qr`.
+
+### Проверка buyer-потока
+
+1. Войти на витрине как `anna`.
+2. Добавить товар в корзину.
+3. Оформить заявку.
+4. Проверить ее в `/admin/orders`.
+
+## 9. Важные нюансы текущей реализации
+
+- `POST /auth/register` создает только buyer-аккаунт `USER`.
+- staff и franchisee-аккаунты создаются только через `POST /api/users`.
+- публичная активация `Item` не меняет `Ledger` и баланс.
+- UI allocation в текущем MVP использует только онлайн-сценарий.
+- в seed есть `ON_CONSIGNMENT` и `OFFLINE_POINT`, поэтому эти значения могут встречаться в демо-данных даже при заблокированном новом создании через UI.

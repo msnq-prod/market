@@ -2,6 +2,7 @@ import express from 'express';
 import { OrderStatus, Prisma, PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
+import { softDeleteOrder } from '../utils/softDelete.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -142,7 +143,10 @@ router.get('/my', async (req: AuthRequest, res) => {
         if (!req.user) return res.sendStatus(401);
 
         const orders = await prisma.order.findMany({
-            where: { user_id: req.user.id },
+            where: {
+                user_id: req.user.id,
+                deleted_at: null
+            },
             include: orderInclude,
             orderBy: { created_at: 'desc' },
             take: 100
@@ -189,13 +193,17 @@ router.post('/', async (req: AuthRequest, res) => {
 
         const productIds = [...groupedItems.keys()];
         const products = await prisma.product.findMany({
-            where: { id: { in: productIds } },
+            where: {
+                id: { in: productIds },
+                deleted_at: null
+            },
             select: {
                 id: true,
                 price: true,
                 is_published: true,
                 items: {
                     where: {
+                        deleted_at: null,
                         status: 'STOCK_ONLINE',
                         is_sold: false
                     },
@@ -275,7 +283,9 @@ router.get('/', async (req: AuthRequest, res) => {
 
         const statusQuery = parseOrderStatus(req.query.status);
         const searchQuery = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-        const where: Prisma.OrderWhereInput = {};
+        const where: Prisma.OrderWhereInput = {
+            deleted_at: null
+        };
         const andConditions: Prisma.OrderWhereInput[] = [];
 
         if (statusQuery) {
@@ -321,8 +331,11 @@ router.patch('/:id', async (req: AuthRequest, res) => {
         if (!isSalesStaff(req.user.role)) return res.sendStatus(403);
 
         const body = (req.body && typeof req.body === 'object' ? req.body : {}) as OrderPatchBody;
-        const existing = await prisma.order.findUnique({
-            where: { id: req.params.id },
+        const existing = await prisma.order.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: orderInclude
         });
 
@@ -387,6 +400,23 @@ router.patch('/:id', async (req: AuthRequest, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Не удалось обновить заказ.' });
+    }
+});
+
+router.delete('/:id', async (req: AuthRequest, res) => {
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isSalesStaff(req.user.role)) return res.sendStatus(403);
+
+        const deleted = await prisma.$transaction((tx) => softDeleteOrder(tx, req.params.id));
+        if (!deleted) {
+            return res.status(404).json({ error: 'Заказ не найден.' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Не удалось удалить заказ.' });
     }
 });
 

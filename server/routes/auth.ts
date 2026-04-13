@@ -1,5 +1,6 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import type { JwtPayload, VerifyErrors } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
@@ -179,7 +180,7 @@ router.post('/refresh', async (req, res) => {
     const refreshToken = req.body.token;
     if (!refreshToken) return res.sendStatus(401);
 
-    jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, async (err, user) => {
+    jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, async (err: VerifyErrors | null, user: string | JwtPayload | undefined) => {
         if (err) return res.sendStatus(403);
         if (!user || typeof user !== 'object') return res.sendStatus(403);
 

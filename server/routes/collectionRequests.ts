@@ -5,7 +5,6 @@ import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
     COLLECTION_STATUSES,
-    createPublicToken,
     buildSerialNumber,
     formatBatchTempId,
     getDefaultProductTranslation,
@@ -53,6 +52,9 @@ const REQUEST_INCLUDE = Prisma.validator<Prisma.CollectionRequestInclude>()({
     batch: {
         include: {
             items: {
+                where: {
+                    deleted_at: null
+                },
                 orderBy: { item_seq: 'asc' }
             },
             owner: {
@@ -96,6 +98,7 @@ const withMetrics = async (request: RequestRecord) => {
     const availableNow = productId ? await prisma.item.count({
         where: {
             product_id: productId,
+            deleted_at: null,
             status: 'STOCK_ONLINE',
             is_sold: false
         }
@@ -136,7 +139,6 @@ const withMetrics = async (request: RequestRecord) => {
             collected_time: request.batch.collected_time,
             gps_lat: request.batch.gps_lat,
             gps_lng: request.batch.gps_lng,
-            video_url: request.batch.video_url,
             daily_batch_seq: request.batch.daily_batch_seq,
             items_count: batchItems.length,
             media_ready_count: mediaReady
@@ -157,7 +159,9 @@ router.get('/', async (req: AuthRequest, res) => {
         if (!req.user) return res.sendStatus(401);
 
         const statusQuery = typeof req.query.status === 'string' ? req.query.status : '';
-        const where: Prisma.CollectionRequestWhereInput = {};
+        const where: Prisma.CollectionRequestWhereInput = {
+            deleted_at: null
+        };
 
         if (COLLECTION_STATUSES.has(statusQuery)) {
             where.status = statusQuery as RequestRecord['status'];
@@ -218,8 +222,16 @@ router.post('/', async (req: AuthRequest, res) => {
             return res.status(400).json({ error: 'Количество должно быть целым числом от 1 до 999.' });
         }
 
-        const product = await prisma.product.findUnique({
-            where: { id: safeProductId },
+        const product = await prisma.product.findFirst({
+            where: {
+                id: safeProductId,
+                deleted_at: null,
+                location: {
+                    is: {
+                        deleted_at: null
+                    }
+                }
+            },
             include: {
                 translations: true,
                 location: {
@@ -290,8 +302,11 @@ router.patch('/:id', async (req: AuthRequest, res) => {
             status?: string;
         };
 
-        const existing = await prisma.collectionRequest.findUnique({
-            where: { id },
+        const existing = await prisma.collectionRequest.findFirst({
+            where: {
+                id,
+                deleted_at: null
+            },
             include: REQUEST_INCLUDE
         });
 
@@ -362,6 +377,10 @@ router.patch('/:id', async (req: AuthRequest, res) => {
                     return res.status(400).json({ error: 'Для этого статуса сначала нужна созданная партия.' });
                 }
 
+                if (status === 'IN_PROGRESS') {
+                    return res.status(400).json({ error: 'После создания партии заказ нельзя вернуть в статус «В работе».' });
+                }
+
                 if (status === 'IN_STOCK' && !hasAllBatchMedia(existing.batch.items)) {
                     return res.status(400).json({ error: 'Нельзя перевести партию на склад без фото и видео для каждого камня.' });
                 }
@@ -370,19 +389,21 @@ router.patch('/:id', async (req: AuthRequest, res) => {
                     where: { id: existing.batch.id },
                     data: {
                         status:
-                            status === 'IN_PROGRESS'
-                                ? 'DRAFT'
-                                : status === 'IN_TRANSIT'
-                                    ? 'TRANSIT'
-                                    : status === 'IN_STOCK'
-                                        ? 'FINISHED'
-                                        : 'RECEIVED'
+                            status === 'IN_TRANSIT'
+                                ? 'TRANSIT'
+                                : status === 'IN_STOCK'
+                                    ? 'FINISHED'
+                                    : 'RECEIVED'
                     }
                 });
 
                 if (status === 'IN_STOCK') {
                     await prisma.item.updateMany({
-                        where: { batch_id: existing.batch.id, status: 'NEW' },
+                        where: {
+                            batch_id: existing.batch.id,
+                            status: 'NEW',
+                            deleted_at: null
+                        },
                         data: { status: 'STOCK_HQ' }
                     });
                 }
@@ -409,8 +430,11 @@ router.delete('/:id', async (req: AuthRequest, res) => {
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const request = await prisma.collectionRequest.findUnique({
-            where: { id: req.params.id },
+        const request = await prisma.collectionRequest.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             select: { id: true, status: true, batch: { select: { id: true } } }
         });
 
@@ -422,7 +446,12 @@ router.delete('/:id', async (req: AuthRequest, res) => {
             return res.status(400).json({ error: 'Удалить можно только открытый заказ без созданной партии.' });
         }
 
-        await prisma.collectionRequest.delete({ where: { id: request.id } });
+        await prisma.collectionRequest.update({
+            where: { id: request.id },
+            data: {
+                deleted_at: new Date()
+            }
+        });
         res.json({ success: true });
     } catch (error) {
         console.error(error);
@@ -435,8 +464,11 @@ router.post('/:id/ack', async (req: AuthRequest, res) => {
         if (!req.user) return res.sendStatus(401);
         if (req.user.role !== 'FRANCHISEE') return res.sendStatus(403);
 
-        const existing = await prisma.collectionRequest.findUnique({
-            where: { id: req.params.id },
+        const existing = await prisma.collectionRequest.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: REQUEST_INCLUDE
         });
 
@@ -480,17 +512,18 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
             gps_lng,
             collected_date,
             collected_time,
-            video_url
         } = req.body as {
             gps_lat?: number;
             gps_lng?: number;
             collected_date?: string;
             collected_time?: string;
-            video_url?: string | null;
         };
 
-        const existing = await prisma.collectionRequest.findUnique({
-            where: { id: req.params.id },
+        const existing = await prisma.collectionRequest.findFirst({
+            where: {
+                id: req.params.id,
+                deleted_at: null
+            },
             include: REQUEST_INCLUDE
         });
 
@@ -530,6 +563,7 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
         const sameDayBatches = await prisma.batch.count({
             where: {
                 product_id: existing.product_id,
+                deleted_at: null,
                 collected_date: safeCollectedDate,
                 status: { not: 'ERROR' }
             }
@@ -539,11 +573,11 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
         const batchId = crypto.randomUUID();
         const itemCreates: Prisma.ItemCreateWithoutBatchInput[] = [];
         for (let index = 1; index <= existing.requested_qty; index += 1) {
+            const serialNumber = buildSerialNumber(existing.product, safeCollectedDate, index, dailyBatchSeq);
             itemCreates.push({
                 product: { connect: { id: existing.product_id } },
                 temp_id: formatBatchTempId(index),
-                public_token: createPublicToken(),
-                serial_number: buildSerialNumber(existing.product, safeCollectedDate, index, dailyBatchSeq),
+                serial_number: serialNumber,
                 item_seq: index,
                 status: 'NEW',
                 collected_date: safeCollectedDate,
@@ -558,7 +592,7 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
                     owner_id: req.user!.id,
                     product_id: existing.product_id!,
                     collection_request_id: existing.id,
-                    video_url: typeof video_url === 'string' && video_url.trim() ? video_url.trim() : null,
+                    video_url: null,
                     gps_lat: safeLat,
                     gps_lng: safeLng,
                     collected_date: safeCollectedDate,

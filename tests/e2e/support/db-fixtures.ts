@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
+import { buildSerialNumber } from '../../../server/utils/collectionWorkflow.ts';
 
 export const testDb = new PrismaClient();
 
@@ -29,6 +30,12 @@ const buildTranslationCreate = (name: string, description: string) => ([
     { language_id: EN_LANGUAGE_ID, name, description },
     { language_id: RU_LANGUAGE_ID, name, description },
 ]);
+const buildFixtureSerialNumber = (
+    product: { country_code: string; location_code: string; item_code: string },
+    collectedDate: Date,
+    itemSeq: number,
+    dailyBatchSeq = 1
+) => buildSerialNumber(product, collectedDate, itemSeq, dailyBatchSeq);
 
 const getSeededFranchisee = async () => {
     const franchisee = await testDb.user.findUnique({
@@ -134,6 +141,7 @@ export async function createProductFixture(options: ProductFixtureOptions = {}) 
     let createdBatchId: string | null = null;
     if (stockOnlineCount > 0) {
         createdBatchId = batchId;
+        const collectedDate = new Date('2026-04-07T00:00:00.000Z');
 
         await testDb.batch.create({
             data: {
@@ -143,24 +151,36 @@ export async function createProductFixture(options: ProductFixtureOptions = {}) 
                 status: 'FINISHED',
                 gps_lat: 55.751244,
                 gps_lng: 37.618423,
-                collected_date: new Date('2026-04-07T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '12:00',
                 daily_batch_seq: 1,
             },
         });
 
         await testDb.item.createMany({
-            data: Array.from({ length: stockOnlineCount }, (_item, index) => ({
-                id: `e2e-item-${suffix}-${index + 1}`,
-                batch_id: batchId,
-                product_id: base.productId,
-                temp_id: String(index + 1).padStart(3, '0'),
-                public_token: `e2e-token-${suffix}-${index + 1}`,
-                item_seq: index + 1,
-                photo_url: '/locations/crystal-caves.jpg',
-                status: 'STOCK_ONLINE',
-                is_sold: false,
-            })),
+            data: Array.from({ length: stockOnlineCount }, (_item, index) => {
+                const serialNumber = buildFixtureSerialNumber(
+                    {
+                        country_code: 'RUS',
+                        location_code: base.locationCode,
+                        item_code: base.itemCode,
+                    },
+                    collectedDate,
+                    index + 1
+                );
+
+                return {
+                    id: `e2e-item-${suffix}-${index + 1}`,
+                    batch_id: batchId,
+                    product_id: base.productId,
+                    temp_id: String(index + 1).padStart(3, '0'),
+                    serial_number: serialNumber,
+                    item_seq: index + 1,
+                    photo_url: '/locations/crystal-caves.jpg',
+                    status: 'STOCK_ONLINE',
+                    is_sold: false,
+                };
+            }),
         });
     }
 
@@ -180,6 +200,7 @@ export async function createFinalizeReadyFixture() {
     const base = await createCatalogFixtureBase(name, description, true);
     const batchId = `e2e-finalize-batch-${suffix}`;
     const itemId = `e2e-finalize-item-${suffix}`;
+    const collectedDate = new Date('2026-04-07T00:00:00.000Z');
 
     await testDb.batch.create({
         data: {
@@ -189,28 +210,34 @@ export async function createFinalizeReadyFixture() {
             status: 'RECEIVED',
             gps_lat: 55.751244,
             gps_lng: 37.618423,
-            collected_date: new Date('2026-04-07T00:00:00.000Z'),
+            collected_date: collectedDate,
             collected_time: '12:00',
             daily_batch_seq: 1,
         },
     });
 
-    const serialFamily = `RUS${base.locationCode}${base.itemCode}070426`;
     await testDb.item.create({
         data: {
             id: itemId,
             batch_id: batchId,
             product_id: base.productId,
             temp_id: '001',
-            public_token: `e2e-finalize-token-${suffix}`,
-            serial_number: `${serialFamily}001`,
+            serial_number: buildFixtureSerialNumber(
+                {
+                    country_code: 'RUS',
+                    location_code: base.locationCode,
+                    item_code: base.itemCode,
+                },
+                collectedDate,
+                1
+            ),
             item_seq: 1,
             photo_url: '/locations/crystal-caves.jpg',
             item_photo_url: '/locations/crystal-caves.jpg',
             item_video_url: '/uploads/videos/mock.mp4',
             status: 'NEW',
             is_sold: false,
-            collected_date: new Date('2026-04-07T00:00:00.000Z'),
+            collected_date: collectedDate,
             collected_time: '12:00',
         },
     });
@@ -231,9 +258,13 @@ export async function createWarehouseFixture() {
     const base = await createCatalogFixtureBase(productName, description, true);
     const firstBatchId = `e2e-wh-batch-a-${suffix}`;
     const secondBatchId = `e2e-wh-batch-b-${suffix}`;
-    const legacyBatchId = `e2e-wh-legacy-${suffix}`;
-    const serialFamily = `RUS${base.locationCode}${base.itemCode}080426`;
     const updatedTempId = `EDIT-${suffix}`;
+    const collectedDate = new Date('2026-04-08T00:00:00.000Z');
+    const serialProduct = {
+        country_code: 'RUS',
+        location_code: base.locationCode,
+        item_code: base.itemCode,
+    };
 
     await testDb.batch.createMany({
         data: [
@@ -244,7 +275,7 @@ export async function createWarehouseFixture() {
                 status: 'FINISHED',
                 gps_lat: 55.751244,
                 gps_lng: 37.618423,
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '09:00',
                 daily_batch_seq: 1,
             },
@@ -255,19 +286,8 @@ export async function createWarehouseFixture() {
                 status: 'FINISHED',
                 gps_lat: 55.751244,
                 gps_lng: 37.618423,
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '11:00',
-                daily_batch_seq: 1,
-            },
-            {
-                id: legacyBatchId,
-                owner_id: base.ownerId,
-                product_id: null,
-                status: 'FINISHED',
-                gps_lat: 55.751244,
-                gps_lng: 37.618423,
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
-                collected_time: '14:00',
                 daily_batch_seq: 1,
             }
         ],
@@ -281,15 +301,14 @@ export async function createWarehouseFixture() {
                 batch_id: firstBatchId,
                 product_id: base.productId,
                 temp_id: '001',
-                public_token: `e2e-wh-token-edit-${suffix}`,
-                serial_number: `${serialFamily}001`,
+                serial_number: buildFixtureSerialNumber(serialProduct, collectedDate, 1),
                 item_seq: 1,
                 photo_url: '/locations/crystal-caves.jpg',
                 item_photo_url: '/locations/crystal-caves.jpg',
                 item_video_url: '/uploads/videos/mock.mp4',
                 status: 'STOCK_HQ',
                 is_sold: false,
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '09:00',
             },
             {
@@ -297,8 +316,7 @@ export async function createWarehouseFixture() {
                 batch_id: firstBatchId,
                 product_id: base.productId,
                 temp_id: '002',
-                public_token: `e2e-wh-token-online-${suffix}`,
-                serial_number: `${serialFamily}002`,
+                serial_number: buildFixtureSerialNumber(serialProduct, collectedDate, 2),
                 item_seq: 2,
                 photo_url: '/locations/crystal-caves.jpg',
                 item_photo_url: '/locations/crystal-caves.jpg',
@@ -306,7 +324,7 @@ export async function createWarehouseFixture() {
                 status: 'STOCK_ONLINE',
                 is_sold: false,
                 sales_channel: 'MARKETPLACE',
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '09:00',
             },
             {
@@ -314,8 +332,7 @@ export async function createWarehouseFixture() {
                 batch_id: secondBatchId,
                 product_id: base.productId,
                 temp_id: '003',
-                public_token: `e2e-wh-token-consign-${suffix}`,
-                serial_number: `${serialFamily}003`,
+                serial_number: buildFixtureSerialNumber(serialProduct, collectedDate, 3),
                 item_seq: 3,
                 photo_url: '/locations/crystal-caves.jpg',
                 item_photo_url: '/locations/crystal-caves.jpg',
@@ -323,7 +340,7 @@ export async function createWarehouseFixture() {
                 status: 'ON_CONSIGNMENT',
                 is_sold: false,
                 sales_channel: 'OFFLINE_POINT',
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '11:00',
             },
             {
@@ -331,8 +348,7 @@ export async function createWarehouseFixture() {
                 batch_id: secondBatchId,
                 product_id: base.productId,
                 temp_id: '004',
-                public_token: `e2e-wh-token-sold-${suffix}`,
-                serial_number: `${serialFamily}004`,
+                serial_number: buildFixtureSerialNumber(serialProduct, collectedDate, 4),
                 item_seq: 4,
                 photo_url: '/locations/crystal-caves.jpg',
                 item_photo_url: '/locations/crystal-caves.jpg',
@@ -343,24 +359,8 @@ export async function createWarehouseFixture() {
                 activation_date: new Date('2026-04-08T10:30:00.000Z'),
                 price_sold: 15000,
                 commission_hq: 1200,
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
+                collected_date: collectedDate,
                 collected_time: '11:00',
-            },
-            {
-                id: `e2e-wh-item-legacy-${suffix}`,
-                batch_id: legacyBatchId,
-                product_id: null,
-                temp_id: 'LEG-001',
-                public_token: `e2e-wh-token-legacy-${suffix}`,
-                serial_number: null,
-                item_seq: 1,
-                photo_url: '/locations/crystal-caves.jpg',
-                item_photo_url: '/locations/crystal-caves.jpg',
-                item_video_url: '/uploads/videos/mock.mp4',
-                status: 'STOCK_HQ',
-                is_sold: false,
-                collected_date: new Date('2026-04-08T00:00:00.000Z'),
-                collected_time: '14:00',
             }
         ],
     });
@@ -368,10 +368,9 @@ export async function createWarehouseFixture() {
     return {
         productName,
         locationName: 'E2E локация',
-        serialFamily,
+        serialFamily: buildFixtureSerialNumber(serialProduct, collectedDate, 1).slice(0, -3),
         firstBatchId,
         secondBatchId,
-        legacyBatchId,
         editableItemId,
         updatedTempId,
     };

@@ -61,9 +61,9 @@
 
 ### 5.4 Цифровой двойник
 Важно: цифровой двойник привязан к **Item**, не к Product.
-- Публичный URL: `/clone/:publicToken`
-- QR PNG: `/api/public/items/:publicToken/qr`
-- API карточки: `/api/public/items/:publicToken`
+- Публичный URL: `/clone/:serialNumber`
+- QR PNG: `/api/public/items/:serialNumber/qr`
+- API карточки: `/api/public/items/:serialNumber`
 
 ## 6. Источники истины
 - Схема БД: `prisma/schema.prisma`.

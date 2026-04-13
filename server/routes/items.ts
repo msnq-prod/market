@@ -3,7 +3,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
-import { createPublicToken, isStaffRole } from '../utils/collectionWorkflow.ts';
+import { isStaffRole, looksLikeLegacyItemSerial } from '../utils/collectionWorkflow.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -69,7 +69,6 @@ const serializeItemSummary = (req: AuthRequest, item: ItemSummaryRecord) => ({
     product_id: item.product_id,
     temp_id: item.temp_id,
     serial_number: item.serial_number,
-    public_token: item.public_token,
     status: item.status,
     is_sold: item.is_sold,
     sales_channel: item.sales_channel,
@@ -85,8 +84,8 @@ const serializeItemSummary = (req: AuthRequest, item: ItemSummaryRecord) => ({
     collected_time: item.collected_time,
     created_at: item.created_at,
     updated_at: item.updated_at,
-    clone_url: buildCloneUrl(req, item.public_token),
-    qr_url: buildQrUrl(item.public_token)
+    clone_url: buildCloneUrl(req, item.serial_number),
+    qr_url: buildQrUrl(item.serial_number)
 });
 
 const serializeItemDetail = (req: AuthRequest, item: ItemRecord) => ({
@@ -136,7 +135,12 @@ const parseOptionalText = (value: unknown) => {
 
 const parseSerialNumber = (value: unknown) => {
     const parsed = parseOptionalText(value);
-    return parsed ? parsed.toUpperCase() : null;
+    const normalized = parsed ? parsed.toUpperCase() : null;
+    if (normalized && looksLikeLegacyItemSerial(normalized)) {
+        throw createHttpError('serial_number должен быть текущим серийным номером, legacy token не поддерживается.', 400);
+    }
+
+    return normalized;
 };
 
 const parseNullableInteger = (value: unknown, fieldLabel: string, minimum = 1) => {
@@ -152,82 +156,21 @@ const parseNullableInteger = (value: unknown, fieldLabel: string, minimum = 1) =
     return parsed;
 };
 
-router.post('/batch/:batchId/items', authenticateToken, async (req: AuthRequest, res) => {
-    try {
-        if (!req.user) return res.sendStatus(401);
-
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.batchId },
-            select: {
-                id: true,
-                owner_id: true,
-                product_id: true,
-                items: {
-                    orderBy: { created_at: 'desc' },
-                    select: { item_seq: true }
-                }
-            }
-        });
-
-        if (!batch) {
-            return res.status(404).json({ error: 'Партия не найдена.' });
-        }
-
-        if (req.user.role === 'FRANCHISEE' && batch.owner_id !== req.user.id) {
-            return res.sendStatus(403);
-        }
-        if (req.user.role !== 'FRANCHISEE' && !isStaffRole(req.user.role)) {
-            return res.sendStatus(403);
-        }
-
-        const { temp_id, photo_url } = req.body as {
-            temp_id?: string;
-            photo_url?: string | null;
-        };
-
-        const safeTempId = typeof temp_id === 'string' ? temp_id.trim() : '';
-        const safePhotoUrl = typeof photo_url === 'string' && photo_url.trim() ? photo_url.trim() : null;
-
-        if (!safeTempId) {
-            return res.status(400).json({ error: 'Укажите temp_id позиции.' });
-        }
-
-        const nextSeq = Math.max(0, ...batch.items.map((item) => item.item_seq || 0)) + 1;
-        const created = await prisma.item.create({
-            data: {
-                batch_id: batch.id,
-                product_id: batch.product_id,
-                temp_id: safeTempId,
-                public_token: createPublicToken(),
-                item_seq: nextSeq,
-                photo_url: safePhotoUrl,
-                item_photo_url: safePhotoUrl,
-                status: 'NEW'
-            }
-        });
-
-        res.status(201).json({
-            id: created.id,
-            temp_id: created.temp_id,
-            public_token: created.public_token,
-            clone_url: buildCloneUrl(req, created.public_token),
-            qr_url: buildQrUrl(created.public_token)
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Не удалось добавить позицию в партию.' });
-    }
-});
-
 router.get('/batch/:batchId', authenticateToken, async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
 
-        const batch = await prisma.batch.findUnique({
-            where: { id: req.params.batchId },
+        const batch = await prisma.batch.findFirst({
+            where: {
+                id: req.params.batchId,
+                deleted_at: null
+            },
             select: {
                 owner_id: true,
                 items: {
+                    where: {
+                        deleted_at: null
+                    },
                     orderBy: { item_seq: 'asc' },
                     include: {
                         batch: {
@@ -263,8 +206,16 @@ router.get('/:itemId', authenticateToken, async (req: AuthRequest, res) => {
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const item = await prisma.item.findUnique({
-            where: { id: req.params.itemId },
+        const item = await prisma.item.findFirst({
+            where: {
+                id: req.params.itemId,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                }
+            },
             include: ITEM_DETAIL_INCLUDE
         });
 
@@ -296,8 +247,16 @@ router.patch('/:itemId', authenticateToken, async (req: AuthRequest, res) => {
             return res.status(400).json({ error: 'В MVP разрешено только support-only редактирование идентификаторов и media-полей Item.' });
         }
 
-        const existing = await prisma.item.findUnique({
-            where: { id: req.params.itemId },
+        const existing = await prisma.item.findFirst({
+            where: {
+                id: req.params.itemId,
+                deleted_at: null,
+                batch: {
+                    is: {
+                        deleted_at: null
+                    }
+                }
+            },
             include: ITEM_DETAIL_INCLUDE
         });
 

@@ -11,13 +11,18 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite\"",
     "dev:e2e": "concurrently \"PORT=3101 npm run server\" \"VITE_HOST=127.0.0.1 VITE_PORT=5273 VITE_API_TARGET=http://127.0.0.1:3101 vite --host 127.0.0.1 --port 5273\"",
-    "build": "npm run prisma:generate && tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "build:server": "node scripts/build-server.mjs",
+    "build:client": "vite build",
+    "build": "npm run prisma:generate && npm run typecheck && npm run build:server && npm run build:client",
     "lint": "eslint .",
     "test:e2e": "npm run prisma:generate && playwright test",
     "test:e2e:headed": "npm run prisma:generate && playwright test --headed",
     "preview": "vite preview",
     "server": "npm run prisma:generate && tsx server/index.ts",
+    "start:prod": "node build/server/index.js",
     "video-processor": "tsx server/videoProcessor.ts",
+    "video-processor:prod": "node build/server/videoProcessor.js",
     "video-export-helper": "node video-export-helper/index.js",
     "video-export-helper:desktop": "electron video-export-helper/desktop/main.cjs",
     "video-export-helper:desktop:dist": "node video-export-helper/build-desktop.mjs",
@@ -25,7 +30,13 @@
     "db:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "db:seed:languages": "npm run prisma:generate && tsx prisma/seed_languages.ts",
-    "db:seed": "npm run prisma:generate && tsx prisma/seed.ts"
+    "db:seed": "npm run prisma:generate && tsx prisma/seed.ts",
+    "db:soft-delete:business": "npm run prisma:generate && tsx scripts/soft-delete-business-data.ts",
+    "db:repair:item-serials": "npm run prisma:generate && tsx scripts/repair-item-serials.ts",
+    "ops:preflight": "./scripts/ops/preflight.sh",
+    "ops:backup": "./scripts/ops/backup-db.sh",
+    "ops:restore": "./scripts/ops/restore-db.sh",
+    "ops:deploy": "./scripts/ops/deploy.sh"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -49,7 +60,6 @@
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.10.1",
     "three": "^0.181.2",
-    "tsx": "^4.21.0",
     "zustand": "^5.0.9"
   },
   "devDependencies": {
@@ -67,6 +77,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
     "concurrently": "^9.2.1",
+    "esbuild": "^0.25.12",
     "electron": "^36.3.2",
     "electron-builder": "^26.0.12",
     "eslint": "^9.39.2",
@@ -75,6 +86,7 @@
     "globals": "^16.5.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.17",
+    "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.0",
     "vite": "^7.2.4"

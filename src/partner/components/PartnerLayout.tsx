@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Package, RussianRuble, LogOut, Home, QrCode, Menu, X, ListOrdered } from 'lucide-react';
+import { Package, RussianRuble, LogOut, Home, Menu, X, ListOrdered } from 'lucide-react';
 import { clearAuthSession } from '../../utils/session';
 
 export function PartnerLayout() {
@@ -37,10 +37,6 @@ export function PartnerLayout() {
 
     if (!isFranchisee) {
         return <Navigate to="/partner/login" replace />;
-    }
-
-    if (location.pathname.startsWith('/partner/qr/print')) {
-        return <Outlet />;
     }
 
     return (
@@ -93,7 +89,6 @@ export function PartnerLayout() {
                     <NavLink to="/partner/dashboard" icon={<Home size={20} />} label="Дашборд" active={location.pathname === '/partner/dashboard'} onClick={() => setIsMobileMenuOpen(false)} />
                     <NavLink to="/partner/batches" icon={<ListOrdered size={20} />} label="Мои партии" active={location.pathname === '/partner/batches'} onClick={() => setIsMobileMenuOpen(false)} />
                     <NavLink to="/partner/batches/new" icon={<Package size={20} />} label="Новая партия" active={location.pathname === '/partner/batches/new'} onClick={() => setIsMobileMenuOpen(false)} />
-                    <NavLink to="/partner/qr" icon={<QrCode size={20} />} label="QR-пакеты" active={location.pathname.startsWith('/partner/qr')} onClick={() => setIsMobileMenuOpen(false)} />
                     <NavLink to="/partner/finance" icon={<RussianRuble size={20} />} label="Финансы" active={location.pathname === '/partner/finance'} onClick={() => setIsMobileMenuOpen(false)} />
                 </nav>
 
