@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, ExternalLink, QrCode } from 'lucide-react';
 import { Button, Input, Modal, Textarea } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
@@ -24,6 +25,84 @@ type ProductTranslation = {
     language_id: number;
     name: string;
     description: string;
+};
+
+type ItemTranslation = {
+    language_id: number;
+    name: string;
+    description?: string;
+    country?: string;
+};
+
+type BatchItem = {
+    id: string;
+    batch_id: string;
+    product_id: string | null;
+    temp_id: string;
+    serial_number: string | null;
+    status: string;
+    is_sold: boolean;
+    sales_channel?: string | null;
+    photo_url?: string | null;
+    source_photo_url?: string | null;
+    item_photo_url?: string | null;
+    item_video_url?: string | null;
+    item_seq?: number | null;
+    activation_date?: string | null;
+    price_sold?: number | null;
+    commission_hq?: number | null;
+    collected_date?: string | null;
+    collected_time?: string | null;
+    created_at: string;
+    updated_at?: string | null;
+    clone_url: string | null;
+    qr_url: string | null;
+};
+
+type ItemDetail = BatchItem & {
+    batch: {
+        id: string;
+        status: string;
+        daily_batch_seq?: number | null;
+        collected_date?: string | null;
+        collected_time?: string | null;
+        owner?: {
+            id: string;
+            name: string;
+            email: string;
+        } | null;
+    };
+    product?: {
+        id: string;
+        image: string;
+        country_code: string;
+        location_code: string;
+        item_code: string;
+        location_description?: string | null;
+        is_published: boolean;
+        translations: ItemTranslation[];
+        location?: {
+            id: string;
+            translations: ItemTranslation[];
+        } | null;
+    } | null;
+};
+
+type ItemFormState = {
+    temp_id: string;
+    serial_number: string;
+    item_seq: string;
+    status: string;
+    is_sold: boolean;
+    sales_channel: string;
+    photo_url: string;
+    item_photo_url: string;
+    item_video_url: string;
+    collected_date: string;
+    collected_time: string;
+    activation_date: string;
+    price_sold: string;
+    commission_hq: string;
 };
 
 type ProductView = {
@@ -111,6 +190,16 @@ const batchStatusClass: Record<string, string> = {
     ERROR: 'bg-red-500/20 text-red-200 border border-red-500/30'
 };
 
+const itemStatusMeta: Record<string, { label: string; className: string }> = {
+    NEW: { label: 'Новый', className: 'bg-gray-800 text-gray-300' },
+    REJECTED: { label: 'Отклонен', className: 'bg-red-500/15 text-red-200' },
+    STOCK_HQ: { label: 'На складе HQ', className: 'bg-emerald-500/15 text-emerald-200' },
+    STOCK_ONLINE: { label: 'Онлайн', className: 'bg-blue-500/15 text-blue-200' },
+    ON_CONSIGNMENT: { label: 'Консигнация', className: 'bg-amber-500/15 text-amber-200' },
+    SOLD_ONLINE: { label: 'Продан онлайн', className: 'bg-indigo-500/15 text-indigo-200' },
+    ACTIVATED: { label: 'Активирован', className: 'bg-violet-500/15 text-violet-200' }
+};
+
 const emptyProductForm: ProductForm = {
     name: '',
     description: '',
@@ -135,6 +224,42 @@ const emptyOrderForm: CollectionOrderForm = {
     note: ''
 };
 
+const formatDateOnly = (value?: string | null) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+};
+
+const formatDateTimeLocalInput = (value?: string | null) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+
+    const pad = (part: number) => String(part).padStart(2, '0');
+    return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+};
+
+const buildItemFormState = (item: ItemDetail): ItemFormState => ({
+    temp_id: item.temp_id,
+    serial_number: item.serial_number || '',
+    item_seq: item.item_seq == null ? '' : String(item.item_seq),
+    status: item.status,
+    is_sold: item.is_sold,
+    sales_channel: item.sales_channel || '',
+    photo_url: item.source_photo_url || '',
+    item_photo_url: item.item_photo_url || '',
+    item_video_url: item.item_video_url || '',
+    collected_date: formatDateOnly(item.collected_date),
+    collected_time: item.collected_time || '',
+    activation_date: formatDateTimeLocalInput(item.activation_date),
+    price_sold: item.price_sold == null ? '' : String(item.price_sold),
+    commission_hq: item.commission_hq == null ? '' : String(item.commission_hq)
+});
+
+const createItemPath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
+const createFallbackImage = '/locations/crystal-caves.jpg';
+const readOnlyInputClassName = 'w-full rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 text-sm text-gray-300 outline-none disabled:cursor-not-allowed disabled:opacity-100';
+
 export function Products() {
     const [products, setProducts] = useState<ProductView[]>([]);
     const [locations, setLocations] = useState<Location[]>([]);
@@ -150,11 +275,20 @@ export function Products() {
     const [formData, setFormData] = useState<ProductForm>(emptyProductForm);
 
     const [expandedProductId, setExpandedProductId] = useState('');
+    const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
+    const [batchItemsById, setBatchItemsById] = useState<Record<string, BatchItem[]>>({});
+    const [batchLoadingIds, setBatchLoadingIds] = useState<Record<string, boolean>>({});
+    const [batchErrors, setBatchErrors] = useState<Record<string, string>>({});
     const [publishingId, setPublishingId] = useState('');
 
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
     const [creatingOrder, setCreatingOrder] = useState(false);
     const [orderForm, setOrderForm] = useState<CollectionOrderForm>(emptyOrderForm);
+    const [selectedItemId, setSelectedItemId] = useState('');
+    const [selectedItem, setSelectedItem] = useState<ItemDetail | null>(null);
+    const [itemForm, setItemForm] = useState<ItemFormState | null>(null);
+    const [itemLoading, setItemLoading] = useState(false);
+    const [itemError, setItemError] = useState('');
 
     const fetchData = async () => {
         setIsLoading(true);
@@ -432,6 +566,68 @@ export function Products() {
         }
     };
 
+    const loadBatchItems = async (batchId: string) => {
+        setBatchLoadingIds((prev) => ({ ...prev, [batchId]: true }));
+        setBatchErrors((prev) => ({ ...prev, [batchId]: '' }));
+
+        try {
+            const response = await authFetch(`/api/items/batch/${batchId}`);
+            const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить товары партии.' }));
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось загрузить товары партии.');
+            }
+
+            setBatchItemsById((prev) => ({ ...prev, [batchId]: payload as BatchItem[] }));
+        } catch (error) {
+            console.error(error);
+            setBatchErrors((prev) => ({ ...prev, [batchId]: error instanceof Error ? error.message : 'Не удалось загрузить товары партии.' }));
+        } finally {
+            setBatchLoadingIds((prev) => ({ ...prev, [batchId]: false }));
+        }
+    };
+
+    const toggleBatch = async (batchId: string) => {
+        const nextExpanded = !expandedBatchIds[batchId];
+        setExpandedBatchIds((prev) => ({ ...prev, [batchId]: nextExpanded }));
+
+        if (nextExpanded && batchItemsById[batchId] === undefined && !batchLoadingIds[batchId]) {
+            await loadBatchItems(batchId);
+        }
+    };
+
+    const openItemModal = async (itemId: string) => {
+        setSelectedItemId(itemId);
+        setSelectedItem(null);
+        setItemForm(null);
+        setItemError('');
+        setItemLoading(true);
+
+        try {
+            const response = await authFetch(`/api/items/${itemId}`);
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить Item.' }));
+                throw new Error(payload.error || 'Не удалось загрузить Item.');
+            }
+
+            const payload = await response.json() as ItemDetail;
+            setSelectedItem(payload);
+            setItemForm(buildItemFormState(payload));
+        } catch (error) {
+            console.error(error);
+            setItemError(error instanceof Error ? error.message : 'Не удалось загрузить Item.');
+        } finally {
+            setItemLoading(false);
+        }
+    };
+
+    const closeItemModal = () => {
+        setSelectedItemId('');
+        setSelectedItem(null);
+        setItemForm(null);
+        setItemError('');
+        setItemLoading(false);
+    };
+
     return (
         <div className="space-y-8">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -537,19 +733,57 @@ export function Products() {
                                                         <p className="text-sm text-gray-500">У этого шаблона пока нет партий.</p>
                                                     ) : (
                                                         <div className="space-y-3">
-                                                            {product.batches.map((batch) => (
-                                                                <div key={batch.id} className="flex flex-col gap-3 rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 md:flex-row md:items-center md:justify-between">
-                                                                    <div>
-                                                                        <p className="text-sm font-semibold text-white">{batch.id}</p>
-                                                                        <p className="text-xs text-gray-500">
-                                                                            {new Date(batch.created_at).toLocaleString('ru-RU')} • камней: {batch.items_count}
-                                                                        </p>
+                                                            {product.batches.map((batch) => {
+                                                                const isBatchExpanded = Boolean(expandedBatchIds[batch.id]);
+                                                                const batchItems = batchItemsById[batch.id] || [];
+                                                                const isBatchLoading = Boolean(batchLoadingIds[batch.id]);
+                                                                const batchError = batchErrors[batch.id];
+
+                                                                return (
+                                                                    <div key={batch.id} className="rounded-xl border border-gray-800 bg-gray-900">
+                                                                        <button
+                                                                            type="button"
+                                                                            className="flex w-full flex-col gap-3 px-4 py-3 text-left md:flex-row md:items-center md:justify-between"
+                                                                            onClick={() => void toggleBatch(batch.id)}
+                                                                        >
+                                                                            <div className="flex min-w-0 items-start gap-3">
+                                                                                <div className="mt-0.5 text-gray-500">
+                                                                                    {isBatchExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                                                                                </div>
+                                                                                <div>
+                                                                                    <p className="text-sm font-semibold text-white">{batch.id}</p>
+                                                                                    <p className="text-xs text-gray-500">
+                                                                                        {new Date(batch.created_at).toLocaleString('ru-RU')} • камней: {batch.items_count}
+                                                                                    </p>
+                                                                                </div>
+                                                                            </div>
+                                                                            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${batchStatusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                                                {batchStatusLabel[batch.status] || batch.status}
+                                                                            </span>
+                                                                        </button>
+
+                                                                        {isBatchExpanded && (
+                                                                            <div className="border-t border-gray-800 px-4 py-4">
+                                                                                {isBatchLoading ? (
+                                                                                    <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-sm text-gray-400">
+                                                                                        Загрузка товаров партии...
+                                                                                    </div>
+                                                                                ) : batchError ? (
+                                                                                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                                                                        {batchError}
+                                                                                    </div>
+                                                                                ) : batchItems.length === 0 ? (
+                                                                                    <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-sm text-gray-500">
+                                                                                        В этой партии пока нет товаров.
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    <ItemGrid items={batchItems} onSelectItem={openItemModal} />
+                                                                                )}
+                                                                            </div>
+                                                                        )}
                                                                     </div>
-                                                                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${batchStatusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                                        {batchStatusLabel[batch.status] || batch.status}
-                                                                    </span>
-                                                                </div>
-                                                            ))}
+                                                                );
+                                                            })}
                                                         </div>
                                                     )}
                                                 </div>
@@ -751,6 +985,186 @@ export function Products() {
                     </div>
                 </form>
             </Modal>
+
+            <Modal
+                isOpen={Boolean(selectedItemId)}
+                onClose={closeItemModal}
+                title={selectedItem ? (selectedItem.serial_number || selectedItem.temp_id) : 'Карточка item'}
+                className="max-w-4xl"
+            >
+                {itemLoading ? (
+                    <div className="py-10 text-center text-gray-400">Загрузка карточки...</div>
+                ) : itemError && !selectedItem ? (
+                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                        {itemError}
+                    </div>
+                ) : selectedItem && itemForm ? (
+                    <div className="space-y-6">
+                        {itemError && (
+                            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                {itemError}
+                            </div>
+                        )}
+
+                        <div className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4 text-sm text-gray-300">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <StatusPill meta={itemStatusMeta[selectedItem.status]} fallbackLabel={selectedItem.status} compact />
+                                <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">{selectedItem.batch.id}</span>
+                                {selectedItem.product && (
+                                    <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">
+                                        {selectedItem.product.country_code}{selectedItem.product.location_code}{selectedItem.product.item_code}
+                                    </span>
+                                )}
+                            </div>
+                            <p className="mt-3 text-xs text-gray-500">ID: {selectedItem.id}</p>
+                            <p className="mt-1 text-xs text-gray-500">Серийный номер: {selectedItem.serial_number || 'Не указан'}</p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <a href={selectedItem.qr_url || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500">
+                                    <QrCode size={16} /> QR
+                                </a>
+                                {createItemPath(selectedItem.serial_number) && (
+                                    <a href={createItemPath(selectedItem.serial_number) || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800">
+                                        <ExternalLink size={16} /> Паспорт
+                                    </a>
+                                )}
+                            </div>
+                        </div>
+
+                        <SectionTitle title="Идентификация" />
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="temp_id">
+                                <input value={itemForm.temp_id} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="serial_number">
+                                <input value={itemForm.serial_number} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="item_seq">
+                                <input value={itemForm.item_seq} readOnly disabled className={readOnlyInputClassName} inputMode="numeric" />
+                            </Field>
+                            <Field label="status">
+                                <input value={itemStatusMeta[itemForm.status]?.label || itemForm.status} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                        </div>
+
+                        <SectionTitle title="Логистика" />
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="collected_date">
+                                <input type="date" value={itemForm.collected_date} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="collected_time">
+                                <input type="time" value={itemForm.collected_time} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="sales_channel">
+                                <input value={itemForm.sales_channel || 'Не назначен'} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="is_sold">
+                                <label className="flex h-[46px] items-center gap-3 rounded-xl border border-gray-800 bg-gray-900 px-4 text-sm text-gray-400">
+                                    <input
+                                        type="checkbox"
+                                        checked={itemForm.is_sold}
+                                        readOnly
+                                        disabled
+                                        className="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500"
+                                    />
+                                    Продан
+                                </label>
+                            </Field>
+                        </div>
+
+                        <SectionTitle title="Media" />
+                        <div className="grid gap-4">
+                            <Field label="photo_url">
+                                <input value={itemForm.photo_url} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="item_photo_url">
+                                <input value={itemForm.item_photo_url} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="item_video_url">
+                                <input value={itemForm.item_video_url} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                        </div>
+
+                        <SectionTitle title="Продажа / финансы" />
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="activation_date">
+                                <input type="datetime-local" value={itemForm.activation_date} readOnly disabled className={readOnlyInputClassName} />
+                            </Field>
+                            <Field label="price_sold">
+                                <input value={itemForm.price_sold} readOnly disabled className={readOnlyInputClassName} inputMode="decimal" />
+                            </Field>
+                            <Field label="commission_hq">
+                                <input value={itemForm.commission_hq} readOnly disabled className={readOnlyInputClassName} inputMode="decimal" />
+                            </Field>
+                        </div>
+
+                        <div className="flex flex-wrap justify-end gap-3">
+                            <Button variant="ghost" onClick={closeItemModal}>Закрыть</Button>
+                        </div>
+                    </div>
+                ) : null}
+            </Modal>
         </div>
+    );
+}
+
+function StatusPill({
+    meta,
+    fallbackLabel,
+    compact = false
+}: {
+    meta?: { label: string; className: string };
+    fallbackLabel: string;
+    compact?: boolean;
+}) {
+    return (
+        <span className={`inline-flex items-center rounded-full px-3 py-1 font-medium ${compact ? 'text-[11px]' : 'text-xs'} ${meta?.className || 'bg-gray-700 text-gray-200 border border-gray-600'}`}>
+            {meta?.label || fallbackLabel}
+        </span>
+    );
+}
+
+function ItemGrid({ items, onSelectItem }: { items: BatchItem[]; onSelectItem: (itemId: string) => void }) {
+    return (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {items.map((item) => {
+                const previewImage = item.item_photo_url || item.photo_url || createFallbackImage;
+                return (
+                    <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => void onSelectItem(item.id)}
+                        className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 text-left transition hover:border-blue-500/50 hover:bg-gray-900 ${item.is_sold ? 'opacity-55' : ''}`}
+                    >
+                        <div className="aspect-square bg-gray-900">
+                            <img src={previewImage} alt={item.serial_number || item.temp_id} className="h-full w-full object-cover" />
+                        </div>
+                        <div className="space-y-2 px-3 py-3">
+                            <div className="flex items-start justify-between gap-2">
+                                <p className="min-w-0 truncate text-sm font-semibold text-white">{item.serial_number || item.temp_id}</p>
+                                <StatusPill meta={itemStatusMeta[item.status]} fallbackLabel={item.status} compact />
+                            </div>
+                            <p className="truncate text-xs text-gray-500">Пакет: {item.temp_id}</p>
+                            <div className="flex items-center justify-between text-xs text-gray-500">
+                                <span>{item.is_sold ? 'Продан' : 'Не продан'}</span>
+                                <span>{item.sales_channel || '—'}</span>
+                            </div>
+                        </div>
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+function SectionTitle({ title }: { title: string }) {
+    return <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-400">{title}</h3>;
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+    return (
+        <label className="block">
+            <span className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500">{label}</span>
+            {children}
+        </label>
     );
 }

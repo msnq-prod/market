@@ -10,6 +10,7 @@ export type CloneItemView = {
     product_name: string;
     product_description: string;
     location_name?: string | null;
+    location_description?: string | null;
     collection_date: string | null;
     collection_time: string | null;
     gps_lat: number | null;
@@ -141,7 +142,7 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
                     <div className="pb-1">
                         <DescriptionCard
                             description={description}
-                            extraText={content.authenticity_text}
+                            extraText={item.location_description || content.authenticity_text}
                         />
                     </div>
 

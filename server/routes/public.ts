@@ -152,6 +152,7 @@ router.get('/items/:serialNumber', async (req, res) => {
             product_name: preferredTranslation?.name || 'Товар',
             product_description: preferredTranslation?.description || '',
             location_name: locationName,
+            location_description: item.product.location_description || '',
             collection_date: collectionDate?.toISOString() || null,
             collection_time: collectionTime,
             gps_lat: item.batch.gps_lat,

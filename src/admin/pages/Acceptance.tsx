@@ -187,7 +187,6 @@ export function Acceptance() {
     const [selectedQrItemIds, setSelectedQrItemIds] = useState<string[]>([]);
     const [batchQuery, setBatchQuery] = useState('');
     const [updatingBatchId, setUpdatingBatchId] = useState('');
-    const [photoUploadingBatchId, setPhotoUploadingBatchId] = useState('');
 
     const loadBatches = async (showSpinner = true) => {
         if (showSpinner) {
@@ -352,55 +351,6 @@ export function Acceptance() {
             setError(finalizeError instanceof Error ? finalizeError.message : 'Не удалось перевести партию на склад.');
         } finally {
             setUpdatingBatchId('');
-        }
-    };
-
-    const handlePhotoUpload = async (batchId: string, files: FileList | null) => {
-        if (!files || files.length === 0) return;
-
-        setPhotoUploadingBatchId(batchId);
-        setError('');
-
-        try {
-            const uploadedFiles: Array<{ name: string; url: string }> = [];
-
-            for (const file of Array.from(files)) {
-                const form = new FormData();
-                form.append('file', file);
-
-                const uploadResponse = await authFetch('/api/upload', {
-                    method: 'POST',
-                    body: form
-                });
-
-                const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось загрузить media-файл.' }));
-                if (!uploadResponse.ok || !uploadPayload.url) {
-                    throw new Error(uploadPayload.error || `Не удалось загрузить файл ${file.name}.`);
-                }
-
-                uploadedFiles.push({
-                    name: file.name,
-                    url: uploadPayload.url
-                });
-            }
-
-            const syncResponse = await authFetch(`/api/batches/${batchId}/media-sync`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ files: uploadedFiles })
-            });
-
-            if (!syncResponse.ok) {
-                const payload = await syncResponse.json().catch(() => ({ error: 'Не удалось сопоставить файлы партии.' }));
-                throw new Error(payload.error || 'Не удалось сопоставить файлы партии.');
-            }
-
-            await refreshAndKeepBatch(batchId);
-        } catch (uploadError) {
-            console.error(uploadError);
-            setError(uploadError instanceof Error ? uploadError.message : 'Не удалось загрузить фото партии.');
-        } finally {
-            setPhotoUploadingBatchId('');
         }
     };
 
@@ -601,24 +551,13 @@ export function Acceptance() {
                                                         <Printer size={16} />
                                                         Печать всех QR
                                                     </Button>
-                                                    <label className={`inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm ${photoUploadingBatchId === selectedBatch.id
-                                                        ? 'cursor-default text-gray-400'
-                                                        : 'cursor-pointer text-gray-100 hover:bg-gray-800'
-                                                        }`}>
+                                                    <Link
+                                                        to={`/admin/photo-tool/${encodeURIComponent(selectedBatch.id)}`}
+                                                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-700 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10"
+                                                    >
                                                         <Camera size={16} />
-                                                        {photoUploadingBatchId === selectedBatch.id ? 'Загрузка фото...' : 'Загрузить фото'}
-                                                        <input
-                                                            type="file"
-                                                            multiple
-                                                            accept="image/*"
-                                                            className="hidden"
-                                                            disabled={photoUploadingBatchId === selectedBatch.id}
-                                                            onChange={(event) => {
-                                                                void handlePhotoUpload(selectedBatch.id, event.target.files);
-                                                                event.currentTarget.value = '';
-                                                            }}
-                                                        />
-                                                    </label>
+                                                        Photo Tool
+                                                    </Link>
                                                     <Link
                                                         to={`/admin/video-tool/${encodeURIComponent(selectedBatch.id)}`}
                                                         className="inline-flex items-center gap-2 rounded-lg border border-emerald-700 px-3 py-2 text-sm text-emerald-100 hover:bg-emerald-500/10"
@@ -639,7 +578,7 @@ export function Acceptance() {
                                 </div>
 
                                 <div className="grid gap-4 px-6 py-5 md:grid-cols-2 xl:grid-cols-4">
-                                    <InfoTile title="Фото готовы" value={`${mediaStats.photoReady}/${mediaStats.total}`} note="Файлы по `serial_number`" />
+                                    <InfoTile title="Фото готовы" value={`${mediaStats.photoReady}/${mediaStats.total}`} note="Назначения через Photo Tool" />
                                     <InfoTile title="Видео готовы" value={`${mediaStats.videoReady}/${mediaStats.total}`} note="Финальные ролики по item" />
                                     <InfoTile title="Media полностью" value={`${mediaStats.fullyReady}/${mediaStats.total}`} note="Готово к переводу на склад" />
                                     <InfoTile title="Позиции в партии" value={`${mediaStats.total}`} note="Все экземпляры текущей партии" />
@@ -650,7 +589,7 @@ export function Acceptance() {
                                         <div className="grid gap-4 lg:grid-cols-3">
                                             <NoticeCard
                                                 title="Фото"
-                                                text="Массовая привязка фото выполняется по имени файла, которое должно совпадать с `serial_number`."
+                                                text="Фото назначаются отдельным Photo Tool по позициям `001`, `002`, `003` с ручной корректировкой и проверкой полного покрытия партии."
                                             />
                                             <NoticeCard
                                                 title="Видео"

@@ -4,6 +4,7 @@ import path from 'path';
 import express from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
+import { upload } from '../middleware/upload.ts';
 import { runVideoJobUpload } from '../middleware/videoJobUpload.ts';
 import { runVideoExportUpload } from '../middleware/videoExportUpload.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
@@ -35,13 +36,16 @@ import {
     type VideoExportManifest
 } from '../services/videoExport.ts';
 import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
-import { hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../utils/collectionWorkflow.ts';
+import { formatItemSeq, hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../utils/collectionWorkflow.ts';
+import { resolveProjectPath } from '../utils/projectPaths.ts';
 import { softDeleteBatch } from '../utils/softDelete.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const ACTIVE_VIDEO_JOB_STATUSES: Array<'QUEUED' | 'PROCESSING'> = ['QUEUED', 'PROCESSING'];
 const VIDEO_EXPORT_LOCK_TIMEOUT_SECONDS = 15;
+const PHOTO_TOOL_PUBLIC_OUTPUT_ROOT = resolveProjectPath('public', 'uploads', 'photos');
+const PHOTO_TOOL_PUBLIC_URL_ROOT = '/uploads/photos';
 
 ensureVideoProcessingDirectories();
 ensureVideoExportDirectories();
@@ -171,6 +175,67 @@ const getSerialFromFilename = (filename: string): string => {
 const createHttpError = (message: string, statusCode: number) =>
     Object.assign(new Error(message), { statusCode });
 
+type PhotoToolApplyManifestEntry = {
+    item_id: string;
+    item_seq: number;
+    source: 'existing' | 'upload';
+    existing_url?: string;
+    file_index?: number;
+};
+
+type PhotoToolBatchRecord = Prisma.BatchGetPayload<{
+    include: {
+        items: {
+            where: { deleted_at: null };
+            orderBy: { item_seq: 'asc' };
+        };
+    };
+}>;
+
+const parseOptionalText = (value: unknown) => {
+    if (value == null) {
+        return null;
+    }
+
+    if (typeof value !== 'string') {
+        throw createHttpError('Некорректное строковое значение.', 400);
+    }
+
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+};
+
+const parseNullableInteger = (value: unknown, fieldLabel: string, minimum = 0) => {
+    if (value == null || value === '') {
+        return null;
+    }
+
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (!Number.isInteger(parsed) || parsed < minimum) {
+        throw createHttpError(`Поле ${fieldLabel} должно быть целым числом не меньше ${minimum}.`, 400);
+    }
+
+    return parsed;
+};
+
+const removeStagedFiles = async (files: Express.Multer.File[] | undefined) => {
+    if (!files?.length) {
+        return;
+    }
+
+    await Promise.all(files.map(async (file) => {
+        if (!file.path) {
+            return;
+        }
+
+        try {
+            await fs.rm(file.path, { force: true });
+        } catch (error) {
+            console.error('Failed to remove staged file', file.path, error);
+        }
+    }));
+};
+
 const removeStagedVideoFile = async (file: Express.Multer.File | undefined) => {
     if (!file?.path) {
         return;
@@ -181,6 +246,156 @@ const removeStagedVideoFile = async (file: Express.Multer.File | undefined) => {
     } catch (error) {
         console.error('Failed to remove staged export video file', file.path, error);
     }
+};
+
+const sanitizePhotoToolFilenamePart = (value: string) => {
+    const normalized = value
+        .trim()
+        .normalize('NFKD')
+        .split('')
+        .filter((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) <= 126)
+        .join('')
+        .replace(/[^a-zA-Z0-9_-]+/g, '-')
+        .replace(/-{2,}/g, '-')
+        .replace(/^[-_]+|[-_]+$/g, '');
+
+    return normalized || 'photo';
+};
+
+const buildPhotoToolFilename = (batchId: string, itemSeq: number, originalName: string) => {
+    const parsed = path.parse(originalName || '');
+    const safeBaseName = sanitizePhotoToolFilenamePart(parsed.name || 'photo');
+    const safeBatchId = sanitizePhotoToolFilenamePart(batchId);
+    const rawExtension = (parsed.ext || '').toLowerCase();
+    const safeExtension = rawExtension && /^[.][a-z0-9]{1,10}$/.test(rawExtension) ? rawExtension : '.jpg';
+
+    return `batch-${safeBatchId}-item-${formatItemSeq(itemSeq)}-${safeBaseName}-${Date.now()}${safeExtension}`;
+};
+
+const getPhotoToolBatch = async (batchId: string) => prisma.batch.findFirst({
+    where: {
+        id: batchId,
+        deleted_at: null
+    },
+    include: {
+        items: {
+            where: {
+                deleted_at: null
+            },
+            orderBy: { item_seq: 'asc' }
+        }
+    }
+});
+
+const ensurePhotoToolBatchReady = (batch: PhotoToolBatchRecord | null) => {
+    if (!batch) {
+        throw createHttpError('Партия не найдена.', 404);
+    }
+
+    if (batch.status !== 'RECEIVED') {
+        throw createHttpError('Назначение фото доступно только для партии в статусе RECEIVED.', 400);
+    }
+
+    if (batch.items.some((item) => item.item_seq == null)) {
+        throw createHttpError('У некоторых Item отсутствует item_seq, назначение фото невозможно.', 400);
+    }
+
+    return batch as PhotoToolBatchRecord & { items: Array<PhotoToolBatchRecord['items'][number] & { item_seq: number }> };
+};
+
+const parsePhotoToolApplyManifest = (value: unknown, batch: PhotoToolBatchRecord) => {
+    if (typeof value !== 'string') {
+        throw createHttpError('Не передан manifest для photo-tool.', 400);
+    }
+
+    let parsedValue: unknown;
+    try {
+        parsedValue = JSON.parse(value);
+    } catch {
+        throw createHttpError('manifest photo-tool должен быть корректным JSON.', 400);
+    }
+
+    if (!Array.isArray(parsedValue)) {
+        throw createHttpError('manifest photo-tool должен быть массивом.', 400);
+    }
+
+    if (parsedValue.length !== batch.items.length) {
+        throw createHttpError('В manifest photo-tool должен быть полный набор Item партии.', 400);
+    }
+
+    const itemsById = new Map(batch.items.map((item) => [item.id, item]));
+    const seenItemIds = new Set<string>();
+    const seenSourceTokens = new Set<string>();
+
+    return parsedValue.map((entry, index) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            throw createHttpError(`manifest photo-tool: запись ${index + 1} должна быть объектом.`, 400);
+        }
+
+        const typedEntry = entry as Record<string, unknown>;
+        const itemId = parseOptionalText(typedEntry.item_id);
+        const itemSeq = parseNullableInteger(typedEntry.item_seq, 'item_seq', 1);
+        const source = typedEntry.source;
+
+        if (!itemId || itemSeq == null || (source !== 'existing' && source !== 'upload')) {
+            throw createHttpError(`manifest photo-tool: запись ${index + 1} заполнена некорректно.`, 400);
+        }
+
+        if (seenItemIds.has(itemId)) {
+            throw createHttpError('manifest photo-tool содержит дублирующиеся item_id.', 400);
+        }
+
+        const item = itemsById.get(itemId);
+        if (!item || item.item_seq == null) {
+            throw createHttpError('manifest photo-tool содержит item_id вне выбранной партии.', 400);
+        }
+
+        if (item.item_seq !== itemSeq) {
+            throw createHttpError('manifest photo-tool содержит item_seq, не совпадающий с текущей партией.', 400);
+        }
+
+        let normalizedEntry: PhotoToolApplyManifestEntry;
+        if (source === 'existing') {
+            const existingUrl = parseOptionalText(typedEntry.existing_url);
+            if (!existingUrl || !existingUrl.startsWith(`${PHOTO_TOOL_PUBLIC_URL_ROOT}/`)) {
+                throw createHttpError('Для existing-фото разрешены только URL из /uploads/photos/.', 400);
+            }
+
+            const sourceToken = `existing:${existingUrl}`;
+            if (seenSourceTokens.has(sourceToken)) {
+                throw createHttpError('manifest photo-tool содержит повторное использование одной и той же фотографии.', 400);
+            }
+
+            seenSourceTokens.add(sourceToken);
+            normalizedEntry = {
+                item_id: itemId,
+                item_seq: itemSeq,
+                source,
+                existing_url: existingUrl
+            };
+        } else {
+            const fileIndex = parseNullableInteger(typedEntry.file_index, 'file_index', 0);
+            if (fileIndex == null) {
+                throw createHttpError('Для upload-фото обязателен file_index.', 400);
+            }
+
+            const sourceToken = `upload:${fileIndex}`;
+            if (seenSourceTokens.has(sourceToken)) {
+                throw createHttpError('manifest photo-tool содержит повторное использование одной и той же фотографии.', 400);
+            }
+
+            seenSourceTokens.add(sourceToken);
+            normalizedEntry = {
+                item_id: itemId,
+                item_seq: itemSeq,
+                source,
+                file_index: fileIndex
+            };
+        }
+
+        seenItemIds.add(itemId);
+        return normalizedEntry;
+    });
 };
 
 const buildVideoExportSessionInclude = Prisma.validator<Prisma.BatchVideoExportSessionInclude>()({
@@ -470,6 +685,146 @@ router.get('/:batchId/qr-pack', authenticateToken, async (req: AuthRequest, res)
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Не удалось загрузить QR-пакет партии.' });
+    }
+});
+
+router.get('/:id/photo-tool', authenticateToken, async (req: AuthRequest, res) => {
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
+
+        const batch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
+
+        res.json({
+            batch: {
+                id: batch.id,
+                status: batch.status,
+                created_at: batch.created_at,
+                updated_at: batch.updated_at,
+                expected_photo_count: batch.items.length
+            },
+            items: batch.items.map((item) => ({
+                id: item.id,
+                temp_id: item.temp_id,
+                item_seq: item.item_seq,
+                serial_number: item.serial_number,
+                item_photo_url: item.item_photo_url
+            }))
+        });
+    } catch (error) {
+        console.error(error);
+        const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+        const message = error instanceof Error && error.message
+            ? error.message
+            : 'Не удалось загрузить данные для photo-tool.';
+
+        res.status(statusCode).json({ error: message });
+    }
+});
+
+router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest, res) => {
+    let uploadedFiles: Express.Multer.File[] | undefined;
+    const createdPaths: string[] = [];
+
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
+
+        await new Promise<void>((resolve, reject) => {
+            upload.array('files')(req, res, (error) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+
+                resolve();
+            });
+        });
+
+        uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
+        if (uploadedFiles.some((file) => !file.mimetype.startsWith('image/'))) {
+            throw createHttpError('Photo-tool принимает только image-файлы.', 400);
+        }
+
+        const batch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
+        const manifest = parsePhotoToolApplyManifest(req.body?.manifest, batch);
+        const usedFileIndexes = manifest
+            .filter((entry) => entry.source === 'upload')
+            .map((entry) => entry.file_index as number)
+            .sort((left, right) => left - right);
+
+        if (usedFileIndexes.length !== uploadedFiles.length) {
+            throw createHttpError('Количество upload-записей в manifest не совпадает с набором загруженных файлов.', 400);
+        }
+
+        usedFileIndexes.forEach((fileIndex, index) => {
+            if (fileIndex !== index || !uploadedFiles?.[fileIndex]) {
+                throw createHttpError('manifest photo-tool содержит некорректные file_index.', 400);
+            }
+        });
+
+        const nextPhotoUrlByItemId = new Map<string, string>();
+
+        for (const entry of manifest) {
+            if (entry.source === 'existing') {
+                nextPhotoUrlByItemId.set(entry.item_id, entry.existing_url as string);
+                continue;
+            }
+
+            const uploadedFile = uploadedFiles[entry.file_index as number];
+            if (!uploadedFile) {
+                throw createHttpError('manifest photo-tool ссылается на отсутствующий файл.', 400);
+            }
+
+            const targetFilename = buildPhotoToolFilename(batch.id, entry.item_seq, uploadedFile.originalname);
+            const targetPath = path.join(PHOTO_TOOL_PUBLIC_OUTPUT_ROOT, targetFilename);
+            await moveFileSafely(uploadedFile.path, targetPath);
+            createdPaths.push(targetPath);
+
+            nextPhotoUrlByItemId.set(entry.item_id, `${PHOTO_TOOL_PUBLIC_URL_ROOT}/${targetFilename}`);
+        }
+
+        await prisma.$transaction(manifest.map((entry) =>
+            prisma.item.update({
+                where: { id: entry.item_id },
+                data: {
+                    item_photo_url: nextPhotoUrlByItemId.get(entry.item_id) || null
+                }
+            })
+        ));
+
+        const updatedBatch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
+        res.json({
+            batch: {
+                id: updatedBatch.id,
+                status: updatedBatch.status,
+                created_at: updatedBatch.created_at,
+                updated_at: updatedBatch.updated_at,
+                expected_photo_count: updatedBatch.items.length
+            },
+            items: updatedBatch.items.map((item) => ({
+                id: item.id,
+                temp_id: item.temp_id,
+                item_seq: item.item_seq,
+                serial_number: item.serial_number,
+                item_photo_url: item.item_photo_url
+            }))
+        });
+    } catch (error) {
+        console.error(error);
+        await Promise.all(createdPaths.map((filePath) => fs.rm(filePath, { force: true }).catch(() => undefined)));
+        await removeStagedFiles(uploadedFiles);
+
+        const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+        const message = error instanceof Error && error.message
+            ? error.message
+            : 'Не удалось применить назначения photo-tool.';
+
+        res.status(statusCode).json({ error: message });
     }
 });
 

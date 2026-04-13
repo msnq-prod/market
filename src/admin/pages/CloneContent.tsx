@@ -35,6 +35,7 @@ const PREVIEW_ITEM: CloneItemView = {
     product_name: 'Демо-товар Stones',
     product_description: 'Короткое описание карточки товара, которое наследуется публичным паспортом.',
     location_name: 'Москва, тестовая локация',
+    location_description: 'Описание локации из товарного шаблона. Этот текст теперь показывается в публичном паспорте вместо стандартной фразы про публичный токен.',
     collection_date: new Date().toISOString(),
     collection_time: '14:30',
     gps_lat: 55.751244,

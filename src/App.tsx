@@ -246,6 +246,7 @@ import { CloneContent } from './admin/pages/CloneContent'
 import { Warehouse } from './admin/pages/Warehouse'
 import { Orders } from './admin/pages/Orders'
 import { VideoTool } from './admin/pages/VideoTool'
+import { PhotoTool } from './admin/pages/PhotoTool'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
 
 function App() {
@@ -257,6 +258,14 @@ function App() {
 
         {/* Admin Routes */}
         <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
+        <Route
+          path="/admin/photo-tool/:batchId"
+          element={(
+            <AdminFullscreenRoute>
+              <PhotoTool />
+            </AdminFullscreenRoute>
+          )}
+        />
         <Route
           path="/admin/video-tool/:batchId"
           element={(

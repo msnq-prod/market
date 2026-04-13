@@ -83,6 +83,7 @@ npm run dev
 - `/admin/products`
 - `/admin/users`
 - `/admin/clone-content`
+- `/admin/photo-tool/:batchId`
 - `/admin/video-tool/:batchId`
 - `/admin/qr/print?batchId=<ID>`
 
@@ -136,7 +137,6 @@ npm run dev
 - `GET /api/batches`
 - `POST /api/batches/:id/receive`
 - `POST /api/batches/:id/finalize`
-- `POST /api/batches/:id/media-sync`
 - `GET /api/batches/:batchId/qr-pack`
 - `GET /api/items/batch/:batchId`
 - `GET /api/items/:itemId`
@@ -158,6 +158,15 @@ npm run dev
 - `POST /api/batches/:id/video-export-sessions/:sessionId/files`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
+
+### Фото
+
+- `GET /api/batches/:id/photo-tool`
+- `POST /api/batches/:id/photo-tool/apply`
+
+### Legacy media sync
+
+- `POST /api/batches/:id/media-sync`
 
 ### Финансы и allocation
 
