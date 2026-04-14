@@ -40,6 +40,7 @@ const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
 const PARTNER_PASSWORD = 'partner123';
+const E2E_REQUEST_NOTE = '[e2e] admin-video-tool';
 
 const randomKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -118,7 +119,8 @@ async function createReceivedBatchWithSerials(
         headers: authHeaders(admin.accessToken),
         data: {
             product_id: productId,
-            requested_qty: itemCount
+            requested_qty: itemCount,
+            note: E2E_REQUEST_NOTE,
         }
     });
     expect(createRequestResponse.ok()).toBeTruthy();

@@ -25,10 +25,34 @@ const prisma = new PrismaClient();
 const app = express();
 const port = process.env.PORT || 3001;
 const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-const helperConnectOrigins = [
+const DEFAULT_HELPER_CONNECT_ORIGINS = [
     'http://127.0.0.1:3012',
     'http://localhost:3012'
 ];
+
+const parseHelperConnectOrigins = () => {
+    const configuredHelperUrl = (
+        process.env.VIDEO_EXPORT_HELPER_URL
+        || process.env.VITE_VIDEO_EXPORT_HELPER_URL
+        || ''
+    ).trim();
+
+    if (!configuredHelperUrl) {
+        return DEFAULT_HELPER_CONNECT_ORIGINS;
+    }
+
+    try {
+        return Array.from(new Set([
+            DEFAULT_HELPER_CONNECT_ORIGINS[0],
+            DEFAULT_HELPER_CONNECT_ORIGINS[1],
+            new URL(configuredHelperUrl).origin
+        ]));
+    } catch {
+        return DEFAULT_HELPER_CONNECT_ORIGINS;
+    }
+};
+
+const helperConnectOrigins = parseHelperConnectOrigins();
 
 const getPrismaErrorMessage = (error: unknown, fallback: string) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {

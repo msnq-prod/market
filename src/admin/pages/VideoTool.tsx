@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upl
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
-const VIDEO_EXPORT_HELPER_URL = 'http://127.0.0.1:3012';
+const VIDEO_EXPORT_HELPER_URL = (import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012').trim().replace(/\/+$/, '');
 const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
 const VIDEO_HELPER_DOWNLOAD_URL = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL || '').trim();
 const MIN_SEGMENT_DURATION_MS = 200;

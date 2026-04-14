@@ -21,6 +21,9 @@ const PARTNER_EMAIL = 'yakutia.partner@stones.com';
 const PARTNER_PASSWORD = 'partner123';
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
+const SALES_EMAIL = 'sales@stones.com';
+const SALES_PASSWORD = 'partner123';
+const E2E_REQUEST_NOTE = '[e2e] partner-qr';
 
 const randomKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -47,7 +50,8 @@ async function createTransitBatchFromRequest(
         headers: authHeaders(adminToken),
         data: {
             product_id: 'prod-yak-001',
-            requested_qty: itemCount
+            requested_qty: itemCount,
+            note: E2E_REQUEST_NOTE,
         }
     });
     expect(createRequestResponse.status()).toBe(201);
@@ -123,7 +127,7 @@ test('API hardening: healthz works, /api/user is sanitized, catalog mutations re
         translations: [
             {
                 language_id: 1,
-                name: `Secured location ${randomKey()}`,
+                name: `[e2e] Secured location ${randomKey()}`,
                 country: 'Russia',
                 description: 'ACL test'
             }
@@ -151,7 +155,7 @@ test('API hardening: healthz works, /api/user is sanitized, catalog mutations re
         translations: [
             {
                 language_id: 1,
-                name: `Secured product ${randomKey()}`,
+                name: `[e2e] Secured product ${randomKey()}`,
                 description: 'ACL test'
             }
         ]
@@ -228,7 +232,8 @@ test('API: партнер завершает заказ на сбор без vid
         headers: authHeaders(admin.accessToken),
         data: {
             product_id: 'prod-yak-001',
-            requested_qty: 2
+            requested_qty: 2,
+            note: E2E_REQUEST_NOTE,
         }
     });
     expect(createRequestResponse.status()).toBe(201);
@@ -258,7 +263,7 @@ test('API: партнер завершает заказ на сбор без vid
 test('UI e2e: партнер не видит QR-раздел, HQ печатает QR из приемки', async ({ page, request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
-    const { batchId, items } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
+    const { batchId } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
 
     await setSession(page, partner);
     await page.goto('/partner/dashboard');
@@ -281,8 +286,67 @@ test('UI e2e: партнер не видит QR-раздел, HQ печатае�
         page.getByRole('button', { name: 'Печать всех QR' }).click()
     ]);
     await printPage.waitForURL(/\/admin\/qr\/print/);
-    await expect(printPage.getByText(`Позиция #${items[0].temp_id}`)).toBeVisible();
+    await expect(printPage.getByRole('heading', { name: 'HQ-сервис печати QR' })).toBeVisible();
+    await expect(printPage.getByRole('heading', { name: 'Интерактивное превью одной этикетки' })).toBeVisible();
+    await printPage.getByLabel('Свое поле').check();
+    const customInput = printPage.getByPlaceholder('Введите свой текст').first();
+    await customInput.fill('Ручная подпись');
+    await expect(customInput).toHaveValue('Ручная подпись');
     await printPage.close();
+
+    await page.locator('input[type="checkbox"]').first().check();
+
+    const [selectedPrintPage] = await Promise.all([
+        page.waitForEvent('popup'),
+        page.getByRole('button', { name: 'Печать выбранных QR' }).click()
+    ]);
+    await selectedPrintPage.waitForURL(/mode=selected/);
+    await expect(selectedPrintPage.getByText('В документе: 1')).toBeVisible();
+    await selectedPrintPage.close();
+});
+
+test('UI e2e: HQ открывает QR-сервис из товаров по кнопке партии', async ({ page, request }) => {
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const { batchId } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
+
+    const receiveBatchResponse = await request.post(`/api/batches/${batchId}/receive`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(receiveBatchResponse.status()).toBe(200);
+
+    await setSession(page, admin);
+    await page.goto('/admin/products');
+    await expect(page.getByRole('heading', { name: 'Товары-шаблоны' })).toBeVisible();
+
+    await page.getByTestId('product-expand-prod-yak-001').click();
+
+    const [printPage] = await Promise.all([
+        page.waitForEvent('popup'),
+        page.getByTestId(`product-batch-qr-${batchId}`).click()
+    ]);
+    await printPage.waitForURL(/\/admin\/qr\/print/);
+    await expect(printPage.getByText(`Партия: ${batchId}`)).toBeVisible();
+    await printPage.close();
+});
+
+test('UI ACL: sales manager не получает доступ к HQ QR-сервису, партнер не видит QR-раздел в partner UI', async ({ page, request }) => {
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const salesManager = await login(request, SALES_EMAIL, SALES_PASSWORD);
+
+    const salesPage = await page.context().newPage();
+    await setSession(salesPage, salesManager);
+    await salesPage.goto('/admin/orders');
+    await expect(salesPage.getByText('QR-печать')).toHaveCount(0);
+    await salesPage.goto('/admin/qr/print');
+    await salesPage.waitForURL(/\/admin\/orders/);
+    await salesPage.close();
+
+    const partnerPage = await page.context().newPage();
+    await setSession(partnerPage, partner);
+    await partnerPage.goto('/partner/dashboard');
+    await expect(partnerPage.getByText('QR-печать')).toHaveCount(0);
+    await partnerPage.close();
 });
 
 test('Public passport is gated until RECEIVED and activation only records activation', async ({ request }) => {

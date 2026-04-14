@@ -19,11 +19,7 @@ export function LocationInfoSection() {
     }, [selectedLocation]);
 
     if (!displayLocation) return null;
-
-    const descriptions: Record<number, string> = {
-        1: "Откройте редкие артефакты и ресурсы, уникальные для этого региона. Наши местные партнеры гарантируют этичное происхождение и проверку подлинности.",
-        2: "Откройте для себя редкие артефакты и ресурсы, уникальные для этого региона. Наши местные партнеры гарантируют, что каждый предмет получен этичным путем и проверен на подлинность."
-    };
+    const description = getLocalizedValue(displayLocation, 'description', language);
 
     return (
         <section className="relative z-10 flex min-h-[100svh] w-full items-end px-4 pb-6 pt-28 text-white pointer-events-auto sm:px-6 md:block md:min-h-0 md:px-6 md:pb-0 md:pt-32">
@@ -43,7 +39,7 @@ export function LocationInfoSection() {
                     </div>
                 </div>
                 <p className="mt-5 max-w-2xl leading-relaxed text-gray-300 md:mx-auto md:mt-8">
-                    {descriptions[language] || descriptions[2]}
+                    {description}
                 </p>
             </div>
         </section>

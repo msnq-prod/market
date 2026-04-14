@@ -1,8 +1,9 @@
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls as DreiOrbitControls } from '@react-three/drei'
-import React, { Suspense, useEffect, useRef, useState } from 'react'
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import * as THREE from 'three'
 import { Earth } from './components/Earth'
 import { Markers } from './components/Markers'
 import { CameraController } from './components/CameraController'
@@ -11,6 +12,7 @@ import { AboutSection } from './components/AboutSection'
 import { ProductListSection } from './components/ProductListSection'
 import { LocationInfoSection } from './components/LocationInfoSection'
 import { LoadingScreen } from './components/LoadingScreen'
+import { ScrollToProductsHint } from './components/ScrollToProductsHint'
 import { AdminLayout } from './admin/components/AdminLayout'
 import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
 import { Dashboard } from './admin/pages/Dashboard'
@@ -31,9 +33,23 @@ type StonesDebugWindow = Window & {
   }
 }
 
+type ScrollLockSnapshot = {
+  bodyOverflow: string
+  htmlOverflow: string
+  bodyOverscrollBehavior: string
+  htmlOverscrollBehavior: string
+}
+
 const scrollToTop = () => {
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
+
+const LIGHT_START_LONGITUDE = -40.35
+const LIGHT_ORBIT_RADIUS = 12
+const LIGHT_ORBIT_HEIGHT = 3.5
+const LIGHT_ORBIT_SPEED = 0.08
+const MAIN_SCENE_DPR: [number, number] = [1, 1.25]
+const MAIN_SCENE_FPS = 30
 
 function useIsMobileViewport() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
@@ -63,17 +79,202 @@ function useHasWebGLSupport() {
   return hasSupport
 }
 
+function OrbitingSunLight() {
+  const lightRef = useRef<THREE.DirectionalLight>(null)
+
+  useFrame(({ clock }) => {
+    if (!lightRef.current) return
+
+    const angle = ((LIGHT_START_LONGITUDE + 180) * Math.PI) / 180 + clock.getElapsedTime() * LIGHT_ORBIT_SPEED
+    const x = -LIGHT_ORBIT_RADIUS * Math.cos(angle)
+    const z = LIGHT_ORBIT_RADIUS * Math.sin(angle)
+
+    lightRef.current.position.set(x, LIGHT_ORBIT_HEIGHT, z)
+  })
+
+  return <directionalLight ref={lightRef} intensity={2.4} />
+}
+
+function SceneRenderTicker({ fps }: { fps: number }) {
+  const invalidate = useThree((state) => state.invalidate)
+
+  useEffect(() => {
+    const frameDuration = 1000 / fps
+    let animationFrameId = 0
+    let timeoutId: number | undefined
+
+    const scheduleNextFrame = () => {
+      timeoutId = window.setTimeout(() => {
+        animationFrameId = window.requestAnimationFrame(() => {
+          if (!document.hidden) {
+            invalidate()
+          }
+
+          scheduleNextFrame()
+        })
+      }, frameDuration)
+    }
+
+    invalidate()
+    scheduleNextFrame()
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId)
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [fps, invalidate])
+
+  return null
+}
+
 function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) {
   const selectedLocation = useStore((state) => state.selectedLocation)
   const clearSelection = useStore((state) => state.clearSelection)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  const scrollLockRef = useRef<ScrollLockSnapshot | null>(null)
+  const mobileGestureRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    lastX: number
+    mode: 'pending' | 'orbit' | 'scroll'
+  } | null>(null)
+
+  const unlockScroll = useCallback(() => {
+    const snapshot = scrollLockRef.current
+    if (!snapshot) return
+
+    document.body.style.overflow = snapshot.bodyOverflow
+    document.documentElement.style.overflow = snapshot.htmlOverflow
+    document.body.style.overscrollBehavior = snapshot.bodyOverscrollBehavior
+    document.documentElement.style.overscrollBehavior = snapshot.htmlOverscrollBehavior
+    scrollLockRef.current = null
+  }, [])
+
+  const lockScroll = useCallback(() => {
+    if (touchAction !== 'pan-y' || scrollLockRef.current) return
+
+    scrollLockRef.current = {
+      bodyOverflow: document.body.style.overflow,
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverscrollBehavior: document.body.style.overscrollBehavior,
+      htmlOverscrollBehavior: document.documentElement.style.overscrollBehavior
+    }
+
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.overscrollBehavior = 'none'
+    document.documentElement.style.overscrollBehavior = 'none'
+  }, [touchAction])
 
   useEffect(() => {
     const domElement = controlsRef.current?.domElement
     if (!domElement) return
 
     domElement.style.touchAction = touchAction
+    domElement.style.overscrollBehavior = 'none'
   }, [touchAction])
+
+  useEffect(() => {
+    const domElement = controlsRef.current?.domElement
+    if (!domElement || touchAction !== 'pan-y') return
+
+    const finishGesture = (pointerId?: number) => {
+      if (pointerId !== undefined && mobileGestureRef.current && mobileGestureRef.current.pointerId !== pointerId) {
+        return
+      }
+
+      mobileGestureRef.current = null
+      unlockScroll()
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch' || !event.isPrimary) return
+
+      mobileGestureRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        mode: 'pending'
+      }
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const gesture = mobileGestureRef.current
+      const controls = controlsRef.current
+      if (!gesture || !controls || event.pointerType !== 'touch' || event.pointerId !== gesture.pointerId) return
+
+      const totalDeltaX = event.clientX - gesture.startX
+      const totalDeltaY = event.clientY - gesture.startY
+      const absX = Math.abs(totalDeltaX)
+      const absY = Math.abs(totalDeltaY)
+
+      if (gesture.mode === 'pending') {
+        if (absX < 10 && absY < 10) return
+
+        if (absX > absY + 6) {
+          gesture.mode = 'orbit'
+          if (useStore.getState().selectedLocation) {
+            clearSelection()
+          }
+          lockScroll()
+        } else if (absY > absX + 6) {
+          gesture.mode = 'scroll'
+          unlockScroll()
+          return
+        } else {
+          return
+        }
+      }
+
+      if (gesture.mode !== 'orbit') return
+
+      const deltaX = event.clientX - gesture.lastX
+      if (deltaX !== 0) {
+        const nextAzimuthalAngle =
+          controls.getAzimuthalAngle() - ((2 * Math.PI * deltaX) / domElement.clientHeight) * controls.rotateSpeed
+
+        controls.setAzimuthalAngle(nextAzimuthalAngle)
+        controls.update()
+        gesture.lastX = event.clientX
+      }
+
+      event.preventDefault()
+    }
+
+    const handlePointerUp = (event: PointerEvent) => {
+      finishGesture(event.pointerId)
+    }
+
+    domElement.addEventListener('pointerdown', handlePointerDown)
+    domElement.addEventListener('pointermove', handlePointerMove)
+    domElement.addEventListener('pointerup', handlePointerUp)
+    domElement.addEventListener('pointercancel', handlePointerUp)
+
+    return () => {
+      domElement.removeEventListener('pointerdown', handlePointerDown)
+      domElement.removeEventListener('pointermove', handlePointerMove)
+      domElement.removeEventListener('pointerup', handlePointerUp)
+      domElement.removeEventListener('pointercancel', handlePointerUp)
+      finishGesture()
+    }
+  }, [clearSelection, lockScroll, touchAction, unlockScroll])
+
+  useEffect(() => {
+    return () => {
+      const snapshot = scrollLockRef.current
+      if (!snapshot) return
+
+      document.body.style.overflow = snapshot.bodyOverflow
+      document.documentElement.style.overflow = snapshot.htmlOverflow
+      document.body.style.overscrollBehavior = snapshot.bodyOverscrollBehavior
+      document.documentElement.style.overscrollBehavior = snapshot.htmlOverscrollBehavior
+      scrollLockRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -102,12 +303,16 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
       enableZoom={false}
       enableRotate={true}
       rotateSpeed={0.5}
+      touches={touchAction === 'pan-y' ? { TWO: THREE.TOUCH.DOLLY_PAN } : undefined}
       autoRotate={!selectedLocation}
-      autoRotateSpeed={0.5}
+      autoRotateSpeed={0.15}
       onStart={() => {
         if (useStore.getState().selectedLocation) {
           clearSelection()
         }
+      }}
+      onEnd={() => {
+        unlockScroll()
       }}
     />
   )
@@ -118,8 +323,8 @@ function Scene() {
 
   return (
     <>
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[8, 3, 2]} intensity={2} />
+      <ambientLight intensity={0.35} />
+      <OrbitingSunLight />
 
       <group>
         <Earth />
@@ -194,13 +399,18 @@ function MainApp() {
         {hasWebGL ? (
           <ErrorBoundary>
             <Canvas
-              camera={{ position: INITIAL_CAMERA_POSITION, fov: 45 }}
+              camera={{ position: INITIAL_CAMERA_POSITION, fov: 45, near: 0.1, far: 20 }}
+              dpr={MAIN_SCENE_DPR}
+              frameloop="demand"
+              gl={{ antialias: true, powerPreference: 'low-power', stencil: false }}
+              performance={{ min: 0.75 }}
               fallback={
                 <div className="flex h-full w-full items-center justify-center bg-black text-sm text-white/70">
                   3D-сцена недоступна в этом браузере
                 </div>
               }
             >
+              <SceneRenderTicker fps={MAIN_SCENE_FPS} />
               <Suspense fallback={null}>
                 <Scene />
               </Suspense>
@@ -221,6 +431,7 @@ function MainApp() {
 
       <div className="relative z-10 pointer-events-none">
         <UIOverlay />
+        <ScrollToProductsHint />
 
         {!selectedLocation && <div className="h-[100svh] pointer-events-none" />}
 
@@ -242,6 +453,7 @@ import { Acceptance } from './admin/pages/Acceptance'
 import { Allocation } from './admin/pages/Allocation'
 import { Users } from './admin/pages/Users'
 import { DigitalClone } from './public/pages/DigitalClone'
+import { NotFound } from './public/pages/NotFound'
 import { CloneContent } from './admin/pages/CloneContent'
 import { Warehouse } from './admin/pages/Warehouse'
 import { Orders } from './admin/pages/Orders'
@@ -303,6 +515,7 @@ function App() {
           <Route path="finance" element={<Finance />} />
           <Route index element={<PartnerDashboard />} />
         </Route>
+        <Route path="*" element={<NotFound />} />
 
       </Routes>
     </BrowserRouter>

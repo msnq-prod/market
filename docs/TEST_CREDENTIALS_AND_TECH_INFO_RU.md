@@ -159,10 +159,14 @@ npm run dev
 - `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
 
+`video-tool` использует локальный helper с `protocol_version = stones-video-export-helper-v2` и позволяет продолжать незавершенную загрузку только для недостающих роликов.
+
 ### Фото
 
 - `GET /api/batches/:id/photo-tool`
 - `POST /api/batches/:id/photo-tool/apply`
+
+`photo-tool/apply` использует optimistic concurrency через `base_photo_state_token`, требует полный manifest по всем Item партии и назначает фото по `item_seq`, а не по `serial_number`.
 
 ### Legacy media sync
 
@@ -216,6 +220,20 @@ Seed создает:
 1. Войти как `manager@stones.com` или `admin@stones.com`.
 2. Открыть `/admin/acceptance`.
 3. Проверить batch в `TRANSIT` или `RECEIVED`.
+
+### Проверка Photo Tool
+
+1. Войти как `manager@stones.com` или `admin@stones.com`.
+2. Открыть batch в `RECEIVED`.
+3. Перейти в `/admin/photo-tool/:batchId`.
+4. Проверить, что coverage совпадает с количеством позиций и что save блокируется при неполном покрытии.
+
+### Проверка Video Tool
+
+1. Войти как `manager@stones.com` или `admin@stones.com`.
+2. Открыть `/admin/video-tool/:batchId`.
+3. Проверить, что helper доступен и tool видит текущую export-session.
+4. Для незавершенной session проверить сценарий retry-tail только по отсутствующим роликам.
 
 ### Проверка публичного паспорта
 

@@ -595,6 +595,14 @@ export function Products() {
         }
     };
 
+    const openBatchQrPrint = (batchId: string) => {
+        const params = new URLSearchParams({
+            batchId,
+            mode: 'all'
+        });
+        window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
+    };
+
     const openItemModal = async (itemId: string) => {
         setSelectedItemId(itemId);
         setSelectedItem(null);
@@ -720,6 +728,7 @@ export function Products() {
                                                     </Button>
                                                     <Button
                                                         variant="ghost"
+                                                        data-testid={`product-expand-${product.id}`}
                                                         onClick={() => setExpandedProductId(isExpanded ? '' : product.id)}
                                                     >
                                                         {isExpanded ? 'Скрыть партии' : `Партии (${product.batches.length})`}
@@ -741,26 +750,37 @@ export function Products() {
 
                                                                 return (
                                                                     <div key={batch.id} className="rounded-xl border border-gray-800 bg-gray-900">
-                                                                        <button
-                                                                            type="button"
-                                                                            className="flex w-full flex-col gap-3 px-4 py-3 text-left md:flex-row md:items-center md:justify-between"
-                                                                            onClick={() => void toggleBatch(batch.id)}
-                                                                        >
-                                                                            <div className="flex min-w-0 items-start gap-3">
+                                                                        <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                                                                            <button
+                                                                                type="button"
+                                                                                className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                                                                                onClick={() => void toggleBatch(batch.id)}
+                                                                            >
                                                                                 <div className="mt-0.5 text-gray-500">
                                                                                     {isBatchExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                                                                                 </div>
-                                                                                <div>
-                                                                                    <p className="text-sm font-semibold text-white">{batch.id}</p>
+                                                                                <div className="min-w-0">
+                                                                                    <p className="truncate text-sm font-semibold text-white">{batch.id}</p>
                                                                                     <p className="text-xs text-gray-500">
                                                                                         {new Date(batch.created_at).toLocaleString('ru-RU')} • камней: {batch.items_count}
                                                                                     </p>
                                                                                 </div>
+                                                                            </button>
+                                                                            <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                                                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${batchStatusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
+                                                                                    {batchStatusLabel[batch.status] || batch.status}
+                                                                                </span>
+                                                                                <button
+                                                                                    type="button"
+                                                                                    data-testid={`product-batch-qr-${batch.id}`}
+                                                                                    onClick={() => openBatchQrPrint(batch.id)}
+                                                                                    className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100 transition hover:bg-blue-500/20"
+                                                                                >
+                                                                                    <QrCode size={14} />
+                                                                                    QR-печать
+                                                                                </button>
                                                                             </div>
-                                                                            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${batchStatusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                                                {batchStatusLabel[batch.status] || batch.status}
-                                                                            </span>
-                                                                        </button>
+                                                                        </div>
 
                                                                         {isBatchExpanded && (
                                                                             <div className="border-t border-gray-800 px-4 py-4">

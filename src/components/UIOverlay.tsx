@@ -114,11 +114,11 @@ export function UIOverlay() {
                         type="button"
                         className="cursor-pointer"
                         onClick={closeToMarket}
-                        aria-label="ZAGARAM"
+                        aria-label="Stones"
                     >
                         <img
                             src={projectLogo}
-                            alt="ZAGARAMI"
+                            alt="Stones"
                             className="h-14 w-auto max-w-[220px] object-contain invert"
                         />
                     </button>
@@ -202,11 +202,11 @@ export function UIOverlay() {
                                 type="button"
                                 className="flex min-w-0 items-center gap-3"
                                 onClick={closeToMarket}
-                                aria-label="ZAGARAM"
+                                aria-label="Stones"
                             >
                                 <img
                                     src={projectLogo}
-                                    alt="ZAGARAMI"
+                                    alt="Stones"
                                     className="h-9 w-auto max-w-[148px] object-contain invert"
                                 />
                             </button>
@@ -750,6 +750,7 @@ function MobileSwipeFilter({
                     ref={containerRef}
                     onTouchStart={handleTouchStart}
                     onTouchEnd={handleTouchEnd}
+                    style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}
                     className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-10 pb-1 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                 >
                     {items.map((item) => {
@@ -855,13 +856,13 @@ function ProductsView({ onClose }: { onClose: () => void }) {
 
             <div className="relative z-10 flex items-start justify-between gap-4 bg-gradient-to-b from-black/80 to-transparent px-4 pb-4 pt-[calc(env(safe-area-inset-top)+1rem)] md:items-center md:p-6">
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-4">
-                    <h2 className="text-2xl font-light tracking-[0.22em] text-white md:text-3xl md:tracking-widest">ТОВАРЫ ZAGARAMI</h2>
+                    <h2 className="text-2xl font-light tracking-[0.22em] text-white md:text-3xl md:tracking-widest">ТОВАРЫ STONES</h2>
                     <span className="w-fit rounded-full bg-blue-500/20 px-2 py-1 text-[11px] text-blue-400 md:text-xs">{filteredProducts.length} ПОЗИЦИЙ</span>
                 </div>
                 <button onClick={onClose} className="shrink-0 text-sm text-gray-400 hover:text-white md:text-lg">✕ ЗАКРЫТЬ</button>
             </div>
 
-            <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] md:px-6 md:pb-10">
+            <div data-testid="products-overlay-scroll" className="relative z-10 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] md:px-6 md:pb-10">
                 <div
                     className={`mb-8 py-4 ${isMobile ? 'space-y-4' : 'relative z-0 space-y-4 overflow-visible'}`}
                     style={isMobile ? undefined : { perspective: '1000px' }}

@@ -31,10 +31,10 @@ export function AdminLayout() {
     }
 
     return (
-        <div className="flex h-screen bg-gray-950 text-gray-100 font-sans selection:bg-blue-500/30">
+        <div className="admin-shell flex h-screen bg-gray-950 text-gray-100 font-sans selection:bg-blue-500/30">
             <Sidebar />
-            <main className="flex-1 overflow-auto">
-                <div className="p-8 max-w-7xl mx-auto">
+            <main className="admin-main flex-1 overflow-auto">
+                <div className="admin-main-inner mx-auto max-w-7xl p-8">
                     {isDev && !isStaff && (
                         <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
                             Режим DEV: админ-интерфейс разблокирован для нештатных ролей в локальном тесте.

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM node:22-alpine AS base
 
 WORKDIR /app
@@ -17,7 +16,7 @@ FROM base AS deps
 COPY package*.json ./
 COPY prisma ./prisma
 
-RUN --mount=type=cache,target=/tmp/.npm npm ci --no-audit --no-fund && rm -rf /root/.npm
+RUN npm ci --no-audit --no-fund && rm -rf /root/.npm
 RUN npx prisma generate
 
 FROM deps AS builder
@@ -27,6 +26,14 @@ ENV VITE_VIDEO_HELPER_DOWNLOAD_URL=${VITE_VIDEO_HELPER_DOWNLOAD_URL}
 
 COPY . .
 RUN npm run build
+
+FROM deps AS prod-deps
+
+RUN npm prune --omit=dev --no-audit --no-fund \
+    && npx prisma generate \
+    && rm -rf /root/.npm \
+    && rm -rf node_modules/ffmpeg-static node_modules/ffprobe-static \
+    && find node_modules -type f -name '*.map' -delete
 
 FROM node:22-alpine AS runtime
 
@@ -39,12 +46,7 @@ RUN apk add --no-cache openssl ffmpeg su-exec
 
 COPY package*.json ./
 COPY prisma ./prisma
-
-RUN --mount=type=cache,target=/tmp/.npm npm ci --omit=dev --no-audit --no-fund \
-    && npx prisma generate \
-    && rm -rf /root/.npm \
-    && rm -rf node_modules/ffmpeg-static node_modules/ffprobe-static \
-    && find node_modules -type f -name '*.map' -delete
+COPY --from=prod-deps /app/node_modules ./node_modules
 
 COPY docker ./docker
 COPY public ./public

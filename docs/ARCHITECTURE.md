@@ -38,6 +38,9 @@ Stones состоит из четырех основных частей:
 - `/` — витрина
 - `/clone/:serialNumber` — публичный цифровой паспорт
 - `/admin/login`
+- `/admin/photo-tool/:batchId`
+- `/admin/video-tool/:batchId`
+- `/admin/qr/print`
 - `/admin/*`
 - `/partner/login`
 - `/partner/dashboard`
@@ -71,7 +74,7 @@ Stones состоит из четырех основных частей:
 - `server/routes/auth.ts` — buyer login/register + refresh + me
 - `server/routes/orders.ts` — заявки покупателей
 - `server/routes/collectionRequests.ts` — задачи на сбор
-- `server/routes/batches.ts` — партии, QR-pack, receive, finalize, video workflows
+- `server/routes/batches.ts` — партии, photo-tool, QR-pack, receive, finalize, video workflows
 - `server/routes/items.ts` — staff/item detail и support-only patch
 - `server/routes/hq.ts` — verify / accept / reject / legacy finish
 - `server/routes/financials.ts` — профиль, ledger, allocation
@@ -171,7 +174,10 @@ Stones состоит из четырех основных частей:
 
 ### Что хранится локально
 
-- пользовательские загрузки: `public/uploads`
+- HQ-фото item: `public/uploads/photos`
+- generic/source video uploads: `public/uploads/videos`
+- legacy generated videos: `public/uploads/videos/generated`
+- финальные export-flow ролики: `public/uploads/videos/exports`
 - изображения локаций: `public/locations`
 - staging и служебные каталоги для видео: `storage/video-jobs`, `storage/video-export`
 
@@ -181,7 +187,15 @@ Stones состоит из четырех основных частей:
 - изображения локаций раздаются через `/locations/*`
 - QR генерируется на лету через `/api/public/items/:serialNumber/qr`
 
-## 7. Видео-контур
+## 7. Фото- и видео-контур
+
+### HQ Photo Tool
+
+- маршрут: `/admin/photo-tool/:batchId`
+- backend: `GET /api/batches/:id/photo-tool`, `POST /api/batches/:id/photo-tool/apply`
+- инструмент работает только для batch в `RECEIVED`
+- сохранение идет по полному manifest и контролируется через `photo_state_token`
+- итог сохраняется в `Item.item_photo_url`
 
 В проекте есть два разных сценария работы с видео:
 
@@ -197,8 +211,10 @@ Stones состоит из четырех основных частей:
 ### Локальный export-flow
 
 - HQ открывает `/admin/video-tool/:batchId`
+- браузер проверяет локальный helper и его `protocol_version`
 - создается `BatchVideoExportSession`
 - локальный helper рендерит ролики по item
+- незавершенная session может быть продолжена через retry-tail для отсутствующих файлов
 - готовые `.mp4` дозагружаются обратно в backend
 
 ## 8. Публичный цифровой паспорт
@@ -215,6 +231,11 @@ Stones состоит из четырех основных частей:
 - item имеет актуальный `serial_number`
 - batch находится в `RECEIVED` или `FINISHED`
 - item не находится в `REJECTED`
+
+Media в паспорте собираются так:
+
+- фото: сначала `item.item_photo_url`, потом fallback на `item.photo_url`
+- видео: `item.item_video_url`
 
 ## 9. Docker и deployment topology
 

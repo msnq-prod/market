@@ -272,6 +272,101 @@ const buildPhotoToolFilename = (batchId: string, itemSeq: number, originalName: 
     return `batch-${safeBatchId}-item-${formatItemSeq(itemSeq)}-${safeBaseName}-${Date.now()}${safeExtension}`;
 };
 
+const buildPhotoToolStateToken = (batch: PhotoToolBatchRecord) =>
+    crypto.createHash('sha256').update(JSON.stringify(
+        batch.items.map((item) => ({
+            id: item.id,
+            item_seq: item.item_seq,
+            item_photo_url: item.item_photo_url,
+            updated_at: item.updated_at
+        }))
+    )).digest('hex');
+
+const serializePhotoToolPayload = (batch: PhotoToolBatchRecord) => ({
+    batch: {
+        id: batch.id,
+        status: batch.status,
+        created_at: batch.created_at,
+        updated_at: batch.updated_at,
+        expected_photo_count: batch.items.length,
+        photo_state_token: buildPhotoToolStateToken(batch)
+    },
+    items: batch.items.map((item) => ({
+        id: item.id,
+        temp_id: item.temp_id,
+        item_seq: item.item_seq,
+        serial_number: item.serial_number,
+        item_photo_url: item.item_photo_url
+    }))
+});
+
+const parsePhotoToolBaseStateToken = (value: unknown) => {
+    const parsed = parseOptionalText(value);
+    if (!parsed) {
+        throw createHttpError('Не передан base_photo_state_token для photo-tool.', 400);
+    }
+
+    return parsed;
+};
+
+const buildPhotoToolFilePathFromUrl = (value: string) => {
+    if (!value.startsWith(`${PHOTO_TOOL_PUBLIC_URL_ROOT}/`)) {
+        return null;
+    }
+
+    const encodedFilename = value.slice(PHOTO_TOOL_PUBLIC_URL_ROOT.length + 1);
+    if (!encodedFilename) {
+        return null;
+    }
+
+    let decodedFilename = '';
+    try {
+        decodedFilename = decodeURIComponent(encodedFilename);
+    } catch {
+        return null;
+    }
+
+    if (!decodedFilename || decodedFilename !== path.basename(decodedFilename)) {
+        return null;
+    }
+
+    return path.join(PHOTO_TOOL_PUBLIC_OUTPUT_ROOT, decodedFilename);
+};
+
+const cleanupOrphanedPhotoToolFiles = async (candidateUrls: string[]) => {
+    const normalizedUrls = [...new Set(candidateUrls.filter((url) => url.startsWith(`${PHOTO_TOOL_PUBLIC_URL_ROOT}/`)))];
+    if (normalizedUrls.length === 0) {
+        return;
+    }
+
+    const stillReferenced = await prisma.item.findMany({
+        where: {
+            item_photo_url: {
+                in: normalizedUrls
+            }
+        },
+        select: {
+            item_photo_url: true
+        }
+    });
+    const referencedSet = new Set(stillReferenced.flatMap((item) => item.item_photo_url ? [item.item_photo_url] : []));
+
+    await Promise.all(normalizedUrls
+        .filter((url) => !referencedSet.has(url))
+        .map(async (url) => {
+            const filePath = buildPhotoToolFilePathFromUrl(url);
+            if (!filePath) {
+                return;
+            }
+
+            try {
+                await fs.rm(filePath, { force: true });
+            } catch (error) {
+                console.error('Failed to cleanup orphaned photo-tool file', filePath, error);
+            }
+        }));
+};
+
 const getPhotoToolBatch = async (batchId: string) => prisma.batch.findFirst({
     where: {
         id: batchId,
@@ -326,6 +421,7 @@ const parsePhotoToolApplyManifest = (value: unknown, batch: PhotoToolBatchRecord
     const itemsById = new Map(batch.items.map((item) => [item.id, item]));
     const seenItemIds = new Set<string>();
     const seenSourceTokens = new Set<string>();
+    const currentBatchPhotoUrls = new Set(batch.items.flatMap((item) => item.item_photo_url ? [item.item_photo_url] : []));
 
     return parsedValue.map((entry, index) => {
         if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
@@ -357,8 +453,11 @@ const parsePhotoToolApplyManifest = (value: unknown, batch: PhotoToolBatchRecord
         let normalizedEntry: PhotoToolApplyManifestEntry;
         if (source === 'existing') {
             const existingUrl = parseOptionalText(typedEntry.existing_url);
-            if (!existingUrl || !existingUrl.startsWith(`${PHOTO_TOOL_PUBLIC_URL_ROOT}/`)) {
-                throw createHttpError('Для existing-фото разрешены только URL из /uploads/photos/.', 400);
+            const isAllowedExistingUrl = typeof existingUrl === 'string'
+                && (existingUrl.startsWith(`${PHOTO_TOOL_PUBLIC_URL_ROOT}/`) || currentBatchPhotoUrls.has(existingUrl));
+
+            if (!isAllowedExistingUrl) {
+                throw createHttpError('Для existing-фото разрешены только текущие фото партии или URL из /uploads/photos/.', 400);
             }
 
             const sourceToken = `existing:${existingUrl}`;
@@ -694,23 +793,7 @@ router.get('/:id/photo-tool', authenticateToken, async (req: AuthRequest, res) =
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
         const batch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
-
-        res.json({
-            batch: {
-                id: batch.id,
-                status: batch.status,
-                created_at: batch.created_at,
-                updated_at: batch.updated_at,
-                expected_photo_count: batch.items.length
-            },
-            items: batch.items.map((item) => ({
-                id: item.id,
-                temp_id: item.temp_id,
-                item_seq: item.item_seq,
-                serial_number: item.serial_number,
-                item_photo_url: item.item_photo_url
-            }))
-        });
+        res.json(serializePhotoToolPayload(batch));
     } catch (error) {
         console.error(error);
         const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
@@ -727,6 +810,7 @@ router.get('/:id/photo-tool', authenticateToken, async (req: AuthRequest, res) =
 router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest, res) => {
     let uploadedFiles: Express.Multer.File[] | undefined;
     const createdPaths: string[] = [];
+    let cleanupCandidateUrls: string[] = [];
 
     try {
         if (!req.user) return res.sendStatus(401);
@@ -749,6 +833,12 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         }
 
         const batch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
+        const currentPhotoStateToken = buildPhotoToolStateToken(batch);
+        const basePhotoStateToken = parsePhotoToolBaseStateToken(req.body?.base_photo_state_token);
+        if (basePhotoStateToken !== currentPhotoStateToken) {
+            throw createHttpError('Данные photo-tool изменились после открытия страницы. Обновите инструмент и повторите сохранение.', 409);
+        }
+
         const manifest = parsePhotoToolApplyManifest(req.body?.manifest, batch);
         const usedFileIndexes = manifest
             .filter((entry) => entry.source === 'upload')
@@ -786,6 +876,11 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
             nextPhotoUrlByItemId.set(entry.item_id, `${PHOTO_TOOL_PUBLIC_URL_ROOT}/${targetFilename}`);
         }
 
+        cleanupCandidateUrls = batch.items
+            .flatMap((item) => item.item_photo_url ? [item.item_photo_url] : []);
+        const nextPhotoUrls = new Set(nextPhotoUrlByItemId.values());
+        cleanupCandidateUrls = cleanupCandidateUrls.filter((url) => !nextPhotoUrls.has(url));
+
         await prisma.$transaction(manifest.map((entry) =>
             prisma.item.update({
                 where: { id: entry.item_id },
@@ -796,22 +891,8 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         ));
 
         const updatedBatch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
-        res.json({
-            batch: {
-                id: updatedBatch.id,
-                status: updatedBatch.status,
-                created_at: updatedBatch.created_at,
-                updated_at: updatedBatch.updated_at,
-                expected_photo_count: updatedBatch.items.length
-            },
-            items: updatedBatch.items.map((item) => ({
-                id: item.id,
-                temp_id: item.temp_id,
-                item_seq: item.item_seq,
-                serial_number: item.serial_number,
-                item_photo_url: item.item_photo_url
-            }))
-        });
+        await cleanupOrphanedPhotoToolFiles(cleanupCandidateUrls);
+        res.json(serializePhotoToolPayload(updatedBatch));
     } catch (error) {
         console.error(error);
         await Promise.all(createdPaths.map((filePath) => fs.rm(filePath, { force: true }).catch(() => undefined)));

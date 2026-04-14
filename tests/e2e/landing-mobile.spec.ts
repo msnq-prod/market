@@ -6,12 +6,45 @@ type TouchPoint = {
     y: number;
 };
 
+type TouchClient = {
+    send: (method: string, params: unknown) => Promise<unknown>;
+};
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const angleDelta = (start: number, end: number) => {
     const rawDelta = end - start;
     const wrappedDelta = ((rawDelta + Math.PI) % (2 * Math.PI)) - Math.PI;
     return Math.abs(wrappedDelta);
+};
+
+const swipe = async (
+    client: TouchClient,
+    from: TouchPoint,
+    to: TouchPoint,
+    steps = 10
+) => {
+    await client.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [from]
+    });
+
+    for (let step = 1; step <= steps; step += 1) {
+        const progress = step / steps;
+        await client.send('Input.dispatchTouchEvent', {
+            type: 'touchMove',
+            touchPoints: [{
+                x: from.x + ((to.x - from.x) * progress),
+                y: from.y + ((to.y - from.y) * progress)
+            }]
+        });
+        await wait(16);
+    }
+
+    await client.send('Input.dispatchTouchEvent', {
+        type: 'touchEnd',
+        touchPoints: []
+    });
 };
 
 test.describe('Mobile landing page', () => {
@@ -23,6 +56,7 @@ test.describe('Mobile landing page', () => {
 
     test('mobile nav and product filters stay usable on /', async ({ page }) => {
         await createProductFixture({ isPublished: true, stockOnlineCount: 1 });
+        const client = await page.context().newCDPSession(page);
         await page.goto('/');
 
         await page.waitForFunction(() => {
@@ -40,7 +74,7 @@ test.describe('Mobile landing page', () => {
         await expect(page.getByTestId('mobile-menu-sheet')).toBeHidden();
 
         await page.getByTestId('mobile-nav-products').click();
-        await expect(page.getByRole('heading', { name: 'ТОВАРЫ ZAGARAMI' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'ТОВАРЫ STONES' })).toBeVisible();
         await expect(page.getByTestId('mobile-filter-location')).toBeVisible();
         await expect(page.getByTestId('mobile-filter-level')).toBeVisible();
 
@@ -51,37 +85,40 @@ test.describe('Mobile landing page', () => {
         await page.getByLabel('Фильтр по уровню: следующий').click();
         await expect(page.getByTestId('mobile-filter-level').getByRole('button', { name: 'Уровень 2' })).toHaveClass(/border-blue-400\/60/);
 
+        const overlayScroll = page.getByTestId('products-overlay-scroll');
+        await expect(overlayScroll).toBeVisible();
+
+        const filterBox = await page.getByTestId('mobile-filter-level').boundingBox();
+        expect(filterBox).not.toBeNull();
+        if (!filterBox) {
+            throw new Error('Mobile filter is not visible.');
+        }
+
+        const overlayScrollBeforeSwipe = await overlayScroll.evaluate((node) => node.scrollTop);
+        await swipe(
+            client,
+            {
+                x: filterBox.x + (filterBox.width * 0.78),
+                y: filterBox.y + (filterBox.height * 0.5)
+            },
+            {
+                x: filterBox.x + (filterBox.width * 0.22),
+                y: filterBox.y + (filterBox.height * 0.5) + 14
+            },
+            12
+        );
+        await page.waitForTimeout(150);
+
+        const overlayScrollAfterSwipe = await overlayScroll.evaluate((node) => node.scrollTop);
+        expect(Math.abs(overlayScrollAfterSwipe - overlayScrollBeforeSwipe)).toBeLessThan(20);
+
         const hasHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
         expect(hasHorizontalOverflow).toBeFalsy();
     });
 
-    test('vertical swipe scrolls, horizontal swipe orbits, and focused location exits back to orbit', async ({ page }) => {
+    test('scroll hint navigates down, orbit gestures stay locked, and focused location exits back to orbit', async ({ page }) => {
         await createProductFixture({ isPublished: true, stockOnlineCount: 1 });
         const client = await page.context().newCDPSession(page);
-
-        const swipe = async (from: TouchPoint, to: TouchPoint, steps = 10) => {
-            await client.send('Input.dispatchTouchEvent', {
-                type: 'touchStart',
-                touchPoints: [from]
-            });
-
-            for (let step = 1; step <= steps; step += 1) {
-                const progress = step / steps;
-                await client.send('Input.dispatchTouchEvent', {
-                    type: 'touchMove',
-                    touchPoints: [{
-                        x: from.x + ((to.x - from.x) * progress),
-                        y: from.y + ((to.y - from.y) * progress)
-                    }]
-                });
-                await wait(16);
-            }
-
-            await client.send('Input.dispatchTouchEvent', {
-                type: 'touchEnd',
-                touchPoints: []
-            });
-        };
 
         await page.goto('/');
 
@@ -118,8 +155,16 @@ test.describe('Mobile landing page', () => {
         const centerX = box.x + (box.width / 2);
         const centerY = box.y + (box.height * 0.45);
 
+        await expect(page.getByLabel('Прокрутить ниже')).toBeVisible();
+        await page.getByLabel('Прокрутить ниже').click();
+        await page.waitForTimeout(250);
+
+        const scrollAfterHint = await page.evaluate(() => window.scrollY);
+        expect(scrollAfterHint).toBeGreaterThan(120);
+
         await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
         await swipe(
+            client,
             { x: centerX, y: centerY + 140 },
             { x: centerX, y: centerY - 220 },
             12
@@ -127,7 +172,7 @@ test.describe('Mobile landing page', () => {
         await page.waitForTimeout(200);
 
         const scrollAfterVerticalSwipe = await page.evaluate(() => window.scrollY);
-        expect(scrollAfterVerticalSwipe).toBeGreaterThan(120);
+        expect(scrollAfterVerticalSwipe).toBeLessThan(40);
 
         await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
         await page.waitForTimeout(100);
@@ -140,8 +185,9 @@ test.describe('Mobile landing page', () => {
         expect(orbitBefore).not.toBeNull();
 
         await swipe(
-            { x: centerX + 120, y: centerY },
-            { x: centerX - 120, y: centerY + 8 },
+            client,
+            { x: centerX + 128, y: centerY + 34 },
+            { x: centerX - 124, y: centerY - 22 },
             12
         );
         await page.waitForTimeout(200);
@@ -199,6 +245,7 @@ test.describe('Mobile landing page', () => {
         const focusedCenterY = focusedCanvasBox.y + (focusedCanvasBox.height * 0.45);
 
         await swipe(
+            client,
             { x: focusedCenterX + 110, y: focusedCenterY - 10 },
             { x: focusedCenterX - 110, y: focusedCenterY + 4 },
             12

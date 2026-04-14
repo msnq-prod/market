@@ -23,7 +23,7 @@ export function LoadingScreen() {
                     // z-5: Above Canvas (z-0), Below UI (z-10).
                     // bg-black/20: Subtle dimming of globe.
                     // backdrop-blur-sm: Subtle blur to focus on loader.
-                    className="fixed inset-0 z-5 flex items-center justify-center pointer-events-auto bg-black/20 backdrop-blur-sm"
+                    className="pointer-events-none fixed inset-0 z-5 flex items-center justify-center bg-black/20 backdrop-blur-sm"
                 >
                     <div className="relative flex flex-col items-center justify-center">
                         {/* Progress Circle SVG */}

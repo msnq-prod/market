@@ -372,7 +372,11 @@ export function Acceptance() {
             return;
         }
 
-        window.open(`/admin/qr/print?batchId=${encodeURIComponent(selectedBatch.id)}`, '_blank', 'noopener,noreferrer');
+        const params = new URLSearchParams({
+            batchId: selectedBatch.id,
+            mode: 'all'
+        });
+        window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
     };
 
     const handlePrintSelectedQr = () => {
@@ -381,7 +385,11 @@ export function Acceptance() {
             return;
         }
 
-        const params = new URLSearchParams({ batchId: selectedBatch.id, ids: selectedQrItemIds.join(',') });
+        const params = new URLSearchParams({
+            batchId: selectedBatch.id,
+            mode: 'selected',
+            ids: selectedQrItemIds.join(',')
+        });
         window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
     };
 

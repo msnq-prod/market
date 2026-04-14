@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart } from 'lucide-react';
+import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { clearAuthSession } from '../../utils/session';
 
@@ -16,7 +16,7 @@ export function Sidebar() {
     };
 
     return (
-        <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
+        <aside className="admin-sidebar w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
             <div className="p-6 border-b border-gray-800">
                 <h1 className="text-xl font-bold text-white tracking-widest uppercase">
                     {isSalesManager ? 'Продажи' : 'Админ HQ'}
@@ -48,6 +48,7 @@ export function Sidebar() {
                         <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Контент</div>
                         <NavItem to="/admin/locations" icon={<MapPin size={20} />} label="Локации" active={location.pathname === '/admin/locations'} />
                         <NavItem to="/admin/products" icon={<Box size={20} />} label="Товары" active={location.pathname === '/admin/products'} />
+                        <NavItem to="/admin/qr/print" icon={<QrCode size={20} />} label="QR-печать" active={false} newTab />
                         <NavItem to="/admin/clone-content" icon={<FileText size={20} />} label="Страница клона" active={location.pathname === '/admin/clone-content'} />
 
                         <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Система</div>
@@ -65,19 +66,47 @@ export function Sidebar() {
     );
 }
 
-function NavItem({ to, icon, label, active }: { to: string; icon: ReactNode; label: string; active: boolean }) {
-    return (
-        <Link
-            to={to}
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${active
-                ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20 shadow-[0_0_15px_rgba(37,99,235,0.1)]'
-                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-                }`}
-        >
+function NavItem({
+    to,
+    icon,
+    label,
+    active,
+    newTab = false
+}: {
+    to: string;
+    icon: ReactNode;
+    label: string;
+    active: boolean;
+    newTab?: boolean;
+}) {
+    const className = `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${active
+        ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20 shadow-[0_0_15px_rgba(37,99,235,0.1)]'
+        : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+        }`;
+
+    const content = (
+        <>
             <div className={`transition-transform duration-200 ${active ? 'scale-110' : 'group-hover:scale-110'}`}>
                 {icon}
             </div>
             <span className="font-medium">{label}</span>
+        </>
+    );
+
+    if (newTab) {
+        return (
+            <a href={to} target="_blank" rel="noreferrer noopener" className={className}>
+                {content}
+            </a>
+        );
+    }
+
+    return (
+        <Link
+            to={to}
+            className={className}
+        >
+            {content}
         </Link>
     );
 }

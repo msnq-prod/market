@@ -1,16 +1,71 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { Printer } from 'lucide-react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+    closestCenter,
+    DndContext,
+    type DragEndEvent,
+    KeyboardSensor,
+    PointerSensor,
+    useDraggable,
+    useDroppable,
+    useSensor,
+    useSensors
+} from '@dnd-kit/core';
+import {
+    arrayMove,
+    SortableContext,
+    sortableKeyboardCoordinates,
+    useSortable,
+    verticalListSortingStrategy
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { ArrowLeft, GripVertical, MoveHorizontal, Printer, QrCode, RotateCcw, X } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+
+type Translation = {
+    language_id: number;
+    name: string;
+    description?: string;
+    country?: string;
+};
+
+type ProductBatchSummary = {
+    id: string;
+    status: string;
+    created_at: string;
+    items_count: number;
+};
+
+type ProductSummary = {
+    id: string;
+    translations: Translation[];
+    location?: {
+        id: string;
+        lat: number;
+        lng: number;
+        translations: Translation[];
+    } | null;
+    batches: ProductBatchSummary[];
+};
+
+type QrPackProduct = {
+    id: string;
+    translations: Translation[];
+    location?: {
+        id: string;
+        lat: number;
+        lng: number;
+        translations: Translation[];
+    } | null;
+} | null;
 
 type QrPackItem = {
     id: string;
     temp_id: string;
     serial_number: string | null;
     status: string;
-    photo_url: string | null;
-    created_at: string;
-    clone_url: string | null;
+    collected_date: string | null;
+    collected_time: string | null;
     qr_url: string | null;
 };
 
@@ -18,19 +73,354 @@ type QrPackBatch = {
     id: string;
     status: string;
     created_at: string;
+    collected_date: string | null;
+    collected_time: string | null;
     gps_lat: number | null;
     gps_lng: number | null;
-    video_url: string | null;
 };
 
 type QrPackResponse = {
     batch: QrPackBatch;
+    product: QrPackProduct;
     items: QrPackItem[];
 };
 
-const CARDS_PER_PAGE = 8;
+type SelectionMode = 'all' | 'selected';
+type QrSide = 'left' | 'right';
+type QrFieldKey = 'productName' | 'locationName' | 'coordinates' | 'collectionTime' | 'serialNumber' | 'customText';
 
-const splitByPages = <T,>(items: T[], size: number): T[][] => {
+export type QrFieldConfig = {
+    enabled: boolean;
+    fontSizePx: number;
+    fontWeight: number;
+    fontFamily: string;
+};
+
+export type QrPrintSettings = {
+    labelWidthMm: number;
+    labelHeightMm: number;
+    qrSizeMm: number;
+    pagePaddingMm: number;
+    gapMm: number;
+    invertColors: boolean;
+    qrSide: QrSide;
+    fieldOrder: QrFieldKey[];
+    fields: Record<QrFieldKey, QrFieldConfig>;
+};
+
+export type QrDocumentItem = {
+    id: string;
+    itemId: string;
+    tempId: string;
+    serialNumber: string;
+    qrUrl: string;
+    productName: string;
+    locationName: string;
+    coordinates: string;
+    collectionTime: string;
+    customText: string;
+};
+
+export type QrPrintDraft = {
+    version: 1;
+    batchId: string;
+    mode: SelectionMode;
+    selectedItemIds: string[];
+    customFieldValues: Record<string, string>;
+};
+
+const QR_PRINT_LAYOUT_KEY = 'qr-print-layout:v1';
+const QR_PRINT_DRAFT_VERSION = 1;
+const QR_BLOCK_ID = 'qr-block';
+const QR_SLOT_LEFT_ID = 'qr-slot-left';
+const QR_SLOT_RIGHT_ID = 'qr-slot-right';
+const A4_WIDTH_MM = 210;
+const A4_HEIGHT_MM = 297;
+const MM_TO_PX = 96 / 25.4;
+const A4_WIDTH_PX = A4_WIDTH_MM * MM_TO_PX;
+const A4_HEIGHT_PX = A4_HEIGHT_MM * MM_TO_PX;
+const A4_ASPECT_RATIO = A4_WIDTH_MM / A4_HEIGHT_MM;
+
+const FIELD_KEYS: QrFieldKey[] = [
+    'productName',
+    'locationName',
+    'coordinates',
+    'collectionTime',
+    'serialNumber',
+    'customText'
+];
+
+const FIELD_LABELS: Record<QrFieldKey, string> = {
+    productName: 'Название',
+    locationName: 'Локация',
+    coordinates: 'Координаты',
+    collectionTime: 'Время',
+    serialNumber: 'Серийный номер',
+    customText: 'Свое поле'
+};
+
+const FONT_OPTIONS = [
+    'Arial, sans-serif',
+    '"Trebuchet MS", sans-serif',
+    '"Helvetica Neue", Arial, sans-serif',
+    '"Times New Roman", serif',
+    'Georgia, serif',
+    '"Courier New", monospace',
+    'Verdana, sans-serif'
+];
+
+const FONT_WEIGHT_OPTIONS = [400, 500, 600, 700];
+
+const createDefaultSettings = (): QrPrintSettings => ({
+    labelWidthMm: 58,
+    labelHeightMm: 36,
+    qrSizeMm: 18,
+    pagePaddingMm: 8,
+    gapMm: 4,
+    invertColors: false,
+    qrSide: 'right',
+    fieldOrder: [...FIELD_KEYS],
+    fields: {
+        productName: {
+            enabled: true,
+            fontSizePx: 18,
+            fontWeight: 700,
+            fontFamily: FONT_OPTIONS[0]
+        },
+        locationName: {
+            enabled: true,
+            fontSizePx: 13,
+            fontWeight: 600,
+            fontFamily: FONT_OPTIONS[1]
+        },
+        coordinates: {
+            enabled: true,
+            fontSizePx: 12,
+            fontWeight: 500,
+            fontFamily: FONT_OPTIONS[5]
+        },
+        collectionTime: {
+            enabled: true,
+            fontSizePx: 12,
+            fontWeight: 500,
+            fontFamily: FONT_OPTIONS[2]
+        },
+        serialNumber: {
+            enabled: true,
+            fontSizePx: 12,
+            fontWeight: 700,
+            fontFamily: FONT_OPTIONS[5]
+        },
+        customText: {
+            enabled: false,
+            fontSizePx: 13,
+            fontWeight: 600,
+            fontFamily: FONT_OPTIONS[0]
+        }
+    }
+});
+
+const clampNumber = (value: unknown, minimum: number, maximum: number, fallback: number) => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(maximum, Math.max(minimum, parsed));
+};
+
+const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[] | undefined, field: keyof T) => {
+    if (!translations?.length) {
+        return '';
+    }
+
+    const translation = translations.find((item) => item.language_id === 2)
+        || translations.find((item) => item.language_id === 1)
+        || translations[0];
+    const value = translation?.[field];
+    return typeof value === 'string' ? value : '';
+};
+
+const createDraftKey = (batchId: string) => `qr-print-draft:${batchId}`;
+
+const parseLayoutSettings = (raw: string | null): QrPrintSettings => {
+    const defaults = createDefaultSettings();
+
+    if (!raw) {
+        return defaults;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as Partial<QrPrintSettings>;
+        const parsedFields = (parsed.fields || {}) as Partial<Record<QrFieldKey, Partial<QrFieldConfig>>>;
+        const parsedOrder = Array.isArray(parsed.fieldOrder)
+            ? parsed.fieldOrder.filter((value): value is QrFieldKey => FIELD_KEYS.includes(value as QrFieldKey))
+            : [];
+
+        return {
+            labelWidthMm: clampNumber(parsed.labelWidthMm, 30, 140, defaults.labelWidthMm),
+            labelHeightMm: clampNumber(parsed.labelHeightMm, 20, 120, defaults.labelHeightMm),
+            qrSizeMm: clampNumber(parsed.qrSizeMm, 10, 60, defaults.qrSizeMm),
+            pagePaddingMm: clampNumber(parsed.pagePaddingMm, 4, 20, defaults.pagePaddingMm),
+            gapMm: clampNumber(parsed.gapMm, 2, 20, defaults.gapMm),
+            invertColors: typeof parsed.invertColors === 'boolean' ? parsed.invertColors : defaults.invertColors,
+            qrSide: parsed.qrSide === 'left' ? 'left' : defaults.qrSide,
+            fieldOrder: [...new Set([...parsedOrder, ...FIELD_KEYS])] as QrFieldKey[],
+            fields: FIELD_KEYS.reduce((acc, key) => {
+                const source = parsedFields[key] || {};
+                acc[key] = {
+                    enabled: typeof source.enabled === 'boolean' ? source.enabled : defaults.fields[key].enabled,
+                    fontSizePx: clampNumber(source.fontSizePx, 9, 40, defaults.fields[key].fontSizePx),
+                    fontWeight: FONT_WEIGHT_OPTIONS.includes(Number(source.fontWeight))
+                        ? Number(source.fontWeight)
+                        : defaults.fields[key].fontWeight,
+                    fontFamily: FONT_OPTIONS.includes(String(source.fontFamily))
+                        ? String(source.fontFamily)
+                        : defaults.fields[key].fontFamily
+                };
+                return acc;
+            }, {} as Record<QrFieldKey, QrFieldConfig>)
+        };
+    } catch {
+        return defaults;
+    }
+};
+
+const readDraft = (batchId: string): QrPrintDraft | null => {
+    if (!batchId || typeof window === 'undefined') {
+        return null;
+    }
+
+    const raw = window.localStorage.getItem(createDraftKey(batchId));
+    if (!raw) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as Partial<QrPrintDraft>;
+        if (parsed.version !== QR_PRINT_DRAFT_VERSION || parsed.batchId !== batchId) {
+            return null;
+        }
+
+        return {
+            version: QR_PRINT_DRAFT_VERSION,
+            batchId,
+            mode: parsed.mode === 'selected' ? 'selected' : 'all',
+            selectedItemIds: Array.isArray(parsed.selectedItemIds)
+                ? parsed.selectedItemIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                : [],
+            customFieldValues: Object.entries(parsed.customFieldValues || {}).reduce((acc, [key, value]) => {
+                if (typeof value === 'string' && key.trim()) {
+                    acc[key] = value;
+                }
+                return acc;
+            }, {} as Record<string, string>)
+        };
+    } catch {
+        return null;
+    }
+};
+
+const formatDateOnly = (value: string | null) => {
+    if (!value) {
+        return '';
+    }
+
+    const isoDate = value.slice(0, 10);
+    const [year, month, day] = isoDate.split('-');
+    if (!year || !month || !day) {
+        return '';
+    }
+
+    return `${day}.${month}.${year}`;
+};
+
+const formatCoordinates = (latitude: number | null, longitude: number | null) => {
+    if (latitude == null || longitude == null) {
+        return '';
+    }
+
+    return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+};
+
+const formatCollectionTime = (
+    itemCollectedDate: string | null,
+    itemCollectedTime: string | null,
+    batchCollectedDate: string | null,
+    batchCollectedTime: string | null
+) => {
+    const date = formatDateOnly(itemCollectedDate || batchCollectedDate);
+    const time = itemCollectedTime || batchCollectedTime || '';
+
+    if (date && time) {
+        return `${date} · ${time}`;
+    }
+    if (date) {
+        return date;
+    }
+    return time;
+};
+
+const getFieldValue = (item: QrDocumentItem, key: QrFieldKey) => {
+    switch (key) {
+        case 'productName':
+            return item.productName;
+        case 'locationName':
+            return item.locationName;
+        case 'coordinates':
+            return item.coordinates;
+        case 'collectionTime':
+            return item.collectionTime;
+        case 'serialNumber':
+            return item.serialNumber;
+        case 'customText':
+            return item.customText;
+        default:
+            return '';
+    }
+};
+
+const buildDocumentItem = (pack: QrPackResponse, item: QrPackItem, customText: string): QrDocumentItem => ({
+    id: item.id,
+    itemId: item.id,
+    tempId: item.temp_id,
+    serialNumber: item.serial_number || 'Серийный номер не указан',
+    qrUrl: item.qr_url || '',
+    productName: getDefaultTranslationValue(pack.product?.translations, 'name') || 'Без названия',
+    locationName: getDefaultTranslationValue(pack.product?.location?.translations, 'name'),
+    coordinates: formatCoordinates(pack.batch.gps_lat, pack.batch.gps_lng),
+    collectionTime: formatCollectionTime(
+        item.collected_date,
+        item.collected_time,
+        pack.batch.collected_date,
+        pack.batch.collected_time
+    ),
+    customText
+});
+
+const buildPreviewFallback = (pack: QrPackResponse | null, product: ProductSummary | null, customTextEnabled: boolean): QrDocumentItem => ({
+    id: 'preview',
+    itemId: 'preview',
+    tempId: '001',
+    serialNumber: pack?.items[0]?.serial_number || 'SN-00000001',
+    qrUrl: pack?.items[0]?.qr_url || '',
+    productName: getDefaultTranslationValue(pack?.product?.translations || product?.translations, 'name') || 'Название товара',
+    locationName: getDefaultTranslationValue(pack?.product?.location?.translations || product?.location?.translations, 'name') || 'Название локации',
+    coordinates: formatCoordinates(pack?.batch.gps_lat ?? product?.location?.lat ?? null, pack?.batch.gps_lng ?? product?.location?.lng ?? null) || '55.7500, 37.6100',
+    collectionTime: formatCollectionTime(
+        pack?.items[0]?.collected_date || null,
+        pack?.items[0]?.collected_time || null,
+        pack?.batch.collected_date || null,
+        pack?.batch.collected_time || null
+    ) || '10.04.2026 · 13:45',
+    customText: customTextEnabled ? 'Любой ваш текст' : ''
+});
+
+const splitIntoPages = <T,>(items: T[], size: number) => {
+    if (size <= 0) {
+        return [items];
+    }
+
     const pages: T[][] = [];
     for (let index = 0; index < items.length; index += size) {
         pages.push(items.slice(index, index + size));
@@ -38,100 +428,704 @@ const splitByPages = <T,>(items: T[], size: number): T[][] => {
     return pages;
 };
 
-const shortSerialNumber = (value: string | null) => {
-    if (!value) return 'Не указан';
-    if (value.length <= 18) return value;
-    return `${value.slice(0, 6)}...${value.slice(-4)}`;
-};
+const getFieldStyle = (config: QrFieldConfig): CSSProperties => ({
+    fontSize: `${config.fontSizePx}px`,
+    fontWeight: config.fontWeight,
+    fontFamily: config.fontFamily,
+    lineHeight: 1.2
+});
 
-const shortCloneUrl = (value: string | null) => {
-    if (!value) {
-        return 'Ссылка недоступна';
-    }
-    try {
-        const parsed = new URL(value);
-        return `${parsed.host}${parsed.pathname}`;
-    } catch {
-        return value;
-    }
+const buildPageGridStyle = (settings: QrPrintSettings, cardsPerRow: number): CSSProperties => ({
+    padding: `${settings.pagePaddingMm}mm`,
+    gap: `${settings.gapMm}mm`,
+    gridTemplateColumns: `repeat(${cardsPerRow}, ${settings.labelWidthMm}mm)`,
+    gridAutoRows: `${settings.labelHeightMm}mm`,
+    alignContent: 'start'
+});
+
+const escapeHtml = (value: string) => value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+const buildPrintableDocumentHtml = ({
+    title,
+    baseHref,
+    stylesheetMarkup,
+    documentMarkup
+}: {
+    title: string;
+    baseHref: string;
+    stylesheetMarkup: string;
+    documentMarkup: string;
+}) => {
+    return `
+        <!doctype html>
+        <html lang="ru">
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <base href="${escapeHtml(baseHref)}" />
+                <title>${escapeHtml(title)}</title>
+                ${stylesheetMarkup}
+                <style>
+                    :root {
+                        color-scheme: light;
+                        font-family: Arial, sans-serif;
+                    }
+
+                    * {
+                        box-sizing: border-box;
+                    }
+
+                    html, body {
+                        margin: 0;
+                        padding: 0;
+                        background: #e2e8f0;
+                    }
+
+                    body {
+                        min-height: 100vh;
+                        color: #0f172a;
+                        overflow-x: auto;
+                    }
+
+                    .screen-toolbar {
+                        position: sticky;
+                        top: 0;
+                        z-index: 10;
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 16px;
+                        padding: 14px 20px;
+                        border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+                        background: rgba(248, 250, 252, 0.92);
+                        backdrop-filter: blur(16px);
+                    }
+
+                    .screen-toolbar__title {
+                        font-size: 14px;
+                        font-weight: 700;
+                    }
+
+                    .screen-toolbar__hint {
+                        font-size: 12px;
+                        color: #475569;
+                    }
+
+                    .screen-toolbar__button {
+                        border: 0;
+                        border-radius: 999px;
+                        background: #2563eb;
+                        color: #ffffff;
+                        padding: 10px 16px;
+                        font: inherit;
+                        font-size: 13px;
+                        font-weight: 700;
+                        cursor: pointer;
+                    }
+
+                    .document-stack {
+                        min-height: calc(100vh - 64px);
+                        padding: 24px;
+                    }
+
+                    .qr-print-output {
+                        display: flex !important;
+                        flex-direction: column;
+                        align-items: center;
+                        gap: 24px;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }
+
+                    .qr-print-page {
+                        margin: 0 auto !important;
+                        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.16);
+                    }
+
+                    .qr-editable-input {
+                        display: none !important;
+                    }
+
+                    .qr-print-value {
+                        display: block !important;
+                    }
+
+                    @page {
+                        size: A4 portrait;
+                        margin: 0;
+                    }
+
+                    @media print {
+                        html, body {
+                            background: #ffffff;
+                        }
+
+                        body {
+                            -webkit-print-color-adjust: exact;
+                            print-color-adjust: exact;
+                        }
+
+                        .screen-toolbar {
+                            display: none !important;
+                        }
+
+                        .document-stack {
+                            padding: 0;
+                        }
+
+                        .qr-print-output {
+                            gap: 0;
+                            align-items: stretch;
+                        }
+
+                        .qr-print-page {
+                            margin: 0 auto !important;
+                            box-shadow: none !important;
+                            break-after: page;
+                            page-break-after: always;
+                        }
+
+                        .qr-print-page:last-child {
+                            break-after: auto;
+                            page-break-after: auto;
+                        }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="screen-toolbar">
+                    <div>
+                        <div class="screen-toolbar__title">${escapeHtml(title)}</div>
+                        <div class="screen-toolbar__hint">Это отдельный документ. Печатайте или сохраняйте PDF отсюда, когда будете готовы.</div>
+                    </div>
+                    <button class="screen-toolbar__button" type="button" onclick="window.print()">Печать</button>
+                </div>
+                <main class="document-stack">
+                    ${documentMarkup}
+                </main>
+            </body>
+        </html>
+    `;
 };
 
 export function QrPrint() {
-    const [searchParams] = useSearchParams();
-    const [pack, setPack] = useState<QrPackResponse | null>(null);
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(true);
+    const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const initialRequestRef = useRef<{
+        batchId: string;
+        mode: SelectionMode;
+        ids: string[];
+    }>({
+        batchId: searchParams.get('batchId')?.trim() || '',
+        mode: searchParams.get('mode') === 'selected' ? 'selected' : 'all',
+        ids: (searchParams.get('ids') || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean)
+    });
 
-    const batchId = searchParams.get('batchId')?.trim() ?? '';
-    const requestedIds = useMemo(() => {
-        const ids = searchParams.get('ids');
-        if (!ids) return null;
-        return new Set(
-            ids
-                .split(',')
-                .map((value) => value.trim())
-                .filter(Boolean)
-        );
-    }, [searchParams]);
+    const [products, setProducts] = useState<ProductSummary[]>([]);
+    const [productsLoading, setProductsLoading] = useState(true);
+    const [productsError, setProductsError] = useState('');
+
+    const [activeProductId, setActiveProductId] = useState('');
+    const [activeBatchId, setActiveBatchId] = useState(initialRequestRef.current.batchId);
+
+    const [pack, setPack] = useState<QrPackResponse | null>(null);
+    const [packLoading, setPackLoading] = useState(Boolean(initialRequestRef.current.batchId));
+    const [packError, setPackError] = useState('');
+
+    const [selectionMode, setSelectionMode] = useState<SelectionMode>(initialRequestRef.current.mode);
+    const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+    const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+    const [settings, setSettings] = useState<QrPrintSettings>(() => (
+        typeof window === 'undefined'
+            ? createDefaultSettings()
+            : parseLayoutSettings(window.localStorage.getItem(QR_PRINT_LAYOUT_KEY))
+    ));
+    const [hydratedBatchId, setHydratedBatchId] = useState('');
+    const documentViewportRef = useRef<HTMLDivElement | null>(null);
+    const printOutputRef = useRef<HTMLDivElement | null>(null);
+    const [pagePreviewMetrics, setPagePreviewMetrics] = useState(() => ({
+        width: A4_WIDTH_PX,
+        height: A4_HEIGHT_PX,
+        scale: 1
+    }));
+
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    );
+
+    const productsWithBatches = useMemo(
+        () => products.filter((product) => product.batches.length > 0),
+        [products]
+    );
+    const selectedProduct = useMemo(
+        () => productsWithBatches.find((product) => product.id === activeProductId) || null,
+        [productsWithBatches, activeProductId]
+    );
+
+    const itemLookup = useMemo(
+        () => new Map((pack?.items || []).map((item) => [item.id, item])),
+        [pack]
+    );
+
+    const documentItems = useMemo(() => {
+        if (!pack) {
+            return [];
+        }
+
+        const orderedItems = selectionMode === 'all'
+            ? pack.items
+            : selectedItemIds
+                .map((itemId) => itemLookup.get(itemId))
+                .filter((item): item is QrPackItem => Boolean(item));
+
+        return orderedItems.map((item) => buildDocumentItem(pack, item, customFieldValues[item.id] || ''));
+    }, [customFieldValues, itemLookup, pack, selectedItemIds, selectionMode]);
+
+    const previewItem = useMemo(
+        () => documentItems[0] || buildPreviewFallback(pack, selectedProduct, settings.fields.customText.enabled),
+        [documentItems, pack, selectedProduct, settings.fields.customText.enabled]
+    );
+
+    const hasDraftChanges = activeBatchId.length > 0
+        && (selectionMode === 'selected' || Object.values(customFieldValues).some((value) => value.trim().length > 0));
+
+    const visibleFieldOrder = useMemo(
+        () => settings.fieldOrder.filter((fieldKey) => settings.fields[fieldKey].enabled),
+        [settings.fieldOrder, settings.fields]
+    );
+
+    const cardsPerRow = Math.max(
+        1,
+        Math.floor(((A4_WIDTH_MM - settings.pagePaddingMm * 2) + settings.gapMm) / (settings.labelWidthMm + settings.gapMm))
+    );
+    const rowsPerPage = Math.max(
+        1,
+        Math.floor(((A4_HEIGHT_MM - settings.pagePaddingMm * 2) + settings.gapMm) / (settings.labelHeightMm + settings.gapMm))
+    );
+    const cardsPerPage = Math.max(1, cardsPerRow * rowsPerPage);
+    const pages = useMemo(() => splitIntoPages(documentItems, cardsPerPage), [cardsPerPage, documentItems]);
 
     useEffect(() => {
-        const loadPack = async () => {
-            if (!batchId) {
-                setError('Не указан batchId для печати QR-пакета.');
-                setLoading(false);
-                return;
-            }
+        let cancelled = false;
 
-            setLoading(true);
-            setError('');
+        const loadProducts = async () => {
+            setProductsLoading(true);
+            setProductsError('');
 
             try {
-                const response = await authFetch(`/api/batches/${batchId}/qr-pack`);
+                const response = await authFetch('/api/products');
+                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить товары для QR-печати.' }));
+
+                if (!response.ok) {
+                    throw new Error(payload.error || 'Не удалось загрузить товары для QR-печати.');
+                }
+
+                if (!cancelled) {
+                    setProducts(payload as ProductSummary[]);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setProductsError(error instanceof Error ? error.message : 'Не удалось загрузить товары для QR-печати.');
+                }
+            } finally {
+                if (!cancelled) {
+                    setProductsLoading(false);
+                }
+            }
+        };
+
+        void loadProducts();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!activeBatchId || productsWithBatches.length === 0) {
+            return;
+        }
+
+        const ownerProduct = productsWithBatches.find((product) => product.batches.some((batch) => batch.id === activeBatchId));
+        if (ownerProduct && ownerProduct.id !== activeProductId) {
+            setActiveProductId(ownerProduct.id);
+        }
+    }, [activeBatchId, activeProductId, productsWithBatches]);
+
+    useEffect(() => {
+        if (!activeBatchId) {
+            setPack(null);
+            setPackError('');
+            setPackLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadPack = async () => {
+            setPackLoading(true);
+            setPackError('');
+
+            try {
+                const response = await authFetch(`/api/batches/${activeBatchId}/qr-pack`);
 
                 if (response.status === 403) {
-                    setError('Нет прав доступа к выбранной партии.');
-                    setPack(null);
-                    return;
+                    throw new Error('Нет прав доступа к выбранной партии.');
                 }
                 if (response.status === 404) {
-                    setError('Партия не найдена.');
-                    setPack(null);
-                    return;
-                }
-                if (!response.ok) {
-                    setError('Не удалось загрузить данные для печати.');
-                    setPack(null);
-                    return;
+                    throw new Error('Партия не найдена.');
                 }
 
-                const data = await response.json() as QrPackResponse;
-                setPack(data);
-            } catch {
-                setError('Сетевая ошибка при загрузке QR-пакета.');
-                setPack(null);
+                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить QR-пакет.' }));
+
+                if (!response.ok) {
+                    throw new Error(payload.error || 'Не удалось загрузить QR-пакет.');
+                }
+
+                if (!cancelled) {
+                    setPack(payload as QrPackResponse);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setPack(null);
+                    setPackError(error instanceof Error ? error.message : 'Не удалось загрузить QR-пакет.');
+                }
             } finally {
-                setLoading(false);
+                if (!cancelled) {
+                    setPackLoading(false);
+                }
             }
         };
 
         void loadPack();
-    }, [batchId]);
 
-    const printableItems = useMemo(() => {
-        if (!pack) return [];
-        if (!requestedIds) return pack.items;
-        return pack.items.filter((item) => requestedIds.has(item.id));
-    }, [pack, requestedIds]);
+        return () => {
+            cancelled = true;
+        };
+    }, [activeBatchId]);
 
-    const pages = useMemo(() => splitByPages(printableItems, CARDS_PER_PAGE), [printableItems]);
+    useEffect(() => {
+        if (!pack || hydratedBatchId === pack.batch.id) {
+            return;
+        }
+
+        const availableIds = new Set(pack.items.map((item) => item.id));
+        const initialRequest = initialRequestRef.current;
+        const initialRequestTargetsCurrentBatch = initialRequest.batchId === pack.batch.id;
+
+        let nextMode: SelectionMode = 'all';
+        let nextSelectedItemIds: string[] = [];
+        let nextCustomFieldValues: Record<string, string> = {};
+
+        if (initialRequestTargetsCurrentBatch) {
+            nextMode = initialRequest.mode;
+            nextSelectedItemIds = initialRequest.ids.filter((itemId) => availableIds.has(itemId));
+        } else {
+            const draft = readDraft(pack.batch.id);
+            if (draft) {
+                nextMode = draft.mode;
+                nextSelectedItemIds = draft.selectedItemIds.filter((itemId) => availableIds.has(itemId));
+                nextCustomFieldValues = Object.entries(draft.customFieldValues).reduce((acc, [key, value]) => {
+                    if (availableIds.has(key)) {
+                        acc[key] = value;
+                    }
+                    return acc;
+                }, {} as Record<string, string>);
+            }
+        }
+
+        setSelectionMode(nextMode);
+        setSelectedItemIds(nextSelectedItemIds);
+        setCustomFieldValues(nextCustomFieldValues);
+        setHydratedBatchId(pack.batch.id);
+    }, [hydratedBatchId, pack]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        window.localStorage.setItem(QR_PRINT_LAYOUT_KEY, JSON.stringify(settings));
+    }, [settings]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || !activeBatchId || hydratedBatchId !== activeBatchId) {
+            return;
+        }
+
+        const draft: QrPrintDraft = {
+            version: QR_PRINT_DRAFT_VERSION,
+            batchId: activeBatchId,
+            mode: selectionMode,
+            selectedItemIds,
+            customFieldValues
+        };
+
+        window.localStorage.setItem(createDraftKey(activeBatchId), JSON.stringify(draft));
+    }, [activeBatchId, customFieldValues, hydratedBatchId, selectedItemIds, selectionMode]);
+
+    useEffect(() => {
+        const params = new URLSearchParams();
+        if (activeBatchId) {
+            params.set('batchId', activeBatchId);
+            params.set('mode', selectionMode);
+            if (selectionMode === 'selected' && selectedItemIds.length > 0) {
+                params.set('ids', selectedItemIds.join(','));
+            }
+        }
+
+        setSearchParams(params, { replace: true });
+    }, [activeBatchId, selectedItemIds, selectionMode, setSearchParams]);
+
+    useEffect(() => {
+        const viewport = documentViewportRef.current;
+        if (!viewport || typeof ResizeObserver === 'undefined') {
+            return;
+        }
+
+        const updateScale = () => {
+            const availableWidth = Math.max(viewport.clientWidth - 24, 180);
+            const availableHeight = Math.max(viewport.clientHeight - 24, 240);
+            const fitWidth = Math.min(availableWidth, availableHeight * A4_ASPECT_RATIO);
+            const unclampedScale = fitWidth / A4_WIDTH_PX;
+            const nextScale = Math.min(1, Math.max(0.2, unclampedScale));
+
+            setPagePreviewMetrics({
+                width: A4_WIDTH_PX * nextScale,
+                height: A4_HEIGHT_PX * nextScale,
+                scale: nextScale
+            });
+        };
+
+        updateScale();
+        const observer = new ResizeObserver(updateScale);
+        observer.observe(viewport);
+
+        return () => observer.disconnect();
+    }, []);
+
+    const confirmBatchSwitch = (nextBatchId: string) => {
+        if (!activeBatchId || nextBatchId === activeBatchId || !hasDraftChanges) {
+            return true;
+        }
+
+        return window.confirm('Сменить партию? Текущие выбранные позиции и ручные подписи останутся только в локальном draft этой партии.');
+    };
+
+    const applyBatchSelection = (nextProductId: string, nextBatchId: string) => {
+        if (!confirmBatchSwitch(nextBatchId)) {
+            return;
+        }
+
+        setActiveProductId(nextProductId);
+        setActiveBatchId(nextBatchId);
+        setPack(null);
+        setPackError('');
+        setPackLoading(Boolean(nextBatchId));
+        setHydratedBatchId('');
+    };
+
+    const handleProductChange = (nextProductId: string) => {
+        if (!nextProductId) {
+            if (!confirmBatchSwitch('')) {
+                return;
+            }
+
+            setActiveProductId('');
+            setActiveBatchId('');
+            setPack(null);
+            setPackError('');
+            setPackLoading(false);
+            setHydratedBatchId('');
+            return;
+        }
+
+        const nextProduct = productsWithBatches.find((product) => product.id === nextProductId);
+        const nextBatchId = nextProduct?.batches[0]?.id || '';
+
+        if (!nextBatchId) {
+            setActiveProductId(nextProductId);
+            return;
+        }
+
+        applyBatchSelection(nextProductId, nextBatchId);
+    };
+
+    const handleBatchChange = (nextBatchId: string) => {
+        if (!nextBatchId || !selectedProduct) {
+            return;
+        }
+
+        applyBatchSelection(selectedProduct.id, nextBatchId);
+    };
+
+    const toggleSelectedItem = (itemId: string) => {
+        setSelectedItemIds((current) => (
+            current.includes(itemId)
+                ? current.filter((value) => value !== itemId)
+                : [...current, itemId]
+        ));
+    };
+
+    const updateCustomFieldValue = (itemId: string, value: string) => {
+        setCustomFieldValues((current) => ({
+            ...current,
+            [itemId]: value
+        }));
+    };
+
+    const updateNumericSetting = (
+        key: 'labelWidthMm' | 'labelHeightMm' | 'qrSizeMm' | 'pagePaddingMm' | 'gapMm',
+        value: string,
+        minimum: number,
+        maximum: number
+    ) => {
+        setSettings((current) => ({
+            ...current,
+            [key]: clampNumber(value, minimum, maximum, current[key])
+        }));
+    };
+
+    const updateFieldConfig = (fieldKey: QrFieldKey, patch: Partial<QrFieldConfig>) => {
+        setSettings((current) => ({
+            ...current,
+            fields: {
+                ...current.fields,
+                [fieldKey]: {
+                    ...current.fields[fieldKey],
+                    ...patch
+                }
+            }
+        }));
+    };
+
+    const handlePreviewDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over) {
+            return;
+        }
+
+        if (active.id === QR_BLOCK_ID) {
+            if (over.id === QR_SLOT_LEFT_ID || over.id === QR_SLOT_RIGHT_ID) {
+                setSettings((current) => ({
+                    ...current,
+                    qrSide: over.id === QR_SLOT_LEFT_ID ? 'left' : 'right'
+                }));
+            }
+            return;
+        }
+
+        const activeField = String(active.id) as QrFieldKey;
+        const overField = String(over.id) as QrFieldKey;
+
+        if (!FIELD_KEYS.includes(activeField) || !FIELD_KEYS.includes(overField) || activeField === overField) {
+            return;
+        }
+
+        setSettings((current) => ({
+            ...current,
+            fieldOrder: arrayMove(
+                current.fieldOrder,
+                current.fieldOrder.indexOf(activeField),
+                current.fieldOrder.indexOf(overField)
+            )
+        }));
+    };
+
+    const pageCaption = `На лист A4 помещается ${cardsPerRow} × ${rowsPerPage} = ${cardsPerPage} этикеток`;
+    const documentScale = pagePreviewMetrics.scale;
+    const previewPages = pages.length > 0 ? pages : [[] as QrDocumentItem[]];
+    const emptyPageMessage = !activeBatchId
+        ? 'Выберите товар и партию слева, чтобы собрать лист.'
+        : packLoading
+            ? 'Загружаем QR-пакет партии...'
+            : packError
+                ? packError
+                : selectionMode === 'selected'
+                    ? 'Пока не выбрано ни одной позиции для печати.'
+                    : 'Для этой партии пока нет публичных QR-позиций.';
+
+    const closeWindowOrReturn = () => {
+        if (window.opener) {
+            window.close();
+            return;
+        }
+
+        navigate('/admin');
+    };
+
+    const openPrintableDocument = () => {
+        if (documentItems.length === 0) {
+            window.alert('Сначала соберите документ: выберите партию и добавьте QR-этикетки.');
+            return;
+        }
+
+        const printOutput = printOutputRef.current;
+        if (!printOutput) {
+            window.alert('Не удалось собрать печатный документ. Обновите страницу и попробуйте снова.');
+            return;
+        }
+
+        const title = pack
+            ? `QR документ партии ${pack.batch.id}`
+            : 'QR документ';
+        const documentWindow = window.open('', '_blank');
+
+        if (!documentWindow) {
+            window.alert('Браузер заблокировал новое окно с документом. Разрешите popup для этого сайта.');
+            return;
+        }
+
+        const clonedOutput = printOutput.cloneNode(true) as HTMLDivElement;
+        clonedOutput.querySelectorAll('img').forEach((image) => {
+            image.setAttribute('src', image.src);
+        });
+
+        const stylesheetMarkup = Array.from(document.head.querySelectorAll('link[rel="stylesheet"], style'))
+            .map((node) => node.outerHTML)
+            .join('\n');
+
+        documentWindow.document.open();
+        documentWindow.document.write(buildPrintableDocumentHtml({
+            title,
+            baseHref: `${window.location.origin}/`,
+            stylesheetMarkup,
+            documentMarkup: clonedOutput.outerHTML
+        }));
+        documentWindow.document.close();
+        documentWindow.focus();
+    };
 
     return (
-        <div className="print-shell min-h-screen bg-slate-900 p-4 md:p-6">
+        <div className="qr-print-root flex h-[100svh] flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.18),_transparent_28%),linear-gradient(180deg,_#020617_0%,_#040814_100%)] text-slate-100">
             <style>
                 {`
                     @page {
-                        size: A4;
-                        margin: 10mm;
+                        size: A4 portrait;
+                        margin: 0;
+                    }
+
+                    @media screen {
+                        .qr-print-value {
+                            display: none !important;
+                        }
+
+                        .qr-print-output {
+                            display: none !important;
+                        }
+
+                        .qr-stable-scroll {
+                            scrollbar-gutter: stable both-edges;
+                        }
                     }
 
                     @media print {
@@ -144,139 +1138,864 @@ export function QrPrint() {
                             print-color-adjust: exact;
                         }
 
-                        .print-controls {
+                        .qr-screen-only {
                             display: none !important;
                         }
 
-                        .print-shell {
-                            background: #ffffff !important;
+                        .qr-print-output {
+                            display: block !important;
                             padding: 0 !important;
+                            margin: 0 !important;
                         }
 
-                        .print-page {
-                            width: 190mm;
-                            min-height: 277mm;
-                            margin: 0 auto;
+                        .qr-print-root {
+                            height: auto !important;
+                            background: #ffffff !important;
+                            overflow: visible !important;
+                        }
+
+                        .qr-document-panel {
+                            display: none !important;
+                        }
+
+                        .qr-print-page {
+                            margin: 0 auto !important;
+                            box-shadow: none !important;
                             page-break-after: always;
                             break-after: page;
                         }
 
-                        .print-page:last-child {
+                        .qr-print-page:last-child {
                             page-break-after: auto;
                             break-after: auto;
                         }
 
-                        .print-grid {
-                            display: grid !important;
-                            grid-template-columns: 1fr 1fr;
-                            grid-template-rows: repeat(4, minmax(0, 1fr));
-                            gap: 6mm;
-                            min-height: 277mm;
+                        .qr-label-card {
+                            box-shadow: none !important;
                         }
 
-                        .print-card {
-                            border: 1px solid #d1d5db !important;
-                            border-radius: 10px !important;
-                            background: #ffffff !important;
-                            color: #111827 !important;
-                            break-inside: avoid;
-                            page-break-inside: avoid;
+                        .qr-editable-input {
+                            display: none !important;
+                        }
+
+                        .qr-print-value {
+                            display: block !important;
                         }
                     }
                 `}
             </style>
 
-            <div className="print-controls max-w-5xl mx-auto mb-4 md:mb-6 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 px-4 py-4 md:px-6 md:py-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                    <h1 className="text-xl md:text-2xl font-bold">HQ-печать QR</h1>
-                    {pack && (
-                        <p className="text-sm text-slate-300 mt-1">
-                            Партия {pack.batch.id.slice(0, 8)}... | Публичных позиций к печати: {printableItems.length}
-                        </p>
-                    )}
-                </div>
-
-                <div className="flex gap-2">
-                    <button
-                        onClick={() => window.print()}
-                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-700 inline-flex items-center gap-2"
-                    >
-                        <Printer size={16} />
-                        Печать / PDF
-                    </button>
-                    <Link
-                        to="/admin/acceptance"
-                        className="rounded-lg border border-slate-500 px-4 py-2 text-sm hover:bg-slate-700"
-                    >
-                        Назад в приемку
-                    </Link>
-                </div>
-            </div>
-
-            {loading && (
-                <div className="text-slate-200 text-center py-16">Загрузка данных для печати...</div>
-            )}
-
-            {!loading && error && (
-                <div className="max-w-3xl mx-auto rounded-lg border border-red-300 bg-red-50 text-red-700 px-4 py-3">
-                    {error}
-                </div>
-            )}
-
-            {!loading && !error && printableItems.length === 0 && (
-                <div className="max-w-3xl mx-auto rounded-lg border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3">
-                    Для печати не выбрано ни одной публичной позиции.
-                </div>
-            )}
-
-            {!loading && !error && pages.length > 0 && (
-                <div className="space-y-6">
-                    {pages.map((pageItems, pageIndex) => (
-                        <section
-                            key={`print-page-${pageIndex}`}
-                            className="print-page max-w-[210mm] mx-auto rounded-xl bg-white p-3 md:p-4 shadow-xl"
+            <header className="qr-screen-only shrink-0 border-b border-white/10 bg-slate-950/85 backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 xl:px-5">
+                    <div className="flex min-w-0 items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={() => navigate('/admin')}
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-700 bg-slate-900/70 text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+                            aria-label="Вернуться в админку"
                         >
-                            <div className="print-grid grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
-                                {pageItems.map((item) => (
-                                    <article
-                                        key={item.id}
-                                        className="print-card border border-slate-200 rounded-xl p-3 md:p-4 bg-white text-slate-900 flex flex-col gap-3"
-                                    >
-                                        <header className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <p className="text-sm font-semibold">Позиция #{item.temp_id}</p>
-                                                <p className="text-xs text-slate-500">Серийный номер: {shortSerialNumber(item.serial_number)}</p>
-                                            </div>
-                                            {item.photo_url ? (
-                                                <img src={item.photo_url} alt="" className="w-14 h-14 rounded-md object-cover border border-slate-200" />
-                                            ) : (
-                                                <div className="flex h-14 w-14 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-[10px] text-slate-400">
-                                                    Нет фото
-                                                </div>
-                                            )}
-                                        </header>
+                            <ArrowLeft size={18} />
+                        </button>
+                        <div className="min-w-0">
+                            <h1 className="truncate text-lg font-semibold text-white xl:text-xl">Окно печати QR</h1>
+                            <p className="truncate text-xs text-slate-400 xl:text-sm">
+                                Отдельный полноэкранный сервис без главного меню. Центр показывает лист A4, а превью одной этикетки встроено в настройки справа.
+                            </p>
+                        </div>
+                    </div>
 
-                                        <div className="flex-1 flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                            {item.qr_url ? (
-                                                <img src={item.qr_url} alt={`QR ${item.temp_id}`} className="w-40 h-40 object-contain" />
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="hidden flex-wrap gap-2 xl:flex">
+                            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                                В документе: {documentItems.length}
+                            </span>
+                            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                                {pageCaption}
+                            </span>
+                            {pack && (
+                                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                                    {pack.batch.id}
+                                </span>
+                            )}
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={() => setSettings(createDefaultSettings())}
+                            className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/65 px-3.5 py-2.5 text-sm text-slate-100 transition hover:border-slate-500 hover:bg-slate-900"
+                        >
+                            <RotateCcw size={16} />
+                            Сбросить
+                        </button>
+                        <button
+                            type="button"
+                            onClick={openPrintableDocument}
+                            className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-500"
+                        >
+                            <Printer size={16} />
+                            Открыть документ
+                        </button>
+                        <button
+                            type="button"
+                            onClick={closeWindowOrReturn}
+                            className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/65 px-3.5 py-2.5 text-sm text-slate-100 transition hover:border-slate-500 hover:bg-slate-900"
+                        >
+                            <X size={16} />
+                            Закрыть
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <div className="grid min-h-0 flex-1 gap-3 p-3 xl:grid-cols-[308px_minmax(0,1fr)_400px] 2xl:grid-cols-[320px_minmax(0,1fr)_420px]">
+                    <section className="qr-screen-only flex min-h-0 flex-col rounded-[26px] border border-white/10 bg-slate-950/70 p-3 shadow-[0_16px_48px_rgba(2,6,23,0.38)] backdrop-blur">
+                        <div className="mb-3">
+                            <h2 className="text-base font-semibold text-white xl:text-lg">Источник данных</h2>
+                            <p className="text-xs text-slate-400 xl:text-sm">Сначала товар и партия, затем режим печати и состав документа.</p>
+                        </div>
+
+                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
+                            <label className="block">
+                                <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Товар-шаблон</span>
+                                <select
+                                    value={activeProductId}
+                                    onChange={(event) => handleProductChange(event.target.value)}
+                                    className="w-full rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500"
+                                >
+                                    <option value="">Выберите товар-шаблон</option>
+                                    {productsWithBatches.map((product) => (
+                                        <option key={product.id} value={product.id}>
+                                            {getDefaultTranslationValue(product.translations, 'name') || product.id}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Партии</span>
+                                    {selectedProduct && <span className="text-xs text-slate-500">{selectedProduct.batches.length} шт.</span>}
+                                </div>
+
+                                {!selectedProduct ? (
+                                    <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-500">
+                                        Выберите товар, чтобы увидеть партии.
+                                    </div>
+                                ) : (
+                                    <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                                        {selectedProduct.batches.map((batch) => {
+                                            const isActive = batch.id === activeBatchId;
+                                            return (
+                                                <button
+                                                    key={batch.id}
+                                                    type="button"
+                                                    onClick={() => handleBatchChange(batch.id)}
+                                                    className={`w-full rounded-2xl border px-3 py-2.5 text-left transition ${isActive
+                                                        ? 'border-blue-500/40 bg-blue-500/10'
+                                                        : 'border-slate-800 bg-slate-950/75 hover:border-slate-600 hover:bg-slate-900'
+                                                        }`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-sm font-semibold text-white">{batch.id}</p>
+                                                            <p className="mt-0.5 text-xs text-slate-500">
+                                                                {new Date(batch.created_at).toLocaleString('ru-RU')} • {batch.items_count} шт.
+                                                            </p>
+                                                        </div>
+                                                        <span className="rounded-full border border-slate-700 px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-300">
+                                                            {batch.status}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-2">
+                                <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Режим печати</span>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectionMode('all')}
+                                        className={`rounded-2xl px-3 py-2.5 text-sm font-medium transition ${selectionMode === 'all'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'border border-slate-700 bg-slate-950/80 text-slate-300 hover:bg-slate-900'
+                                            }`}
+                                    >
+                                        Печатать все
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectionMode('selected')}
+                                        className={`rounded-2xl px-3 py-2.5 text-sm font-medium transition ${selectionMode === 'selected'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'border border-slate-700 bg-slate-950/80 text-slate-300 hover:bg-slate-900'
+                                            }`}
+                                    >
+                                        Выбрать вручную
+                                    </button>
+                                </div>
+                            </div>
+
+                            {productsLoading && (
+                                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-400">
+                                    Загружаем товарные шаблоны...
+                                </div>
+                            )}
+
+                            {productsError && (
+                                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                    {productsError}
+                                </div>
+                            )}
+
+                            {packLoading && (
+                                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-400">
+                                    Загружаем QR-пакет партии...
+                                </div>
+                            )}
+
+                            {packError && (
+                                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                    {packError}
+                                </div>
+                            )}
+
+                            {!packLoading && pack && (
+                                <div className="space-y-2">
+                                    <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+                                        <span className="rounded-full border border-slate-700 px-3 py-1">
+                                            Доступно QR: {pack.items.length}
+                                        </span>
+                                        <span className="rounded-full border border-slate-700 px-3 py-1">
+                                            В листе: {documentItems.length}
+                                        </span>
+                                    </div>
+
+                                    {selectionMode === 'selected' ? (
+                                        <div className="space-y-2">
+                                            {pack.items.length === 0 ? (
+                                                <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-500">
+                                                    В этой партии нет публичных QR-позиций.
+                                                </div>
                                             ) : (
-                                                <span className="text-xs text-slate-400">QR недоступен</span>
+                                                pack.items.map((item) => {
+                                                    const selectedIndex = selectedItemIds.indexOf(item.id);
+                                                    const isSelected = selectedIndex !== -1;
+
+                                                    return (
+                                                        <button
+                                                            key={item.id}
+                                                            type="button"
+                                                            onClick={() => toggleSelectedItem(item.id)}
+                                                            className={`w-full rounded-2xl border px-3 py-2.5 text-left transition ${isSelected
+                                                                ? 'border-blue-500/40 bg-blue-500/10'
+                                                                : 'border-slate-800 bg-slate-950/75 hover:border-slate-600 hover:bg-slate-900'
+                                                                }`}
+                                                        >
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <p className="truncate text-sm font-semibold text-white">
+                                                                        {item.serial_number || item.temp_id}
+                                                                    </p>
+                                                                    <p className="mt-0.5 text-xs text-slate-500">Позиция #{item.temp_id}</p>
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    {isSelected && (
+                                                                        <span className="rounded-full bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-100">
+                                                                            #{selectedIndex + 1}
+                                                                        </span>
+                                                                    )}
+                                                                    <span className={`h-4 w-4 rounded-full border ${isSelected ? 'border-blue-400 bg-blue-400' : 'border-slate-600 bg-transparent'}`} />
+                                                                </div>
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })
                                             )}
                                         </div>
+                                    ) : (
+                                        <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-500">
+                                            В документ автоматически попадут все публичные QR этой партии.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </section>
 
-                                        <footer className="space-y-1">
-                                            <p className="text-[11px] font-medium text-slate-700 break-all">
-                                                Ссылка паспорта: {shortCloneUrl(item.clone_url)}
-                                            </p>
-                                            {item.clone_url && <p className="text-[10px] text-slate-500 break-all">{item.clone_url}</p>}
-                                        </footer>
-                                    </article>
-                                ))}
+                    <section className="qr-document-panel flex min-h-0 flex-col rounded-[26px] border border-white/10 bg-slate-950/70 p-4 shadow-[0_16px_48px_rgba(2,6,23,0.38)] backdrop-blur">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <h2 className="text-base font-semibold text-white xl:text-lg">Лист на печать</h2>
+                            <div className="flex flex-wrap gap-2 text-xs text-slate-300">
+                                <span className="rounded-full border border-slate-700 px-3 py-1">Масштаб превью: {Math.round(documentScale * 100)}%</span>
+                                {settings.invertColors && <span className="rounded-full border border-amber-400/30 px-3 py-1 text-amber-100">Инверсия</span>}
                             </div>
-                        </section>
-                    ))}
+                        </div>
+
+                        <div ref={documentViewportRef} className="qr-document-pages qr-stable-scroll min-h-0 flex-1 space-y-6 overflow-y-auto overflow-x-hidden p-2">
+                            {previewPages.map((pageItems, pageIndex) => {
+                                const showEmptyState = documentItems.length === 0 && pageIndex === 0;
+                                return (
+                                    <div
+                                        key={`qr-document-page-frame-${pageIndex}`}
+                                        className="qr-document-page-frame relative mx-auto overflow-hidden rounded-[24px] bg-white shadow-2xl"
+                                        style={{
+                                            width: `${pagePreviewMetrics.width}px`,
+                                            height: `${pagePreviewMetrics.height}px`
+                                        }}
+                                    >
+                                        <article
+                                            className="qr-document-page absolute left-0 top-0 bg-white"
+                                            style={{
+                                                width: `${A4_WIDTH_MM}mm`,
+                                                height: `${A4_HEIGHT_MM}mm`,
+                                                transform: `scale(${documentScale})`,
+                                                transformOrigin: 'top left'
+                                            }}
+                                        >
+                                            {showEmptyState ? (
+                                                <div className={`absolute inset-0 flex items-center justify-center px-10 text-center text-sm ${packError ? 'text-red-500' : 'text-slate-500'}`}>
+                                                    {emptyPageMessage}
+                                                </div>
+                                            ) : (
+                                                <div className="grid" style={buildPageGridStyle(settings, cardsPerRow)}>
+                                                    {pageItems.map((item) => (
+                                                        <PrintLabelCard
+                                                            key={item.id}
+                                                            item={item}
+                                                            settings={settings}
+                                                            onCustomTextChange={updateCustomFieldValue}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </article>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </section>
+
+                    <section className="qr-screen-only flex min-h-0 flex-col rounded-[26px] border border-white/10 bg-slate-950/70 p-4 shadow-[0_16px_48px_rgba(2,6,23,0.38)] backdrop-blur">
+                        <div className="mb-3">
+                            <h2 className="text-base font-semibold text-white xl:text-lg">Настройки</h2>
+                            <p className="text-xs text-slate-400 xl:text-sm">Сверху интерактивное превью одной этикетки, ниже физика печати и параметры каждого поля.</p>
+                        </div>
+
+                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
+                            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-white">Превью одной этикетки</h3>
+                                        <p className="text-xs text-slate-400">Здесь меняется порядок полей и сторона QR.</p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                        <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-100">
+                                            <MoveHorizontal size={12} />
+                                            QR {settings.qrSide === 'left' ? 'слева' : 'справа'}
+                                        </span>
+                                        {settings.invertColors && (
+                                            <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-amber-100">
+                                                Инверсия
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="h-[236px] overflow-hidden">
+                                    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handlePreviewDragEnd}>
+                                        <LabelEditorPreview
+                                            item={previewItem}
+                                            settings={settings}
+                                            visibleFieldOrder={visibleFieldOrder}
+                                        />
+                                    </DndContext>
+                                </div>
+                            </div>
+
+                            <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Геометрия листа</span>
+                                    <span className="text-xs text-slate-400">{pageCaption}</span>
+                                </div>
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <NumericField
+                                        compact
+                                        label="Ширина, мм"
+                                        value={settings.labelWidthMm}
+                                        onChange={(value) => updateNumericSetting('labelWidthMm', value, 30, 140)}
+                                    />
+                                    <NumericField
+                                        compact
+                                        label="Высота, мм"
+                                        value={settings.labelHeightMm}
+                                        onChange={(value) => updateNumericSetting('labelHeightMm', value, 20, 120)}
+                                    />
+                                    <NumericField
+                                        compact
+                                        label="QR, мм"
+                                        value={settings.qrSizeMm}
+                                        onChange={(value) => updateNumericSetting('qrSizeMm', value, 10, 60)}
+                                    />
+                                    <NumericField
+                                        compact
+                                        label="Поля листа, мм"
+                                        value={settings.pagePaddingMm}
+                                        onChange={(value) => updateNumericSetting('pagePaddingMm', value, 4, 20)}
+                                    />
+                                    <div className="sm:col-span-2">
+                                        <NumericField
+                                            compact
+                                            label="Зазор между этикетками, мм"
+                                            value={settings.gapMm}
+                                            onChange={(value) => updateNumericSetting('gapMm', value, 2, 20)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <label className="flex items-center justify-between gap-4 rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-3">
+                                    <div>
+                                        <p className="text-sm font-medium text-white">Инверсия для печати</p>
+                                        <p className="text-xs text-slate-400">Черный фон, светлый текст и инвертированный QR.</p>
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.invertColors}
+                                        onChange={(event) => setSettings((current) => ({ ...current, invertColors: event.target.checked }))}
+                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                                    />
+                                </label>
+                            </div>
+
+                            <div className="space-y-2">
+                                {FIELD_KEYS.map((fieldKey) => {
+                                    const config = settings.fields[fieldKey];
+                                    return (
+                                        <div key={fieldKey} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                                <label className="inline-flex items-center gap-3 text-sm font-medium text-white">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={config.enabled}
+                                                        onChange={(event) => updateFieldConfig(fieldKey, { enabled: event.target.checked })}
+                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                                                    />
+                                                    {FIELD_LABELS[fieldKey]}
+                                                </label>
+                                                <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                                                    <span className="rounded-full border border-slate-700 px-2 py-1">
+                                                        {config.enabled ? 'Включено' : 'Скрыто'}
+                                                    </span>
+                                                    <span className="rounded-full border border-slate-700 px-2 py-1">
+                                                        #{settings.fieldOrder.indexOf(fieldKey) + 1}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-3 grid gap-2 sm:grid-cols-[96px_110px_minmax(0,1fr)]">
+                                                <NumericField
+                                                    compact
+                                                    label="Размер, px"
+                                                    value={config.fontSizePx}
+                                                    onChange={(value) => updateFieldConfig(fieldKey, {
+                                                        fontSizePx: clampNumber(value, 9, 40, config.fontSizePx)
+                                                    })}
+                                                />
+
+                                                <label className="block">
+                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Жирность</span>
+                                                    <select
+                                                        value={String(config.fontWeight)}
+                                                        onChange={(event) => updateFieldConfig(fieldKey, { fontWeight: Number(event.target.value) })}
+                                                        className="w-full rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500"
+                                                    >
+                                                        {FONT_WEIGHT_OPTIONS.map((option) => (
+                                                            <option key={option} value={option}>
+                                                                {option}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+
+                                                <label className="block">
+                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Шрифт</span>
+                                                    <select
+                                                        value={config.fontFamily}
+                                                        onChange={(event) => updateFieldConfig(fieldKey, { fontFamily: event.target.value })}
+                                                        className="w-full rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500"
+                                                    >
+                                                        {FONT_OPTIONS.map((option) => (
+                                                            <option key={option} value={option}>
+                                                                {option}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </section>
+            </div>
+
+            <div ref={printOutputRef} className="qr-print-output">
+                {pages.map((pageItems, pageIndex) => (
+                    <article
+                        key={`qr-print-page-${pageIndex}`}
+                        className="qr-print-page bg-white"
+                        style={{
+                            width: `${A4_WIDTH_MM}mm`,
+                            minHeight: `${A4_HEIGHT_MM}mm`
+                        }}
+                    >
+                        <div className="grid" style={buildPageGridStyle(settings, cardsPerRow)}>
+                            {pageItems.map((item) => (
+                                <PrintLabelCard
+                                    key={item.id}
+                                    item={item}
+                                    settings={settings}
+                                    onCustomTextChange={updateCustomFieldValue}
+                                />
+                            ))}
+                        </div>
+                    </article>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function LabelEditorPreview({
+    item,
+    settings,
+    visibleFieldOrder
+}: {
+    item: QrDocumentItem;
+    settings: QrPrintSettings;
+    visibleFieldOrder: QrFieldKey[];
+}) {
+    const labelHeightPx = Math.max(210, settings.labelHeightMm * 3.4);
+    const qrSizePx = Math.min(96, Math.max(56, settings.qrSizeMm * 2.5));
+    const slotWidthPx = Math.max(68, qrSizePx + 10);
+    const textFields = visibleFieldOrder;
+    const shellClass = settings.invertColors
+        ? 'border-slate-700 bg-black'
+        : 'border-slate-700 bg-slate-950';
+
+    return (
+        <div className="h-full overflow-hidden">
+            <div
+                className={`h-full rounded-[20px] border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${shellClass}`}
+                style={{
+                    width: '100%',
+                    minHeight: `${labelHeightPx}px`
+                }}
+            >
+                <div className="flex h-full items-stretch gap-2">
+                    <QrSlot
+                        slotId={QR_SLOT_LEFT_ID}
+                        isActive={settings.qrSide === 'left'}
+                        qrSizePx={qrSizePx}
+                        slotWidthPx={slotWidthPx}
+                        item={item}
+                        invertColors={settings.invertColors}
+                    />
+
+                    <div className={`flex min-w-0 flex-1 flex-col justify-between rounded-2xl border border-dashed p-2 ${settings.invertColors ? 'border-slate-700 bg-white/[0.03]' : 'border-slate-800 bg-black/20'}`}>
+                        <SortableContext items={textFields} strategy={verticalListSortingStrategy}>
+                            <div className="flex h-full flex-col gap-1.5 overflow-hidden">
+                                {textFields.length === 0 ? (
+                                    <div className={`rounded-xl border border-dashed px-3 py-4 text-xs ${settings.invertColors ? 'border-slate-700 text-slate-500' : 'border-slate-700 text-slate-500'}`}>
+                                        Включите хотя бы одну надпись в настройках справа.
+                                    </div>
+                                ) : (
+                                    textFields.map((fieldKey) => (
+                                        <SortableFieldPreview
+                                            key={fieldKey}
+                                            id={fieldKey}
+                                            label={FIELD_LABELS[fieldKey]}
+                                            value={getFieldValue(item, fieldKey) || FIELD_LABELS[fieldKey]}
+                                            style={getFieldStyle(settings.fields[fieldKey])}
+                                            invertColors={settings.invertColors}
+                                        />
+                                    ))
+                                )}
+                            </div>
+                        </SortableContext>
+                    </div>
+
+                    <QrSlot
+                        slotId={QR_SLOT_RIGHT_ID}
+                        isActive={settings.qrSide === 'right'}
+                        qrSizePx={qrSizePx}
+                        slotWidthPx={slotWidthPx}
+                        item={item}
+                        invertColors={settings.invertColors}
+                    />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function QrSlot({
+    slotId,
+    isActive,
+    qrSizePx,
+    slotWidthPx,
+    item,
+    invertColors
+}: {
+    slotId: string;
+    isActive: boolean;
+    qrSizePx: number;
+    slotWidthPx: number;
+    item: QrDocumentItem;
+    invertColors: boolean;
+}) {
+    const { isOver, setNodeRef } = useDroppable({ id: slotId });
+
+    return (
+        <div
+            ref={setNodeRef}
+            className={`flex min-w-[72px] items-center justify-center rounded-2xl border p-2 transition ${isOver
+                ? 'border-blue-400 bg-blue-500/10'
+                : invertColors
+                    ? 'border-dashed border-slate-700 bg-white/[0.03]'
+                    : 'border-dashed border-slate-700 bg-black/20'
+                }`}
+            style={{ width: `${slotWidthPx}px` }}
+        >
+            {isActive ? (
+                <DraggableQrBlock
+                    qrSizePx={qrSizePx}
+                    qrUrl={item.qrUrl}
+                    serialNumber={item.serialNumber}
+                    invertColors={invertColors}
+                />
+            ) : (
+                <div className="px-1 text-center text-[10px] text-slate-500">
+                    Перетащите QR сюда
                 </div>
             )}
         </div>
+    );
+}
+
+function DraggableQrBlock({
+    qrSizePx,
+    qrUrl,
+    serialNumber,
+    invertColors
+}: {
+    qrSizePx: number;
+    qrUrl: string;
+    serialNumber: string;
+    invertColors: boolean;
+}) {
+    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: QR_BLOCK_ID });
+
+    return (
+        <div
+            ref={setNodeRef}
+            {...listeners}
+            {...attributes}
+            className={`flex cursor-grab flex-col items-center gap-2 rounded-2xl border px-2 py-2 text-center active:cursor-grabbing ${invertColors
+                ? 'border-slate-700 bg-black text-white'
+                : 'border-slate-700 bg-white text-slate-900'
+                } ${isDragging ? 'opacity-60' : ''}`}
+            style={{
+                transform: CSS.Translate.toString(transform),
+                width: `${Math.max(qrSizePx + 12, 72)}px`
+            }}
+        >
+            <div
+                className={`flex items-center justify-center rounded-xl border ${invertColors ? 'border-slate-700 bg-black' : 'border-gray-200 bg-white'}`}
+                style={{
+                    width: `${qrSizePx}px`,
+                    height: `${qrSizePx}px`
+                }}
+            >
+                {qrUrl ? (
+                    <img
+                        src={qrUrl}
+                        alt={`QR ${serialNumber}`}
+                        className="h-full w-full object-contain"
+                        style={{ filter: invertColors ? 'invert(1)' : 'none' }}
+                    />
+                ) : (
+                    <QrCode size={Math.max(36, qrSizePx * 0.55)} className={invertColors ? 'text-white' : 'text-gray-300'} />
+                )}
+            </div>
+            <div className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${invertColors ? 'border-slate-700 text-slate-300' : 'border-gray-200 text-gray-500'}`}>
+                <MoveHorizontal size={12} />
+                QR
+            </div>
+        </div>
+    );
+}
+
+function SortableFieldPreview({
+    id,
+    label,
+    value,
+    style,
+    invertColors
+}: {
+    id: QrFieldKey;
+    label: string;
+    value: string;
+    style: CSSProperties;
+    invertColors: boolean;
+}) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+    return (
+        <div
+            ref={setNodeRef}
+            className={`rounded-2xl border px-2.5 py-2 ${invertColors ? 'border-slate-700 bg-white/[0.04]' : 'border-slate-800 bg-slate-900/80'} ${isDragging ? 'opacity-60' : ''}`}
+            style={{
+                transform: CSS.Transform.toString(transform),
+                transition
+            }}
+        >
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</span>
+                <button
+                    type="button"
+                    {...attributes}
+                    {...listeners}
+                    className="inline-flex cursor-grab items-center gap-1 rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 active:cursor-grabbing"
+                >
+                    <GripVertical size={10} />
+                    Move
+                </button>
+            </div>
+            <div className={`break-words leading-tight ${invertColors ? 'text-white' : 'text-white'}`} style={style}>
+                {value}
+            </div>
+        </div>
+    );
+}
+
+function PrintLabelCard({
+    item,
+    settings,
+    onCustomTextChange
+}: {
+    item: QrDocumentItem;
+    settings: QrPrintSettings;
+    onCustomTextChange: (itemId: string, value: string) => void;
+}) {
+    const orderedFields = settings.fieldOrder.filter((fieldKey) => settings.fields[fieldKey].enabled);
+    const isInverted = settings.invertColors;
+
+    return (
+        <article
+            className={`qr-label-card flex overflow-hidden rounded-[4mm] border ${isInverted
+                ? 'border-slate-700 bg-slate-950 text-white'
+                : 'border-slate-200 bg-white text-slate-900'
+                } ${settings.qrSide === 'left' ? '' : 'flex-row-reverse'}`}
+            style={{
+                width: `${settings.labelWidthMm}mm`,
+                height: `${settings.labelHeightMm}mm`,
+                padding: '3mm',
+                gap: '3mm'
+            }}
+        >
+            <div
+                className={`flex shrink-0 items-center justify-center rounded-[3mm] border ${isInverted
+                    ? 'border-slate-700 bg-slate-950'
+                    : 'border-slate-200 bg-white'
+                    }`}
+                style={{
+                    width: `${settings.qrSizeMm}mm`,
+                    height: `${settings.qrSizeMm}mm`
+                }}
+            >
+                {item.qrUrl ? (
+                    <img
+                        src={item.qrUrl}
+                        alt={`QR ${item.serialNumber}`}
+                        className="h-full w-full object-contain"
+                        style={{ filter: isInverted ? 'invert(1)' : 'none' }}
+                    />
+                ) : (
+                    <QrCode className={isInverted ? 'text-white' : 'text-slate-300'} size={32} />
+                )}
+            </div>
+
+            <div className="min-w-0 flex-1 overflow-hidden">
+                <div className="flex h-full flex-col justify-center gap-[1.6mm] overflow-hidden">
+                    {orderedFields.map((fieldKey) => {
+                        const fieldConfig = settings.fields[fieldKey];
+
+                        if (fieldKey === 'customText') {
+                            return (
+                                <div key={fieldKey} className="min-w-0" style={getFieldStyle(fieldConfig)}>
+                                    <input
+                                        value={item.customText}
+                                        onChange={(event) => onCustomTextChange(item.itemId, event.target.value)}
+                                        placeholder="Введите свой текст"
+                                        className={`qr-editable-input w-full rounded-[2mm] border border-dashed px-[1.6mm] py-[1.2mm] text-inherit outline-none ${isInverted
+                                            ? 'border-slate-600 bg-black/30 text-white placeholder:text-slate-500'
+                                            : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'
+                                            }`}
+                                        style={getFieldStyle(fieldConfig)}
+                                    />
+                                    {item.customText.trim() && (
+                                        <div className="qr-print-value break-words">
+                                            {item.customText}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
+
+                        const value = getFieldValue(item, fieldKey);
+                        if (!value) {
+                            return null;
+                        }
+
+                        return (
+                            <p key={fieldKey} className="break-words" style={getFieldStyle(fieldConfig)}>
+                                {value}
+                            </p>
+                        );
+                    })}
+                </div>
+            </div>
+        </article>
+    );
+}
+
+function NumericField({
+    label,
+    value,
+    onChange,
+    compact = false
+}: {
+    label: string;
+    value: number;
+    onChange: (value: string) => void;
+    compact?: boolean;
+}) {
+    return (
+        <label className="block">
+            <span className={`block font-semibold uppercase tracking-[0.18em] text-slate-500 ${compact ? 'mb-1.5 text-[11px]' : 'mb-2 text-xs'}`}>{label}</span>
+            <input
+                type="number"
+                min="0"
+                step="1"
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                className={`w-full rounded-2xl border border-slate-700 bg-slate-900/80 text-sm text-white outline-none transition focus:border-blue-500 ${compact ? 'px-3 py-2.5' : 'px-4 py-3'}`}
+            />
+        </label>
     );
 }

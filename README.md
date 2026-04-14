@@ -165,6 +165,7 @@ npm run db:repair:item-serials -- --apply
 
 ## Документация
 
+- Полный пакет документации: [docs/DOCUMENTATION_PACKAGE_RU.md](./docs/DOCUMENTATION_PACKAGE_RU.md)
 - Общий usage guide: [docs/SYSTEM_USAGE_GUIDE_RU.md](./docs/SYSTEM_USAGE_GUIDE_RU.md)
 - Бизнес-логика: [docs/BUSINESS_LOGIC_RU.md](./docs/BUSINESS_LOGIC_RU.md)
 - Карта процессов и аудит: [docs/BUSINESS_PROCESSES_AUDIT_RU.md](./docs/BUSINESS_PROCESSES_AUDIT_RU.md)

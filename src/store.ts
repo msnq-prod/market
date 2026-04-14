@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { LOCATIONS } from './data/db';
 import type { Location, User, Product } from './data/db';
 import { authFetch } from './utils/authFetch';
 import { clearAuthSession } from './utils/session';
@@ -86,9 +85,8 @@ export const useStore = create<AppState>((set) => ({
             const data = await res.json();
             set({ locations: data, isLoading: false });
         } catch (error) {
-            console.error('API unavailable, using mock data:', error);
-            // Fallback to mock locations when API is unavailable
-            set({ locations: LOCATIONS, isLoading: false });
+            console.error('Failed to load locations:', error);
+            set({ locations: [], isLoading: false });
         }
     },
 
