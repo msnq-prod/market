@@ -131,6 +131,18 @@ npm run ops:deploy
 
 Это позволяет деплоить на VPS ровно тот commit, который прошел CI в GitHub Actions.
 
+### Порог свободного места
+
+По умолчанию `preflight` требует минимум 5 GiB свободного места.
+
+Для небольших VPS порог можно снизить через env:
+
+```bash
+STONES_MIN_FREE_GB=2 ./scripts/ops/deploy-revision.sh <commit_sha>
+```
+
+В GitHub Actions для этого предусмотрен repo variable `STONES_PROD_MIN_FREE_GB`.
+
 ## 6. Проверка после деплоя
 
 Минимум:

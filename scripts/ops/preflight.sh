@@ -68,9 +68,16 @@ fi
 mkdir -p "$MYSQL_BACKUP_DIR"
 
 available_kb="$(df -Pk "$REPO_ROOT" | awk 'NR==2 { print $4 }')"
-minimum_kb=$((5 * 1024 * 1024))
+minimum_free_gb="${STONES_MIN_FREE_GB:-5}"
+
+if ! [[ "$minimum_free_gb" =~ ^[0-9]+$ ]] || (( minimum_free_gb < 1 )); then
+    echo "STONES_MIN_FREE_GB must be a positive integer." >&2
+    exit 1
+fi
+
+minimum_kb=$((minimum_free_gb * 1024 * 1024))
 if (( available_kb < minimum_kb )); then
-    echo "Not enough free disk space for a safe deploy. Need at least 5 GiB free." >&2
+    echo "Not enough free disk space for a safe deploy. Need at least ${minimum_free_gb} GiB free." >&2
     exit 1
 fi
 
@@ -79,3 +86,4 @@ compose_prod config >/dev/null
 echo "Production preflight passed."
 echo "Env file: $PROD_ENV_FILE"
 echo "Free disk: $((available_kb / 1024 / 1024)) GiB"
+echo "Minimum free disk requirement: ${minimum_free_gb} GiB"

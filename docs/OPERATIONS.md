@@ -52,6 +52,7 @@ npm run ops:deploy
 - var `STONES_PROD_SSH_PORT`
 - var `STONES_PROD_SSH_USER`
 - var `STONES_PROD_APP_DIR`
+- var `STONES_PROD_MIN_FREE_GB` — опционально, если на VPS меньше 5 GiB свободного места перед сборкой
 
 Требования на сервере:
 
@@ -60,6 +61,7 @@ npm run ops:deploy
 - production checkout не должен содержать незакоммиченных tracked-изменений;
 - `docker` и `docker compose` доступны для пользователя деплоя.
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL` может отсутствовать, если production-сборка desktop helper пока не опубликована.
+- по умолчанию preflight требует 5 GiB свободного места, но порог можно переопределить через `STONES_MIN_FREE_GB`.
 
 ## 2. Backup базы данных
 

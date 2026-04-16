@@ -68,10 +68,13 @@ jobs:
           DEPLOY_PORT: ${{ vars.STONES_PROD_SSH_PORT }}
           DEPLOY_USER: ${{ vars.STONES_PROD_SSH_USER }}
           DEPLOY_DIR: ${{ vars.STONES_PROD_APP_DIR }}
+          DEPLOY_MIN_FREE_GB: ${{ vars.STONES_PROD_MIN_FREE_GB }}
         run: |
           test -n "$DEPLOY_HOST"
           test -n "$DEPLOY_USER"
           test -n "$DEPLOY_DIR"
 
+          DEPLOY_MIN_FREE_GB="${DEPLOY_MIN_FREE_GB:-5}"
+
           ssh -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$DEPLOY_DIR' && ./scripts/ops/deploy-revision.sh '$GITHUB_SHA'"
+            "cd '$DEPLOY_DIR' && STONES_MIN_FREE_GB='$DEPLOY_MIN_FREE_GB' ./scripts/ops/deploy-revision.sh '$GITHUB_SHA'"

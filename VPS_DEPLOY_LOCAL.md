@@ -127,6 +127,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail
 - variable `STONES_PROD_SSH_PORT=22`
 - variable `STONES_PROD_SSH_USER=<SSH_USER>`
 - variable `STONES_PROD_APP_DIR=/root/apps/stones`
+- variable `STONES_PROD_MIN_FREE_GB=2`  # если VPS меньше и стандартные 5 GiB недостижимы
 
 Для server-side deploy используется:
 
