@@ -32,6 +32,34 @@ npm run ops:deploy
 6. делает внутренний healthcheck `app`
 7. делает внешний healthcheck через `caddy`
 
+## 1.1 Автоматический релиз через GitHub Actions
+
+В репозитории предусмотрен workflow:
+
+- `.github/workflows/ci-cd.yml`
+
+Поведение:
+
+1. на каждый push в `main` запускает `npm ci`, `npm run lint`, `npm run build`;
+2. если CI зеленый, подключается по SSH к production-серверу;
+3. на сервере запускает `./scripts/ops/deploy-revision.sh <commit_sha>`;
+4. `deploy-revision.sh` делает `git fetch`, переключает checkout на точный commit и запускает обычный `scripts/ops/deploy.sh`.
+
+Нужные GitHub Actions secrets / vars:
+
+- secret `STONES_PROD_SSH_PRIVATE_KEY`
+- var `STONES_PROD_SSH_HOST`
+- var `STONES_PROD_SSH_PORT`
+- var `STONES_PROD_SSH_USER`
+- var `STONES_PROD_APP_DIR`
+
+Требования на сервере:
+
+- git checkout репозитория уже существует;
+- `.env.production` настроен вручную и не хранится в git;
+- production checkout не должен содержать незакоммиченных tracked-изменений;
+- `docker` и `docker compose` доступны для пользователя деплоя.
+
 ## 2. Backup базы данных
 
 Команда:

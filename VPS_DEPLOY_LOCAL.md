@@ -115,7 +115,25 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail
 0 3 * * * cd /home/<SSH_USER>/apps/stones && /usr/bin/npm run ops:backup >> /home/<SSH_USER>/stones-backup.log 2>&1
 ```
 
-## 9. Rollback
+## 9. GitHub Actions CI/CD
+
+В репозитории есть workflow `.github/workflows/ci-cd.yml`.
+
+Что нужно добавить в GitHub repository settings:
+
+- secret `STONES_PROD_SSH_PRIVATE_KEY`
+- variable `STONES_PROD_SSH_HOST=<VPS_IP>`
+- variable `STONES_PROD_SSH_PORT=22`
+- variable `STONES_PROD_SSH_USER=<SSH_USER>`
+- variable `STONES_PROD_APP_DIR=/root/apps/stones`
+
+Для server-side deploy используется:
+
+```bash
+./scripts/ops/deploy-revision.sh <commit_sha>
+```
+
+## 10. Rollback
 
 Если проблема в коде:
 

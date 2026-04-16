@@ -111,6 +111,25 @@ npm run ops:deploy
 5. healthcheck внутри `app`
 6. healthcheck через `caddy`
 
+### Deploy конкретной ревизии
+
+Для CI/CD в репозиторий добавлен `scripts/ops/deploy-revision.sh`.
+
+Пример:
+
+```bash
+./scripts/ops/deploy-revision.sh <commit_sha>
+```
+
+Скрипт:
+
+- проверяет, что working tree чист по tracked-файлам;
+- делает `git fetch --prune --tags origin`;
+- переключает checkout на нужный commit;
+- запускает стандартный `./scripts/ops/deploy.sh`.
+
+Это позволяет деплоить на VPS ровно тот commit, который прошел CI в GitHub Actions.
+
 ## 6. Проверка после деплоя
 
 Минимум:
