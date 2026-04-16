@@ -24,7 +24,6 @@ required_vars=(
     ACCESS_TOKEN_SECRET
     REFRESH_TOKEN_SECRET
     VIDEO_PROCESSOR_POLL_MS
-    VITE_VIDEO_HELPER_DOWNLOAD_URL
     STONES_HELPER_ALLOWED_ORIGIN
 )
 
@@ -38,8 +37,6 @@ require_not_placeholder MYSQL_PASSWORD "$MYSQL_PASSWORD"
 require_not_placeholder MYSQL_ROOT_PASSWORD "$MYSQL_ROOT_PASSWORD"
 require_not_placeholder ACCESS_TOKEN_SECRET "$ACCESS_TOKEN_SECRET"
 require_not_placeholder REFRESH_TOKEN_SECRET "$REFRESH_TOKEN_SECRET"
-require_not_placeholder VITE_VIDEO_HELPER_DOWNLOAD_URL "$VITE_VIDEO_HELPER_DOWNLOAD_URL"
-
 client_url_normalized="$(normalize_url "$CLIENT_URL")"
 helper_origin_normalized="$(normalize_url "$STONES_HELPER_ALLOWED_ORIGIN")"
 expected_client_url="https://$APP_DOMAIN"
@@ -59,9 +56,13 @@ if [[ "$DATABASE_URL" != *"@db:3306/"* ]]; then
     exit 1
 fi
 
-if [[ "$VITE_VIDEO_HELPER_DOWNLOAD_URL" != https://* ]]; then
-    echo "VITE_VIDEO_HELPER_DOWNLOAD_URL must use https." >&2
-    exit 1
+if [[ -n "${VITE_VIDEO_HELPER_DOWNLOAD_URL:-}" ]]; then
+    require_not_placeholder VITE_VIDEO_HELPER_DOWNLOAD_URL "$VITE_VIDEO_HELPER_DOWNLOAD_URL"
+
+    if [[ "$VITE_VIDEO_HELPER_DOWNLOAD_URL" != https://* ]]; then
+        echo "VITE_VIDEO_HELPER_DOWNLOAD_URL must use https when it is configured." >&2
+        exit 1
+    fi
 fi
 
 mkdir -p "$MYSQL_BACKUP_DIR"

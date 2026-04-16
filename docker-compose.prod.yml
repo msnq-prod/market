@@ -2,7 +2,7 @@ x-runtime-build: &runtime-build
   context: .
   dockerfile: Dockerfile
   args:
-    VITE_VIDEO_HELPER_DOWNLOAD_URL: ${VITE_VIDEO_HELPER_DOWNLOAD_URL:?VITE_VIDEO_HELPER_DOWNLOAD_URL is required}
+    VITE_VIDEO_HELPER_DOWNLOAD_URL: ${VITE_VIDEO_HELPER_DOWNLOAD_URL:-}
 
 x-json-logging: &json-logging
   driver: json-file

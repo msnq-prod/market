@@ -109,7 +109,7 @@ Playwright по умолчанию использует:
 - `VITE_HOST=127.0.0.1`
 - `VITE_PORT=5173`
 - `VITE_API_TARGET=http://127.0.0.1:3001`
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL=https://downloads.example.com/ZAGARAMI-Video-Helper.dmg`
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL=https://downloads.example.com/ZAGARAMI-Video-Helper.dmg` (опционально, если опубликован production DMG)
 
 ## Основные скрипты
 

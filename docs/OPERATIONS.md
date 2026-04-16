@@ -59,6 +59,7 @@ npm run ops:deploy
 - `.env.production` настроен вручную и не хранится в git;
 - production checkout не должен содержать незакоммиченных tracked-изменений;
 - `docker` и `docker compose` доступны для пользователя деплоя.
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL` может отсутствовать, если production-сборка desktop helper пока не опубликована.
 
 ## 2. Backup базы данных
 

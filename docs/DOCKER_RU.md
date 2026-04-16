@@ -74,14 +74,15 @@ cp .env.production.example .env.production
 - `ACCESS_TOKEN_SECRET`
 - `REFRESH_TOKEN_SECRET`
 - `VIDEO_PROCESSOR_POLL_MS`
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL`
 - `STONES_HELPER_ALLOWED_ORIGIN`
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, только если опубликован production DMG для desktop helper
 
 Инварианты:
 
 - `CLIENT_URL` должен быть `https://<APP_DOMAIN>`
 - `STONES_HELPER_ALLOWED_ORIGIN` должен совпадать с `CLIENT_URL`
 - `DATABASE_URL` должен указывать на `db:3306`
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL` можно не задавать, если production DMG еще не опубликован
 
 ## 5. Production deploy через scripts/ops
 
