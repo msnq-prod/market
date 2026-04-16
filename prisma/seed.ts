@@ -974,16 +974,38 @@ async function main() {
             id: 'order-anna-001',
             user_id: 'usr-cust-anna',
             total: 34400,
-            status: 'COMPLETED',
+            assigned_sales_manager_id: 'usr-sales-manager',
+            status: 'RECEIVED',
             delivery_address: 'Казань, ул. Баумана, 14',
             contact_phone: '+7 900 111-22-33',
             contact_email: 'anna.smirnova@example.ru',
             comment: 'Позвонить за час до доставки.',
             created_at: daysAgo(18, 12),
+            shipment: {
+                create: {
+                    id: 'shipment-anna-001',
+                    carrier: 'CDEK',
+                    tracking_number: 'CDEK-DEMO-ANNA-001',
+                    tracking_status_code: 'DELIVERED',
+                    tracking_status_label: 'Заказ вручен получателю',
+                    last_event_at: daysAgo(14, 15),
+                    last_synced_at: daysAgo(14, 16),
+                    meta: { source: 'seed' },
+                },
+            },
             items: {
                 create: [
                     { id: 'order-item-anna-001', product_id: 'prod-altai-001', quantity: 1, price: 22600 },
                     { id: 'order-item-anna-002', product_id: 'prod-altai-002', quantity: 1, price: 11800 },
+                ],
+            },
+            status_events: {
+                create: [
+                    { id: 'order-event-anna-001', to_status: 'NEW', created_at: daysAgo(18, 12), meta: { source: 'seed' } },
+                    { id: 'order-event-anna-002', actor_user_id: 'usr-sales-manager', from_status: 'NEW', to_status: 'IN_PROGRESS', created_at: daysAgo(18, 14), meta: { source: 'seed' } },
+                    { id: 'order-event-anna-003', actor_user_id: 'usr-sales-manager', from_status: 'IN_PROGRESS', to_status: 'PACKED', created_at: daysAgo(17, 11), meta: { source: 'seed' } },
+                    { id: 'order-event-anna-004', actor_user_id: 'usr-sales-manager', from_status: 'PACKED', to_status: 'SHIPPED', created_at: daysAgo(17, 15), meta: { source: 'seed' } },
+                    { id: 'order-event-anna-005', actor_user_id: 'usr-sales-manager', from_status: 'SHIPPED', to_status: 'RECEIVED', created_at: daysAgo(14, 16), meta: { source: 'seed' } },
                 ],
             },
         },
@@ -994,15 +1016,36 @@ async function main() {
             id: 'order-maxim-001',
             user_id: 'usr-cust-maxim',
             total: 41200,
-            status: 'IN_PROGRESS',
+            assigned_sales_manager_id: 'usr-sales-manager',
+            status: 'SHIPPED',
             delivery_address: 'Новосибирск, Красный проспект, 9',
             contact_phone: '+7 901 222-33-44',
             contact_email: 'maxim.lebedev@example.ru',
             comment: 'Доставка в будни после 18:00.',
             created_at: daysAgo(11, 16),
+            shipment: {
+                create: {
+                    id: 'shipment-maxim-001',
+                    carrier: 'CDEK',
+                    tracking_number: 'CDEK-DEMO-MAXIM-001',
+                    tracking_status_code: 'IN_TRANSIT',
+                    tracking_status_label: 'Посылка в пути',
+                    last_event_at: daysAgo(8, 11),
+                    last_synced_at: daysAgo(8, 12),
+                    meta: { source: 'seed' },
+                },
+            },
             items: {
                 create: [
                     { id: 'order-item-maxim-001', product_id: 'prod-baltic-001', quantity: 1, price: 41200 },
+                ],
+            },
+            status_events: {
+                create: [
+                    { id: 'order-event-maxim-001', to_status: 'NEW', created_at: daysAgo(11, 16), meta: { source: 'seed' } },
+                    { id: 'order-event-maxim-002', actor_user_id: 'usr-sales-manager', from_status: 'NEW', to_status: 'IN_PROGRESS', created_at: daysAgo(11, 17), meta: { source: 'seed' } },
+                    { id: 'order-event-maxim-003', actor_user_id: 'usr-sales-manager', from_status: 'IN_PROGRESS', to_status: 'PACKED', created_at: daysAgo(10, 11), meta: { source: 'seed' } },
+                    { id: 'order-event-maxim-004', actor_user_id: 'usr-sales-manager', from_status: 'PACKED', to_status: 'SHIPPED', created_at: daysAgo(8, 12), meta: { source: 'seed' } },
                 ],
             },
         },
@@ -1024,6 +1067,11 @@ async function main() {
                     { id: 'order-item-olga-001', product_id: 'prod-yak-001', quantity: 1, price: 185000 },
                 ],
             },
+            status_events: {
+                create: [
+                    { id: 'order-event-olga-001', to_status: 'NEW', created_at: daysAgo(4, 14), meta: { source: 'seed' } },
+                ],
+            },
         },
     });
 
@@ -1032,15 +1080,40 @@ async function main() {
             id: 'order-kirill-001',
             user_id: 'usr-cust-kirill',
             total: 17900,
-            status: 'CANCELLED',
+            assigned_sales_manager_id: 'usr-sales-manager',
+            status: 'RETURNED',
+            return_reason: 'NOT_PICKED_UP',
             delivery_address: 'Краснодар, ул. Северная, 99',
             contact_phone: '+7 903 444-55-66',
             contact_email: 'kirill.volkov@example.ru',
             comment: 'Отменен клиентом после звонка менеджера.',
             created_at: daysAgo(6, 11),
+            shipment: {
+                create: {
+                    id: 'shipment-kirill-001',
+                    carrier: 'CDEK',
+                    tracking_number: 'CDEK-DEMO-KIRILL-001',
+                    tracking_status_code: 'RETURNED',
+                    tracking_status_label: 'Не забран, отправление возвращено',
+                    last_event_at: daysAgo(1, 10),
+                    last_synced_at: daysAgo(1, 11),
+                    meta: { source: 'seed' },
+                },
+            },
             items: {
                 create: [
                     { id: 'order-item-kirill-001', product_id: 'prod-baltic-002', quantity: 1, price: 17900 },
+                ],
+            },
+            status_events: {
+                create: [
+                    { id: 'order-event-kirill-001', to_status: 'NEW', created_at: daysAgo(6, 11), meta: { source: 'seed' } },
+                    { id: 'order-event-kirill-002', actor_user_id: 'usr-sales-manager', from_status: 'NEW', to_status: 'IN_PROGRESS', created_at: daysAgo(6, 12), meta: { source: 'seed' } },
+                    { id: 'order-event-kirill-003', actor_user_id: 'usr-sales-manager', from_status: 'IN_PROGRESS', to_status: 'PACKED', created_at: daysAgo(5, 13), meta: { source: 'seed' } },
+                    { id: 'order-event-kirill-004', actor_user_id: 'usr-sales-manager', from_status: 'PACKED', to_status: 'SHIPPED', created_at: daysAgo(5, 17), meta: { source: 'seed' } },
+                    { id: 'order-event-kirill-005', actor_user_id: 'usr-sales-manager', from_status: 'SHIPPED', to_status: 'RETURN_REQUESTED', created_at: daysAgo(2, 12), meta: { source: 'seed', reason: 'NOT_PICKED_UP' } },
+                    { id: 'order-event-kirill-006', actor_user_id: 'usr-sales-manager', from_status: 'RETURN_REQUESTED', to_status: 'RETURN_IN_TRANSIT', created_at: daysAgo(2, 16), meta: { source: 'seed' } },
+                    { id: 'order-event-kirill-007', actor_user_id: 'usr-sales-manager', from_status: 'RETURN_IN_TRANSIT', to_status: 'RETURNED', created_at: daysAgo(1, 11), meta: { source: 'seed' } },
                 ],
             },
         },

@@ -140,8 +140,10 @@ model ProductTranslation {
 model Order {
   id               String      @id @default(uuid())
   user_id          String
+  assigned_sales_manager_id String?
   total            Decimal     @db.Decimal(12, 2)
   status           OrderStatus @default(NEW)
+  return_reason    ReturnReason?
   delivery_address String?
   contact_phone    String?
   contact_email    String?
@@ -151,10 +153,14 @@ model Order {
   created_at       DateTime    @default(now())
   updated_at       DateTime    @updatedAt
 
-  user  User        @relation(fields: [user_id], references: [id])
-  items OrderItem[]
+  user                    User               @relation(fields: [user_id], references: [id])
+  assigned_sales_manager  User?              @relation("AssignedSalesOrders", fields: [assigned_sales_manager_id], references: [id])
+  items                   OrderItem[]
+  status_events           OrderStatusEvent[]
+  shipment                OrderShipment?
 
   @@index([user_id])
+  @@index([assigned_sales_manager_id])
   @@index([deleted_at])
   @@map("orders")
 }
@@ -170,6 +176,7 @@ model OrderItem {
 
   order   Order   @relation(fields: [order_id], references: [id])
   product Product @relation(fields: [product_id], references: [id])
+  assignments OrderItemAssignment[]
 
   @@index([order_id])
   @@index([product_id])
@@ -189,8 +196,18 @@ enum Role {
 enum OrderStatus {
   NEW
   IN_PROGRESS
-  COMPLETED
+  PACKED
+  SHIPPED
+  RECEIVED
+  RETURN_REQUESTED
+  RETURN_IN_TRANSIT
+  RETURNED
   CANCELLED
+}
+
+enum ReturnReason {
+  REFUSED_BY_CUSTOMER
+  NOT_PICKED_UP
 }
 
 enum ItemStatus {
@@ -265,9 +282,11 @@ model User {
 
   // Relations
   orders                       Order[]
+  assigned_sales_orders        Order[]              @relation("AssignedSalesOrders")
   batches                      Batch[]             @relation("BatchOwner")
   ledgers                      Ledger[]
   audit_logs                   AuditLog[]
+  order_status_events          OrderStatusEvent[]   @relation("OrderStatusEventActor")
   created_collection_requests  CollectionRequest[] @relation("CollectionRequestCreatedBy")
   target_collection_requests   CollectionRequest[] @relation("CollectionRequestTargetUser")
   accepted_collection_requests CollectionRequest[] @relation("CollectionRequestAcceptedBy")
@@ -332,6 +351,7 @@ model Item {
   batch          Batch    @relation(fields: [batch_id], references: [id])
   product        Product? @relation(fields: [product_id], references: [id])
   ledger_entries Ledger[]
+  order_assignments OrderItemAssignment[]
 
   @@unique([batch_id, temp_id])
   @@index([batch_id])
@@ -339,6 +359,55 @@ model Item {
   @@index([status, is_sold])
   @@index([deleted_at])
   @@map("items")
+}
+
+model OrderStatusEvent {
+  id            String       @id @default(uuid())
+  order_id       String
+  actor_user_id  String?
+  from_status    OrderStatus?
+  to_status      OrderStatus
+  meta           Json?
+  created_at     DateTime     @default(now())
+
+  order          Order        @relation(fields: [order_id], references: [id])
+  actor_user     User?        @relation("OrderStatusEventActor", fields: [actor_user_id], references: [id])
+
+  @@index([order_id, created_at])
+  @@index([actor_user_id])
+  @@map("order_status_events")
+}
+
+model OrderItemAssignment {
+  id            String      @id @default(uuid())
+  order_item_id  String
+  item_id        String      @unique
+  created_at     DateTime    @default(now())
+
+  order_item     OrderItem   @relation(fields: [order_item_id], references: [id])
+  item           Item        @relation(fields: [item_id], references: [id])
+
+  @@index([order_item_id])
+  @@map("order_item_assignments")
+}
+
+model OrderShipment {
+  id                    String    @id @default(uuid())
+  order_id              String    @unique
+  carrier               String    @default("CDEK") @db.VarChar(32)
+  tracking_number       String    @db.VarChar(64)
+  tracking_status_code  String?   @db.VarChar(64)
+  tracking_status_label String?   @db.VarChar(191)
+  last_event_at         DateTime?
+  last_synced_at        DateTime?
+  meta                  Json?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  order                 Order     @relation(fields: [order_id], references: [id])
+
+  @@index([tracking_number])
+  @@map("order_shipments")
 }
 
 model VideoProcessingJob {

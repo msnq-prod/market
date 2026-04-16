@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    FFMPEG_BIN=/bin/true \
     npm_config_cache=/tmp/.npm \
     npm_config_fetch_retries=5 \
     npm_config_fetch_retry_mintimeout=20000 \
@@ -29,10 +30,9 @@ RUN npm run build
 
 FROM deps AS prod-deps
 
-RUN npm prune --omit=dev --no-audit --no-fund \
+RUN npm prune --omit=dev --omit=optional --no-audit --no-fund \
     && npx prisma generate \
     && rm -rf /root/.npm \
-    && rm -rf node_modules/ffmpeg-static node_modules/ffprobe-static \
     && find node_modules -type f -name '*.map' -delete
 
 FROM node:22-alpine AS runtime

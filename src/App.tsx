@@ -457,6 +457,9 @@ import { NotFound } from './public/pages/NotFound'
 import { CloneContent } from './admin/pages/CloneContent'
 import { Warehouse } from './admin/pages/Warehouse'
 import { Orders } from './admin/pages/Orders'
+import { Clients } from './admin/pages/Clients'
+import { SalesInventory } from './admin/pages/SalesInventory'
+import { SalesHistory } from './admin/pages/SalesHistory'
 import { VideoTool } from './admin/pages/VideoTool'
 import { PhotoTool } from './admin/pages/PhotoTool'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
@@ -497,6 +500,9 @@ function App() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="orders" element={<Orders />} />
+          <Route path="clients" element={<Clients />} />
+          <Route path="inventory" element={<SalesInventory />} />
+          <Route path="sales-history" element={<SalesHistory />} />
           <Route path="locations" element={<Locations />} />
           <Route path="products" element={<Products />} />
           <Route path="acceptance" element={<Acceptance />} />

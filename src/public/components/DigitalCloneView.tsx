@@ -54,7 +54,10 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
     const hasVideoAsset = item.has_video && videoUrl !== null;
     const itemKey = item.serial_number || item.clone_url || item.product_name;
     const [activeOverlay, setActiveOverlay] = useState<null | { kind: 'photo' | 'video'; itemKey: string }>(null);
-    const description = item.product_description || content.hero_description;
+    const description = item.location_description || item.product_description || content.hero_description;
+    const extraText = item.location_description
+        ? (item.product_description || content.authenticity_text)
+        : content.authenticity_text;
     const collectionDate = formatCollectionDate(item.collection_date);
     const coordinatesLabel = formatCoordinates(item.gps_lat, item.gps_lng);
     const photoLightboxOpen = activeOverlay?.kind === 'photo' && activeOverlay.itemKey === itemKey;
@@ -142,7 +145,7 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
                     <div className="pb-1">
                         <DescriptionCard
                             description={description}
-                            extraText={item.location_description || content.authenticity_text}
+                            extraText={extraText}
                         />
                     </div>
 

@@ -23,7 +23,7 @@ export function LocationInfoSection() {
 
     return (
         <section className="relative z-10 flex min-h-[100svh] w-full items-end px-4 pb-6 pt-28 text-white pointer-events-auto sm:px-6 md:block md:min-h-0 md:px-6 md:pb-0 md:pt-32">
-            <div className="mx-auto w-full max-w-4xl rounded-[2rem] border border-white/10 bg-black/45 px-5 py-6 text-left shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-md md:rounded-none md:border-0 md:bg-transparent md:px-0 md:py-0 md:text-center md:shadow-none md:backdrop-blur-0">
+            <div className="mx-auto flex w-full max-w-4xl flex-col px-5 py-6 text-left md:min-h-[100svh] md:items-center md:justify-start md:px-0 md:py-0 md:text-center">
                 <motion.h2
                     initial={{ opacity: 0, y: 20 }}
                     whileInView={{ opacity: 1, y: 0 }}
@@ -38,7 +38,7 @@ export function LocationInfoSection() {
                         <span>ДОЛГ: {displayLocation.lng.toFixed(4)}</span>
                     </div>
                 </div>
-                <p className="mt-5 max-w-2xl leading-relaxed text-gray-300 md:mx-auto md:mt-8">
+                <p className="mt-24 max-w-2xl leading-relaxed text-gray-300 md:mx-auto md:mt-[26rem]">
                     {description}
                 </p>
             </div>

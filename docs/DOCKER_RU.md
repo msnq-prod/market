@@ -32,6 +32,7 @@ docker compose up -d --build
 - uploads и video storage вынесены в docker volumes
 - `CLIENT_URL` внутри local docker stack — `http://localhost:3001`
 - сиды не выполняются автоматически
+- runtime image использует системный `ffmpeg` из Alpine; desktop helper-зависимости `ffmpeg-static` и `ffprobe-static` в compose-сборку не устанавливаются
 
 ## 3. Production stack
 

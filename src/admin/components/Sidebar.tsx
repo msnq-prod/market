@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode } from 'lucide-react';
+import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { clearAuthSession } from '../../utils/session';
 
@@ -8,7 +8,7 @@ export function Sidebar() {
     const navigate = useNavigate();
     const role = localStorage.getItem('userRole');
     const isSalesManager = role === 'SALES_MANAGER';
-    const canAccessOrders = role === 'ADMIN' || role === 'SALES_MANAGER';
+    const canAccessSalesCabinet = role === 'ADMIN' || role === 'SALES_MANAGER';
 
     const handleLogout = () => {
         clearAuthSession();
@@ -22,21 +22,29 @@ export function Sidebar() {
                     {isSalesManager ? 'Продажи' : 'Админ HQ'}
                 </h1>
                 <p className="text-xs text-gray-500 mt-1">
-                    {isSalesManager ? 'Очередь заказов Stones' : 'Центр управления Stones'}
+                    {isSalesManager ? 'Очередь заказов ZAGARAMI' : 'Центр управления ZAGARAMI'}
                 </p>
             </div>
 
             <nav className="flex-1 p-4 space-y-1">
                 {isSalesManager ? (
-                    <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                    <>
+                        <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                        <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
+                        <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
+                        <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
+                    </>
                 ) : (
                     <>
                         <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Дашборд" active={location.pathname === '/admin'} />
 
-                        {canAccessOrders && (
+                        {canAccessSalesCabinet && (
                             <>
                                 <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Продажи</div>
                                 <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                                <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
+                                <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
+                                <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
                             </>
                         )}
 

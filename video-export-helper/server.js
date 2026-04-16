@@ -8,8 +8,6 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import multer from 'multer';
-import ffmpegStatic from 'ffmpeg-static';
-import ffprobeStatic from 'ffprobe-static';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,7 +67,7 @@ const readPackageVersion = async () => {
 
 const getDefaultStorageRoot = () => {
     if (process.platform === 'darwin') {
-        return path.join(os.homedir(), 'Library/Application Support/Stones Video Helper');
+        return path.join(os.homedir(), 'Library/Application Support/ZAGARAMI Video Helper');
     }
 
     return path.join(process.cwd(), 'storage/video-export-helper');
@@ -99,6 +97,54 @@ const resolveExecutablePath = (binaryPath) => {
     }
 
     return binaryPath;
+};
+
+const isOptionalModuleNotFound = (error, moduleName) => {
+    if (!error || typeof error !== 'object') {
+        return false;
+    }
+
+    const code = typeof error.code === 'string' ? error.code : '';
+    const message = typeof error.message === 'string' ? error.message : '';
+    if (!['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND'].includes(code)) {
+        return false;
+    }
+
+    return message.includes(`'${moduleName}'`) || message.includes(`"${moduleName}"`) || message.includes(moduleName);
+};
+
+const importOptionalDependency = async (moduleName) => {
+    try {
+        return await import(moduleName);
+    } catch (error) {
+        if (isOptionalModuleNotFound(error, moduleName)) {
+            return null;
+        }
+
+        throw error;
+    }
+};
+
+const resolveBundledBinaryPaths = async () => {
+    const [ffmpegModule, ffprobeModule] = await Promise.all([
+        importOptionalDependency('ffmpeg-static'),
+        importOptionalDependency('ffprobe-static')
+    ]);
+
+    const ffmpegStaticPath = resolveExecutablePath(typeof ffmpegModule?.default === 'string' ? ffmpegModule.default : '');
+    const ffprobeExport = ffprobeModule?.default;
+    const ffprobeStaticPath = resolveExecutablePath(
+        typeof ffprobeExport?.path === 'string'
+            ? ffprobeExport.path
+            : typeof ffprobeExport === 'string'
+                ? ffprobeExport
+                : ''
+    );
+
+    return {
+        ffmpegStaticPath,
+        ffprobeStaticPath
+    };
 };
 
 const isLoopbackAddress = (value) => {
@@ -381,8 +427,9 @@ export async function startVideoExportHelperServer(options = {}) {
             ? options.helperVersion
             : await readPackageVersion()
     );
-    const ffmpegPath = resolveExecutablePath(options.ffmpegPath || process.env.VIDEO_EXPORT_HELPER_FFMPEG_BIN || ffmpegStatic || 'ffmpeg');
-    const ffprobePath = resolveExecutablePath(options.ffprobePath || process.env.VIDEO_EXPORT_HELPER_FFPROBE_BIN || ffprobeStatic.path || 'ffprobe');
+    const { ffmpegStaticPath, ffprobeStaticPath } = await resolveBundledBinaryPaths();
+    const ffmpegPath = resolveExecutablePath(options.ffmpegPath || process.env.VIDEO_EXPORT_HELPER_FFMPEG_BIN || ffmpegStaticPath || 'ffmpeg');
+    const ffprobePath = resolveExecutablePath(options.ffprobePath || process.env.VIDEO_EXPORT_HELPER_FFPROBE_BIN || ffprobeStaticPath || 'ffprobe');
 
     await ensureDirectory(storageRoot);
     await ensureDirectory(sourceRoot);

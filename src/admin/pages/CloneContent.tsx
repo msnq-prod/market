@@ -32,7 +32,7 @@ const FIELD_CONFIG: Array<{
 const PREVIEW_ITEM: CloneItemView = {
     serial_number: 'RUSPREVIEW000001',
     clone_url: `${window.location.origin}/clone/RUSPREVIEW000001`,
-    product_name: 'Демо-товар Stones',
+    product_name: 'Демо-товар ZAGARAMI',
     product_description: 'Короткое описание карточки товара, которое наследуется публичным паспортом.',
     location_name: 'Москва, тестовая локация',
     location_description: 'Описание локации из товарного шаблона. Этот текст теперь показывается в публичном паспорте вместо стандартной фразы про публичный токен.',

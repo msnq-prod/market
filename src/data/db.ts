@@ -68,7 +68,27 @@ export interface User {
     role: UserRole;
 }
 
-export type OrderStatus = 'NEW' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type OrderStatus =
+    | 'NEW'
+    | 'IN_PROGRESS'
+    | 'PACKED'
+    | 'SHIPPED'
+    | 'RECEIVED'
+    | 'RETURN_REQUESTED'
+    | 'RETURN_IN_TRANSIT'
+    | 'RETURNED'
+    | 'CANCELLED';
+
+export type ReturnReason = 'REFUSED_BY_CUSTOMER' | 'NOT_PICKED_UP';
+
+export interface AssignedItem {
+    id: string;
+    temp_id: string;
+    serial_number?: string | null;
+    item_seq?: number | null;
+    status: string;
+    is_sold: boolean;
+}
 
 export interface OrderHistoryItem {
     id: string;
@@ -78,17 +98,90 @@ export interface OrderHistoryItem {
     quantity: number;
     price: number;
     subtotal: number;
+    assigned_items?: AssignedItem[];
+}
+
+export interface OrderStatusEvent {
+    id: string;
+    from_status?: OrderStatus | null;
+    to_status: OrderStatus;
+    meta?: Record<string, unknown> | null;
+    created_at: string;
+    actor_user?: {
+        id: string;
+        name: string;
+        email?: string | null;
+        role: string;
+    } | null;
+}
+
+export interface OrderShipment {
+    id: string;
+    carrier: string;
+    tracking_number: string;
+    tracking_status_code?: string | null;
+    tracking_status_label?: string | null;
+    last_event_at?: string | null;
+    last_synced_at?: string | null;
+    meta?: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
 }
 
 export interface OrderHistory {
     id: string;
     status: OrderStatus;
+    return_reason?: ReturnReason | null;
     total: number;
     delivery_address?: string | null;
     contact_phone?: string | null;
     contact_email?: string | null;
     comment?: string | null;
+    internal_note?: string | null;
     created_at: string;
     updated_at: string;
     items: OrderHistoryItem[];
+    user?: {
+        id: string;
+        name: string;
+        email?: string | null;
+        username?: string | null;
+        role: string;
+    } | null;
+    assigned_sales_manager?: {
+        id: string;
+        name: string;
+        email?: string | null;
+        role: string;
+    } | null;
+    shipment?: OrderShipment | null;
+    status_events?: OrderStatusEvent[];
+}
+
+export interface SalesCustomer {
+    id: string;
+    name: string;
+    email?: string | null;
+    username?: string | null;
+    total_orders: number;
+    delivered_orders: number;
+    returned_orders: number;
+    revenue_received: number;
+    last_order_at?: string | null;
+    contact_phone?: string | null;
+    contact_email?: string | null;
+    delivery_address?: string | null;
+}
+
+export interface SalesInventoryRow {
+    id: string;
+    name: string;
+    location_name: string;
+    country_code: string;
+    location_code: string;
+    item_code: string;
+    price: number;
+    free_stock: number;
+    reserved_stock: number;
+    sold_stock: number;
 }

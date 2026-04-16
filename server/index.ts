@@ -17,6 +17,7 @@ import uploadRoutes from './routes/upload.ts';
 import contentRoutes from './routes/content.ts';
 import collectionRequestsRoutes from './routes/collectionRequests.ts';
 import ordersRoutes from './routes/orders.ts';
+import salesRoutes from './routes/sales.ts';
 import { isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
 import { softDeleteLocation, softDeleteProduct } from './utils/softDelete.ts';
@@ -163,6 +164,7 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             connectSrc: ["'self'", ...helperConnectOrigins],
+            imgSrc: ["'self'", 'data:', 'blob:'],
             mediaSrc: ["'self'", 'blob:', ...helperConnectOrigins],
             upgradeInsecureRequests: null
         }
@@ -208,6 +210,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/collection-requests', collectionRequestsRoutes);
 app.use('/api/orders', ordersRoutes);
+app.use('/api/sales', salesRoutes);
 
 app.use('/api/upload', uploadRoutes);
 

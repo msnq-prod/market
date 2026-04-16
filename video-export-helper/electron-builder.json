@@ -1,6 +1,6 @@
 {
   "appId": "com.stones.videohelper",
-  "productName": "Stones Video Helper",
+  "productName": "ZAGARAMI Video Helper",
   "directories": {
     "output": "dist-electron"
   },

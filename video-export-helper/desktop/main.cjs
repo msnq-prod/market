@@ -36,14 +36,14 @@ const createTrayIcon = () => {
 const normalizeStartupError = (error) => {
     const message = error instanceof Error ? error.message : '';
     if (/ffmpeg|ffprobe/i.test(message)) {
-        return 'Helper не смог проверить ffmpeg или ffprobe. Переустановите Stones Video Helper.';
+        return 'Helper не смог проверить ffmpeg или ffprobe. Переустановите ZAGARAMI Video Helper.';
     }
 
     if (/EADDRINUSE/i.test(message)) {
-        return 'Helper не запустился: локальный порт 3012 уже занят. Закройте другой экземпляр и откройте Stones Video Helper снова.';
+        return 'Helper не запустился: локальный порт 3012 уже занят. Закройте другой экземпляр и откройте ZAGARAMI Video Helper снова.';
     }
 
-    return message || 'Helper не смог запуститься. Перезапустите приложение или переустановите Stones Video Helper.';
+    return message || 'Helper не смог запуститься. Перезапустите приложение или переустановите ZAGARAMI Video Helper.';
 };
 
 const createWindow = async () => {
@@ -57,7 +57,7 @@ const createWindow = async () => {
         minWidth: 560,
         minHeight: 640,
         backgroundColor: '#0b1020',
-        title: 'Stones Video Helper',
+        title: 'ZAGARAMI Video Helper',
         show: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload.cjs'),
@@ -83,7 +83,7 @@ const createWindow = async () => {
     return mainWindow;
 };
 
-const getStorageRoot = () => path.join(app.getPath('appData'), 'Stones Video Helper');
+const getStorageRoot = () => path.join(app.getPath('appData'), 'ZAGARAMI Video Helper');
 const getDesktopStatePath = () => path.join(getStorageRoot(), DESKTOP_STATE_FILE);
 
 const readDesktopState = async () => {
@@ -140,7 +140,7 @@ const refreshTrayMenu = () => {
 
     const menu = Menu.buildFromTemplate([
         {
-            label: 'Открыть Stones Video Helper',
+            label: 'Открыть ZAGARAMI Video Helper',
             click: () => {
                 void showMainWindow();
             }
@@ -186,7 +186,7 @@ const ensureTray = () => {
     }
 
     tray = new Tray(createTrayIcon());
-    tray.setToolTip('Stones Video Helper');
+    tray.setToolTip('ZAGARAMI Video Helper');
     tray.on('click', () => {
         void showMainWindow();
     });
@@ -241,7 +241,7 @@ ipcMain.handle('helper:get-status', async () => {
     }
 
     if (!helperController) {
-        throw new Error('Helper ещё не запущен. Перезапустите Stones Video Helper.');
+        throw new Error('Helper ещё не запущен. Перезапустите ZAGARAMI Video Helper.');
     }
 
     return helperController.getHealthInfo();

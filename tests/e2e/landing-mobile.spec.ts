@@ -74,7 +74,7 @@ test.describe('Mobile landing page', () => {
         await expect(page.getByTestId('mobile-menu-sheet')).toBeHidden();
 
         await page.getByTestId('mobile-nav-products').click();
-        await expect(page.getByRole('heading', { name: 'ТОВАРЫ STONES' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'ТОВАРЫ ZAGARAMI' })).toBeVisible();
         await expect(page.getByTestId('mobile-filter-location')).toBeVisible();
         await expect(page.getByTestId('mobile-filter-level')).toBeVisible();
 

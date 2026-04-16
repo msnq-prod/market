@@ -534,16 +534,15 @@ export function VideoTool() {
     );
     const activeProductCount = Math.max(0, activeSegments.length - 1);
     const itemDelta = activeProductCount - expectedOutputCount;
-    const showHelperInstallPanel = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
     const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
     const exportBlockedReason = helperStatus === 'unavailable'
-        ? 'Нужен Stones Video Helper.'
+        ? 'Нужен ZAGARAMI Video Helper.'
         : helperStatus === 'version_mismatch'
-            ? 'Обновите Stones Video Helper.'
+            ? 'Обновите ZAGARAMI Video Helper.'
             : helperStatus !== 'ready'
-                ? 'Проверяем Stones Video Helper.'
+                ? 'Проверяем ZAGARAMI Video Helper.'
         : !sourceFile || !durationMs
-            ? 'Сначала загрузите исходное видео.'
+            ? 'Загрузите исходник.'
         : itemDelta < 0
                 ? `Не хватает ${Math.abs(itemDelta)} товарных фрагментов.`
                     : itemDelta > 0
@@ -802,10 +801,10 @@ export function VideoTool() {
     }, [batchId]);
 
     useEffect(() => {
-        if (showHelperInstallPanel) {
+        if (helperStatus === 'unavailable' || helperStatus === 'version_mismatch') {
             setLeftRailOpen(true);
         }
-    }, [showHelperInstallPanel]);
+    }, [helperStatus]);
 
     useEffect(() => {
         const previousBodyOverflow = document.body.style.overflow;
@@ -1529,20 +1528,14 @@ export function VideoTool() {
     const clipCounterText = `Товарных клипов: ${totalSegments} / ${expectedOutputCount}`;
     const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
     const hasExportError = Boolean(error || session?.error_message || exportPhase === 'error');
-    const helperStatusLabel = helperStatus === 'ready'
-        ? 'Готов'
-        : helperStatus === 'checking'
-            ? 'Проверка'
-            : helperStatus === 'version_mismatch'
-                ? 'Обновить'
-                : 'Не найден';
-    const helperStatusToneClass = helperStatus === 'ready'
-        ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100'
-        : helperStatus === 'checking'
-            ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
-            : helperStatus === 'version_mismatch'
-                ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
-                : 'border-red-400/20 bg-red-400/10 text-red-200';
+    const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
+    const helperSidebarStatus = helperStatus === 'checking'
+            ? 'Проверяем локальный helper.'
+        : helperStatus === 'version_mismatch'
+            ? 'Локальный helper устарел. Обновите приложение и перепроверьте статус.'
+            : helperStatus === 'unavailable'
+                ? 'Локальный helper не найден или не запущен.'
+                : 'Готово к нарезке и экспорту.';
     const blockingStatusLabel = hasExportError
         ? 'Ошибка экспорта'
         : exportPhase === 'completed'
@@ -1560,8 +1553,8 @@ export function VideoTool() {
                     ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
                     : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
     const helperInstallTitle = helperStatus === 'version_mismatch'
-        ? 'Обновите Stones Video Helper'
-        : 'Установите Stones Video Helper';
+        ? 'Обновите ZAGARAMI Video Helper'
+        : 'Установите ZAGARAMI Video Helper';
     const helperInstallDescription = helperStatus === 'version_mismatch'
         ? 'Локальный helper устарел. Скачайте актуальную версию, откройте приложение и перепроверьте статус.'
         : 'Монтаж и экспорт работают через локальный macOS helper. Скачайте его, один раз откройте приложение и вернитесь к монтажу.';
@@ -1569,13 +1562,7 @@ export function VideoTool() {
         || session?.error_message
         || exportMessage
         || notice?.message
-        || (helperStatus === 'ready'
-            ? 'Helper подключён. Можно продолжать нарезку и экспорт.'
-            : helperStatus === 'checking'
-                ? 'Проверяем Stones Video Helper.'
-                : helperStatus === 'version_mismatch'
-                    ? 'Установлена несовместимая версия Stones Video Helper.'
-                    : 'Stones Video Helper не найден или не запущен.');
+        || helperSidebarStatus;
     const normalizedStatusMessage = statusMessage === 'Load failed'
         ? 'Не удалось загрузить исходник.'
         : statusMessage;
@@ -1651,69 +1638,57 @@ export function VideoTool() {
                     style={{
                         gridTemplateColumns: leftRailOpen
                             ? 'minmax(196px,224px) minmax(0,3.4fr) minmax(300px,1.15fr)'
-                            : '68px minmax(0,3.8fr) minmax(280px,1fr)'
+                            : 'minmax(0,3.8fr) minmax(280px,1fr)'
                     }}
                 >
-                    <aside className="min-h-0 border-r border-zinc-800 bg-[#17181c] p-3">
-                        {leftRailOpen ? (
+                    {leftRailOpen && (
+                        <aside className="min-h-0 border-r border-zinc-800 bg-[#17181c] p-3">
                             <div className="flex h-full min-h-0 flex-col gap-3">
-                            <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
-                                <div className="flex items-start justify-between gap-3">
+                                <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
                                     <div className="min-w-0">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Исходник</p>
                                         <p className="mt-1 truncate text-sm font-medium text-zinc-200">
                                             {sourceFile?.name || draft?.sourceFingerprint.name || 'Видео не выбрано'}
                                         </p>
                                     </div>
-                                </div>
 
-                                <label className="mt-4 inline-flex cursor-pointer items-center rounded-xl border border-emerald-700/60 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/15">
-                                    <Upload size={14} />
-                                    <span className="ml-2">Открыть видео</span>
-                                    <input
-                                        data-testid="source-input"
-                                        aria-label="Исходное видео"
-                                        type="file"
-                                        accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
-                                        className="hidden"
-                                        onChange={(event) => {
-                                            handleSourcePicked(event.target.files?.[0] || null);
-                                            event.currentTarget.value = '';
-                                        }}
-                                    />
-                                </label>
+                                    <label className="mt-4 inline-flex cursor-pointer items-center rounded-xl border border-emerald-700/60 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/15">
+                                        <Upload size={14} />
+                                        <span className="ml-2">Открыть видео</span>
+                                        <input
+                                            data-testid="source-input"
+                                            aria-label="Исходное видео"
+                                            type="file"
+                                            accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
+                                            className="hidden"
+                                            onChange={(event) => {
+                                                handleSourcePicked(event.target.files?.[0] || null);
+                                                event.currentTarget.value = '';
+                                            }}
+                                        />
+                                    </label>
 
-                                <div className="mt-4 grid grid-cols-2 gap-2">
-                                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
-                                        <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Длительность</div>
-                                        <div className="mt-1 text-sm text-zinc-100">
-                                            {durationMs
-                                                ? formatDuration(durationMs)
-                                                : draft?.sourceFingerprint
-                                                    ? formatDuration(draft.sourceFingerprint.durationMs)
-                                                    : '—'}
+                                    <div className="mt-4 grid grid-cols-2 gap-2">
+                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Длительность</div>
+                                            <div className="mt-1 text-sm text-zinc-100">
+                                                {durationMs
+                                                    ? formatDuration(durationMs)
+                                                    : draft?.sourceFingerprint
+                                                        ? formatDuration(draft.sourceFingerprint.durationMs)
+                                                        : '—'}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Нарезка</div>
+                                            <div className="mt-1 text-sm text-zinc-100">{`${totalSegments}/${expectedOutputCount}`}</div>
                                         </div>
                                     </div>
-                                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
-                                        <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Нарезка</div>
-                                        <div className="mt-1 text-sm text-zinc-100">{`${totalSegments}/${expectedOutputCount}`}</div>
-                                    </div>
-                                </div>
-                            </section>
+                                </section>
 
-                            <section className="min-h-0 flex-1 rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
-                                <div className="flex items-center justify-between gap-3">
-                                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Статус</p>
-                                    <div className="flex flex-wrap items-center justify-end gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={openHelperDownload}
-                                            disabled={!helperDownloadConfigured}
-                                            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-200 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            <HardDriveDownload size={14} />
-                                            Скачать helper
-                                        </button>
+                                <section className="min-h-0 flex-1 rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Статус</p>
                                         <button
                                             type="button"
                                             onClick={() => void checkHelper()}
@@ -1723,127 +1698,114 @@ export function VideoTool() {
                                             Проверить
                                         </button>
                                     </div>
-                                </div>
 
-                                <div className="mt-4 flex flex-wrap gap-2">
-                                    <span className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${helperStatusToneClass}`}>
-                                        Helper: {helperStatusLabel}
-                                    </span>
-                                    <span className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${blockingStatusToneClass}`}>
-                                        {blockingStatusLabel}
-                                    </span>
-                                </div>
+                                    <p className={`mt-4 rounded-2xl border px-3 py-3 text-sm leading-6 ${statusMessageToneClass}`}>
+                                        {normalizedStatusMessage}
+                                    </p>
 
-                                <div className={`mt-4 rounded-2xl border px-3 py-3 text-sm leading-6 ${statusMessageToneClass}`}>
-                                    {normalizedStatusMessage}
-                                </div>
-
-                                {showHelperInstallPanel && (
-                                    <div
-                                        data-testid="helper-install-panel"
-                                        className="mt-4 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-3"
-                                    >
-                                        <p className="text-sm font-medium text-amber-50">{helperInstallTitle}</p>
-                                        <p className="mt-2 text-sm leading-6 text-amber-100/90">
-                                            {helperInstallDescription}
-                                        </p>
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                            <button
-                                                type="button"
-                                                data-testid="helper-download"
-                                                onClick={openHelperDownload}
-                                                disabled={!helperDownloadConfigured}
-                                                className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25 disabled:cursor-not-allowed disabled:opacity-40"
-                                            >
-                                                <HardDriveDownload size={14} />
-                                                Скачать Stones Video Helper
-                                            </button>
-                                            <button
-                                                type="button"
-                                                data-testid="helper-recheck"
-                                                onClick={() => void checkHelper()}
-                                                className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500 hover:text-white"
-                                            >
-                                                <RefreshCw size={14} />
-                                                Я установил, перепроверить
-                                            </button>
-                                        </div>
-                                        {!helperDownloadConfigured && (
-                                            <p className="mt-3 text-xs leading-5 text-amber-100/75">
-                                                Ссылка на production DMG ещё не настроена в `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
+                                    {helperNeedsAttention && (
+                                        <div
+                                            data-testid="helper-install-panel"
+                                            className="mt-4 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-3"
+                                        >
+                                            <p className="text-sm font-medium text-amber-50">{helperInstallTitle}</p>
+                                            <p className="mt-2 text-sm leading-6 text-amber-100/90">
+                                                {helperInstallDescription}
                                             </p>
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                {helperDownloadConfigured && (
+                                                    <button
+                                                        type="button"
+                                                        data-testid="helper-download"
+                                                        onClick={openHelperDownload}
+                                                        className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
+                                                    >
+                                                        <HardDriveDownload size={14} />
+                                                        Скачать ZAGARAMI Video Helper
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    data-testid="helper-recheck"
+                                                    onClick={() => void checkHelper()}
+                                                    className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500 hover:text-white"
+                                                >
+                                                    <RefreshCw size={14} />
+                                                    Я установил, перепроверить
+                                                </button>
+                                            </div>
+                                            {!helperDownloadConfigured && (
+                                                <p className="mt-3 text-xs leading-5 text-amber-100/75">
+                                                    Ссылка на production DMG ещё не настроена в `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {draft && (
+                                        <div
+                                            data-testid="draft-banner"
+                                            className="mt-4 rounded-2xl border border-sky-400/20 bg-sky-400/10 px-3 py-3 text-sm text-sky-100"
+                                        >
+                                            <p>Найден локальный draft: {draft.segments.length} фрагментов.</p>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={handleDiscardDraft}
+                                                className="mt-2 h-auto justify-start px-0 py-0 text-sky-100 hover:bg-transparent"
+                                            >
+                                                Сбросить черновик
+                                            </Button>
+                                        </div>
+                                    )}
+
+                                    <div className="mt-4 grid gap-2 text-xs text-zinc-300">
+                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                            Загружено: {session ? `${session.uploaded_count}/${session.expected_count}` : `0/${expectedOutputCount}`}
+                                        </div>
+                                        {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading') && (
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                                {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
+                                            </div>
+                                        )}
+                                        {session && (
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                                Сессия: {sessionStatusLabel[session.status] || session.status}
+                                            </div>
+                                        )}
+                                        {helperHealth?.helper_version && (
+                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                                Версия helper: {helperHealth.helper_version}
+                                            </div>
                                         )}
                                     </div>
-                                )}
+                                </section>
 
-                                {draft && (
-                                    <div
-                                        data-testid="draft-banner"
-                                        className="mt-4 rounded-2xl border border-sky-400/20 bg-sky-400/10 px-3 py-3 text-sm text-sky-100"
+                                <div className="mt-auto pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeftRailOpen(false)}
+                                        className="inline-flex h-10 w-full items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                                        aria-label="Свернуть левую панель"
                                     >
-                                        <p>Найден локальный draft: {draft.segments.length} фрагментов.</p>
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={handleDiscardDraft}
-                                            className="mt-2 h-auto justify-start px-0 py-0 text-sky-100 hover:bg-transparent"
-                                        >
-                                            Сбросить черновик
-                                        </Button>
-                                    </div>
-                                )}
-
-                                <div className="mt-4 grid gap-2">
-                                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-300">
-                                        Загружено: {session ? `${session.uploaded_count}/${session.expected_count}` : `0/${expectedOutputCount}`}
-                                    </div>
-                                    {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading') && (
-                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-300">
-                                            {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
-                                        </div>
-                                    )}
-                                    {session && (
-                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-300">
-                                            Сессия: {sessionStatusLabel[session.status] || session.status}
-                                        </div>
-                                    )}
-                                    {helperHealth?.helper_version && (
-                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-300">
-                                            Версия helper: {helperHealth.helper_version}
-                                        </div>
-                                    )}
+                                        <ChevronLeft size={16} />
+                                    </button>
                                 </div>
-                            </section>
-                        </div>
-                        ) : (
-                            <div className="flex h-full flex-col items-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setLeftRailOpen(true)}
-                                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                                    aria-label="Открыть левую панель"
-                                >
-                                    <ChevronRight size={16} />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setLeftRailOpen(true)}
-                                    className="flex h-28 w-full items-center justify-center rounded-2xl border border-zinc-800 bg-[#101115] px-2 text-center text-[11px] uppercase tracking-[0.16em] text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
-                                >
-                                    Исходник
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setLeftRailOpen(true)}
-                                    className="flex h-28 w-full items-center justify-center rounded-2xl border border-zinc-800 bg-[#101115] px-2 text-center text-[11px] uppercase tracking-[0.16em] text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
-                                >
-                                    Статус
-                                </button>
                             </div>
-                        )}
-                    </aside>
+                        </aside>
+                    )}
 
-                    <section className="min-h-0 bg-[#131418] p-3">
+                    <section className="relative min-h-0 bg-[#131418] p-3">
+                        {!leftRailOpen && (
+                            <button
+                                type="button"
+                                onClick={() => setLeftRailOpen(true)}
+                                className="absolute bottom-6 left-3 z-20 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                                aria-label="Открыть левую панель"
+                            >
+                                <ChevronRight size={16} />
+                            </button>
+                        )}
                         <div className="flex h-full min-h-0 flex-col gap-3">
                             <section className="min-h-0 flex-1 overflow-hidden rounded-[24px] border border-zinc-800 bg-[#17191e]">
                                 <div className="border-b border-zinc-800 px-4 py-3">

@@ -10,6 +10,12 @@ export function AdminLayout() {
     const isStaff = isHqStaff || isSalesManager;
     const isDev = import.meta.env.DEV;
     const hasAdminAccess = isStaff || isDev;
+    const salesRoutes = new Set([
+        '/admin/orders',
+        '/admin/clients',
+        '/admin/inventory',
+        '/admin/sales-history'
+    ]);
 
     if (!token) {
         return <Navigate to="/admin/login" replace state={{ from: location }} />;
@@ -22,11 +28,11 @@ export function AdminLayout() {
         return <Navigate to="/" replace />;
     }
 
-    if (isSalesManager && location.pathname !== '/admin/orders') {
+    if (isSalesManager && !salesRoutes.has(location.pathname)) {
         return <Navigate to="/admin/orders" replace />;
     }
 
-    if (role === 'MANAGER' && location.pathname === '/admin/orders') {
+    if (role === 'MANAGER' && salesRoutes.has(location.pathname)) {
         return <Navigate to="/admin" replace />;
     }
 

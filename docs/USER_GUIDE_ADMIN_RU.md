@@ -122,20 +122,29 @@
 
 - искать заказы;
 - открывать карточку заявки;
-- редактировать данные клиента у незакрытых заказов;
+- редактировать данные клиента до этапа отправки;
 - вести внутреннюю заметку;
+- вести трек-номер СДЭК;
+- синхронизировать доставку;
 - менять статус.
 
 Допустимые переходы:
 
 - `NEW -> IN_PROGRESS`
-- `NEW -> CANCELLED`
-- `IN_PROGRESS -> COMPLETED`
+- `IN_PROGRESS -> PACKED`
 - `IN_PROGRESS -> CANCELLED`
+- `PACKED -> SHIPPED`
+- `PACKED -> CANCELLED`
+- `SHIPPED -> RECEIVED`
+- `SHIPPED -> RETURN_REQUESTED`
+- `RETURN_REQUESTED -> RETURN_IN_TRANSIT`
+- `RETURN_IN_TRANSIT -> RETURNED`
 
 Важно:
 
 - `internal_note` не виден покупателю;
+- конкретные `Item` резервируются при переходе в `IN_PROGRESS`;
+- для `SHIPPED` нужен заполненный трек-номер;
 - закрытые заказы не позволяют менять клиентские поля.
 
 ## 4.4 Allocation

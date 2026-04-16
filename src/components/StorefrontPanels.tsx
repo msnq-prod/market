@@ -41,14 +41,24 @@ type CheckoutForm = {
 const orderStatusLabels: Record<string, string> = {
     NEW: 'НОВАЯ',
     IN_PROGRESS: 'В РАБОТЕ',
-    COMPLETED: 'ЗАКРЫТА',
-    CANCELLED: 'ОТМЕНЕНА'
+    PACKED: 'УПАКОВАН',
+    SHIPPED: 'ОТПРАВЛЕН',
+    RECEIVED: 'ПОЛУЧЕН',
+    RETURN_REQUESTED: 'ВОЗВРАТ ЗАПРОШЕН',
+    RETURN_IN_TRANSIT: 'ВОЗВРАТ В ПУТИ',
+    RETURNED: 'ВОЗВРАЩЁН',
+    CANCELLED: 'ОТМЕНЁН'
 };
 
 const orderStatusClasses: Record<string, string> = {
     NEW: 'bg-blue-500/15 text-blue-200 border border-blue-400/30',
     IN_PROGRESS: 'bg-amber-500/15 text-amber-200 border border-amber-400/30',
-    COMPLETED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/30',
+    PACKED: 'bg-violet-500/15 text-violet-200 border border-violet-400/30',
+    SHIPPED: 'bg-cyan-500/15 text-cyan-200 border border-cyan-400/30',
+    RECEIVED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/30',
+    RETURN_REQUESTED: 'bg-orange-500/15 text-orange-200 border border-orange-400/30',
+    RETURN_IN_TRANSIT: 'bg-rose-500/15 text-rose-200 border border-rose-400/30',
+    RETURNED: 'bg-fuchsia-500/15 text-fuchsia-200 border border-fuchsia-400/30',
     CANCELLED: 'bg-red-500/15 text-red-200 border border-red-400/30'
 };
 

@@ -1,41 +1,12 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { PencilLine, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
+import { PencilLine, RefreshCw, Save, Search, Trash2, Truck, X } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
+import type { OrderHistory, OrderStatus, ReturnReason } from '../../data/db';
 
-type OrderFilter = 'ACTIVE' | 'NEW' | 'IN_PROGRESS' | 'CLOSED';
-type OrderStatus = 'NEW' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+type OrderFilter = 'ACTIVE' | 'NEW' | 'IN_PROGRESS' | 'PACKED' | 'DELIVERY' | 'RETURNS' | 'CLOSED';
 
-type OrderItemRow = {
-    id: string;
-    product_id: string;
-    product_name: string;
-    product_image?: string;
-    quantity: number;
-    price: number;
-    subtotal: number;
-};
-
-type SalesOrder = {
-    id: string;
-    status: OrderStatus;
-    total: number;
-    delivery_address: string | null;
-    contact_phone: string | null;
-    contact_email: string | null;
-    comment: string | null;
-    internal_note: string | null;
-    created_at: string;
-    updated_at: string;
-    user: {
-        id: string;
-        name: string;
-        email: string | null;
-        username: string | null;
-        role: string;
-    } | null;
-    items: OrderItemRow[];
-};
+type SalesOrder = OrderHistory;
 
 type OrderEditForm = {
     delivery_address: string;
@@ -45,19 +16,27 @@ type OrderEditForm = {
     internal_note: string;
 };
 
-type EditableOrderPayload = Partial<Record<keyof OrderEditForm, string>>;
-
 const orderStatusLabels: Record<OrderStatus, string> = {
     NEW: 'НОВАЯ',
     IN_PROGRESS: 'В РАБОТЕ',
-    COMPLETED: 'ЗАКРЫТА',
-    CANCELLED: 'ОТМЕНЕНА'
+    PACKED: 'УПАКОВАН',
+    SHIPPED: 'ОТПРАВЛЕН',
+    RECEIVED: 'ПОЛУЧЕН',
+    RETURN_REQUESTED: 'ВОЗВРАТ ЗАПРОШЕН',
+    RETURN_IN_TRANSIT: 'ВОЗВРАТ В ПУТИ',
+    RETURNED: 'ВОЗВРАЩЁН',
+    CANCELLED: 'ОТМЕНЁН'
 };
 
 const orderStatusClasses: Record<OrderStatus, string> = {
     NEW: 'bg-blue-500/20 text-blue-200 border border-blue-500/40',
     IN_PROGRESS: 'bg-amber-500/20 text-amber-100 border border-amber-500/40',
-    COMPLETED: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40',
+    PACKED: 'bg-violet-500/20 text-violet-100 border border-violet-500/40',
+    SHIPPED: 'bg-cyan-500/20 text-cyan-100 border border-cyan-500/40',
+    RECEIVED: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40',
+    RETURN_REQUESTED: 'bg-orange-500/20 text-orange-100 border border-orange-500/40',
+    RETURN_IN_TRANSIT: 'bg-rose-500/20 text-rose-100 border border-rose-500/40',
+    RETURNED: 'bg-fuchsia-500/20 text-fuchsia-100 border border-fuchsia-500/40',
     CANCELLED: 'bg-red-500/20 text-red-200 border border-red-500/40'
 };
 
@@ -65,10 +44,16 @@ const filterLabels: Record<OrderFilter, string> = {
     ACTIVE: 'Активные',
     NEW: 'Новые',
     IN_PROGRESS: 'В работе',
+    PACKED: 'Упакованы',
+    DELIVERY: 'Доставка',
+    RETURNS: 'Возвраты',
     CLOSED: 'Закрытые'
 };
 
-const comparableValue = (value: string | null | undefined): string => value?.trim() || '';
+const returnReasonLabels: Record<ReturnReason, string> = {
+    REFUSED_BY_CUSTOMER: 'Отказ клиента',
+    NOT_PICKED_UP: 'Не забрал с ПВЗ'
+};
 
 const formatOrderDate = (value: string): string => {
     const date = new Date(value);
@@ -83,9 +68,11 @@ const formatOrderDate = (value: string): string => {
     }).format(date);
 };
 
-const isClosed = (status: OrderStatus): boolean => status === 'COMPLETED' || status === 'CANCELLED';
+const comparableValue = (value: string | null | undefined): string => value?.trim() || '';
+const isClosed = (status: OrderStatus): boolean => status === 'RECEIVED' || status === 'RETURNED' || status === 'CANCELLED';
+const isReturnFlow = (status: OrderStatus): boolean => status === 'RETURN_REQUESTED' || status === 'RETURN_IN_TRANSIT' || status === 'RETURNED';
 
-const shortAddress = (value: string | null): string => {
+const shortAddress = (value: string | null | undefined): string => {
     if (!value) return 'Адрес не указан';
     if (value.length <= 56) return value;
     return `${value.slice(0, 56)}...`;
@@ -104,28 +91,9 @@ const createEditForm = (order: SalesOrder | null): OrderEditForm => ({
     internal_note: order?.internal_note || ''
 });
 
-const matchesSearch = (order: SalesOrder, query: string): boolean => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return true;
-
-    const haystack = [
-        order.id,
-        order.user?.name,
-        order.user?.username,
-        order.contact_phone,
-        order.contact_email,
-        order.delivery_address
-    ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
-    return haystack.includes(normalized);
-};
-
-const buildOrderPatchPayload = (order: SalesOrder, form: OrderEditForm): EditableOrderPayload => {
-    const payload: EditableOrderPayload = {};
-    const allowCustomerEdits = !isClosed(order.status);
+const buildOrderPatchPayload = (order: SalesOrder, form: OrderEditForm) => {
+    const payload: Partial<OrderEditForm> = {};
+    const allowCustomerEdits = order.status === 'NEW' || order.status === 'IN_PROGRESS' || order.status === 'PACKED';
 
     if (allowCustomerEdits && comparableValue(order.delivery_address) !== comparableValue(form.delivery_address)) {
         payload.delivery_address = form.delivery_address;
@@ -146,6 +114,26 @@ const buildOrderPatchPayload = (order: SalesOrder, form: OrderEditForm): Editabl
     return payload;
 };
 
+const matchesSearch = (order: SalesOrder, query: string): boolean => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return true;
+
+    const haystack = [
+        order.id,
+        order.user?.name,
+        order.user?.username,
+        order.contact_phone,
+        order.contact_email,
+        order.delivery_address,
+        order.shipment?.tracking_number
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    return haystack.includes(normalized);
+};
+
 export function Orders() {
     const [orders, setOrders] = useState<SalesOrder[]>([]);
     const [loading, setLoading] = useState(true);
@@ -156,7 +144,11 @@ export function Orders() {
     const [selectedOrderId, setSelectedOrderId] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [form, setForm] = useState<OrderEditForm>(createEditForm(null));
+    const [trackingNumber, setTrackingNumber] = useState('');
+    const [returnReason, setReturnReason] = useState<ReturnReason>('REFUSED_BY_CUSTOMER');
     const [saving, setSaving] = useState(false);
+    const [savingShipment, setSavingShipment] = useState(false);
+    const [syncingShipment, setSyncingShipment] = useState(false);
     const [updatingStatus, setUpdatingStatus] = useState('');
     const [deletingOrderId, setDeletingOrderId] = useState('');
     const requestIdRef = useRef(0);
@@ -178,7 +170,7 @@ export function Orders() {
                     params.set('q', searchValue);
                 }
 
-                const response = await authFetch(`/api/orders${params.toString() ? `?${params.toString()}` : ''}`, {
+                const response = await authFetch(`/api/sales/orders${params.toString() ? `?${params.toString()}` : ''}`, {
                     signal: controller.signal
                 });
 
@@ -187,23 +179,19 @@ export function Orders() {
                 }
 
                 if (!response.ok) {
-                    const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить заявки.' }));
-                    setError(payload.error || 'Не удалось загрузить заявки.');
+                    const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить заказы.' }));
+                    setError(payload.error || 'Не удалось загрузить заказы.');
                     return;
                 }
 
                 const data = await response.json() as SalesOrder[];
                 setOrders(data);
-            } catch (loadError) {
-                if (controller.signal.aborted) {
+            } catch (_error) {
+                if (controller.signal.aborted || requestId !== requestIdRef.current) {
                     return;
                 }
 
-                if (requestId !== requestIdRef.current) {
-                    return;
-                }
-
-                setError(loadError instanceof Error ? 'Сетевая ошибка при загрузке заявок.' : 'Не удалось загрузить заявки.');
+                setError('Сетевая ошибка при загрузке заказов.');
             } finally {
                 if (requestId === requestIdRef.current) {
                     setLoading(false);
@@ -216,26 +204,28 @@ export function Orders() {
         return () => controller.abort();
     }, [deferredQuery, reloadToken]);
 
-    const searchedOrders = useMemo(() => {
-        return orders.filter((order) => matchesSearch(order, query));
-    }, [orders, query]);
+    const searchedOrders = useMemo(() => orders.filter((order) => matchesSearch(order, query)), [orders, query]);
 
     const filteredOrders = useMemo(() => {
         if (filter === 'NEW') return searchedOrders.filter((order) => order.status === 'NEW');
         if (filter === 'IN_PROGRESS') return searchedOrders.filter((order) => order.status === 'IN_PROGRESS');
+        if (filter === 'PACKED') return searchedOrders.filter((order) => order.status === 'PACKED');
+        if (filter === 'DELIVERY') return searchedOrders.filter((order) => order.status === 'SHIPPED');
+        if (filter === 'RETURNS') return searchedOrders.filter((order) => isReturnFlow(order.status));
         if (filter === 'CLOSED') return searchedOrders.filter((order) => isClosed(order.status));
         return searchedOrders.filter((order) => !isClosed(order.status));
     }, [filter, searchedOrders]);
 
-    const selectedOrder = useMemo(() => {
-        return filteredOrders.find((order) => order.id === selectedOrderId) || filteredOrders[0] || null;
-    }, [filteredOrders, selectedOrderId]);
+    const selectedOrder = useMemo(() => (
+        filteredOrders.find((order) => order.id === selectedOrderId) || filteredOrders[0] || null
+    ), [filteredOrders, selectedOrderId]);
 
     useEffect(() => {
         if (filteredOrders.length === 0) {
             setSelectedOrderId('');
             setIsEditing(false);
             setForm(createEditForm(null));
+            setTrackingNumber('');
             return;
         }
 
@@ -244,6 +234,8 @@ export function Orders() {
             setSelectedOrderId(nextOrder.id);
             setIsEditing(false);
             setForm(createEditForm(nextOrder));
+            setTrackingNumber(nextOrder.shipment?.tracking_number || '');
+            setReturnReason(nextOrder.return_reason || 'REFUSED_BY_CUSTOMER');
         }
     }, [filteredOrders, selectedOrderId]);
 
@@ -253,28 +245,37 @@ export function Orders() {
         }
 
         setForm(createEditForm(selectedOrder));
+        setTrackingNumber(selectedOrder.shipment?.tracking_number || '');
+        setReturnReason(selectedOrder.return_reason || 'REFUSED_BY_CUSTOMER');
     }, [isEditing, selectedOrder]);
 
     const summary = useMemo(() => ({
         active: searchedOrders.filter((order) => !isClosed(order.status)).length,
         fresh: searchedOrders.filter((order) => order.status === 'NEW').length,
         inWork: searchedOrders.filter((order) => order.status === 'IN_PROGRESS').length,
+        delivery: searchedOrders.filter((order) => order.status === 'PACKED' || order.status === 'SHIPPED').length,
+        returns: searchedOrders.filter((order) => isReturnFlow(order.status)).length,
         closed: searchedOrders.filter((order) => isClosed(order.status)).length
     }), [searchedOrders]);
 
     const hasFormChanges = selectedOrder ? Object.keys(buildOrderPatchPayload(selectedOrder, form)).length > 0 : false;
-    const customerFieldsLocked = selectedOrder ? isClosed(selectedOrder.status) : false;
+    const shipmentChanged = comparableValue(selectedOrder?.shipment?.tracking_number) !== comparableValue(trackingNumber);
+    const customerFieldsLocked = selectedOrder ? !(selectedOrder.status === 'NEW' || selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'PACKED') : false;
 
     const replaceOrder = (updated: SalesOrder) => {
         setOrders((prev) => prev.map((order) => order.id === updated.id ? updated : order));
         setSelectedOrderId(updated.id);
         setForm(createEditForm(updated));
+        setTrackingNumber(updated.shipment?.tracking_number || '');
+        setReturnReason(updated.return_reason || 'REFUSED_BY_CUSTOMER');
     };
 
     const handleSelectOrder = (order: SalesOrder) => {
         setSelectedOrderId(order.id);
         setIsEditing(false);
         setForm(createEditForm(order));
+        setTrackingNumber(order.shipment?.tracking_number || '');
+        setReturnReason(order.return_reason || 'REFUSED_BY_CUSTOMER');
         setError('');
     };
 
@@ -285,12 +286,15 @@ export function Orders() {
         setError('');
 
         try {
-            const response = await authFetch(`/api/orders/${selectedOrder.id}`, {
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/status`, {
                 method: 'PATCH',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ status })
+                body: JSON.stringify({
+                    status,
+                    return_reason: status === 'RETURN_REQUESTED' ? returnReason : undefined
+                })
             });
 
             const payload = await response.json().catch(() => ({ error: 'Не удалось обновить статус заказа.' }));
@@ -322,7 +326,7 @@ export function Orders() {
         setError('');
 
         try {
-            const response = await authFetch(`/api/orders/${selectedOrder.id}`, {
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}`, {
                 method: 'PATCH',
                 headers: {
                     'Content-Type': 'application/json'
@@ -345,6 +349,62 @@ export function Orders() {
         }
     };
 
+    const handleSaveShipment = async () => {
+        if (!selectedOrder) return;
+
+        setSavingShipment(true);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/shipment`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    tracking_number: trackingNumber
+                })
+            });
+
+            const result = await response.json().catch(() => ({ error: 'Не удалось сохранить доставку.' }));
+            if (!response.ok) {
+                setError(result.error || 'Не удалось сохранить доставку.');
+                return;
+            }
+
+            replaceOrder(result as SalesOrder);
+        } catch (_error) {
+            setError('Сетевая ошибка при сохранении доставки.');
+        } finally {
+            setSavingShipment(false);
+        }
+    };
+
+    const handleSyncShipment = async () => {
+        if (!selectedOrder) return;
+
+        setSyncingShipment(true);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/shipment/sync`, {
+                method: 'POST'
+            });
+
+            const result = await response.json().catch(() => ({ error: 'Не удалось синхронизировать доставку.' }));
+            if (!response.ok) {
+                setError(result.error || 'Не удалось синхронизировать доставку.');
+                return;
+            }
+
+            replaceOrder(result as SalesOrder);
+        } catch (_error) {
+            setError('Сетевая ошибка при синхронизации доставки.');
+        } finally {
+            setSyncingShipment(false);
+        }
+    };
+
     const handleDelete = async () => {
         if (!selectedOrder) return;
         if (!window.confirm(`Скрыть заказ #${selectedOrder.id.slice(0, 8)} из интерфейса? Восстановление возможно только напрямую из БД.`)) {
@@ -355,7 +415,7 @@ export function Orders() {
         setError('');
 
         try {
-            const response = await authFetch(`/api/orders/${selectedOrder.id}`, {
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}`, {
                 method: 'DELETE'
             });
 
@@ -369,6 +429,7 @@ export function Orders() {
             setSelectedOrderId('');
             setIsEditing(false);
             setForm(createEditForm(null));
+            setTrackingNumber('');
         } catch (_error) {
             setError('Сетевая ошибка при удалении заказа.');
         } finally {
@@ -382,7 +443,7 @@ export function Orders() {
                 <div>
                     <h1 className="text-2xl font-bold text-white">Заказы с сайта</h1>
                     <p className="mt-1 max-w-3xl text-gray-500">
-                        Рабочая очередь продаж: ищите заявки по логину, контактам и адресу, редактируйте клиентские данные и ведите внутренние заметки.
+                        Рабочий pipeline продажника: принятие, упаковка, отправка, получение и возвраты по СДЭК.
                     </p>
                 </div>
 
@@ -402,10 +463,12 @@ export function Orders() {
                 </div>
             )}
 
-            <section className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+            <section className="grid grid-cols-2 gap-4 xl:grid-cols-6">
                 <SummaryCard title="Активные" value={summary.active} />
                 <SummaryCard title="Новые" value={summary.fresh} />
                 <SummaryCard title="В работе" value={summary.inWork} />
+                <SummaryCard title="Логистика" value={summary.delivery} />
+                <SummaryCard title="Возвраты" value={summary.returns} />
                 <SummaryCard title="Закрытые" value={summary.closed} />
             </section>
 
@@ -413,21 +476,21 @@ export function Orders() {
                 <aside className="rounded-2xl border border-gray-800 bg-gray-900 p-4 space-y-4">
                     <div className="space-y-3">
                         <label className="block space-y-2">
-                            <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по заявкам</span>
+                            <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по заказам</span>
                             <div className="flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-3 py-2">
                                 <Search size={16} className="text-gray-500" />
                                 <input
                                     value={query}
                                     onChange={(event) => setQuery(event.target.value)}
-                                    placeholder="ID, логин, телефон, email, адрес"
+                                    placeholder="ID, логин, контакты, трек"
                                     className="w-full bg-transparent text-sm text-white placeholder:text-gray-600 focus:outline-none"
-                                    aria-label="Поиск по заявкам"
+                                    aria-label="Поиск по заказам"
                                 />
                             </div>
                         </label>
 
                         <div className="flex flex-wrap gap-2">
-                            {(['ACTIVE', 'NEW', 'IN_PROGRESS', 'CLOSED'] as OrderFilter[]).map((value) => (
+                            {(['ACTIVE', 'NEW', 'IN_PROGRESS', 'PACKED', 'DELIVERY', 'RETURNS', 'CLOSED'] as OrderFilter[]).map((value) => (
                                 <FilterButton
                                     key={value}
                                     label={filterLabels[value]}
@@ -474,8 +537,11 @@ export function Orders() {
                                     </div>
 
                                     <div className="mt-3 text-sm text-gray-200">{orderBuyerLabel(order)}</div>
-                                    <div className="mt-1 text-sm text-gray-400">{order.contact_phone || 'Телефон не указан'}</div>
+                                    <div className="mt-1 text-sm text-gray-400">{order.contact_phone || order.contact_email || 'Контакты не указаны'}</div>
                                     <div className="mt-2 text-xs text-gray-500">{shortAddress(order.delivery_address)}</div>
+                                    {order.shipment?.tracking_number && (
+                                        <div className="mt-2 text-xs font-mono text-cyan-300">{order.shipment.tracking_number}</div>
+                                    )}
                                     <div className="mt-3 font-mono text-sm text-blue-300">{formatRub(order.total)}</div>
                                 </button>
                             ))}
@@ -503,6 +569,9 @@ export function Orders() {
                                         <div>{orderBuyerLabel(selectedOrder)}</div>
                                         <div className="text-gray-500">
                                             Создан: {formatOrderDate(selectedOrder.created_at)} • Обновлён: {formatOrderDate(selectedOrder.updated_at)}
+                                        </div>
+                                        <div className="text-gray-500">
+                                            Ответственный: {selectedOrder.assigned_sales_manager?.name || 'Не назначен'}
                                         </div>
                                     </div>
                                 </div>
@@ -564,17 +633,55 @@ export function Orders() {
                                             <ActionButton
                                                 disabled={Boolean(updatingStatus) || saving}
                                                 onClick={() => void handleStatusUpdate('IN_PROGRESS')}
-                                                label="Взять в работу"
+                                                label="Принять"
                                             />
                                         )}
                                         {selectedOrder.status === 'IN_PROGRESS' && (
                                             <ActionButton
                                                 disabled={Boolean(updatingStatus) || saving}
-                                                onClick={() => void handleStatusUpdate('COMPLETED')}
-                                                label="Закрыть"
+                                                onClick={() => void handleStatusUpdate('PACKED')}
+                                                label="Упакован"
                                             />
                                         )}
-                                        {(selectedOrder.status === 'NEW' || selectedOrder.status === 'IN_PROGRESS') && (
+                                        {selectedOrder.status === 'PACKED' && (
+                                            <ActionButton
+                                                disabled={Boolean(updatingStatus) || saving || !trackingNumber.trim()}
+                                                onClick={() => void handleStatusUpdate('SHIPPED')}
+                                                label="Отправлен"
+                                            />
+                                        )}
+                                        {selectedOrder.status === 'SHIPPED' && (
+                                            <>
+                                                <ActionButton
+                                                    disabled={Boolean(updatingStatus) || saving}
+                                                    onClick={() => void handleStatusUpdate('RECEIVED')}
+                                                    label="Получен"
+                                                />
+                                                <ActionButton
+                                                    disabled={Boolean(updatingStatus) || saving}
+                                                    onClick={() => void handleStatusUpdate('RETURN_REQUESTED')}
+                                                    label="Возврат"
+                                                    variant="danger"
+                                                />
+                                            </>
+                                        )}
+                                        {selectedOrder.status === 'RETURN_REQUESTED' && (
+                                            <ActionButton
+                                                disabled={Boolean(updatingStatus) || saving}
+                                                onClick={() => void handleStatusUpdate('RETURN_IN_TRANSIT')}
+                                                label="Возврат в пути"
+                                                variant="danger"
+                                            />
+                                        )}
+                                        {selectedOrder.status === 'RETURN_IN_TRANSIT' && (
+                                            <ActionButton
+                                                disabled={Boolean(updatingStatus) || saving}
+                                                onClick={() => void handleStatusUpdate('RETURNED')}
+                                                label="Возвращён"
+                                                variant="danger"
+                                            />
+                                        )}
+                                        {(selectedOrder.status === 'NEW' || selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'PACKED') && (
                                             <ActionButton
                                                 disabled={Boolean(updatingStatus) || saving}
                                                 onClick={() => void handleStatusUpdate('CANCELLED')}
@@ -588,7 +695,7 @@ export function Orders() {
 
                             {customerFieldsLocked && (
                                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-                                    Данные клиента закрытого заказа доступны только для чтения. В режиме редактирования можно менять только внутреннюю заметку.
+                                    Данные клиента на текущем этапе доступны только для чтения. В режиме редактирования можно менять внутреннюю заметку.
                                 </div>
                             )}
 
@@ -617,12 +724,6 @@ export function Orders() {
                                         placeholder="Адрес не указан"
                                         multiline
                                     />
-
-                                    <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
-                                        <div className="text-xs uppercase tracking-wider text-gray-500">Аккаунт покупателя</div>
-                                        <div className="mt-2 text-sm text-gray-200">{orderBuyerLabel(selectedOrder)}</div>
-                                        <div className="mt-1 text-sm text-gray-500">{selectedOrder.user?.email || 'Email аккаунта не указан'}</div>
-                                    </div>
                                 </section>
 
                                 <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-4">
@@ -643,36 +744,132 @@ export function Orders() {
                                         placeholder="Заметка для менеджера не заполнена"
                                         multiline
                                     />
+
+                                    {(selectedOrder.status === 'SHIPPED' || isReturnFlow(selectedOrder.status)) && (
+                                        <label className="block rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-2">
+                                            <span className="text-xs uppercase tracking-wider text-gray-500">Причина возврата</span>
+                                            <select
+                                                value={returnReason}
+                                                onChange={(event) => setReturnReason(event.target.value as ReturnReason)}
+                                                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                                            >
+                                                <option value="REFUSED_BY_CUSTOMER">{returnReasonLabels.REFUSED_BY_CUSTOMER}</option>
+                                                <option value="NOT_PICKED_UP">{returnReasonLabels.NOT_PICKED_UP}</option>
+                                            </select>
+                                        </label>
+                                    )}
                                 </section>
                             </div>
 
+                            <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-4">
+                                <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-gray-500">
+                                    <Truck size={14} />
+                                    Доставка СДЭК
+                                </div>
+
+                                <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+                                    <label className="block rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-2">
+                                        <span className="text-xs uppercase tracking-wider text-gray-500">Трек-номер</span>
+                                        <input
+                                            value={trackingNumber}
+                                            onChange={(event) => setTrackingNumber(event.target.value)}
+                                            className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
+                                            placeholder="Например, 1234567890"
+                                        />
+                                    </label>
+
+                                    <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
+                                        <div className="text-xs uppercase tracking-wider text-gray-500">Статус трекинга</div>
+                                        <div className="mt-2 text-sm text-gray-200">{selectedOrder.shipment?.tracking_status_label || 'Пока нет синхронизации'}</div>
+                                        <div className="mt-1 text-xs text-gray-500">
+                                            {selectedOrder.shipment?.last_synced_at ? `Синхронизирован: ${formatOrderDate(selectedOrder.shipment.last_synced_at)}` : 'Синхронизации ещё не было'}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleSaveShipment()}
+                                        disabled={savingShipment || !trackingNumber.trim() || !shipmentChanged}
+                                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/10 disabled:opacity-50"
+                                    >
+                                        <Save size={15} />
+                                        {savingShipment ? 'Сохраняем...' : 'Сохранить трек'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleSyncShipment()}
+                                        disabled={syncingShipment || !selectedOrder.shipment?.tracking_number}
+                                        className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+                                    >
+                                        <RefreshCw size={15} className={syncingShipment ? 'animate-spin' : ''} />
+                                        {syncingShipment ? 'Синхронизируем...' : 'Синхронизировать'}
+                                    </button>
+                                </div>
+                            </section>
+
                             <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-3">
                                 <div className="flex items-center justify-between">
-                                    <div className="text-xs uppercase tracking-wider text-gray-500">Состав заказа</div>
+                                    <div className="text-xs uppercase tracking-wider text-gray-500">Состав заказа и резерв</div>
                                     <div className="text-sm text-gray-500">{selectedOrder.items.length} позиций</div>
                                 </div>
 
                                 <div className="space-y-3">
                                     {selectedOrder.items.map((item) => (
-                                        <div key={item.id} className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                            <div className="flex items-center gap-3">
-                                                {item.product_image && (
-                                                    <img
-                                                        src={item.product_image}
-                                                        alt={item.product_name}
-                                                        className="h-12 w-12 rounded-lg border border-gray-800 object-cover"
-                                                    />
-                                                )}
-                                                <div>
-                                                    <div className="text-sm text-white">{item.product_name}</div>
-                                                    <div className="text-xs text-gray-500">
-                                                        Количество: {item.quantity} • {formatRub(item.price)} / шт.
+                                        <div key={item.id} className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-3">
+                                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                                <div className="flex items-center gap-3">
+                                                    {item.product_image && (
+                                                        <img
+                                                            src={item.product_image}
+                                                            alt={item.product_name}
+                                                            className="h-12 w-12 rounded-lg border border-gray-800 object-cover"
+                                                        />
+                                                    )}
+                                                    <div>
+                                                        <div className="text-sm text-white">{item.product_name}</div>
+                                                        <div className="text-xs text-gray-500">
+                                                            Количество: {item.quantity} • {formatRub(item.price)} / шт.
+                                                        </div>
                                                     </div>
                                                 </div>
+                                                <div className="font-mono text-sm text-gray-200">{formatRub(item.subtotal)}</div>
                                             </div>
-                                            <div className="font-mono text-sm text-gray-200">{formatRub(item.subtotal)}</div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                                {item.assigned_items && item.assigned_items.length > 0 ? item.assigned_items.map((assignedItem) => (
+                                                    <span key={assignedItem.id} className="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-xs text-gray-300">
+                                                        {assignedItem.serial_number || assignedItem.temp_id}
+                                                    </span>
+                                                )) : (
+                                                    <span className="text-xs text-gray-500">Конкретные Item будут показаны после резервирования.</span>
+                                                )}
+                                            </div>
                                         </div>
                                     ))}
+                                </div>
+                            </section>
+
+                            <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-3">
+                                <div className="text-xs uppercase tracking-wider text-gray-500">Таймлайн заказа</div>
+                                <div className="space-y-3">
+                                    {selectedOrder.status_events?.map((event) => (
+                                        <div key={event.id} className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                                <div className="text-sm text-white">{orderStatusLabels[event.to_status]}</div>
+                                                <div className="text-xs text-gray-500">{formatOrderDate(event.created_at)}</div>
+                                            </div>
+                                            <div className="mt-2 text-xs text-gray-500">
+                                                {event.actor_user?.name || (event.meta?.source === 'CDEK' ? 'Система / СДЭК' : 'Система')}
+                                            </div>
+                                            {typeof event.meta?.cdek_status_label === 'string' && (
+                                                <div className="mt-1 text-xs text-cyan-300">{event.meta.cdek_status_label}</div>
+                                            )}
+                                        </div>
+                                    )) || (
+                                        <div className="text-sm text-gray-500">История переходов пока пуста.</div>
+                                    )}
                                 </div>
                             </section>
                         </div>

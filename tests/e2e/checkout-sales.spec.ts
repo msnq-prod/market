@@ -3,6 +3,8 @@ import { createProductFixture, disconnectTestDb } from './support/db-fixtures';
 
 const SALES_EMAIL = 'sales@stones.com';
 const SALES_PASSWORD = 'partner123';
+const MANAGER_EMAIL = 'manager@stones.com';
+const MANAGER_PASSWORD = 'partner123';
 
 type AuthPayload = {
     accessToken: string;
@@ -56,6 +58,15 @@ async function loginViaApi(request: APIRequestContext, login: string, password: 
     return response.json() as Promise<AuthPayload>;
 }
 
+async function registerBuyer(request: APIRequestContext, username: string, password: string): Promise<AuthPayload> {
+    const response = await request.post('/auth/register', {
+        data: { username, password }
+    });
+
+    expect(response.ok()).toBeTruthy();
+    return response.json() as Promise<AuthPayload>;
+}
+
 test('Sales manager can search, edit and process checkout заявки without leaking internal notes to buyer history', async ({ page, request }) => {
     const key = randomKey();
     const username = `buyer-${key}`;
@@ -95,7 +106,15 @@ test('Sales manager can search, edit and process checkout заявки without l
     await expect(page).toHaveURL(/\/admin\/orders$/);
     await expect(page.getByRole('heading', { name: 'Заказы с сайта' })).toBeVisible();
 
-    await page.getByLabel('Поиск по заявкам').fill(username);
+    await page.goto('/admin/clients');
+    await expect(page.getByRole('heading', { name: 'Клиенты' })).toBeVisible();
+    await page.goto('/admin/inventory');
+    await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
+    await page.goto('/admin/sales-history');
+    await expect(page.getByRole('heading', { name: 'История продаж' })).toBeVisible();
+    await page.goto('/admin/orders');
+
+    await page.getByLabel('Поиск по заказам').fill(username);
 
     const orderRow = page.locator('aside button').filter({ hasText: username }).first();
     await expect(orderRow).toBeVisible();
@@ -123,20 +142,32 @@ test('Sales manager can search, edit and process checkout заявки without l
     await expect(page.locator('aside button').filter({ hasText: updatedPhone }).first()).toBeVisible();
     await expect(page.locator('aside button').filter({ hasText: updatedAddress }).first()).toBeVisible();
 
-    await detailPane.getByRole('button', { name: 'Взять в работу' }).click();
+    await detailPane.getByRole('button', { name: 'Принять' }).click();
     await expect(detailPane.getByText('В РАБОТЕ')).toBeVisible();
 
-    await detailPane.getByRole('button', { name: 'Закрыть' }).click();
+    await detailPane.getByRole('button', { name: 'Упакован' }).click();
+    await expect(detailPane.getByText('УПАКОВАН')).toBeVisible();
+
+    await detailPane.getByLabel('Трек-номер').fill('MOCK-DELIVERED');
+    await detailPane.getByRole('button', { name: 'Сохранить трек' }).click();
+    await expect(detailPane.getByText('MOCK-DELIVERED')).toBeVisible();
+
+    await detailPane.getByRole('button', { name: 'Отправлен' }).click();
+    await expect(detailPane.getByText('ОТПРАВЛЕН')).toBeVisible();
+
+    await detailPane.getByRole('button', { name: 'Синхронизировать' }).click();
+    await expect(detailPane.getByText('ПОЛУЧЕН')).toBeVisible();
+
     await page.getByRole('button', { name: 'Закрытые' }).click();
     await expect(page.locator('aside button').filter({ hasText: username }).first()).toBeVisible();
-    await expect(detailPane.getByText('ЗАКРЫТА')).toBeVisible();
+    await expect(detailPane.getByText('ПОЛУЧЕН')).toBeVisible();
 
     const salesAuth = await loginViaApi(request, SALES_EMAIL, SALES_PASSWORD);
     const salesQuery = new URLSearchParams({
         q: username,
-        status: 'COMPLETED'
+        status: 'RECEIVED'
     });
-    const salesOrdersResponse = await request.get(`/api/orders?${salesQuery.toString()}`, {
+    const salesOrdersResponse = await request.get(`/api/sales/orders?${salesQuery.toString()}`, {
         headers: {
             Authorization: `Bearer ${salesAuth.accessToken}`
         }
@@ -159,9 +190,9 @@ test('Sales manager can search, edit and process checkout заявки without l
     expect(salesOrders[0].delivery_address).toBe(updatedAddress);
     expect(salesOrders[0].comment).toBe(updatedComment);
     expect(salesOrders[0].internal_note).toBe(internalNote);
-    expect(salesOrders[0].status).toBe('COMPLETED');
+    expect(salesOrders[0].status).toBe('RECEIVED');
 
-    const invalidTransitionResponse = await request.patch(`/api/orders/${salesOrders[0].id}`, {
+    const invalidTransitionResponse = await request.patch(`/api/sales/orders/${salesOrders[0].id}/status`, {
         headers: {
             Authorization: `Bearer ${salesAuth.accessToken}`
         },
@@ -197,6 +228,168 @@ test('Sales manager can search, edit and process checkout заявки without l
     expect(buyerOrder?.delivery_address).toBe(updatedAddress);
     expect(buyerOrder?.comment).toBe(updatedComment);
     expect(buyerOrder?.internal_note).toBeUndefined();
+});
+
+test('Sales cabinet ACL: sales manager sees all 4 sales screens, manager is redirected away', async ({ page }) => {
+    await page.goto('/admin/login');
+    await page.locator('input[type="email"]').fill(SALES_EMAIL);
+    await page.locator('input[type="password"]').fill(SALES_PASSWORD);
+    await page.getByRole('button', { name: 'Войти' }).click();
+
+    await page.goto('/admin/orders');
+    await expect(page.getByRole('heading', { name: 'Заказы с сайта' })).toBeVisible();
+    await page.goto('/admin/clients');
+    await expect(page.getByRole('heading', { name: 'Клиенты' })).toBeVisible();
+    await page.goto('/admin/inventory');
+    await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
+    await page.goto('/admin/sales-history');
+    await expect(page.getByRole('heading', { name: 'История продаж' })).toBeVisible();
+
+    await page.goto('/admin/login');
+    await page.locator('input[type="email"]').fill(MANAGER_EMAIL);
+    await page.locator('input[type="password"]').fill(MANAGER_PASSWORD);
+    await page.getByRole('button', { name: 'Войти' }).click();
+
+    await page.goto('/admin/clients');
+    await page.waitForURL(/\/admin$/);
+    await page.goto('/admin/inventory');
+    await page.waitForURL(/\/admin$/);
+    await page.goto('/admin/sales-history');
+    await page.waitForURL(/\/admin$/);
+});
+
+test('Reservation blocks taking the second order into work when free stock is exhausted', async ({ request }) => {
+    const { productId } = await createProductFixture({ isPublished: true, stockOnlineCount: 1 });
+    const buyerOne = `buyer-a-${randomKey()}`;
+    const buyerTwo = `buyer-b-${randomKey()}`;
+    const password = 'buyer123';
+
+    const buyerOneAuth = await registerBuyer(request, buyerOne, password);
+    const buyerTwoAuth = await registerBuyer(request, buyerTwo, password);
+
+    const orderPayload = {
+        items: [{ product_id: productId, quantity: 1 }],
+        delivery_address: 'Владивосток, тестовый адрес 1',
+        contact_phone: '+79991112233',
+        contact_email: `${buyerOne}@example.test`,
+        comment: 'Первый заказ'
+    };
+
+    const firstOrderResponse = await request.post('/api/orders', {
+        headers: {
+            Authorization: `Bearer ${buyerOneAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: orderPayload
+    });
+    expect(firstOrderResponse.ok()).toBeTruthy();
+    const firstOrder = await firstOrderResponse.json() as { id: string };
+
+    const secondOrderResponse = await request.post('/api/orders', {
+        headers: {
+            Authorization: `Bearer ${buyerTwoAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: {
+            ...orderPayload,
+            contact_email: `${buyerTwo}@example.test`,
+            comment: 'Второй заказ'
+        }
+    });
+    expect(secondOrderResponse.ok()).toBeTruthy();
+    const secondOrder = await secondOrderResponse.json() as { id: string };
+
+    const salesAuth = await loginViaApi(request, SALES_EMAIL, SALES_PASSWORD);
+
+    const takeFirstOrderResponse = await request.patch(`/api/sales/orders/${firstOrder.id}/status`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: { status: 'IN_PROGRESS' }
+    });
+    expect(takeFirstOrderResponse.ok()).toBeTruthy();
+
+    const takeSecondOrderResponse = await request.patch(`/api/sales/orders/${secondOrder.id}/status`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: { status: 'IN_PROGRESS' }
+    });
+    expect(takeSecondOrderResponse.status()).toBe(400);
+    const takeSecondOrderPayload = await takeSecondOrderResponse.json() as { error?: string };
+    expect(takeSecondOrderPayload.error || '').toContain('Недостаточно свободных');
+});
+
+test('Return sync puts order into returned state and releases stock back to inventory', async ({ request }) => {
+    const { productId } = await createProductFixture({ isPublished: true, stockOnlineCount: 1, name: `Return stock ${randomKey()}` });
+    const username = `buyer-return-${randomKey()}`;
+    const password = 'buyer123';
+    const buyerAuth = await registerBuyer(request, username, password);
+    const salesAuth = await loginViaApi(request, SALES_EMAIL, SALES_PASSWORD);
+
+    const createOrderResponse = await request.post('/api/orders', {
+        headers: {
+            Authorization: `Bearer ${buyerAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: {
+            items: [{ product_id: productId, quantity: 1 }],
+            delivery_address: 'Владивосток, возврат 1',
+            contact_phone: '+79994445566',
+            contact_email: `${username}@example.test`,
+            comment: 'Заказ на возврат'
+        }
+    });
+    expect(createOrderResponse.ok()).toBeTruthy();
+    const order = await createOrderResponse.json() as { id: string };
+
+    const updateStatus = async (status: string) => {
+        const response = await request.patch(`/api/sales/orders/${order.id}/status`, {
+            headers: {
+                Authorization: `Bearer ${salesAuth.accessToken}`,
+                'Content-Type': 'application/json'
+            },
+            data: { status }
+        });
+        expect(response.ok()).toBeTruthy();
+    };
+
+    await updateStatus('IN_PROGRESS');
+    await updateStatus('PACKED');
+
+    const saveShipmentResponse = await request.put(`/api/sales/orders/${order.id}/shipment`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: {
+            tracking_number: 'MOCK-RETURN-NOT-PICKED-UP'
+        }
+    });
+    expect(saveShipmentResponse.ok()).toBeTruthy();
+
+    await updateStatus('SHIPPED');
+
+    const syncResponse = await request.post(`/api/sales/orders/${order.id}/shipment/sync`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`
+        }
+    });
+    expect(syncResponse.ok()).toBeTruthy();
+    const syncedOrder = await syncResponse.json() as { status: string; return_reason?: string | null };
+    expect(syncedOrder.status).toBe('RETURNED');
+    expect(syncedOrder.return_reason).toBe('NOT_PICKED_UP');
+
+    const inventoryResponse = await request.get(`/api/sales/inventory?q=${encodeURIComponent('Return stock')}`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`
+        }
+    });
+    expect(inventoryResponse.ok()).toBeTruthy();
+    const inventory = await inventoryResponse.json() as Array<{ id: string; free_stock: number }>;
+    expect(inventory.find((row) => row.id === productId)?.free_stock).toBe(1);
 });
 
 test.afterAll(async () => {

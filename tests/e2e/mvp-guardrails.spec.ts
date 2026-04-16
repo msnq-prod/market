@@ -86,7 +86,7 @@ test('API guardrails: manager cannot create admin or read orders queue', async (
     });
     expect(createAdminResponse.status()).toBe(403);
 
-    const ordersResponse = await request.get('/api/orders', {
+    const ordersResponse = await request.get('/api/sales/orders', {
         headers: {
             Authorization: `Bearer ${manager.accessToken}`
         }
