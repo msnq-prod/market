@@ -7,7 +7,9 @@ import { authFetch } from '../../utils/authFetch';
 const VIDEO_EXPORT_HELPER_URL = (import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012').trim().replace(/\/+$/, '');
 const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
+const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
 const VIDEO_HELPER_DOWNLOAD_URL = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL).trim();
+const VIDEO_HELPER_DOWNLOAD_URL_ARM64 = DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64;
 const MIN_SEGMENT_DURATION_MS = 200;
 const CROSSFADE_MS = 200;
 const TIMELINE_ZOOM_STEP = 1.2;
@@ -536,6 +538,7 @@ export function VideoTool() {
     const activeProductCount = Math.max(0, activeSegments.length - 1);
     const itemDelta = activeProductCount - expectedOutputCount;
     const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
+    const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
     const exportBlockedReason = helperStatus === 'unavailable'
         ? 'Нужен ZAGARAMI Video Helper.'
         : helperStatus === 'version_mismatch'
@@ -794,6 +797,13 @@ export function VideoTool() {
         }
 
         window.open(VIDEO_HELPER_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
+    };
+    const openHelperDownloadArm64 = () => {
+        if (!helperDownloadArm64Configured) {
+            return;
+        }
+
+        window.open(VIDEO_HELPER_DOWNLOAD_URL_ARM64, '_blank', 'noopener,noreferrer');
     };
 
     useEffect(() => {
@@ -1722,7 +1732,18 @@ export function VideoTool() {
                                                         className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
                                                     >
                                                         <HardDriveDownload size={14} />
-                                                        Скачать ZAGARAMI Video Helper
+                                                        Скачать ZAGARAMI Video Helper (Intel)
+                                                    </button>
+                                                )}
+                                                {helperDownloadArm64Configured && (
+                                                    <button
+                                                        type="button"
+                                                        data-testid="helper-download-arm64"
+                                                        onClick={openHelperDownloadArm64}
+                                                        className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
+                                                    >
+                                                        <HardDriveDownload size={14} />
+                                                        Скачать ZAGARAMI Video Helper (Apple Silicon)
                                                     </button>
                                                 )}
                                                 <button
@@ -1735,7 +1756,7 @@ export function VideoTool() {
                                                     Я установил, перепроверить
                                                 </button>
                                             </div>
-                                            {!helperDownloadConfigured && (
+                                            {!helperDownloadConfigured && !helperDownloadArm64Configured && (
                                                 <p className="mt-3 text-xs leading-5 text-amber-100/75">
                                                     Ссылка на production DMG ещё не настроена в `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
                                                 </p>
