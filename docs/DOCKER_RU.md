@@ -75,14 +75,14 @@ cp .env.production.example .env.production
 - `REFRESH_TOKEN_SECRET`
 - `VIDEO_PROCESSOR_POLL_MS`
 - `STONES_HELPER_ALLOWED_ORIGIN`
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, только если опубликован production DMG для desktop helper
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, если нужен внешний URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
 
 Инварианты:
 
 - `CLIENT_URL` должен быть `https://<APP_DOMAIN>`
 - `STONES_HELPER_ALLOWED_ORIGIN` должен совпадать с `CLIENT_URL`
 - `DATABASE_URL` должен указывать на `db:3306`
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL` можно не задавать, если production DMG еще не опубликован
+- если `VITE_VIDEO_HELPER_DOWNLOAD_URL` не задан, UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
 
 ## 5. Production deploy через scripts/ops
 

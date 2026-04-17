@@ -60,7 +60,7 @@ npm run ops:deploy
 - `.env.production` настроен вручную и не хранится в git;
 - production checkout не должен содержать незакоммиченных tracked-изменений;
 - `docker` и `docker compose` доступны для пользователя деплоя.
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL` может отсутствовать, если production-сборка desktop helper пока не опубликована.
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL` может отсутствовать: тогда UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`.
 - по умолчанию preflight требует 5 GiB свободного места, но порог можно переопределить через `STONES_MIN_FREE_GB`.
 
 ## 2. Backup базы данных
