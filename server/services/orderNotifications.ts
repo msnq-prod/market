@@ -1,6 +1,5 @@
 export type NewOrderNotificationPayload = {
     orderId: string;
-    userId: string;
     buyerName: string;
     buyerUsername: string | null;
     total: number;
@@ -8,15 +7,37 @@ export type NewOrderNotificationPayload = {
     createdAt: string;
 };
 
-type NotificationAdapter = (payload: NewOrderNotificationPayload) => Promise<void>;
+export type OrderStatusNotificationPayload = {
+    orderId: string;
+    fromStatus: string | null;
+    toStatus: string;
+    buyerName: string;
+    buyerUsername: string | null;
+    total: number;
+    actorName?: string | null;
+    happenedAt: string;
+};
 
-let notificationAdapter: NotificationAdapter = async () => {};
+type NewOrderNotificationAdapter = (payload: NewOrderNotificationPayload) => Promise<void>;
+type OrderStatusNotificationAdapter = (payload: OrderStatusNotificationPayload) => Promise<void>;
 
-export const setNewOrderNotificationAdapter = (adapter: NotificationAdapter) => {
-    notificationAdapter = adapter;
+let newOrderNotificationAdapter: NewOrderNotificationAdapter = async () => {};
+let orderStatusNotificationAdapter: OrderStatusNotificationAdapter = async () => {};
+
+export const setNewOrderNotificationAdapter = (adapter: NewOrderNotificationAdapter) => {
+    newOrderNotificationAdapter = adapter;
+};
+
+export const setOrderStatusNotificationAdapter = (adapter: OrderStatusNotificationAdapter) => {
+    orderStatusNotificationAdapter = adapter;
 };
 
 export const sendNewOrderCreatedNotification = async (payload: NewOrderNotificationPayload) => {
-    await notificationAdapter(payload);
+    await newOrderNotificationAdapter(payload);
     console.info('[sales.notifications] new-order', JSON.stringify(payload));
+};
+
+export const sendOrderStatusChangedNotification = async (payload: OrderStatusNotificationPayload) => {
+    await orderStatusNotificationAdapter(payload);
+    console.info('[sales.notifications] order-status', JSON.stringify(payload));
 };

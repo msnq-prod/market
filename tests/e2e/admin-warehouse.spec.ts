@@ -3,7 +3,6 @@ import { createFinalizeReadyFixture, createWarehouseFixture, disconnectTestDb } 
 
 type LoginPayload = {
     accessToken: string;
-    refreshToken: string;
     role: string;
     name: string;
 };
@@ -27,7 +26,6 @@ async function login(request: APIRequestContext, email: string, password: string
 async function setAdminSession(page: Page, loginPayload: LoginPayload) {
     await page.addInitScript((payload) => {
         localStorage.setItem('accessToken', payload.accessToken);
-        localStorage.setItem('refreshToken', payload.refreshToken);
         localStorage.setItem('userRole', payload.role);
         localStorage.setItem('userName', payload.name);
     }, loginPayload);

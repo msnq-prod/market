@@ -4,7 +4,7 @@ import path from 'path';
 import express from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
-import { upload } from '../middleware/upload.ts';
+import { normalizeSharedUploadedFiles, upload } from '../middleware/upload.ts';
 import { runVideoJobUpload } from '../middleware/videoJobUpload.ts';
 import { runVideoExportUpload } from '../middleware/videoExportUpload.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
@@ -35,8 +35,14 @@ import {
     type UploadedVideoExportManifestEntry,
     type VideoExportManifest
 } from '../services/videoExport.ts';
+import {
+    loadBatchMediaSnapshot,
+    queueBatchMediaReadyNotifications,
+    queueBatchReceivedNotification,
+    runTelegramSideEffect
+} from '../services/telegramNotifications.ts';
 import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
-import { formatItemSeq, hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../utils/collectionWorkflow.ts';
+import { formatItemSeq, getDefaultProductTranslation, hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../utils/collectionWorkflow.ts';
 import { resolveProjectPath } from '../utils/projectPaths.ts';
 import { softDeleteBatch } from '../utils/softDelete.ts';
 
@@ -262,14 +268,15 @@ const sanitizePhotoToolFilenamePart = (value: string) => {
     return normalized || 'photo';
 };
 
-const buildPhotoToolFilename = (batchId: string, itemSeq: number, originalName: string) => {
+const buildPhotoToolFilename = (batchId: string, itemSeq: number, originalName: string, safeExtension?: string) => {
     const parsed = path.parse(originalName || '');
     const safeBaseName = sanitizePhotoToolFilenamePart(parsed.name || 'photo');
     const safeBatchId = sanitizePhotoToolFilenamePart(batchId);
-    const rawExtension = (parsed.ext || '').toLowerCase();
-    const safeExtension = rawExtension && /^[.][a-z0-9]{1,10}$/.test(rawExtension) ? rawExtension : '.jpg';
+    const normalizedExtension = typeof safeExtension === 'string' && /^[.][a-z0-9]{1,10}$/.test(safeExtension)
+        ? safeExtension.toLowerCase()
+        : '.jpg';
 
-    return `batch-${safeBatchId}-item-${formatItemSeq(itemSeq)}-${safeBaseName}-${Date.now()}${safeExtension}`;
+    return `batch-${safeBatchId}-item-${formatItemSeq(itemSeq)}-${safeBaseName}-${Date.now()}${normalizedExtension}`;
 };
 
 const buildPhotoToolStateToken = (batch: PhotoToolBatchRecord) =>
@@ -811,6 +818,7 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
     let uploadedFiles: Express.Multer.File[] | undefined;
     const createdPaths: string[] = [];
     let cleanupCandidateUrls: string[] = [];
+    let beforeMediaSnapshot: Awaited<ReturnType<typeof loadBatchMediaSnapshot>> = null;
 
     try {
         if (!req.user) return res.sendStatus(401);
@@ -828,10 +836,12 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         });
 
         uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
+        await normalizeSharedUploadedFiles(uploadedFiles, 'photo');
         if (uploadedFiles.some((file) => !file.mimetype.startsWith('image/'))) {
             throw createHttpError('Photo-tool принимает только image-файлы.', 400);
         }
 
+        beforeMediaSnapshot = await loadBatchMediaSnapshot(prisma, req.params.id);
         const batch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
         const currentPhotoStateToken = buildPhotoToolStateToken(batch);
         const basePhotoStateToken = parsePhotoToolBaseStateToken(req.body?.base_photo_state_token);
@@ -868,7 +878,12 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
                 throw createHttpError('manifest photo-tool ссылается на отсутствующий файл.', 400);
             }
 
-            const targetFilename = buildPhotoToolFilename(batch.id, entry.item_seq, uploadedFile.originalname);
+            const targetFilename = buildPhotoToolFilename(
+                batch.id,
+                entry.item_seq,
+                uploadedFile.originalname,
+                path.extname(uploadedFile.filename).toLowerCase()
+            );
             const targetPath = path.join(PHOTO_TOOL_PUBLIC_OUTPUT_ROOT, targetFilename);
             await moveFileSafely(uploadedFile.path, targetPath);
             createdPaths.push(targetPath);
@@ -891,6 +906,8 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         ));
 
         const updatedBatch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
+        const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, req.params.id);
+        await runTelegramSideEffect(() => queueBatchMediaReadyNotifications(prisma, beforeMediaSnapshot, afterMediaSnapshot));
         await cleanupOrphanedPhotoToolFiles(cleanupCandidateUrls);
         res.json(serializePhotoToolPayload(updatedBatch));
     } catch (error) {
@@ -1030,6 +1047,15 @@ router.post('/:id/receive', authenticateToken, async (req: AuthRequest, res) => 
             include: BATCH_INCLUDE
         });
 
+        if (updated?.owner && updated.product) {
+            const productName = getDefaultProductTranslation(updated.product.translations)?.name || `Партия ${updated.id}`;
+            await runTelegramSideEffect(() => queueBatchReceivedNotification(prisma, {
+                batchId: updated.id,
+                productName,
+                ownerId: updated.owner.id,
+                ownerName: updated.owner.name
+            }));
+        }
         res.json(updated ? serializeBatch(req, updated) : { success: true });
     } catch (error) {
         console.error(error);
@@ -1345,6 +1371,7 @@ router.get('/:id/video-export-sessions/:sessionId', authenticateToken, async (re
 router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, async (req: AuthRequest, res) => {
     let uploadedFile: Express.Multer.File | undefined;
     let loadedSessionId: string | null = null;
+    let beforeMediaSnapshot: Awaited<ReturnType<typeof loadBatchMediaSnapshot>> = null;
 
     try {
         if (!req.user) return res.sendStatus(401);
@@ -1363,6 +1390,7 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
         if (!serialNumber) {
             throw createHttpError('Не передан serial_number для финального ролика.', 400);
         }
+        beforeMediaSnapshot = await loadBatchMediaSnapshot(prisma, req.params.id);
         const result = await withVideoExportBatchLock(req.params.id, async (tx) => {
             await markStaleVideoExportSessions(tx, req.params.id);
 
@@ -1480,6 +1508,8 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
 
         if (!result.duplicate && result.shouldComplete) {
             await cleanupOlderCompletedVideoExports(result.batchId, result.version);
+            const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, req.params.id);
+            await runTelegramSideEffect(() => queueBatchMediaReadyNotifications(prisma, beforeMediaSnapshot, afterMediaSnapshot));
         }
 
         res.json(result);
@@ -1652,6 +1682,7 @@ router.post('/:id/media-sync', authenticateToken, async (req: AuthRequest, res) 
             return res.status(400).json({ error: 'Не передан список файлов для сопоставления.' });
         }
 
+        const beforeMediaSnapshot = await loadBatchMediaSnapshot(prisma, req.params.id);
         const batch = await prisma.batch.findFirst({
             where: {
                 id: req.params.id,
@@ -1715,6 +1746,8 @@ router.post('/:id/media-sync', authenticateToken, async (req: AuthRequest, res) 
             },
             include: BATCH_INCLUDE
         });
+        const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, req.params.id);
+        await runTelegramSideEffect(() => queueBatchMediaReadyNotifications(prisma, beforeMediaSnapshot, afterMediaSnapshot));
 
         res.json({
             matched,

@@ -57,6 +57,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:?ACCESS_TOKEN_SECRET is required}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
+      TELEGRAM_TOKEN_ENCRYPTION_KEY: ${TELEGRAM_TOKEN_ENCRYPTION_KEY:?TELEGRAM_TOKEN_ENCRYPTION_KEY is required}
       CLIENT_URL: ${CLIENT_URL:?CLIENT_URL is required}
       PORT: ${PORT:-3001}
       RUN_MIGRATIONS: "1"
@@ -93,6 +94,31 @@ services:
       - stones_video_exports:/app/storage/video-export
     healthcheck:
       test: ["CMD-SHELL", "ps -o args | grep -q '[n]ode build/server/videoProcessor.js'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *json-logging
+
+  telegram-worker:
+    image: stones-runtime:prod
+    build: *runtime-build
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    command: ["node", "build/server/telegramWorker.js"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      TELEGRAM_TOKEN_ENCRYPTION_KEY: ${TELEGRAM_TOKEN_ENCRYPTION_KEY:?TELEGRAM_TOKEN_ENCRYPTION_KEY is required}
+      TELEGRAM_WORKER_POLL_MS: ${TELEGRAM_WORKER_POLL_MS:-5000}
+      TELEGRAM_WORKER_RETRY_BASE_MS: ${TELEGRAM_WORKER_RETRY_BASE_MS:-5000}
+      TELEGRAM_WORKER_MAX_ATTEMPTS: ${TELEGRAM_WORKER_MAX_ATTEMPTS:-5}
+      RUN_MIGRATIONS: "0"
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "ps -o args | grep -q '[n]ode build/server/telegramWorker.js'"]
       interval: 15s
       timeout: 5s
       retries: 5

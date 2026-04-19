@@ -9,7 +9,6 @@ import type { OrderHistory, Product, User } from '../data/db';
 
 type AuthResponse = {
     accessToken: string;
-    refreshToken: string;
     role: string;
     name: string;
     user: User;
@@ -523,17 +522,17 @@ function AuthCard({ onAuthenticated }: { onAuthenticated: (user: User) => void }
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify(body)
             });
 
             const payload = await response.json().catch(() => ({ error: 'Ошибка авторизации.' })) as Partial<AuthResponse> & { error?: string };
-            if (!response.ok || !payload.accessToken || !payload.refreshToken || !payload.user || !payload.role || !payload.name) {
+            if (!response.ok || !payload.accessToken || !payload.user || !payload.role || !payload.name) {
                 throw new Error(payload.error || 'Ошибка авторизации.');
             }
 
             persistAuthSession({
                 accessToken: payload.accessToken,
-                refreshToken: payload.refreshToken,
                 role: payload.role,
                 name: payload.name
             });
@@ -590,7 +589,7 @@ function AuthCard({ onAuthenticated }: { onAuthenticated: (user: User) => void }
                     <span className="text-sm text-gray-300">Пароль</span>
                     <input
                         required
-                        minLength={6}
+                        minLength={12}
                         type="password"
                         value={password}
                         onChange={(event) => setPassword(event.target.value)}

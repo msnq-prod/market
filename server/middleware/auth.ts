@@ -16,11 +16,11 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
     if (!token) return res.sendStatus(401);
 
     jwt.verify(token, ACCESS_TOKEN_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403);
-        if (!user || typeof user !== 'object') return res.sendStatus(403);
+        if (err) return res.sendStatus(401);
+        if (!user || typeof user !== 'object') return res.sendStatus(401);
 
         const payload = user as { id?: string; role?: string };
-        if (!payload.id || !payload.role) return res.sendStatus(403);
+        if (!payload.id || !payload.role) return res.sendStatus(401);
 
         req.user = { id: payload.id, role: payload.role };
         next();

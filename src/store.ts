@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Location, User, Product } from './data/db';
 import { authFetch } from './utils/authFetch';
-import { clearAuthSession } from './utils/session';
+import { clearAuthSession, logoutSession } from './utils/session';
 
 interface AppState {
     viewMode: 'WORLD' | 'LOCATION';
@@ -73,7 +73,7 @@ export const useStore = create<AppState>((set) => ({
     setActiveView: (view) => set({ activeView: view }),
     setUser: (user) => set({ user, authLoading: false }),
     logout: () => {
-        clearAuthSession();
+        logoutSession();
         set({ user: null, authLoading: false });
     },
 
@@ -92,7 +92,8 @@ export const useStore = create<AppState>((set) => ({
 
     hydrateSession: async () => {
         const accessToken = localStorage.getItem('accessToken');
-        if (!accessToken) {
+        const storedRole = localStorage.getItem('userRole');
+        if (!accessToken && !storedRole) {
             set({ user: null, authLoading: false });
             return;
         }

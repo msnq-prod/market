@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { Package, RussianRuble, LogOut, Home, Menu, X, ListOrdered } from 'lucide-react';
-import { clearAuthSession } from '../../utils/session';
+import { logoutSession } from '../../utils/session';
 
 export function PartnerLayout() {
     const navigate = useNavigate();
@@ -19,7 +19,7 @@ export function PartnerLayout() {
     const isFranchisee = role === 'FRANCHISEE';
 
     const handleLogout = () => {
-        clearAuthSession();
+        logoutSession();
         navigate('/partner/login');
     };
 

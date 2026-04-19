@@ -1,17 +1,43 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import QRCode from 'qrcode';
+import { IS_LOCAL_AUTH_ENVIRONMENT } from '../config/env.ts';
 import { buildCloneUrl } from '../utils/cloneUrls.ts';
 import { getDefaultProductTranslation, isPublicPassportAvailable, looksLikeLegacyItemSerial } from '../utils/collectionWorkflow.ts';
+import {
+    buildSecurityAuditDetails,
+    createRateLimitMiddleware,
+    writeSecurityAuditLog
+} from '../services/security.ts';
+import { runTelegramSideEffect, syncTelegramLowStockNotifications } from '../services/telegramNotifications.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const PUBLIC_ACTIVATION_ALLOWED_STATUSES = new Set(['ON_CONSIGNMENT', 'STOCK_ONLINE', 'SOLD_ONLINE']);
+const publicActivateRateLimitMax = IS_LOCAL_AUTH_ENVIRONMENT ? 100 : 8;
 
 const pickCollectionDate = (batchDate: Date | null, itemDate: Date | null): Date | null => batchDate || itemDate || null;
 const pickCollectionTime = (batchTime: string | null, itemTime: string | null): string | null => batchTime || itemTime || null;
 const normalizeSerialNumber = (value: string): string => value.trim().toUpperCase();
 const isResolvableCurrentSerial = (value: string): boolean => !looksLikeLegacyItemSerial(value);
+const publicActivateRateLimit = createRateLimitMiddleware({
+    namespace: 'public-activate',
+    window_ms: 10 * 60 * 1000,
+    max: publicActivateRateLimitMax,
+    block_ms: 30 * 60 * 1000,
+    message: 'Слишком много попыток активации. Повторите позже.',
+    key: (req) => `${req.ip}:${normalizeSerialNumber(req.params.serialNumber || 'UNKNOWN')}`,
+    on_limit: async (req, context) => {
+        await writeSecurityAuditLog(prisma, {
+            action: 'SECURITY_PUBLIC_ACTIVATE_RATE_LIMITED',
+            details: buildSecurityAuditDetails(req, {
+                serial_number: normalizeSerialNumber(req.params.serialNumber || 'UNKNOWN'),
+                attempts: context.count,
+                reset_at: new Date(context.reset_at).toISOString()
+            })
+        });
+    }
+});
 const getPreferredLocationName = (
     translations: Array<{ language_id: number; name: string }>
 ): string | null => (
@@ -168,7 +194,7 @@ router.get('/items/:serialNumber', async (req, res) => {
     }
 });
 
-router.post('/items/:serialNumber/activate', async (req, res) => {
+router.post('/items/:serialNumber/activate', publicActivateRateLimit, async (req, res) => {
     try {
         const serialNumber = normalizeSerialNumber(req.params.serialNumber);
         if (!isResolvableCurrentSerial(serialNumber)) {
@@ -200,7 +226,7 @@ router.post('/items/:serialNumber/activate', async (req, res) => {
             }
         });
 
-        if (!item) {
+        if (!item || !isPublicPassportAvailable(item.status, item.batch?.status)) {
             return res.status(404).json({ error: 'Камень не найден.' });
         }
 
@@ -228,6 +254,10 @@ router.post('/items/:serialNumber/activate', async (req, res) => {
             }
         });
 
+        const productId = item.product_id;
+        if (productId) {
+            await runTelegramSideEffect(() => syncTelegramLowStockNotifications(prisma, [productId]));
+        }
         res.json({
             success: true,
             message: 'Item activated. Financial settlement must be completed in a protected staff workflow.'

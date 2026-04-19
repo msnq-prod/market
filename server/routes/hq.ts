@@ -3,6 +3,11 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { NextFunction, Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.ts';
+import {
+    loadBatchMediaSnapshot,
+    queueBatchMediaReadyNotifications,
+    runTelegramSideEffect
+} from '../services/telegramNotifications.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -139,6 +144,7 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
     const { batchId } = req.params;
 
     try {
+        const beforeMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);
         const batch = await prisma.batch.findFirst({
             where: {
                 id: batchId,
@@ -197,6 +203,8 @@ router.post('/batches/:batchId/finish', async (req: AuthRequest, res) => {
                 deleted_at: null
             }
         });
+        const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);
+        await runTelegramSideEffect(() => queueBatchMediaReadyNotifications(prisma, beforeMediaSnapshot, afterMediaSnapshot));
 
         res.json(updatedBatch);
     } catch (_error) {

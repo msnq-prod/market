@@ -111,6 +111,7 @@ model Product {
   collection_requests CollectionRequest[]
   batches             Batch[]
   items               Item[]
+  telegram_low_stock_states TelegramLowStockState[]
 
   @@index([location_id])
   @@index([category_id])
@@ -267,18 +268,28 @@ enum BatchVideoExportStatus {
   ABANDONED
 }
 
+enum TelegramNotificationJobStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
 model User {
-  id              String   @id @default(uuid())
-  name            String
-  email           String?  @unique
-  username        String?  @unique
-  password_hash   String?
-  role            Role     @default(USER)
-  balance         Decimal  @default(0) @db.Decimal(12, 2)
-  commission_rate Decimal  @default(0) @db.Decimal(5, 2)
-  details         Json?
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  id                 String    @id @default(uuid())
+  name               String
+  email              String?   @unique
+  username           String?   @unique
+  password_hash      String?
+  role               Role      @default(USER)
+  balance            Decimal   @default(0) @db.Decimal(12, 2)
+  commission_rate    Decimal   @default(0) @db.Decimal(5, 2)
+  details            Json?
+  telegram_chat_id   String?   @unique @db.VarChar(64)
+  telegram_username  String?   @db.VarChar(191)
+  telegram_started_at DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
 
   // Relations
   orders                       Order[]
@@ -286,6 +297,8 @@ model User {
   batches                      Batch[]             @relation("BatchOwner")
   ledgers                      Ledger[]
   audit_logs                   AuditLog[]
+  auth_sessions                AuthSession[]
+  telegram_notification_jobs   TelegramNotificationJob[]
   order_status_events          OrderStatusEvent[]   @relation("OrderStatusEventActor")
   created_collection_requests  CollectionRequest[] @relation("CollectionRequestCreatedBy")
   target_collection_requests   CollectionRequest[] @relation("CollectionRequestTargetUser")
@@ -294,6 +307,56 @@ model User {
   requested_video_exports      BatchVideoExportSession[] @relation("BatchVideoExportRequestedBy")
 
   @@map("users")
+}
+
+model AuthSession {
+  id                String       @id @default(uuid())
+  user_id           String
+  family_id         String
+  parent_session_id String?
+  token_hash        String       @unique @db.VarChar(191)
+  user_agent        String?      @db.VarChar(191)
+  ip_address        String?      @db.VarChar(64)
+  expires_at        DateTime
+  last_used_at      DateTime?
+  rotated_at        DateTime?
+  revoked_at        DateTime?
+  revoke_reason     String?      @db.VarChar(191)
+  created_at        DateTime     @default(now())
+  updated_at        DateTime     @updatedAt
+
+  user           User         @relation(fields: [user_id], references: [id])
+  parent_session AuthSession? @relation("AuthSessionRotation", fields: [parent_session_id], references: [id])
+  child_sessions AuthSession[] @relation("AuthSessionRotation")
+
+  @@index([user_id])
+  @@index([family_id])
+  @@index([expires_at])
+  @@index([revoked_at])
+  @@index([parent_session_id])
+  @@map("auth_sessions")
+}
+
+model TelegramBot {
+  id                   String   @id @default(uuid())
+  name                 String   @db.VarChar(191)
+  encrypted_token      String?  @db.Text
+  bot_username         String?  @db.VarChar(191)
+  notify_admin         Boolean  @default(false)
+  notify_sales_manager Boolean  @default(false)
+  notify_franchisee    Boolean  @default(false)
+  event_settings       Json
+  manual_recipients    Json
+  low_stock_threshold  Int      @default(10)
+  update_offset        Int      @default(0)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  contacts        TelegramBotContact[]
+  jobs            TelegramNotificationJob[]
+  low_stock_states TelegramLowStockState[]
+
+  @@map("telegram_bots")
 }
 
 model Batch {
@@ -479,14 +542,78 @@ model Ledger {
   @@map("ledger")
 }
 
+model TelegramBotContact {
+  id          String   @id @default(uuid())
+  bot_id      String
+  chat_id     String   @db.VarChar(64)
+  chat_type   String   @db.VarChar(32)
+  username    String?  @db.VarChar(191)
+  first_name  String?  @db.VarChar(191)
+  last_name   String?  @db.VarChar(191)
+  started_at  DateTime?
+  last_seen_at DateTime @default(now())
+  payload     Json?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  @@unique([bot_id, chat_id])
+  @@index([bot_id, last_seen_at])
+  @@map("telegram_bot_contacts")
+}
+
+model TelegramNotificationJob {
+  id               String                        @id @default(uuid())
+  bot_id           String
+  user_id          String?
+  event_key        String                        @db.VarChar(191)
+  status           TelegramNotificationJobStatus @default(PENDING)
+  recipient_target String                        @db.VarChar(191)
+  recipient_kind   String                        @db.VarChar(32)
+  payload          Json
+  attempts         Int                           @default(0)
+  next_attempt_at  DateTime                      @default(now())
+  last_error       String?                       @db.Text
+  sent_at          DateTime?
+  created_at       DateTime                      @default(now())
+  updated_at       DateTime                      @updatedAt
+
+  bot  TelegramBot @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+  user User?       @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([bot_id, created_at])
+  @@index([status, next_attempt_at])
+  @@index([user_id])
+  @@map("telegram_notification_jobs")
+}
+
+model TelegramLowStockState {
+  id                String   @id @default(uuid())
+  bot_id            String
+  product_id        String
+  last_known_free_stock Int  @default(0)
+  below_threshold   Boolean  @default(false)
+  last_notified_at  DateTime?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  bot     TelegramBot @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+  product Product     @relation(fields: [product_id], references: [id], onDelete: Cascade)
+
+  @@unique([bot_id, product_id])
+  @@index([product_id])
+  @@map("telegram_low_stock_states")
+}
+
 model AuditLog {
   id        String   @id @default(uuid())
-  user_id   String
+  user_id   String?
   action    String
   details   Json?
   timestamp DateTime @default(now())
 
-  user User @relation(fields: [user_id], references: [id])
+  user User? @relation(fields: [user_id], references: [id])
 
   @@index([user_id])
   @@map("audit_logs")

@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History } from 'lucide-react';
+import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { clearAuthSession } from '../../utils/session';
+import { logoutSession } from '../../utils/session';
 
 export function Sidebar() {
     const location = useLocation();
@@ -11,13 +11,13 @@ export function Sidebar() {
     const canAccessSalesCabinet = role === 'ADMIN' || role === 'SALES_MANAGER';
 
     const handleLogout = () => {
-        clearAuthSession();
+        logoutSession();
         navigate('/admin/login', { replace: true });
     };
 
     return (
-        <aside className="admin-sidebar w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
-            <div className="p-6 border-b border-gray-800">
+        <aside className="admin-sidebar border-b border-gray-800 bg-gray-900 lg:flex lg:w-64 lg:flex-col lg:border-b-0 lg:border-r">
+            <div className="border-b border-gray-800 p-4 sm:p-6">
                 <h1 className="text-xl font-bold text-white tracking-widest uppercase">
                     {isSalesManager ? 'Продажи' : 'Админ HQ'}
                 </h1>
@@ -26,49 +26,58 @@ export function Sidebar() {
                 </p>
             </div>
 
-            <nav className="flex-1 p-4 space-y-1">
-                {isSalesManager ? (
-                    <>
-                        <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
-                        <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
-                        <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
-                        <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
-                    </>
-                ) : (
-                    <>
-                        <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Дашборд" active={location.pathname === '/admin'} />
+            <nav className="flex-1 overflow-x-auto p-3 sm:p-4 lg:space-y-1 lg:overflow-x-visible">
+                <div className="flex gap-2 lg:block">
+                    {isSalesManager ? (
+                        <>
+                            <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                            <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
+                            <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
+                            <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
+                        </>
+                    ) : (
+                        <>
+                            <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Дашборд" active={location.pathname === '/admin'} />
 
-                        {canAccessSalesCabinet && (
-                            <>
-                                <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Продажи</div>
-                                <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
-                                <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
-                                <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
-                                <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
-                            </>
-                        )}
+                            {canAccessSalesCabinet && (
+                                <>
+                                    <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Продажи</div>
+                                    <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
+                                    <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
+                                    <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
+                                    <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
+                                </>
+                            )}
 
-                        <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Логистика</div>
-                        <NavItem to="/admin/acceptance" icon={<Truck size={20} />} label="Приемка" active={location.pathname === '/admin/acceptance'} />
-                        <NavItem to="/admin/allocation" icon={<Box size={20} />} label="Распределение" active={location.pathname === '/admin/allocation'} />
-                        <NavItem to="/admin/warehouse" icon={<Archive size={20} />} label="Склад" active={location.pathname === '/admin/warehouse'} />
+                            <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Логистика</div>
+                            <NavItem to="/admin/acceptance" icon={<Truck size={20} />} label="Приемка" active={location.pathname === '/admin/acceptance'} />
+                            <NavItem to="/admin/allocation" icon={<Box size={20} />} label="Распределение" active={location.pathname === '/admin/allocation'} />
+                            <NavItem to="/admin/warehouse" icon={<Archive size={20} />} label="Склад" active={location.pathname === '/admin/warehouse'} />
 
-                        <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Контент</div>
-                        <NavItem to="/admin/locations" icon={<MapPin size={20} />} label="Локации" active={location.pathname === '/admin/locations'} />
-                        <NavItem to="/admin/products" icon={<Box size={20} />} label="Товары" active={location.pathname === '/admin/products'} />
-                        <NavItem to="/admin/qr/print" icon={<QrCode size={20} />} label="QR-печать" active={false} newTab />
-                        <NavItem to="/admin/clone-content" icon={<FileText size={20} />} label="Страница клона" active={location.pathname === '/admin/clone-content'} />
+                            <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Контент</div>
+                            <NavItem to="/admin/locations" icon={<MapPin size={20} />} label="Локации" active={location.pathname === '/admin/locations'} />
+                            <NavItem to="/admin/products" icon={<Box size={20} />} label="Товары" active={location.pathname === '/admin/products'} />
+                            <NavItem to="/admin/qr/print" icon={<QrCode size={20} />} label="QR-печать" active={false} newTab />
+                            <NavItem to="/admin/clone-content" icon={<FileText size={20} />} label="Страница клона" active={location.pathname === '/admin/clone-content'} />
 
-                        <div className="pt-4 pb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Система</div>
-                        <NavItem to="/admin/users" icon={<Users size={20} />} label="Пользователи" active={location.pathname === '/admin/users'} />
-                    </>
-                )}
+                            <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Система</div>
+                            <NavItem to="/admin/users" icon={<Users size={20} />} label="Пользователи" active={location.pathname === '/admin/users'} />
+                            {role === 'ADMIN' && (
+                                <NavItem to="/admin/telegram-bots" icon={<Bot size={20} />} label="Telegram" active={location.pathname === '/admin/telegram-bots'} />
+                            )}
+                        </>
+                    )}
+                </div>
             </nav>
 
-            <div className="p-4 border-t border-gray-800">
-                <div className="flex items-center gap-3 px-4 py-2 text-gray-400 hover:text-white transition-colors cursor-pointer" onClick={handleLogout}>
+            <div className="border-t border-gray-800 p-3 sm:p-4">
+                <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex min-h-11 w-full items-center gap-3 rounded-lg px-4 py-2 text-left text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+                >
                     <span>Выйти</span>
-                </div>
+                </button>
             </div>
         </aside>
     );
@@ -87,7 +96,7 @@ function NavItem({
     active: boolean;
     newTab?: boolean;
 }) {
-    const className = `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${active
+    const className = `group flex min-h-11 items-center gap-3 rounded-lg px-4 py-3 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 lg:w-full ${active
         ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20 shadow-[0_0_15px_rgba(37,99,235,0.1)]'
         : 'text-gray-400 hover:bg-gray-800 hover:text-white'
         }`;

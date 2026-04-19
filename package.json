@@ -23,6 +23,8 @@
     "start:prod": "node build/server/index.js",
     "video-processor": "tsx server/videoProcessor.ts",
     "video-processor:prod": "node build/server/videoProcessor.js",
+    "telegram-worker": "npm run prisma:generate && tsx server/telegramWorker.ts",
+    "telegram-worker:prod": "node build/server/telegramWorker.js",
     "video-export-helper": "node video-export-helper/index.js",
     "video-export-helper:desktop": "electron video-export-helper/desktop/main.cjs",
     "video-export-helper:desktop:dist": "node video-export-helper/build-desktop.mjs",

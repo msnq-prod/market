@@ -13,6 +13,12 @@ import {
     normalizeTimeValue,
     toCollectionDate
 } from '../utils/collectionWorkflow.ts';
+import {
+    queueCollectionRequestAcknowledgedNotification,
+    queueCollectionRequestCompletedNotification,
+    queueCollectionRequestCreatedNotification,
+    runTelegramSideEffect
+} from '../services/telegramNotifications.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -277,6 +283,13 @@ router.post('/', async (req: AuthRequest, res) => {
             include: REQUEST_INCLUDE
         });
 
+        await runTelegramSideEffect(() => queueCollectionRequestCreatedNotification(prisma, {
+            requestId: created.id,
+            title: created.title,
+            requestedQty: created.requested_qty,
+            creatorName: created.created_by_user?.name || req.user!.id,
+            targetUserId: created.target_user_id
+        }));
         res.status(201).json(await withMetrics(created));
     } catch (error) {
         console.error(error);
@@ -495,6 +508,12 @@ router.post('/:id/ack', async (req: AuthRequest, res) => {
             include: REQUEST_INCLUDE
         });
 
+        await runTelegramSideEffect(() => queueCollectionRequestAcknowledgedNotification(prisma, {
+            requestId: updated.id,
+            title: updated.title,
+            partnerUserId: req.user!.id,
+            partnerName: updated.accepted_by_user?.name || updated.target_user?.name || req.user!.id
+        }));
         res.json(await withMetrics(updated));
     } catch (error) {
         console.error(error);
@@ -614,6 +633,15 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
             });
         });
 
+        await runTelegramSideEffect(() => queueCollectionRequestCompletedNotification(prisma, {
+            requestId: created.id,
+            title: created.title,
+            batchId,
+            partnerUserId: req.user!.id,
+            partnerName: created.accepted_by_user?.name || created.target_user?.name || req.user!.id,
+            collectedDate: safeCollectedDate,
+            collectedTime: safeCollectedTime
+        }));
         res.json(await withMetrics(created));
     } catch (error) {
         console.error(error);

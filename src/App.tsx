@@ -463,6 +463,7 @@ import { SalesHistory } from './admin/pages/SalesHistory'
 import { VideoTool } from './admin/pages/VideoTool'
 import { PhotoTool } from './admin/pages/PhotoTool'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
+import { TelegramBots } from './admin/pages/TelegramBots'
 
 function App() {
   return (
@@ -509,6 +510,7 @@ function App() {
           <Route path="allocation" element={<Allocation />} />
           <Route path="warehouse" element={<Warehouse />} />
           <Route path="users" element={<Users />} />
+          <Route path="telegram-bots" element={<TelegramBots />} />
           <Route path="clone-content" element={<CloneContent />} />
         </Route>
 

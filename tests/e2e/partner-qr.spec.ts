@@ -2,7 +2,6 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 
 type LoginPayload = {
     accessToken: string;
-    refreshToken: string;
     role: string;
     name: string;
 };
@@ -92,7 +91,6 @@ async function createTransitBatchFromRequest(
 async function setSession(page: Page, loginPayload: LoginPayload) {
     await page.addInitScript((payload) => {
         localStorage.setItem('accessToken', payload.accessToken);
-        localStorage.setItem('refreshToken', payload.refreshToken);
         localStorage.setItem('userRole', payload.role);
         localStorage.setItem('userName', payload.name);
     }, loginPayload);

@@ -8,7 +8,6 @@ const MANAGER_PASSWORD = 'partner123';
 
 type AuthPayload = {
     accessToken: string;
-    refreshToken: string;
 };
 
 const randomKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

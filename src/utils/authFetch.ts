@@ -8,18 +8,18 @@ const withAuthHeader = (init: AuthFetchInit, accessToken: string | null): Reques
     } else {
         headers.delete('Authorization');
     }
-    return { ...init, headers };
+    return {
+        ...init,
+        credentials: init?.credentials || 'same-origin',
+        headers
+    };
 };
 
 const tryRefreshToken = async (): Promise<string | null> => {
-    const refreshToken = localStorage.getItem('refreshToken');
-    if (!refreshToken) return null;
-
     try {
         const refreshRes = await fetch('/auth/refresh', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: refreshToken })
+            credentials: 'include'
         });
 
         if (!refreshRes.ok) return null;
@@ -37,7 +37,7 @@ export const authFetch = async (input: AuthFetchInput, init?: AuthFetchInit): Pr
     const initialToken = localStorage.getItem('accessToken');
     let response = await fetch(input, withAuthHeader(init, initialToken));
 
-    if (response.status !== 401 && response.status !== 403) {
+    if (response.status !== 401) {
         return response;
     }
 

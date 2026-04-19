@@ -1197,7 +1197,7 @@ export function QrPrint() {
                             <ArrowLeft size={18} />
                         </button>
                         <div className="min-w-0">
-                            <h1 className="truncate text-lg font-semibold text-white xl:text-xl">Окно печати QR</h1>
+                            <h1 className="truncate text-lg font-semibold text-white xl:text-xl">HQ-сервис печати QR</h1>
                             <p className="truncate text-xs text-slate-400 xl:text-sm">
                                 Отдельный полноэкранный сервис без главного меню. Центр показывает лист A4, а превью одной этикетки встроено в настройки справа.
                             </p>
@@ -1214,7 +1214,7 @@ export function QrPrint() {
                             </span>
                             {pack && (
                                 <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
-                                    {pack.batch.id}
+                                    Партия: {pack.batch.id}
                                 </span>
                             )}
                         </div>
@@ -1489,7 +1489,7 @@ export function QrPrint() {
                             <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                     <div>
-                                        <h3 className="text-sm font-semibold text-white">Превью одной этикетки</h3>
+                                        <h3 className="text-sm font-semibold text-white">Интерактивное превью одной этикетки</h3>
                                         <p className="text-xs text-slate-400">Здесь меняется порядок полей и сторона QR.</p>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2 text-[11px]">

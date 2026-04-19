@@ -46,9 +46,13 @@ CLIENT_URL=http://localhost:5173
 DATABASE_URL="mysql://stones:stones@localhost:3307/stones?connection_limit=20&pool_timeout=30"
 ACCESS_TOKEN_SECRET="change_me_access"
 REFRESH_TOKEN_SECRET="change_me_refresh"
+TELEGRAM_TOKEN_ENCRYPTION_KEY="change_me_telegram_crypto"
 VITE_HOST=127.0.0.1
 VITE_PORT=5173
 VITE_API_TARGET=http://127.0.0.1:3001
+# TELEGRAM_WORKER_POLL_MS=5000
+# TELEGRAM_WORKER_RETRY_BASE_MS=5000
+# TELEGRAM_WORKER_MAX_ATTEMPTS=5
 ```
 
 ### 3.3 Подготовка базы
@@ -79,6 +83,7 @@ npm run test:e2e
 npm run test:e2e:headed
 npm run server
 npm run video-processor
+npm run telegram-worker
 ```
 
 Для изолированного e2e-режима:
@@ -107,6 +112,8 @@ npm run dev:e2e
 - `baltic.partner@stones.com` / `partner123`
 - buyer-логины: `anna`, `maxim`, `olga`, `kirill` / `partner123`
 
+Эти пароли предназначены только для локального dev/e2e. Во внешних окружениях вход с ними блокируется, пока пароль не заменен на уникальный.
+
 Подробности: [TEST_CREDENTIALS_AND_TECH_INFO_RU.md](./TEST_CREDENTIALS_AND_TECH_INFO_RU.md)
 
 ## 7. Основные маршруты
@@ -127,6 +134,7 @@ npm run dev:e2e
 - `/admin/locations`
 - `/admin/products`
 - `/admin/users`
+- `/admin/telegram-bots`
 - `/admin/clone-content`
 - `/admin/photo-tool/:batchId`
 - `/admin/video-tool/:batchId`
@@ -164,7 +172,8 @@ npm run dev:e2e
 Важно:
 
 - это не реальная оплата;
-- Telegram login пока не подключен.
+- Telegram login для buyer-аккаунта пока не подключен;
+- Telegram-боты уведомлений для HQ и партнерских событий настраиваются отдельно в admin-панели.
 
 ## 9. Работа HQ
 
@@ -341,7 +350,8 @@ HQ-печать QR работает через:
 
 - создавать staff и franchisee-аккаунты;
 - видеть роли и balances;
-- ограничивать создание ролей по текущему пользователю.
+- ограничивать создание ролей по текущему пользователю;
+- вручную привязывать `telegram_chat_id` и `telegram_username` к существующему пользователю.
 
 `MANAGER` может создавать:
 
@@ -355,7 +365,26 @@ HQ-печать QR работает через:
 - `SALES_MANAGER`
 - `FRANCHISEE`
 
-## 9.12 Clone Content
+## 9.12 Telegram Bots
+
+Доступно только `ADMIN`.
+
+Позволяет:
+
+- создавать несколько Telegram-ботов как отдельные вкладки;
+- сохранять token бота и проверять его через Telegram API;
+- включать/выключать роли получателей `ADMIN`, `SALES_MANAGER`, `FRANCHISEE`;
+- настраивать группы событий `Продажи`, `Склад`, `Поставки`, `Администрирование`;
+- задавать ручных получателей по `chat_id` и `@username`;
+- видеть список “Недавние чаты”, которые появились после команды `/start`.
+
+Важно:
+
+- личные уведомления идут только по numeric `chat_id`;
+- `FRANCHISEE` получает только partner-scoped события по своим заявкам и партиям;
+- token хранится в зашифрованном виде и требует `TELEGRAM_TOKEN_ENCRYPTION_KEY`.
+
+## 9.13 Clone Content
 
 Позволяет менять тексты публичной страницы цифрового паспорта без правки кода.
 
@@ -477,8 +506,13 @@ Endpoint:
 - `public/uploads/videos`
 - `public/uploads/videos/generated`
 - `public/uploads/videos/exports`
+- `storage/uploads/staging`
 - `storage/video-jobs`
 - `storage/video-export`
+
+Заметка по безопасности:
+- `POST /api/upload/photo` принимает только raster-изображения (`png/jpg/gif/webp`), canonicalizes extension и блокирует HTML/SVG/XML payload.
+- `POST /api/upload/video` принимает только `mp4/mov/m4v/webm`; uploaded files под `/uploads/*` отдаются с `X-Content-Type-Options: nosniff`.
 
 ## 14. Частые проблемы
 
@@ -497,7 +531,8 @@ Endpoint:
 
 - используется ли `username` для buyer-регистрации
 - не занят ли уже логин
-- корректно ли сохранены access/refresh tokens
+- корректно ли сохранен `accessToken` в `localStorage`
+- приходит ли `stones_refresh_token` как `HttpOnly` cookie на `/auth/login` и `/auth/refresh`
 
 ### 14.3 Photo Tool не сохраняет назначения
 
@@ -536,6 +571,6 @@ Endpoint:
 ## 15. Что не реализовано полностью
 
 - реальная онлайн-оплата;
-- Telegram login;
+- Telegram login для buyer-аккаунта;
 - автоматический финансовый расчет из публичной активации;
 - новый UI-поток для офлайн-консигнации.

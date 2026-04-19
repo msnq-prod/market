@@ -3,7 +3,6 @@ import { createProductFixture, disconnectTestDb, testDb } from './support/db-fix
 
 type LoginPayload = {
     accessToken: string;
-    refreshToken: string;
     role: string;
     name: string;
 };
@@ -47,7 +46,6 @@ async function login(request: APIRequestContext, email: string, password: string
 async function setAdminSession(page: Page, loginPayload: LoginPayload) {
     await page.addInitScript((payload) => {
         localStorage.setItem('accessToken', payload.accessToken);
-        localStorage.setItem('refreshToken', payload.refreshToken);
         localStorage.setItem('userRole', payload.role);
         localStorage.setItem('userName', payload.name);
     }, loginPayload);
@@ -226,13 +224,16 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
                 }
             ]),
             files: {
-                name: '5001.png',
+                name: '5001.svg',
                 mimeType: 'image/png',
                 buffer: TINY_PNG
             }
         }
     });
     expect(replacementResponse.ok()).toBeTruthy();
+    const replacementPayload = await replacementResponse.json() as PhotoToolPayload;
+    expect(replacementPayload.items[0]?.item_photo_url || '').toMatch(/\/uploads\/photos\/.+\.png$/);
+    expect(replacementPayload.items[0]?.item_photo_url || '').not.toContain('.svg');
 
     const oldPhotoCheck = await request.get(firstUploadPayload.url);
     expect(oldPhotoCheck.status()).toBe(404);

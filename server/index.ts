@@ -18,11 +18,35 @@ import contentRoutes from './routes/content.ts';
 import collectionRequestsRoutes from './routes/collectionRequests.ts';
 import ordersRoutes from './routes/orders.ts';
 import salesRoutes from './routes/sales.ts';
+import telegramRoutes from './routes/telegram.ts';
+import { setUploadedMediaResponseHeaders } from './middleware/upload.ts';
 import { isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
 import { softDeleteLocation, softDeleteProduct } from './utils/softDelete.ts';
+import {
+    buildSecurityAuditDetails,
+    getPasswordPolicyError,
+    shouldBlockWeakSharedPassword,
+    writeSecurityAuditLog
+} from './services/security.ts';
+import {
+    queueAdminUserCreatedNotification,
+    queueLocationLifecycleNotification,
+    queueSalesOrderCreatedNotification,
+    queueSalesOrderStatusNotification,
+    queueProductPublicationNotification,
+    runTelegramSideEffect
+} from './services/telegramNotifications.ts';
+import { setNewOrderNotificationAdapter, setOrderStatusNotificationAdapter } from './services/orderNotifications.ts';
 
 const prisma = new PrismaClient();
+setNewOrderNotificationAdapter(async (payload) => {
+    await runTelegramSideEffect(() => queueSalesOrderCreatedNotification(prisma, payload));
+});
+setOrderStatusNotificationAdapter(async (payload) => {
+    await runTelegramSideEffect(() => queueSalesOrderStatusNotification(prisma, payload));
+});
+
 const app = express();
 const port = process.env.PORT || 3001;
 const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
@@ -93,6 +117,30 @@ const parseTemplateCode = (value: unknown, fallback: string, maxLength: number) 
     }
 
     return normalizeCode(value, fallback, maxLength);
+};
+
+const getPrimaryName = (translations: Array<{ language_id?: number; name?: string }> | null | undefined): string => {
+    if (!Array.isArray(translations)) {
+        return '';
+    }
+
+    return translations.find((translation) => translation.language_id === 2)?.name
+        || translations.find((translation) => translation.language_id === 1)?.name
+        || translations[0]?.name
+        || '';
+};
+
+const getActorName = async (userId?: string): Promise<string> => {
+    if (!userId) {
+        return 'Система';
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true }
+    });
+
+    return user?.name || userId;
 };
 
 const serializeProduct = <T extends {
@@ -188,7 +236,10 @@ app.use((req, res, next) => {
 });
 
 // Static media (uploaded files and pre-bundled location images)
-app.use('/uploads', express.static(uploadDir));
+app.use('/uploads', express.static(uploadDir, {
+    index: false,
+    setHeaders: setUploadedMediaResponseHeaders
+}));
 app.use('/locations', express.static(locationsDir));
 
 app.get('/healthz', async (_req, res) => {
@@ -211,6 +262,7 @@ app.use('/api/content', contentRoutes);
 app.use('/api/collection-requests', collectionRequestsRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/sales', salesRoutes);
+app.use('/api/telegram', telegramRoutes);
 
 app.use('/api/upload', uploadRoutes);
 
@@ -352,6 +404,9 @@ app.get('/api/users', authenticateToken, async (req: AuthRequest, res) => {
                 name: true,
                 email: true,
                 role: true,
+                telegram_chat_id: true,
+                telegram_username: true,
+                telegram_started_at: true,
                 balance: true,
                 commission_rate: true,
                 created_at: true
@@ -393,8 +448,21 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
         return res.status(400).json({ error: 'Укажите email пользователя.' });
     }
 
-    if (!safePassword || safePassword.length < 6) {
-        return res.status(400).json({ error: 'Пароль должен содержать минимум 6 символов.' });
+    const passwordError = getPasswordPolicyError(safePassword);
+    if (passwordError) {
+        return res.status(400).json({ error: passwordError });
+    }
+
+    if (shouldBlockWeakSharedPassword(safePassword)) {
+        await writeSecurityAuditLog(prisma, {
+            action: 'AUTH_WEAK_SHARED_PASSWORD_BLOCKED',
+            user_id: req.user.id,
+            details: buildSecurityAuditDetails(req, {
+                target_email: safeEmail,
+                target_role: safeRole
+            })
+        });
+        return res.status(400).json({ error: 'В этом окружении использование тестового общего пароля запрещено.' });
     }
 
     if (!allowedRoles.has(safeRole)) {
@@ -415,16 +483,104 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
                 name: true,
                 email: true,
                 role: true,
+                telegram_chat_id: true,
+                telegram_username: true,
+                telegram_started_at: true,
                 balance: true,
                 commission_rate: true,
                 created_at: true
             }
         });
 
+        const actorName = await getActorName(req.user.id);
+        await runTelegramSideEffect(() => queueAdminUserCreatedNotification(prisma, {
+            userId: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            createdByName: actorName
+        }));
+
         res.status(201).json(user);
     } catch (error) {
         console.error(error);
         res.status(400).json({ error: 'Не удалось создать пользователя. Возможно, email уже используется.' });
+    }
+});
+
+app.patch('/api/users/:id/telegram', authenticateToken, requireRole(['ADMIN']), async (req: AuthRequest, res) => {
+    const safeChatId = typeof req.body?.telegram_chat_id === 'string' ? req.body.telegram_chat_id.trim() : '';
+    const rawUsername = typeof req.body?.telegram_username === 'string' ? req.body.telegram_username.trim() : '';
+    const normalizedChatId = safeChatId || null;
+    const normalizedUsername = rawUsername ? rawUsername.replace(/^@/, '') : null;
+    const usernameWithPrefix = normalizedUsername ? `@${normalizedUsername}` : null;
+
+    if (normalizedChatId && !/^-?\d+$/.test(normalizedChatId)) {
+        return res.status(400).json({ error: 'telegram_chat_id должен быть числовым chat id.' });
+    }
+
+    if (usernameWithPrefix && !/^@[A-Za-z0-9_]{4,}$/.test(usernameWithPrefix)) {
+        return res.status(400).json({ error: 'telegram_username должен быть в формате @username.' });
+    }
+
+    try {
+        const existingUser = await prisma.user.findUnique({
+            where: { id: req.params.id },
+            select: {
+                id: true,
+                telegram_started_at: true
+            }
+        });
+        if (!existingUser) {
+            return res.status(404).json({ error: 'Пользователь не найден.' });
+        }
+
+        const recentContact = normalizedChatId ? await prisma.telegramBotContact.findFirst({
+            where: {
+                chat_id: normalizedChatId
+            },
+            orderBy: {
+                last_seen_at: 'desc'
+            },
+            select: {
+                username: true,
+                started_at: true,
+                last_seen_at: true
+            }
+        }) : null;
+
+        const updatedUser = await prisma.user.update({
+            where: { id: existingUser.id },
+            data: {
+                telegram_chat_id: normalizedChatId,
+                telegram_username: normalizedChatId
+                    ? (normalizedUsername || recentContact?.username || null)
+                    : null,
+                telegram_started_at: normalizedChatId
+                    ? (existingUser.telegram_started_at || recentContact?.started_at || recentContact?.last_seen_at || new Date())
+                    : null
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                telegram_chat_id: true,
+                telegram_username: true,
+                telegram_started_at: true,
+                balance: true,
+                commission_rate: true,
+                created_at: true
+            }
+        });
+
+        res.json(updatedUser);
+    } catch (error) {
+        console.error(error);
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+            return res.status(400).json({ error: 'Этот telegram_chat_id уже привязан к другому пользователю.' });
+        }
+        res.status(500).json({ error: 'Не удалось сохранить Telegram-привязку пользователя.' });
     }
 });
 
@@ -449,7 +605,7 @@ app.get('/api/categories', async (_req, res) => {
 // ===== ADMIN API =====
 
 // Create location
-app.post('/api/locations', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+app.post('/api/locations', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
     try {
         const {
             lat, lng, image, translations
@@ -466,6 +622,14 @@ app.post('/api/locations', authenticateToken, requireRole(['ADMIN', 'MANAGER']),
             },
             include: { translations: true }
         });
+
+        const actorName = await getActorName(req.user?.id);
+        await runTelegramSideEffect(() => queueLocationLifecycleNotification(prisma, {
+            locationId: location.id,
+            locationName: getPrimaryName(location.translations) || `Локация ${location.id}`,
+            action: 'created',
+            actorName
+        }));
         res.json(location);
     } catch (error) {
         console.error(error);
@@ -516,15 +680,36 @@ app.put('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER'
 });
 
 // Delete location
-app.delete('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+app.delete('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
     try {
         const { id } = req.params;
+        const existing = await prisma.location.findFirst({
+            where: {
+                id,
+                deleted_at: null
+            },
+            include: {
+                translations: true
+            }
+        });
+        if (!existing) {
+            res.status(404).json({ error: 'Локация не найдена.' });
+            return;
+        }
+
         const deleted = await prisma.$transaction((tx) => softDeleteLocation(tx, id));
         if (!deleted) {
             res.status(404).json({ error: 'Локация не найдена.' });
             return;
         }
 
+        const actorName = await getActorName(req.user?.id);
+        await runTelegramSideEffect(() => queueLocationLifecycleNotification(prisma, {
+            locationId: existing.id,
+            locationName: getPrimaryName(existing.translations) || `Локация ${existing.id}`,
+            action: 'deleted',
+            actorName
+        }));
         res.json({ success: true });
     } catch (error) {
         console.error(error);
@@ -572,7 +757,7 @@ app.get('/api/products', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 // Create product
-app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
     try {
         const {
             price,
@@ -640,6 +825,16 @@ app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), 
                 }
             }
         });
+
+        if (product.is_published) {
+            const actorName = await getActorName(req.user?.id);
+            await runTelegramSideEffect(() => queueProductPublicationNotification(prisma, {
+                productId: product.id,
+                productName: getPrimaryName(product.translations) || `Товар ${product.id}`,
+                isPublished: true,
+                actorName
+            }));
+        }
         res.json(serializeProduct(product));
     } catch (error) {
         console.error(error);
@@ -648,7 +843,7 @@ app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), 
 });
 
 // Update product
-app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
     try {
         const { id } = req.params;
         const {
@@ -671,7 +866,10 @@ app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']
                 id,
                 deleted_at: null
             },
-            select: { id: true }
+            select: {
+                id: true,
+                is_published: true
+            }
         });
 
         if (!existingProduct) {
@@ -731,6 +929,16 @@ app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']
                 }
             }
         });
+
+        if (existingProduct.is_published !== product.is_published) {
+            const actorName = await getActorName(req.user?.id);
+            await runTelegramSideEffect(() => queueProductPublicationNotification(prisma, {
+                productId: product.id,
+                productName: getPrimaryName(product.translations) || `Товар ${product.id}`,
+                isPublished: product.is_published,
+                actorName
+            }));
+        }
         res.json(serializeProduct(product));
     } catch (error) {
         console.error(error);
@@ -749,7 +957,10 @@ app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthReques
                 id: req.params.id,
                 deleted_at: null
             },
-            select: { id: true }
+            select: {
+                id: true,
+                is_published: true
+            }
         });
 
         if (!existingProduct) {
@@ -782,6 +993,15 @@ app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthReques
             }
         });
 
+        if (existingProduct.is_published !== product.is_published) {
+            const actorName = await getActorName(req.user?.id);
+            await runTelegramSideEffect(() => queueProductPublicationNotification(prisma, {
+                productId: product.id,
+                productName: getPrimaryName(product.translations) || `Товар ${product.id}`,
+                isPublished: product.is_published,
+                actorName
+            }));
+        }
         res.json(serializeProduct(product));
     } catch (error) {
         console.error(error);

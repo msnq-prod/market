@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { NextFunction, Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.ts';
+import { runTelegramSideEffect, syncTelegramLowStockNotifications } from '../services/telegramNotifications.ts';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -112,6 +113,10 @@ router.post('/items/:itemId/allocate', async (req: AuthRequest, res) => {
             }
         });
 
+        const productId = updatedItem.product_id;
+        if (productId) {
+            await runTelegramSideEffect(() => syncTelegramLowStockNotifications(prisma, [productId]));
+        }
         res.json(updatedItem);
     } catch (error) {
         console.error(error);

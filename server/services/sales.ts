@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient, OrderStatus, ReturnReason, SalesChannel } from '@prisma/client';
-import { sendNewOrderCreatedNotification } from './orderNotifications.ts';
+import { sendNewOrderCreatedNotification, sendOrderStatusChangedNotification } from './orderNotifications.ts';
 import { fetchCdekOrderSnapshot, mapCdekSnapshotToOrderProgress } from './cdek.ts';
+import { runTelegramSideEffect, syncTelegramLowStockNotifications } from './telegramNotifications.ts';
 
 export type SalesDbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -167,6 +168,14 @@ const getLocationName = (translations: Array<{ language_id: number; name: string
     || translations.find((translation) => translation.language_id === 1)?.name
     || translations[0]?.name
     || 'Локация'
+);
+
+const getOrderProductIds = (order: Pick<SalesOrderRecord, 'items'>): string[] => (
+    [...new Set(order.items.map((item) => item.product_id).filter(Boolean))]
+);
+
+const getLatestStatusEventTimestamp = (order: Pick<SalesOrderRecord, 'status_events' | 'updated_at'>): string => (
+    order.status_events.at(-1)?.created_at.toISOString() || order.updated_at.toISOString()
 );
 
 const serializeStatusEvent = (event: SalesOrderRecord['status_events'][number]) => ({
@@ -647,7 +656,6 @@ export const createCustomerOrder = async (
 
     await sendNewOrderCreatedNotification({
         orderId: created.id,
-        userId: actor.id,
         buyerName: actor.name,
         buyerUsername: actor.username,
         total: toNumber(created.total),
@@ -784,7 +792,7 @@ export const transitionSalesOrderStatus = async (
 
     assertOrderAssignee(actor, existing);
 
-    return db.$transaction(async (tx) => {
+    const updated = await db.$transaction(async (tx) => {
         const current = await tx.order.findFirst({
             where: {
                 id: orderId,
@@ -799,6 +807,19 @@ export const transitionSalesOrderStatus = async (
 
         return applyStatusTransition(tx, current, nextStatus, actor, options?.meta || null, options?.returnReason || null);
     });
+
+    await sendOrderStatusChangedNotification({
+        orderId: updated.id,
+        fromStatus: existing.status,
+        toStatus: updated.status,
+        buyerName: updated.user?.name || 'Покупатель',
+        buyerUsername: updated.user?.username || null,
+        total: toNumber(updated.total),
+        happenedAt: getLatestStatusEventTimestamp(updated)
+    });
+    await runTelegramSideEffect(() => syncTelegramLowStockNotifications(db, getOrderProductIds(updated)));
+
+    return updated;
 };
 
 export const syncSalesOrderShipment = async (
@@ -820,7 +841,7 @@ export const syncSalesOrderShipment = async (
     const snapshot = await fetchCdekOrderSnapshot(order.shipment.tracking_number);
     const mappedProgress = mapCdekSnapshotToOrderProgress(snapshot);
 
-    return db.$transaction(async (tx) => {
+    const result = await db.$transaction(async (tx) => {
         await tx.orderShipment.update({
             where: { order_id: order.id },
             data: {
@@ -844,8 +865,14 @@ export const syncSalesOrderShipment = async (
         const progression = mappedProgress.targetStatus
             ? getOrderProgression(current.status, mappedProgress.targetStatus as OrderStatus)
             : [];
+        const appliedTransitions: Array<{
+            fromStatus: string | null;
+            toStatus: string;
+            happenedAt: string;
+        }> = [];
 
         for (const nextStatus of progression) {
+            const previousStatus = current.status;
             current = await applyStatusTransition(
                 tx,
                 current,
@@ -858,10 +885,35 @@ export const syncSalesOrderShipment = async (
                 },
                 mappedProgress.returnReason ? mappedProgress.returnReason as ReturnReason : current.return_reason
             );
+            appliedTransitions.push({
+                fromStatus: previousStatus,
+                toStatus: current.status,
+                happenedAt: getLatestStatusEventTimestamp(current)
+            });
         }
 
-        return current;
+        return {
+            order: current,
+            transitions: appliedTransitions
+        };
     });
+
+    const baseBuyerName = result.order.user?.name || 'Покупатель';
+    const baseBuyerUsername = result.order.user?.username || null;
+    for (const event of result.transitions) {
+        await sendOrderStatusChangedNotification({
+            orderId: result.order.id,
+            fromStatus: event.fromStatus,
+            toStatus: event.toStatus,
+            buyerName: baseBuyerName,
+            buyerUsername: baseBuyerUsername,
+            total: toNumber(result.order.total),
+            happenedAt: event.happenedAt
+        });
+    }
+
+    await runTelegramSideEffect(() => syncTelegramLowStockNotifications(db, getOrderProductIds(result.order)));
+    return result.order;
 };
 
 export const upsertSalesOrderShipment = async (

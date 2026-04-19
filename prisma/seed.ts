@@ -72,6 +72,10 @@ async function main() {
     await deleteAllFromTableIfExists('batch_video_export_sessions');
 
     await db.$transaction([
+        db.authSession.deleteMany(),
+        db.orderStatusEvent.deleteMany(),
+        db.orderShipment.deleteMany(),
+        db.orderItemAssignment.deleteMany(),
         db.orderItem.deleteMany(),
         db.order.deleteMany(),
         db.ledger.deleteMany(),

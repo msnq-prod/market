@@ -13,15 +13,15 @@ export function AdminFullscreenRoute({ children }: { children: ReactNode }) {
         return <Navigate to="/admin/login" replace state={{ from: location }} />;
     }
 
+    if (role === 'FRANCHISEE') {
+        return <Navigate to="/partner/dashboard" replace />;
+    }
+
+    if (role === 'SALES_MANAGER') {
+        return <Navigate to="/admin/orders" replace />;
+    }
+
     if (!hasAdminAccess) {
-        if (role === 'FRANCHISEE') {
-            return <Navigate to="/partner/dashboard" replace />;
-        }
-
-        if (role === 'SALES_MANAGER') {
-            return <Navigate to="/admin/orders" replace />;
-        }
-
         return <Navigate to="/" replace />;
     }
 

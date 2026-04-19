@@ -51,7 +51,7 @@ ZAGARAMI состоит из четырех основных частей:
 ### Frontend state
 
 - глобальное клиентское состояние витрины хранится в Zustand: `src/store.ts`
-- auth-сессия хранится в localStorage и используется через `authFetch`
+- access token хранится в `localStorage`, а refresh-session хранится в `HttpOnly` cookie и обновляется через `authFetch`
 - routing основан на `react-router-dom`
 
 ## 3. Backend
@@ -71,7 +71,7 @@ ZAGARAMI состоит из четырех основных частей:
 
 ### Route-модули
 
-- `server/routes/auth.ts` — buyer login/register + refresh + me
+- `server/routes/auth.ts` — buyer login/register + refresh + logout + me
 - `server/routes/orders.ts` — заявки покупателей
 - `server/routes/collectionRequests.ts` — задачи на сбор
 - `server/routes/batches.ts` — партии, photo-tool, QR-pack, receive, finalize, video workflows
@@ -152,7 +152,7 @@ ZAGARAMI состоит из четырех основных частей:
 
 ### Механика
 
-- access token и refresh token — JWT
+- access token — JWT с коротким TTL, refresh-session — server-side запись в `auth_sessions`, привязанная к `HttpOnly` cookie
 - защищенные запросы используют `Authorization: Bearer <token>`
 - middleware: `authenticateToken`, `requireRole`
 
@@ -179,11 +179,11 @@ ZAGARAMI состоит из четырех основных частей:
 - legacy generated videos: `public/uploads/videos/generated`
 - финальные export-flow ролики: `public/uploads/videos/exports`
 - изображения локаций: `public/locations`
-- staging и служебные каталоги для видео: `storage/video-jobs`, `storage/video-export`
+- staging и служебные каталоги: `storage/uploads/staging`, `storage/video-jobs`, `storage/video-export`
 
 ### Публичные URL
 
-- uploaded media раздаются через `/uploads/*`
+- uploaded media раздаются через `/uploads/*`, но inline разрешен только для безопасных raster/video extension; неизвестные типы отдаются как download с `nosniff`
 - изображения локаций раздаются через `/locations/*`
 - QR генерируется на лету через `/api/public/items/:serialNumber/qr`
 

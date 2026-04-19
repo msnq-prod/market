@@ -26,7 +26,9 @@ ARG VITE_VIDEO_HELPER_DOWNLOAD_URL=""
 ENV VITE_VIDEO_HELPER_DOWNLOAD_URL=${VITE_VIDEO_HELPER_DOWNLOAD_URL}
 
 COPY . .
-RUN npm run build
+RUN npm run typecheck \
+    && npm run build:server \
+    && npm run build:client
 
 FROM deps AS prod-deps
 

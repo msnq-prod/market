@@ -39,6 +39,7 @@ export function Login({ portal = 'partner' }: LoginProps) {
             const response = await fetch('/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({ email, password }),
             });
 
@@ -61,7 +62,6 @@ export function Login({ portal = 'partner' }: LoginProps) {
 
             persistAuthSession({
                 accessToken: data.accessToken,
-                refreshToken: data.refreshToken,
                 role: data.role,
                 name: data.name
             });
