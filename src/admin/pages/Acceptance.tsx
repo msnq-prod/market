@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, PackageCheck, Printer, QrCode, Search, Video } from 'lucide-react';
+import { Camera, Download, PackageCheck, QrCode, Search, Video } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -368,7 +368,7 @@ export function Acceptance() {
 
     const handlePrintAllQr = () => {
         if (!selectedBatch || !hasPrintableItems) {
-            setError('Для печати нет публичных QR-позиций.');
+            setError('Для QR PDF нет публичных позиций.');
             return;
         }
 
@@ -381,7 +381,7 @@ export function Acceptance() {
 
     const handlePrintSelectedQr = () => {
         if (!selectedBatch || selectedQrItemIds.length === 0) {
-            setError('Выберите позиции для печати QR.');
+            setError('Выберите позиции для QR PDF.');
             return;
         }
 
@@ -548,16 +548,16 @@ export function Acceptance() {
                                                         onClick={handlePrintSelectedQr}
                                                         disabled={selectedQrItemIds.length === 0}
                                                     >
-                                                        <Printer size={16} />
-                                                        Печать выбранных QR
+                                                        <Download size={16} />
+                                                        PDF выбранных QR
                                                     </Button>
                                                     <Button
                                                         variant="ghost"
                                                         onClick={handlePrintAllQr}
                                                         disabled={!hasPrintableItems}
                                                     >
-                                                        <Printer size={16} />
-                                                        Печать всех QR
+                                                        <Download size={16} />
+                                                        PDF всех QR
                                                     </Button>
                                                     <Link
                                                         to={`/admin/photo-tool/${encodeURIComponent(selectedBatch.id)}`}

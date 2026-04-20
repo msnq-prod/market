@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 type LoginPayload = {
     accessToken: string;
@@ -258,7 +259,7 @@ test('API: партнер завершает заказ на сбор без vid
     expect(payload.batch.status).toBe('TRANSIT');
 });
 
-test('UI e2e: партнер не видит QR-раздел, HQ печатает QR из приемки', async ({ page, request }) => {
+test('UI e2e: партнер не видит QR-раздел, HQ сохраняет QR PDF из приемки', async ({ page, request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const { batchId } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
@@ -281,22 +282,41 @@ test('UI e2e: партнер не видит QR-раздел, HQ печатае�
 
     const [printPage] = await Promise.all([
         page.waitForEvent('popup'),
-        page.getByRole('button', { name: 'Печать всех QR' }).click()
+        page.getByRole('button', { name: 'PDF всех QR' }).click()
     ]);
     await printPage.waitForURL(/\/admin\/qr\/print/);
-    await expect(printPage.getByRole('heading', { name: 'HQ-сервис печати QR' })).toBeVisible();
+    await expect(printPage.getByRole('heading', { name: 'HQ-сервис QR PDF' })).toBeVisible();
     await expect(printPage.getByRole('heading', { name: 'Интерактивное превью одной этикетки' })).toBeVisible();
+    await expect(printPage.getByRole('button', { name: 'Сохранить PDF' })).toBeEnabled();
+    await expect(printPage.getByLabel('Скругление, мм')).toHaveValue('0');
+    await expect.poll(async () => (
+        printPage.locator('.qr-label-card').first().evaluate((element) => getComputedStyle(element).borderTopLeftRadius)
+    )).toBe('0px');
+    await printPage.getByLabel('Скругление, мм').fill('4');
+    await expect.poll(async () => (
+        printPage.locator('.qr-label-card').first().evaluate((element) => getComputedStyle(element).borderTopLeftRadius)
+    )).not.toBe('0px');
     await printPage.getByLabel('Свое поле').check();
     const customInput = printPage.getByPlaceholder('Введите свой текст').first();
     await customInput.fill('Ручная подпись');
     await expect(customInput).toHaveValue('Ручная подпись');
+    const [download] = await Promise.all([
+        printPage.waitForEvent('download'),
+        printPage.getByRole('button', { name: 'Сохранить PDF' }).click()
+    ]);
+    expect(download.suggestedFilename()).toMatch(/^qr-.+\.pdf$/);
+    const downloadedPath = await download.path();
+    expect(downloadedPath).toBeTruthy();
+    const pdfBuffer = await readFile(downloadedPath as string);
+    expect(pdfBuffer.subarray(0, 4).toString()).toBe('%PDF');
+    expect(pdfBuffer.byteLength).toBeGreaterThan(5000);
     await printPage.close();
 
     await page.locator('input[type="checkbox"]').first().check();
 
     const [selectedPrintPage] = await Promise.all([
         page.waitForEvent('popup'),
-        page.getByRole('button', { name: 'Печать выбранных QR' }).click()
+        page.getByRole('button', { name: 'PDF выбранных QR' }).click()
     ]);
     await selectedPrintPage.waitForURL(/mode=selected/);
     await expect(selectedPrintPage.getByText('В документе: 1')).toBeVisible();

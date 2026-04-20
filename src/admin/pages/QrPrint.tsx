@@ -19,7 +19,7 @@ import {
     verticalListSortingStrategy
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ArrowLeft, GripVertical, MoveHorizontal, Printer, QrCode, RotateCcw, X } from 'lucide-react';
+import { ArrowLeft, Download, GripVertical, MoveHorizontal, QrCode, RotateCcw, X } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 
 type Translation = {
@@ -99,6 +99,7 @@ export type QrFieldConfig = {
 export type QrPrintSettings = {
     labelWidthMm: number;
     labelHeightMm: number;
+    labelRadiusMm: number;
     qrSizeMm: number;
     pagePaddingMm: number;
     gapMm: number;
@@ -140,6 +141,10 @@ const MM_TO_PX = 96 / 25.4;
 const A4_WIDTH_PX = A4_WIDTH_MM * MM_TO_PX;
 const A4_HEIGHT_PX = A4_HEIGHT_MM * MM_TO_PX;
 const A4_ASPECT_RATIO = A4_WIDTH_MM / A4_HEIGHT_MM;
+const LABEL_PADDING_MM = 3;
+const LABEL_CONTENT_GAP_MM = 3;
+const PDF_EXPORT_SCALE = 2;
+const PDF_GEOMETRY_TOLERANCE_PX = 2;
 
 const FIELD_KEYS: QrFieldKey[] = [
     'productName',
@@ -175,6 +180,7 @@ const QR_CONTROL_CLASS = 'w-full rounded-xl border border-white/8 bg-[#11141a] t
 const createDefaultSettings = (): QrPrintSettings => ({
     labelWidthMm: 58,
     labelHeightMm: 36,
+    labelRadiusMm: 0,
     qrSizeMm: 18,
     pagePaddingMm: 8,
     gapMm: 4,
@@ -261,6 +267,7 @@ const parseLayoutSettings = (raw: string | null): QrPrintSettings => {
         return {
             labelWidthMm: clampNumber(parsed.labelWidthMm, 30, 140, defaults.labelWidthMm),
             labelHeightMm: clampNumber(parsed.labelHeightMm, 20, 120, defaults.labelHeightMm),
+            labelRadiusMm: clampNumber(parsed.labelRadiusMm, 0, 16, defaults.labelRadiusMm),
             qrSizeMm: clampNumber(parsed.qrSizeMm, 10, 60, defaults.qrSizeMm),
             pagePaddingMm: clampNumber(parsed.pagePaddingMm, 4, 20, defaults.pagePaddingMm),
             gapMm: clampNumber(parsed.gapMm, 2, 20, defaults.gapMm),
@@ -444,174 +451,290 @@ const buildPageGridStyle = (settings: QrPrintSettings, cardsPerRow: number): CSS
     alignContent: 'start'
 });
 
-const escapeHtml = (value: string) => value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+const formatMmValue = (value: number) => {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+};
 
-const buildPrintableDocumentHtml = ({
-    title,
-    baseHref,
-    stylesheetMarkup,
-    documentMarkup
+const formatCssMm = (value: number) => `${formatMmValue(value)}mm`;
+
+const sanitizePdfFilenamePart = (value: string) => (
+    value
+        .trim()
+        .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80)
+);
+
+const buildPdfFilename = (batchId: string | null) => {
+    const safeBatchId = sanitizePdfFilenamePart(batchId || '') || 'document';
+    return `qr-${safeBatchId}.pdf`;
+};
+
+const setElementStyles = (element: HTMLElement, styles: Record<string, string>) => {
+    Object.entries(styles).forEach(([property, value]) => {
+        element.style.setProperty(property, value);
+    });
+};
+
+const applyPdfFieldStyle = (element: HTMLElement, config: QrFieldConfig) => {
+    setElementStyles(element, {
+        'font-size': `${config.fontSizePx}px`,
+        'font-weight': String(config.fontWeight),
+        'font-family': config.fontFamily,
+        'line-height': '1.2',
+        'overflow-wrap': 'break-word',
+        'word-break': 'break-word',
+        margin: '0'
+    });
+};
+
+const resolveExportImageUrl = (url: string) => {
+    try {
+        return new URL(url, window.location.origin).toString();
+    } catch {
+        return url;
+    }
+};
+
+const validatePdfSettings = (settings: QrPrintSettings, cardsPerRow: number, rowsPerPage: number) => {
+    const errors: string[] = [];
+    const contentWidthMm = A4_WIDTH_MM - settings.pagePaddingMm * 2;
+    const contentHeightMm = A4_HEIGHT_MM - settings.pagePaddingMm * 2;
+    const usedWidthMm = cardsPerRow * settings.labelWidthMm + Math.max(0, cardsPerRow - 1) * settings.gapMm;
+    const usedHeightMm = rowsPerPage * settings.labelHeightMm + Math.max(0, rowsPerPage - 1) * settings.gapMm;
+    const labelInnerWidthMm = settings.labelWidthMm - LABEL_PADDING_MM * 2;
+    const labelInnerHeightMm = settings.labelHeightMm - LABEL_PADDING_MM * 2;
+    const maxRadiusMm = Math.min(settings.labelWidthMm, settings.labelHeightMm) / 2;
+
+    if (usedWidthMm - contentWidthMm > 0.01) {
+        errors.push(`Ширина ряда ${formatMmValue(usedWidthMm)} мм больше доступной области A4 ${formatMmValue(contentWidthMm)} мм.`);
+    }
+
+    if (usedHeightMm - contentHeightMm > 0.01) {
+        errors.push(`Высота ряда ${formatMmValue(usedHeightMm)} мм больше доступной области A4 ${formatMmValue(contentHeightMm)} мм.`);
+    }
+
+    if (settings.qrSizeMm - labelInnerWidthMm > 0.01 || settings.qrSizeMm - labelInnerHeightMm > 0.01) {
+        errors.push(`QR ${formatMmValue(settings.qrSizeMm)} мм не помещается во внутреннюю область этикетки ${formatMmValue(labelInnerWidthMm)} × ${formatMmValue(labelInnerHeightMm)} мм.`);
+    }
+
+    if (settings.labelRadiusMm - maxRadiusMm > 0.01) {
+        errors.push(`Скругление ${formatMmValue(settings.labelRadiusMm)} мм больше половины размера этикетки ${formatMmValue(maxRadiusMm)} мм.`);
+    }
+
+    return errors;
+};
+
+const createPdfExportRoot = ({
+    pages,
+    settings,
+    cardsPerRow
 }: {
-    title: string;
-    baseHref: string;
-    stylesheetMarkup: string;
-    documentMarkup: string;
+    pages: QrDocumentItem[][];
+    settings: QrPrintSettings;
+    cardsPerRow: number;
 }) => {
-    return `
-        <!doctype html>
-        <html lang="ru">
-            <head>
-                <meta charset="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <base href="${escapeHtml(baseHref)}" />
-                <title>${escapeHtml(title)}</title>
-                ${stylesheetMarkup}
-                <style>
-                    :root {
-                        color-scheme: light;
-                        font-family: Arial, sans-serif;
-                    }
+    const root = document.createElement('div');
+    setElementStyles(root, {
+        position: 'absolute',
+        left: '-10000px',
+        top: '0',
+        width: `${A4_WIDTH_MM}mm`,
+        background: '#ffffff',
+        color: '#0f172a',
+        'font-family': 'Arial, sans-serif',
+        'z-index': '-1'
+    });
 
-                    * {
-                        box-sizing: border-box;
-                    }
+    pages.forEach((pageItems) => {
+        const pageElement = document.createElement('article');
+        pageElement.dataset.qrPdfPage = 'true';
+        setElementStyles(pageElement, {
+            width: `${A4_WIDTH_MM}mm`,
+            height: `${A4_HEIGHT_MM}mm`,
+            background: '#ffffff',
+            overflow: 'hidden',
+            margin: '0',
+            padding: '0',
+            'box-sizing': 'border-box'
+        });
 
-                    html, body {
-                        margin: 0;
-                        padding: 0;
-                        background: #e2e8f0;
-                    }
+        const gridElement = document.createElement('div');
+        setElementStyles(gridElement, {
+            display: 'grid',
+            padding: `${settings.pagePaddingMm}mm`,
+            gap: `${settings.gapMm}mm`,
+            'grid-template-columns': `repeat(${cardsPerRow}, ${settings.labelWidthMm}mm)`,
+            'grid-auto-rows': `${settings.labelHeightMm}mm`,
+            'align-content': 'start',
+            'box-sizing': 'border-box'
+        });
 
-                    body {
-                        min-height: 100vh;
-                        color: #0f172a;
-                        overflow-x: auto;
-                    }
+        pageItems.forEach((item) => {
+            gridElement.appendChild(createPdfLabelElement(item, settings));
+        });
 
-                    .screen-toolbar {
-                        position: sticky;
-                        top: 0;
-                        z-index: 10;
-                        display: flex;
-                        align-items: center;
-                        justify-content: space-between;
-                        gap: 16px;
-                        padding: 14px 20px;
-                        border-bottom: 1px solid rgba(148, 163, 184, 0.35);
-                        background: rgba(248, 250, 252, 0.92);
-                        backdrop-filter: blur(16px);
-                    }
+        pageElement.appendChild(gridElement);
+        root.appendChild(pageElement);
+    });
 
-                    .screen-toolbar__title {
-                        font-size: 14px;
-                        font-weight: 700;
-                    }
+    return root;
+};
 
-                    .screen-toolbar__hint {
-                        font-size: 12px;
-                        color: #475569;
-                    }
+const createPdfLabelElement = (item: QrDocumentItem, settings: QrPrintSettings) => {
+    const isInverted = settings.invertColors;
+    const labelElement = document.createElement('article');
+    labelElement.dataset.qrLabelCard = 'true';
+    setElementStyles(labelElement, {
+        display: 'flex',
+        'flex-direction': settings.qrSide === 'left' ? 'row' : 'row-reverse',
+        width: `${settings.labelWidthMm}mm`,
+        height: `${settings.labelHeightMm}mm`,
+        padding: `${LABEL_PADDING_MM}mm`,
+        gap: `${LABEL_CONTENT_GAP_MM}mm`,
+        overflow: 'hidden',
+        border: `1px solid ${isInverted ? '#334155' : '#e2e8f0'}`,
+        background: isInverted ? '#020617' : '#ffffff',
+        color: isInverted ? '#ffffff' : '#0f172a',
+        'border-radius': formatCssMm(settings.labelRadiusMm),
+        'box-sizing': 'border-box'
+    });
 
-                    .screen-toolbar__button {
-                        border: 0;
-                        border-radius: 999px;
-                        background: #2563eb;
-                        color: #ffffff;
-                        padding: 10px 16px;
-                        font: inherit;
-                        font-size: 13px;
-                        font-weight: 700;
-                        cursor: pointer;
-                    }
+    const qrElement = document.createElement('div');
+    qrElement.dataset.qrPdfCode = 'true';
+    setElementStyles(qrElement, {
+        display: 'flex',
+        'align-items': 'center',
+        'justify-content': 'center',
+        width: `${settings.qrSizeMm}mm`,
+        height: `${settings.qrSizeMm}mm`,
+        'flex-shrink': '0',
+        border: `1px solid ${isInverted ? '#334155' : '#e2e8f0'}`,
+        background: isInverted ? '#020617' : '#ffffff',
+        'border-radius': formatCssMm(Math.min(settings.labelRadiusMm, 3)),
+        'box-sizing': 'border-box',
+        overflow: 'hidden'
+    });
 
-                    .document-stack {
-                        min-height: calc(100vh - 64px);
-                        padding: 24px;
-                    }
+    if (item.qrUrl) {
+        const qrImage = document.createElement('img');
+        qrImage.src = resolveExportImageUrl(item.qrUrl);
+        qrImage.alt = `QR ${item.serialNumber}`;
+        setElementStyles(qrImage, {
+            display: 'block',
+            width: '100%',
+            height: '100%',
+            'object-fit': 'contain',
+            filter: isInverted ? 'invert(1)' : 'none'
+        });
+        qrElement.appendChild(qrImage);
+    }
 
-                    .qr-print-output {
-                        display: flex !important;
-                        flex-direction: column;
-                        align-items: center;
-                        gap: 24px;
-                        margin: 0 !important;
-                        padding: 0 !important;
-                    }
+    const textContainer = document.createElement('div');
+    setElementStyles(textContainer, {
+        display: 'flex',
+        'min-width': '0',
+        flex: '1',
+        height: '100%',
+        overflow: 'hidden',
+        'align-items': 'center',
+        'box-sizing': 'border-box'
+    });
 
-                    .qr-print-page {
-                        margin: 0 auto !important;
-                        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.16);
-                    }
+    const textStack = document.createElement('div');
+    setElementStyles(textStack, {
+        display: 'flex',
+        width: '100%',
+        height: '100%',
+        'flex-direction': 'column',
+        'justify-content': 'center',
+        gap: '1.6mm',
+        overflow: 'hidden'
+    });
 
-                    .qr-editable-input {
-                        display: none !important;
-                    }
+    settings.fieldOrder.forEach((fieldKey) => {
+        const fieldConfig = settings.fields[fieldKey];
+        if (!fieldConfig.enabled) {
+            return;
+        }
 
-                    .qr-print-value {
-                        display: block !important;
-                    }
+        const value = getFieldValue(item, fieldKey);
+        if (!value.trim()) {
+            return;
+        }
 
-                    @page {
-                        size: A4 portrait;
-                        margin: 0;
-                    }
+        const fieldElement = document.createElement('p');
+        fieldElement.textContent = value;
+        applyPdfFieldStyle(fieldElement, fieldConfig);
+        textStack.appendChild(fieldElement);
+    });
 
-                    @media print {
-                        html, body {
-                            background: #ffffff;
-                        }
+    textContainer.appendChild(textStack);
+    labelElement.appendChild(qrElement);
+    labelElement.appendChild(textContainer);
 
-                        body {
-                            -webkit-print-color-adjust: exact;
-                            print-color-adjust: exact;
-                        }
+    return labelElement;
+};
 
-                        .screen-toolbar {
-                            display: none !important;
-                        }
+const waitForExportImages = async (root: HTMLElement) => {
+    const images = Array.from(root.querySelectorAll('img'));
+    await Promise.all(images.map((image) => {
+        if (image.complete && image.naturalWidth > 0) {
+            return Promise.resolve();
+        }
 
-                        .document-stack {
-                            padding: 0;
-                        }
+        return new Promise<void>((resolve, reject) => {
+            image.addEventListener('load', () => resolve(), { once: true });
+            image.addEventListener('error', () => reject(new Error(`Не удалось загрузить QR ${image.alt || image.src}.`)), { once: true });
+        });
+    }));
+};
 
-                        .qr-print-output {
-                            gap: 0;
-                            align-items: stretch;
-                        }
+const validateExportDomGeometry = (
+    root: HTMLElement,
+    settings: QrPrintSettings,
+    expectedPageCount: number,
+    expectedLabelCount: number
+) => {
+    const errors: string[] = [];
+    const assertDimension = (label: string, actualPx: number, expectedMm: number) => {
+        const expectedPx = expectedMm * MM_TO_PX;
+        if (Math.abs(actualPx - expectedPx) > PDF_GEOMETRY_TOLERANCE_PX) {
+            errors.push(`${label}: ожидается ${formatMmValue(expectedMm)} мм, фактически ${formatMmValue(actualPx / MM_TO_PX)} мм.`);
+        }
+    };
 
-                        .qr-print-page {
-                            margin: 0 auto !important;
-                            box-shadow: none !important;
-                            break-after: page;
-                            page-break-after: always;
-                        }
+    const pageElements = Array.from(root.querySelectorAll<HTMLElement>('[data-qr-pdf-page="true"]'));
+    if (pageElements.length !== expectedPageCount) {
+        errors.push(`Количество страниц PDF изменилось: ожидается ${expectedPageCount}, фактически ${pageElements.length}.`);
+    }
 
-                        .qr-print-page:last-child {
-                            break-after: auto;
-                            page-break-after: auto;
-                        }
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="screen-toolbar">
-                    <div>
-                        <div class="screen-toolbar__title">${escapeHtml(title)}</div>
-                        <div class="screen-toolbar__hint">Это отдельный документ. Печатайте или сохраняйте PDF отсюда, когда будете готовы.</div>
-                    </div>
-                    <button class="screen-toolbar__button" type="button" onclick="window.print()">Печать</button>
-                </div>
-                <main class="document-stack">
-                    ${documentMarkup}
-                </main>
-            </body>
-        </html>
-    `;
+    pageElements.forEach((pageElement, index) => {
+        const rect = pageElement.getBoundingClientRect();
+        assertDimension(`Страница ${index + 1}, ширина`, rect.width, A4_WIDTH_MM);
+        assertDimension(`Страница ${index + 1}, высота`, rect.height, A4_HEIGHT_MM);
+    });
+
+    const labelElements = Array.from(root.querySelectorAll<HTMLElement>('[data-qr-label-card="true"]'));
+    if (labelElements.length !== expectedLabelCount) {
+        errors.push(`Количество этикеток PDF изменилось: ожидается ${expectedLabelCount}, фактически ${labelElements.length}.`);
+    }
+
+    labelElements.forEach((labelElement, index) => {
+        const rect = labelElement.getBoundingClientRect();
+        assertDimension(`Этикетка ${index + 1}, ширина`, rect.width, settings.labelWidthMm);
+        assertDimension(`Этикетка ${index + 1}, высота`, rect.height, settings.labelHeightMm);
+    });
+
+    const qrElements = Array.from(root.querySelectorAll<HTMLElement>('[data-qr-pdf-code="true"]'));
+    qrElements.forEach((qrElement, index) => {
+        const rect = qrElement.getBoundingClientRect();
+        assertDimension(`QR ${index + 1}, ширина`, rect.width, settings.qrSizeMm);
+        assertDimension(`QR ${index + 1}, высота`, rect.height, settings.qrSizeMm);
+    });
+
+    return errors;
 };
 
 export function QrPrint() {
@@ -650,8 +773,8 @@ export function QrPrint() {
             : parseLayoutSettings(window.localStorage.getItem(QR_PRINT_LAYOUT_KEY))
     ));
     const [hydratedBatchId, setHydratedBatchId] = useState('');
+    const [pdfExporting, setPdfExporting] = useState(false);
     const documentViewportRef = useRef<HTMLDivElement | null>(null);
-    const printOutputRef = useRef<HTMLDivElement | null>(null);
     const [pagePreviewMetrics, setPagePreviewMetrics] = useState(() => ({
         width: A4_WIDTH_PX,
         height: A4_HEIGHT_PX,
@@ -724,10 +847,10 @@ export function QrPrint() {
 
             try {
                 const response = await authFetch('/api/products');
-                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить товары для QR-печати.' }));
+                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить товары для QR-документа.' }));
 
                 if (!response.ok) {
-                    throw new Error(payload.error || 'Не удалось загрузить товары для QR-печати.');
+                    throw new Error(payload.error || 'Не удалось загрузить товары для QR-документа.');
                 }
 
                 if (!cancelled) {
@@ -735,7 +858,7 @@ export function QrPrint() {
                 }
             } catch (error) {
                 if (!cancelled) {
-                    setProductsError(error instanceof Error ? error.message : 'Не удалось загрузить товары для QR-печати.');
+                    setProductsError(error instanceof Error ? error.message : 'Не удалось загрузить товары для QR-документа.');
                 }
             } finally {
                 if (!cancelled) {
@@ -985,7 +1108,7 @@ export function QrPrint() {
     };
 
     const updateNumericSetting = (
-        key: 'labelWidthMm' | 'labelHeightMm' | 'qrSizeMm' | 'pagePaddingMm' | 'gapMm',
+        key: 'labelWidthMm' | 'labelHeightMm' | 'labelRadiusMm' | 'qrSizeMm' | 'pagePaddingMm' | 'gapMm',
         value: string,
         minimum: number,
         maximum: number
@@ -1052,7 +1175,7 @@ export function QrPrint() {
             : packError
                 ? packError
                 : selectionMode === 'selected'
-                    ? 'Пока не выбрано ни одной позиции для печати.'
+                    ? 'Пока не выбрано ни одной позиции для PDF.'
                     : 'Для этой партии пока нет публичных QR-позиций.';
 
     const closeWindowOrReturn = () => {
@@ -1064,46 +1187,77 @@ export function QrPrint() {
         navigate('/admin/products');
     };
 
-    const openPrintableDocument = () => {
+    const savePdfDocument = async () => {
+        if (pdfExporting) {
+            return;
+        }
+
         if (documentItems.length === 0) {
             window.alert('Сначала соберите документ: выберите партию и добавьте QR-этикетки.');
             return;
         }
 
-        const printOutput = printOutputRef.current;
-        if (!printOutput) {
-            window.alert('Не удалось собрать печатный документ. Обновите страницу и попробуйте снова.');
+        const settingsErrors = validatePdfSettings(settings, cardsPerRow, rowsPerPage);
+        if (settingsErrors.length > 0) {
+            window.alert(`PDF не сохранен: параметры документа расходятся с A4.\n\n${settingsErrors.join('\n')}`);
             return;
         }
 
-        const title = pack
-            ? `QR документ партии ${pack.batch.id}`
-            : 'QR документ';
-        const documentWindow = window.open('', '_blank');
+        let exportRoot: HTMLElement | null = null;
+        setPdfExporting(true);
 
-        if (!documentWindow) {
-            window.alert('Браузер заблокировал новое окно с документом. Разрешите popup для этого сайта.');
-            return;
+        try {
+            const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+                import('html2canvas'),
+                import('jspdf')
+            ]);
+
+            exportRoot = createPdfExportRoot({ pages, settings, cardsPerRow });
+            document.body.appendChild(exportRoot);
+
+            await document.fonts?.ready;
+            await waitForExportImages(exportRoot);
+
+            const geometryErrors = validateExportDomGeometry(exportRoot, settings, pages.length, documentItems.length);
+            if (geometryErrors.length > 0) {
+                throw new Error(`PDF не сохранен: документ отличается от заданных параметров.\n\n${geometryErrors.join('\n')}`);
+            }
+
+            const pdf = new jsPDF({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4',
+                compress: true
+            });
+            const pageElements = Array.from(exportRoot.querySelectorAll<HTMLElement>('[data-qr-pdf-page="true"]'));
+
+            for (const [pageIndex, pageElement] of pageElements.entries()) {
+                if (pageIndex > 0) {
+                    pdf.addPage();
+                }
+
+                const canvas = await html2canvas(pageElement, {
+                    backgroundColor: '#ffffff',
+                    scale: PDF_EXPORT_SCALE,
+                    useCORS: true,
+                    logging: false,
+                    width: Math.ceil(A4_WIDTH_PX),
+                    height: Math.ceil(A4_HEIGHT_PX),
+                    windowWidth: Math.ceil(A4_WIDTH_PX),
+                    windowHeight: Math.ceil(A4_HEIGHT_PX),
+                    scrollX: 0,
+                    scrollY: 0
+                });
+                pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_WIDTH_MM, A4_HEIGHT_MM);
+            }
+
+            pdf.save(buildPdfFilename(pack?.batch.id || activeBatchId || null));
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : 'Не удалось сохранить PDF-документ.');
+        } finally {
+            exportRoot?.remove();
+            setPdfExporting(false);
         }
-
-        const clonedOutput = printOutput.cloneNode(true) as HTMLDivElement;
-        clonedOutput.querySelectorAll('img').forEach((image) => {
-            image.setAttribute('src', image.src);
-        });
-
-        const stylesheetMarkup = Array.from(document.head.querySelectorAll('link[rel="stylesheet"], style'))
-            .map((node) => node.outerHTML)
-            .join('\n');
-
-        documentWindow.document.open();
-        documentWindow.document.write(buildPrintableDocumentHtml({
-            title,
-            baseHref: `${window.location.origin}/`,
-            stylesheetMarkup,
-            documentMarkup: clonedOutput.outerHTML
-        }));
-        documentWindow.document.close();
-        documentWindow.focus();
     };
 
     return (
@@ -1117,10 +1271,6 @@ export function QrPrint() {
 
                     @media screen {
                         .qr-print-value {
-                            display: none !important;
-                        }
-
-                        .qr-print-output {
                             display: none !important;
                         }
 
@@ -1141,12 +1291,6 @@ export function QrPrint() {
 
                         .qr-screen-only {
                             display: none !important;
-                        }
-
-                        .qr-print-output {
-                            display: block !important;
-                            padding: 0 !important;
-                            margin: 0 !important;
                         }
 
                         .qr-print-root {
@@ -1199,9 +1343,9 @@ export function QrPrint() {
                         </button>
                         <div className="min-w-0">
                             <p className="admin-chip w-fit">Товары / QR-печать</p>
-                            <h1 className="mt-3 text-[1.9rem] font-semibold leading-tight tracking-tight text-white">HQ-сервис печати QR</h1>
+                            <h1 className="mt-3 text-[1.9rem] font-semibold leading-tight tracking-tight text-white">HQ-сервис QR PDF</h1>
                             <p className="mt-1 max-w-2xl text-sm text-gray-500">
-                                Сбор печатного A4-листа из публичных QR партии. Источник, превью и настройки остаются на одном рабочем экране.
+                                Сбор PDF-документа A4 из публичных QR партии. Источник, превью и настройки остаются на одном рабочем экране.
                             </p>
                         </div>
                     </div>
@@ -1232,11 +1376,12 @@ export function QrPrint() {
                             </button>
                             <button
                                 type="button"
-                                onClick={openPrintableDocument}
-                                className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500"
+                                onClick={savePdfDocument}
+                                disabled={pdfExporting || documentItems.length === 0}
+                                className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                                <Printer size={16} />
-                                Открыть документ
+                                <Download size={16} />
+                                {pdfExporting ? 'Сохраняем PDF...' : 'Сохранить PDF'}
                             </button>
                             <button
                                 type="button"
@@ -1255,7 +1400,7 @@ export function QrPrint() {
                     <section className="admin-panel qr-screen-only flex min-h-[420px] min-w-0 flex-col rounded-[24px] px-4 py-4 lg:min-h-0">
                         <div className="mb-4 border-b border-white/6 pb-4">
                             <h2 className="text-base font-semibold text-white">Источник данных</h2>
-                            <p className="mt-1 text-sm text-gray-500">Выберите товар-шаблон, партию и состав QR для печати.</p>
+                            <p className="mt-1 text-sm text-gray-500">Выберите товар-шаблон, партию и состав QR для PDF.</p>
                         </div>
 
                         <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
@@ -1318,7 +1463,7 @@ export function QrPrint() {
                             </div>
 
                             <div className="space-y-2">
-                                <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Режим печати</span>
+                                <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Режим документа</span>
                                 <div className="grid grid-cols-2 gap-2">
                                     <button
                                         type="button"
@@ -1328,7 +1473,7 @@ export function QrPrint() {
                                             : 'border border-white/8 bg-white/[0.04] text-gray-300 hover:bg-white/[0.07] hover:text-white'
                                             }`}
                                     >
-                                        Печатать все
+                                        Все QR
                                     </button>
                                     <button
                                         type="button"
@@ -1433,7 +1578,7 @@ export function QrPrint() {
                     <section className="admin-panel qr-document-panel flex min-h-[620px] min-w-0 flex-col rounded-[24px] p-4 lg:min-h-0">
                         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/6 pb-4">
                             <div>
-                                <h2 className="text-base font-semibold text-white">Лист на печать</h2>
+                                <h2 className="text-base font-semibold text-white">PDF-лист</h2>
                                 <p className="mt-1 text-sm text-gray-500">Центральное превью показывает фактическую раскладку A4.</p>
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs text-gray-300">
@@ -1549,23 +1694,27 @@ export function QrPrint() {
                                     />
                                     <NumericField
                                         compact
+                                        label="Скругление, мм"
+                                        value={settings.labelRadiusMm}
+                                        onChange={(value) => updateNumericSetting('labelRadiusMm', value, 0, 16)}
+                                    />
+                                    <NumericField
+                                        compact
                                         label="Поля листа, мм"
                                         value={settings.pagePaddingMm}
                                         onChange={(value) => updateNumericSetting('pagePaddingMm', value, 4, 20)}
                                     />
-                                    <div className="sm:col-span-2">
-                                        <NumericField
-                                            compact
-                                            label="Зазор между этикетками, мм"
-                                            value={settings.gapMm}
-                                            onChange={(value) => updateNumericSetting('gapMm', value, 2, 20)}
-                                        />
-                                    </div>
+                                    <NumericField
+                                        compact
+                                        label="Зазор, мм"
+                                        value={settings.gapMm}
+                                        onChange={(value) => updateNumericSetting('gapMm', value, 2, 20)}
+                                    />
                                 </div>
 
                                 <label className="flex items-center justify-between gap-4 rounded-xl border border-white/8 bg-[#11141a] px-3 py-3">
                                     <div>
-                                        <p className="text-sm font-medium text-white">Инверсия для печати</p>
+                                        <p className="text-sm font-medium text-white">Инверсия для PDF</p>
                                         <p className="text-xs text-gray-500">Черный фон, светлый текст и инвертированный QR.</p>
                                     </div>
                                     <input
@@ -1650,29 +1799,6 @@ export function QrPrint() {
                     </section>
             </div>
 
-            <div ref={printOutputRef} className="qr-print-output">
-                {pages.map((pageItems, pageIndex) => (
-                    <article
-                        key={`qr-print-page-${pageIndex}`}
-                        className="qr-print-page bg-white"
-                        style={{
-                            width: `${A4_WIDTH_MM}mm`,
-                            minHeight: `${A4_HEIGHT_MM}mm`
-                        }}
-                    >
-                        <div className="grid" style={buildPageGridStyle(settings, cardsPerRow)}>
-                            {pageItems.map((item) => (
-                                <PrintLabelCard
-                                    key={item.id}
-                                    item={item}
-                                    settings={settings}
-                                    onCustomTextChange={updateCustomFieldValue}
-                                />
-                            ))}
-                        </div>
-                    </article>
-                ))}
-            </div>
         </div>
     );
 }
@@ -1904,25 +2030,26 @@ function PrintLabelCard({
 
     return (
         <article
-            className={`qr-label-card flex overflow-hidden rounded-[4mm] border ${isInverted
-                ? 'border-slate-700 bg-slate-950 text-white'
-                : 'border-slate-200 bg-white text-slate-900'
-                } ${settings.qrSide === 'left' ? '' : 'flex-row-reverse'}`}
+            className={`qr-label-card flex overflow-hidden border ${settings.qrSide === 'left' ? '' : 'flex-row-reverse'}`}
             style={{
                 width: `${settings.labelWidthMm}mm`,
                 height: `${settings.labelHeightMm}mm`,
-                padding: '3mm',
-                gap: '3mm'
+                padding: formatCssMm(LABEL_PADDING_MM),
+                gap: formatCssMm(LABEL_CONTENT_GAP_MM),
+                borderColor: isInverted ? '#334155' : '#e2e8f0',
+                backgroundColor: isInverted ? '#020617' : '#ffffff',
+                color: isInverted ? '#ffffff' : '#0f172a',
+                borderRadius: formatCssMm(settings.labelRadiusMm)
             }}
         >
             <div
-                className={`flex shrink-0 items-center justify-center rounded-[3mm] border ${isInverted
-                    ? 'border-slate-700 bg-slate-950'
-                    : 'border-slate-200 bg-white'
-                    }`}
+                className="flex shrink-0 items-center justify-center overflow-hidden border"
                 style={{
                     width: `${settings.qrSizeMm}mm`,
-                    height: `${settings.qrSizeMm}mm`
+                    height: `${settings.qrSizeMm}mm`,
+                    borderColor: isInverted ? '#334155' : '#e2e8f0',
+                    backgroundColor: isInverted ? '#020617' : '#ffffff',
+                    borderRadius: formatCssMm(Math.min(settings.labelRadiusMm, 3))
                 }}
             >
                 {item.qrUrl ? (
@@ -1953,7 +2080,10 @@ function PrintLabelCard({
                                             ? 'border-slate-600 bg-black/30 text-white placeholder:text-slate-500'
                                             : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'
                                             }`}
-                                        style={getFieldStyle(fieldConfig)}
+                                        style={{
+                                            ...getFieldStyle(fieldConfig),
+                                            borderRadius: formatCssMm(Math.min(settings.labelRadiusMm, 2))
+                                        }}
                                     />
                                     {item.customText.trim() && (
                                         <div className="qr-print-value break-words">
