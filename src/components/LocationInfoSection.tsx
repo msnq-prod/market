@@ -22,8 +22,8 @@ export function LocationInfoSection() {
     const description = getLocalizedValue(displayLocation, 'description', language);
 
     return (
-        <section className="relative z-10 flex min-h-[100svh] w-full items-end px-4 pb-6 pt-28 text-white pointer-events-auto sm:px-6 md:block md:min-h-0 md:px-6 md:pb-0 md:pt-32">
-            <div className="mx-auto flex w-full max-w-4xl flex-col px-5 py-6 text-left md:min-h-[100svh] md:items-center md:justify-start md:px-0 md:py-0 md:text-center">
+        <section className="pointer-events-none relative z-10 flex min-h-[100svh] w-full items-end px-4 pb-6 pt-28 text-white sm:px-6 md:items-start md:px-6 md:pb-0 md:pt-28">
+            <div className="mx-auto flex w-full max-w-4xl flex-col px-5 py-6 text-left md:items-center md:justify-start md:px-0 md:py-0 md:text-center">
                 <motion.h2
                     initial={{ opacity: 0, y: 20 }}
                     whileInView={{ opacity: 1, y: 0 }}
@@ -38,7 +38,7 @@ export function LocationInfoSection() {
                         <span>ДОЛГ: {displayLocation.lng.toFixed(4)}</span>
                     </div>
                 </div>
-                <p className="mt-24 max-w-2xl leading-relaxed text-gray-300 md:mx-auto md:mt-[26rem]">
+                <p className="mt-24 max-w-2xl leading-relaxed text-gray-300 md:mx-auto md:mt-32 lg:mt-40">
                     {description}
                 </p>
             </div>

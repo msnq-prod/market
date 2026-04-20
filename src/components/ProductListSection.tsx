@@ -24,7 +24,7 @@ export function ProductListSection() {
     if (!displayLocation || !displayLocation.products) return null;
 
     return (
-        <section id="products" className="relative z-10 mt-0 w-full min-h-[100svh] border-t border-white/10 bg-black/30 px-4 pb-24 pt-12 text-white backdrop-blur-md pointer-events-auto sm:px-6 md:mt-[80vh] md:min-h-screen md:pt-20 md:pb-20">
+        <section id="products" data-testid="location-products-sheet" className="relative z-10 mt-0 w-full min-h-[100svh] border-t border-white/10 bg-black/30 px-4 pb-24 pt-6 text-white backdrop-blur-md pointer-events-auto sm:px-6 sm:pt-8 md:min-h-screen md:pb-20 md:pt-4">
             <div className="max-w-6xl mx-auto">
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2 md:gap-8 lg:grid-cols-3">
                     {displayLocation.products.map((product) => (
@@ -46,6 +46,7 @@ function ProductCard({ product, addToCart, language }: { product: Product, addTo
 
     return (
         <motion.div
+            data-testid="location-product-card"
             initial={{ opacity: 0, scale: 0.9 }}
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true }}

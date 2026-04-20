@@ -22,10 +22,6 @@ const pageMeta: Record<string, { title: string; description: string }> = {
         title: 'История продаж',
         description: 'Архив завершенных продаж.'
     },
-    '/admin/locations': {
-        title: 'Локации',
-        description: 'География каталога и публикация точек.'
-    },
     '/admin/products': {
         title: 'Товары',
         description: 'Карточки товаров, остатки и публикация.'

@@ -5,7 +5,7 @@ import type { MotionValue } from 'framer-motion'
 import { useStore } from '../store'
 import { getLocalizedValue } from '../utils/language';
 import type { Product, User } from '../data/db'
-import { Languages, Menu, ShoppingBag, ShoppingCart, UserRound, X } from 'lucide-react';
+import { Languages, Menu, RotateCcw, ShoppingBag, ShoppingCart, UserRound, X } from 'lucide-react';
 import { formatRub } from '../utils/currency';
 import projectLogo from '../assets/project-logo.png';
 import { MarketplaceButtons } from './MarketplaceButtons';
@@ -51,6 +51,7 @@ function useIsMobile() {
 
 export function UIOverlay() {
     const activeView = useStore((state) => state.activeView)
+    const selectedLocation = useStore((state) => state.selectedLocation)
     const activeUser = useStore((state) => state.user)
     const cart = useStore((state) => state.cart)
     const language = useStore((state) => state.language)
@@ -198,18 +199,31 @@ export function UIOverlay() {
                 {activeView === 'MARKET' && (
                     <div className="pointer-events-auto absolute inset-x-0 top-0 z-[60] px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
                         <div className="flex items-center justify-between rounded-full border border-white/10 bg-black/55 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-                            <button
-                                type="button"
-                                className="flex min-w-0 items-center gap-3"
-                                onClick={closeToMarket}
-                                aria-label="ZAGARAMI"
-                            >
-                                <img
-                                    src={projectLogo}
-                                    alt="ZAGARAMI"
-                                    className="h-9 w-auto max-w-[148px] object-contain invert"
-                                />
-                            </button>
+                            {selectedLocation ? (
+                                <button
+                                    type="button"
+                                    data-testid="mobile-orbit-button"
+                                    className="flex shrink-0 items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/15"
+                                    onClick={closeToMarket}
+                                    aria-label="Вернуться на орбиту"
+                                >
+                                    <RotateCcw size={15} strokeWidth={1.8} />
+                                    <span>На орбиту</span>
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="flex min-w-0 items-center gap-3"
+                                    onClick={closeToMarket}
+                                    aria-label="ZAGARAMI"
+                                >
+                                    <img
+                                        src={projectLogo}
+                                        alt="ZAGARAMI"
+                                        className="h-9 w-auto max-w-[148px] object-contain invert"
+                                    />
+                                </button>
+                            )}
 
                             <div className="flex items-center gap-1">
                                 <LanguageSwitcher

@@ -84,7 +84,7 @@ export function Dashboard() {
     const cards = [
         {
             title: 'Локации',
-            to: '/admin/locations',
+            to: '/admin/products',
             icon: <MapPin size={18} />,
             accentClass: 'bg-amber-400/10 text-amber-200',
             value: stats.locationsTotal,

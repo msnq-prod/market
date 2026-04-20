@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { createProductFixture, disconnectTestDb } from './support/db-fixtures';
 
 type TouchPoint = {
@@ -16,6 +16,32 @@ const angleDelta = (start: number, end: number) => {
     const rawDelta = end - start;
     const wrappedDelta = ((rawDelta + Math.PI) % (2 * Math.PI)) - Math.PI;
     return Math.abs(wrappedDelta);
+};
+
+const selectFirstProductLocation = async (page: Page, errorMessage: string) => {
+    await page.evaluate((message) => {
+        const store = (window as Window & {
+            __STONES_STORE__?: {
+                getState: () => {
+                    locations: Array<Record<string, unknown> & { products?: unknown[] }>;
+                    selectLocation: (location: Record<string, unknown>) => void;
+                };
+            };
+        }).__STONES_STORE__;
+
+        if (!store) {
+            throw new Error('Store is not available.');
+        }
+
+        const state = store.getState();
+        const firstLocation = state.locations.find((location) => Array.isArray(location.products) && location.products.length > 0);
+
+        if (!firstLocation) {
+            throw new Error(message);
+        }
+
+        state.selectLocation(firstLocation);
+    }, errorMessage);
 };
 
 const swipe = async (
@@ -143,7 +169,7 @@ test.describe('Mobile landing page', () => {
                 __STONES_DEBUG__?: { orbit?: { getAngles: () => { touchAction: string | null } } };
             }).__STONES_DEBUG__?.orbit?.getAngles().touchAction ?? null;
         });
-        expect(touchAction).toBe('pan-y');
+        expect(touchAction).toBe('none');
 
         const canvas = page.locator('canvas').first();
         const box = await canvas.boundingBox();
@@ -157,10 +183,11 @@ test.describe('Mobile landing page', () => {
 
         await expect(page.getByLabel('Прокрутить ниже')).toBeVisible();
         await page.getByLabel('Прокрутить ниже').click();
-        await page.waitForTimeout(250);
 
-        const scrollAfterHint = await page.evaluate(() => window.scrollY);
-        expect(scrollAfterHint).toBeGreaterThan(120);
+        await expect.poll(
+            async () => page.evaluate(() => window.scrollY),
+            { timeout: 2_000 }
+        ).toBeGreaterThan(120);
 
         await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
         await swipe(
@@ -198,34 +225,12 @@ test.describe('Mobile landing page', () => {
             }).__STONES_DEBUG__?.orbit?.getAngles().azimuthalAngle ?? null;
         });
         expect(orbitAfter).not.toBeNull();
-        expect(angleDelta(orbitBefore ?? 0, orbitAfter ?? 0)).toBeGreaterThan(0.12);
+        expect(angleDelta(orbitBefore ?? 0, orbitAfter ?? 0)).toBeGreaterThan(0.7);
 
         const scrollAfterHorizontalSwipe = await page.evaluate(() => window.scrollY);
         expect(scrollAfterHorizontalSwipe).toBeLessThan(40);
 
-        await page.evaluate(() => {
-            const store = (window as Window & {
-                __STONES_STORE__?: {
-                    getState: () => {
-                        locations: Array<Record<string, unknown> & { products?: unknown[] }>;
-                        selectLocation: (location: Record<string, unknown>) => void;
-                    };
-                };
-            }).__STONES_STORE__;
-
-            if (!store) {
-                throw new Error('Store is not available.');
-            }
-
-            const state = store.getState();
-            const firstLocation = state.locations.find((location) => Array.isArray(location.products) && location.products.length > 0);
-
-            if (!firstLocation) {
-                throw new Error('No published location with products found for orbit exit test.');
-            }
-
-            state.selectLocation(firstLocation);
-        });
+        await selectFirstProductLocation(page, 'No published location with products found for orbit exit test.');
         await page.waitForTimeout(200);
 
         const selectedLocationId = await page.evaluate(() => {
@@ -234,6 +239,7 @@ test.describe('Mobile landing page', () => {
             }).__STONES_STORE__?.getState().selectedLocation?.id ?? null;
         });
         expect(selectedLocationId).not.toBeNull();
+        await expect(page.getByTestId('mobile-orbit-button')).toBeVisible();
 
         const focusedCanvasBox = await canvas.boundingBox();
         expect(focusedCanvasBox).not.toBeNull();
@@ -243,6 +249,34 @@ test.describe('Mobile landing page', () => {
 
         const focusedCenterX = focusedCanvasBox.x + (focusedCanvasBox.width / 2);
         const focusedCenterY = focusedCanvasBox.y + (focusedCanvasBox.height * 0.45);
+
+        await page.touchscreen.tap(
+            focusedCanvasBox.x + (focusedCanvasBox.width * 0.12),
+            focusedCenterY
+        );
+        await page.waitForTimeout(200);
+
+        const selectedLocationAfterEmptyTap = await page.evaluate(() => {
+            return (window as Window & {
+                __STONES_STORE__?: { getState: () => { selectedLocation: { id: string } | null } };
+            }).__STONES_STORE__?.getState().selectedLocation;
+        });
+        expect(selectedLocationAfterEmptyTap).toBeNull();
+
+        await selectFirstProductLocation(page, 'No published location with products found for orbit button test.');
+        await page.waitForTimeout(200);
+        await page.getByTestId('mobile-orbit-button').click();
+        await page.waitForTimeout(200);
+
+        const selectedLocationAfterButton = await page.evaluate(() => {
+            return (window as Window & {
+                __STONES_STORE__?: { getState: () => { selectedLocation: { id: string } | null } };
+            }).__STONES_STORE__?.getState().selectedLocation;
+        });
+        expect(selectedLocationAfterButton).toBeNull();
+
+        await selectFirstProductLocation(page, 'No published location with products found for orbit exit test.');
+        await page.waitForTimeout(200);
 
         await swipe(
             client,

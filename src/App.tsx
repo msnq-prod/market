@@ -1,7 +1,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls as DreiOrbitControls } from '@react-three/drei'
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { Earth } from './components/Earth'
@@ -16,7 +16,6 @@ import { ScrollToProductsHint } from './components/ScrollToProductsHint'
 import { AdminLayout } from './admin/components/AdminLayout'
 import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
 import { Dashboard } from './admin/pages/Dashboard'
-import { Locations } from './admin/pages/Locations'
 import { Products } from './admin/pages/Products'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
@@ -50,6 +49,10 @@ const LIGHT_ORBIT_HEIGHT = 3.5
 const LIGHT_ORBIT_SPEED = 0.08
 const MAIN_SCENE_DPR: [number, number] = [1, 1.25]
 const MAIN_SCENE_FPS = 30
+const MOBILE_ORBIT_START_THRESHOLD = 5
+const MOBILE_ORBIT_ROTATE_SPEED = 0.7
+const MOBILE_ORBIT_MIN_POLAR_ANGLE = 0.25
+const MOBILE_ORBIT_MAX_POLAR_ANGLE = Math.PI - 0.25
 
 function useIsMobileViewport() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
@@ -129,18 +132,27 @@ function SceneRenderTicker({ fps }: { fps: number }) {
   return null
 }
 
-function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) {
+function GlobeOrbitControls({ isMobile }: { isMobile: boolean }) {
   const selectedLocation = useStore((state) => state.selectedLocation)
   const clearSelection = useStore((state) => state.clearSelection)
+  const invalidate = useThree((state) => state.invalidate)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const scrollLockRef = useRef<ScrollLockSnapshot | null>(null)
+  const canvasTapRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    moved: boolean
+  } | null>(null)
   const mobileGestureRef = useRef<{
     pointerId: number
     startX: number
     startY: number
     lastX: number
-    mode: 'pending' | 'orbit' | 'scroll'
+    lastY: number
+    mode: 'pending' | 'orbit'
   } | null>(null)
+  const touchAction = 'none'
 
   const unlockScroll = useCallback(() => {
     const snapshot = scrollLockRef.current
@@ -154,7 +166,7 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
   }, [])
 
   const lockScroll = useCallback(() => {
-    if (touchAction !== 'pan-y' || scrollLockRef.current) return
+    if (!isMobile || scrollLockRef.current) return
 
     scrollLockRef.current = {
       bodyOverflow: document.body.style.overflow,
@@ -167,7 +179,7 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
     document.documentElement.style.overflow = 'hidden'
     document.body.style.overscrollBehavior = 'none'
     document.documentElement.style.overscrollBehavior = 'none'
-  }, [touchAction])
+  }, [isMobile])
 
   useEffect(() => {
     const domElement = controlsRef.current?.domElement
@@ -179,7 +191,62 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
 
   useEffect(() => {
     const domElement = controlsRef.current?.domElement
-    if (!domElement || touchAction !== 'pan-y') return
+    if (!domElement) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!event.isPrimary) return
+
+      canvasTapRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false
+      }
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const tap = canvasTapRef.current
+      if (!tap || event.pointerId !== tap.pointerId) return
+
+      if (Math.hypot(event.clientX - tap.startX, event.clientY - tap.startY) >= MOBILE_ORBIT_START_THRESHOLD) {
+        tap.moved = true
+      }
+    }
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (canvasTapRef.current?.pointerId === event.pointerId) {
+        canvasTapRef.current = null
+      }
+    }
+
+    const handleClick = () => {
+      const tap = canvasTapRef.current
+      canvasTapRef.current = null
+
+      if (tap?.moved) return
+
+      if (useStore.getState().selectedLocation) {
+        clearSelection()
+      }
+    }
+
+    domElement.addEventListener('pointerdown', handlePointerDown)
+    domElement.addEventListener('pointermove', handlePointerMove)
+    domElement.addEventListener('pointercancel', handlePointerCancel)
+    domElement.addEventListener('click', handleClick)
+
+    return () => {
+      domElement.removeEventListener('pointerdown', handlePointerDown)
+      domElement.removeEventListener('pointermove', handlePointerMove)
+      domElement.removeEventListener('pointercancel', handlePointerCancel)
+      domElement.removeEventListener('click', handleClick)
+      canvasTapRef.current = null
+    }
+  }, [clearSelection])
+
+  useEffect(() => {
+    const domElement = controlsRef.current?.domElement
+    if (!domElement || !isMobile) return
 
     const finishGesture = (pointerId?: number) => {
       if (pointerId !== undefined && mobileGestureRef.current && mobileGestureRef.current.pointerId !== pointerId) {
@@ -198,7 +265,12 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
         startX: event.clientX,
         startY: event.clientY,
         lastX: event.clientX,
+        lastY: event.clientY,
         mode: 'pending'
+      }
+
+      if (typeof domElement.setPointerCapture === 'function') {
+        domElement.setPointerCapture(event.pointerId)
       }
     }
 
@@ -213,44 +285,47 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
       const absY = Math.abs(totalDeltaY)
 
       if (gesture.mode === 'pending') {
-        if (absX < 10 && absY < 10) return
+        if (Math.max(absX, absY) < MOBILE_ORBIT_START_THRESHOLD) return
 
-        if (absX > absY + 6) {
-          gesture.mode = 'orbit'
-          if (useStore.getState().selectedLocation) {
-            clearSelection()
-          }
-          lockScroll()
-        } else if (absY > absX + 6) {
-          gesture.mode = 'scroll'
-          unlockScroll()
-          return
-        } else {
-          return
+        gesture.mode = 'orbit'
+        if (useStore.getState().selectedLocation) {
+          clearSelection()
         }
+        lockScroll()
       }
 
-      if (gesture.mode !== 'orbit') return
-
       const deltaX = event.clientX - gesture.lastX
-      if (deltaX !== 0) {
+      const deltaY = event.clientY - gesture.lastY
+      if (deltaX !== 0 || deltaY !== 0) {
+        const rotationBase = Math.max(420, Math.min(domElement.clientWidth, domElement.clientHeight))
         const nextAzimuthalAngle =
-          controls.getAzimuthalAngle() - ((2 * Math.PI * deltaX) / domElement.clientHeight) * controls.rotateSpeed
+          controls.getAzimuthalAngle() - ((2 * Math.PI * deltaX) / rotationBase) * MOBILE_ORBIT_ROTATE_SPEED
+        const nextPolarAngle = THREE.MathUtils.clamp(
+          controls.getPolarAngle() - ((Math.PI * deltaY) / rotationBase) * MOBILE_ORBIT_ROTATE_SPEED,
+          MOBILE_ORBIT_MIN_POLAR_ANGLE,
+          MOBILE_ORBIT_MAX_POLAR_ANGLE
+        )
 
         controls.setAzimuthalAngle(nextAzimuthalAngle)
+        controls.setPolarAngle(nextPolarAngle)
         controls.update()
         gesture.lastX = event.clientX
+        gesture.lastY = event.clientY
+        invalidate()
       }
 
       event.preventDefault()
     }
 
     const handlePointerUp = (event: PointerEvent) => {
+      if (typeof domElement.releasePointerCapture === 'function' && domElement.hasPointerCapture(event.pointerId)) {
+        domElement.releasePointerCapture(event.pointerId)
+      }
       finishGesture(event.pointerId)
     }
 
     domElement.addEventListener('pointerdown', handlePointerDown)
-    domElement.addEventListener('pointermove', handlePointerMove)
+    domElement.addEventListener('pointermove', handlePointerMove, { passive: false })
     domElement.addEventListener('pointerup', handlePointerUp)
     domElement.addEventListener('pointercancel', handlePointerUp)
 
@@ -261,7 +336,7 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
       domElement.removeEventListener('pointercancel', handlePointerUp)
       finishGesture()
     }
-  }, [clearSelection, lockScroll, touchAction, unlockScroll])
+  }, [clearSelection, invalidate, isMobile, lockScroll, unlockScroll])
 
   useEffect(() => {
     return () => {
@@ -303,7 +378,9 @@ function GlobeOrbitControls({ touchAction }: { touchAction: 'pan-y' | 'none' }) 
       enableZoom={false}
       enableRotate={true}
       rotateSpeed={0.5}
-      touches={touchAction === 'pan-y' ? { TWO: THREE.TOUCH.DOLLY_PAN } : undefined}
+      minPolarAngle={MOBILE_ORBIT_MIN_POLAR_ANGLE}
+      maxPolarAngle={MOBILE_ORBIT_MAX_POLAR_ANGLE}
+      touches={isMobile ? { TWO: THREE.TOUCH.DOLLY_PAN } : undefined}
       autoRotate={!selectedLocation}
       autoRotateSpeed={0.15}
       onStart={() => {
@@ -333,7 +410,7 @@ function Scene() {
 
       <CameraController />
 
-      <GlobeOrbitControls touchAction={isMobile ? 'pan-y' : 'none'} />
+      <GlobeOrbitControls isMobile={isMobile} />
     </>
   )
 }
@@ -370,8 +447,10 @@ const INITIAL_CAMERA_POSITION: [number, number, number] = [
 function MainApp() {
   const fetchLocations = useStore((state) => state.fetchLocations)
   const selectedLocation = useStore((state) => state.selectedLocation)
+  const clearSelection = useStore((state) => state.clearSelection)
   const [showOverviewDelayed, setShowOverviewDelayed] = React.useState(true)
   const hasWebGL = useHasWebGLSupport()
+  const sceneContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     void fetchLocations()
@@ -391,11 +470,30 @@ function MainApp() {
     }
   }, [selectedLocation])
 
+  const handleScenePointerMissed = useCallback(() => {
+    if (useStore.getState().selectedLocation) {
+      clearSelection()
+    }
+  }, [clearSelection])
+
+  useEffect(() => {
+    const handleDocumentClick = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || !sceneContainerRef.current?.contains(target)) return
+      if (!useStore.getState().selectedLocation) return
+
+      clearSelection()
+    }
+
+    document.addEventListener('click', handleDocumentClick, true)
+    return () => document.removeEventListener('click', handleDocumentClick, true)
+  }, [clearSelection])
+
   return (
     <div className="relative w-full min-h-[100svh] overflow-x-clip bg-black">
       {hasWebGL && <LoadingScreen />}
 
-      <div className="fixed inset-0 z-0">
+      <div ref={sceneContainerRef} className="fixed inset-0 z-0">
         {hasWebGL ? (
           <ErrorBoundary>
             <Canvas
@@ -404,6 +502,7 @@ function MainApp() {
               frameloop="demand"
               gl={{ antialias: true, powerPreference: 'low-power', stencil: false }}
               performance={{ min: 0.75 }}
+              onPointerMissed={handleScenePointerMissed}
               fallback={
                 <div className="flex h-full w-full items-center justify-center bg-black text-sm text-white/70">
                   3D-сцена недоступна в этом браузере
@@ -504,7 +603,7 @@ function App() {
           <Route path="clients" element={<Clients />} />
           <Route path="inventory" element={<SalesInventory />} />
           <Route path="sales-history" element={<SalesHistory />} />
-          <Route path="locations" element={<Locations />} />
+          <Route path="locations" element={<Navigate to="/admin/products" replace />} />
           <Route path="products" element={<Products />} />
           <Route path="acceptance" element={<Acceptance />} />
           <Route path="allocation" element={<Allocation />} />
