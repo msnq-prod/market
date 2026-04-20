@@ -1,7 +1,19 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot } from 'lucide-react';
+import { LayoutDashboard, MapPin, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { logoutSession } from '../../utils/session';
+
+type NavConfig = {
+    to: string;
+    label: string;
+    icon: ReactNode;
+    newTab?: boolean;
+};
+
+type NavSection = {
+    title: string;
+    items: NavConfig[];
+};
 
 export function Sidebar() {
     const location = useLocation();
@@ -10,72 +22,103 @@ export function Sidebar() {
     const isSalesManager = role === 'SALES_MANAGER';
     const canAccessSalesCabinet = role === 'ADMIN' || role === 'SALES_MANAGER';
 
+    const salesItems: NavConfig[] = [
+        { to: '/admin/orders', icon: <ShoppingCart size={18} />, label: 'Заказы' },
+        { to: '/admin/clients', icon: <Users size={18} />, label: 'Клиенты' },
+        { to: '/admin/inventory', icon: <Database size={18} />, label: 'Наличие' },
+        { to: '/admin/sales-history', icon: <History size={18} />, label: 'История продаж' }
+    ];
+
+    const hqSections: NavSection[] = [
+        {
+            title: 'Обзор',
+            items: [
+                { to: '/admin', icon: <LayoutDashboard size={18} />, label: 'Дашборд' }
+            ]
+        },
+        ...(canAccessSalesCabinet ? [{
+            title: 'Продажи',
+            items: salesItems
+        }] : []),
+        {
+            title: 'Логистика',
+            items: [
+                { to: '/admin/acceptance', icon: <Truck size={18} />, label: 'Приемка' },
+                { to: '/admin/allocation', icon: <Box size={18} />, label: 'Распределение' },
+                { to: '/admin/warehouse', icon: <Archive size={18} />, label: 'Склад' }
+            ]
+        },
+        {
+            title: 'Контент',
+            items: [
+                { to: '/admin/locations', icon: <MapPin size={18} />, label: 'Локации' },
+                { to: '/admin/products', icon: <Box size={18} />, label: 'Товары' },
+                { to: '/admin/qr/print', icon: <QrCode size={18} />, label: 'QR-печать', newTab: true },
+                { to: '/admin/clone-content', icon: <FileText size={18} />, label: 'Страница клона' }
+            ]
+        },
+        {
+            title: 'Система',
+            items: [
+                { to: '/admin/users', icon: <Users size={18} />, label: 'Пользователи' },
+                ...(role === 'ADMIN'
+                    ? [{ to: '/admin/telegram-bots', icon: <Bot size={18} />, label: 'Telegram' }]
+                    : [])
+            ]
+        }
+    ];
+
+    const sections = isSalesManager
+        ? [{ title: 'Продажи', items: salesItems }]
+        : hqSections;
+
     const handleLogout = () => {
         logoutSession();
         navigate('/admin/login', { replace: true });
     };
 
     return (
-        <aside className="admin-sidebar border-b border-gray-800 bg-gray-900 lg:flex lg:w-64 lg:flex-col lg:border-b-0 lg:border-r">
-            <div className="border-b border-gray-800 p-4 sm:p-6">
-                <h1 className="text-xl font-bold text-white tracking-widest uppercase">
+        <aside className="admin-sidebar border-b border-white/6 bg-[#14161b] lg:flex lg:w-[214px] lg:flex-col lg:border-b-0 lg:border-r">
+            <div className="border-b border-white/6 px-5 py-6">
+                <h2 className="text-[1.85rem] font-semibold tracking-tight text-white">
                     {isSalesManager ? 'Продажи' : 'Админ HQ'}
-                </h1>
-                <p className="text-xs text-gray-500 mt-1">
-                    {isSalesManager ? 'Очередь заказов ZAGARAMI' : 'Центр управления ZAGARAMI'}
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                    {isSalesManager ? 'Очередь заказов Stones' : 'Центр управления Stones'}
                 </p>
             </div>
 
-            <nav className="flex-1 overflow-x-auto p-3 sm:p-4 lg:space-y-1 lg:overflow-x-visible">
-                <div className="flex gap-2 lg:block">
-                    {isSalesManager ? (
-                        <>
-                            <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
-                            <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
-                            <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
-                            <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
-                        </>
-                    ) : (
-                        <>
-                            <NavItem to="/admin" icon={<LayoutDashboard size={20} />} label="Дашборд" active={location.pathname === '/admin'} />
-
-                            {canAccessSalesCabinet && (
-                                <>
-                                    <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Продажи</div>
-                                    <NavItem to="/admin/orders" icon={<ShoppingCart size={20} />} label="Заказы" active={location.pathname === '/admin/orders'} />
-                                    <NavItem to="/admin/clients" icon={<Users size={20} />} label="Клиенты" active={location.pathname === '/admin/clients'} />
-                                    <NavItem to="/admin/inventory" icon={<Database size={20} />} label="Наличие" active={location.pathname === '/admin/inventory'} />
-                                    <NavItem to="/admin/sales-history" icon={<History size={20} />} label="История продаж" active={location.pathname === '/admin/sales-history'} />
-                                </>
-                            )}
-
-                            <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Логистика</div>
-                            <NavItem to="/admin/acceptance" icon={<Truck size={20} />} label="Приемка" active={location.pathname === '/admin/acceptance'} />
-                            <NavItem to="/admin/allocation" icon={<Box size={20} />} label="Распределение" active={location.pathname === '/admin/allocation'} />
-                            <NavItem to="/admin/warehouse" icon={<Archive size={20} />} label="Склад" active={location.pathname === '/admin/warehouse'} />
-
-                            <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Контент</div>
-                            <NavItem to="/admin/locations" icon={<MapPin size={20} />} label="Локации" active={location.pathname === '/admin/locations'} />
-                            <NavItem to="/admin/products" icon={<Box size={20} />} label="Товары" active={location.pathname === '/admin/products'} />
-                            <NavItem to="/admin/qr/print" icon={<QrCode size={20} />} label="QR-печать" active={false} newTab />
-                            <NavItem to="/admin/clone-content" icon={<FileText size={20} />} label="Страница клона" active={location.pathname === '/admin/clone-content'} />
-
-                            <div className="hidden px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-500 lg:block">Система</div>
-                            <NavItem to="/admin/users" icon={<Users size={20} />} label="Пользователи" active={location.pathname === '/admin/users'} />
-                            {role === 'ADMIN' && (
-                                <NavItem to="/admin/telegram-bots" icon={<Bot size={20} />} label="Telegram" active={location.pathname === '/admin/telegram-bots'} />
-                            )}
-                        </>
-                    )}
+            <nav className="flex-1 overflow-x-auto px-3 py-4 lg:overflow-y-auto lg:overflow-x-visible">
+                <div className="flex gap-3 lg:block lg:space-y-4">
+                    {sections.map((section) => (
+                        <div key={section.title} className="min-w-[190px] lg:min-w-0">
+                            <div className="px-3 pb-2 text-[10px] font-medium uppercase tracking-[0.24em] text-gray-600">
+                                {section.title}
+                            </div>
+                            <div className="space-y-1">
+                                {section.items.map((item) => (
+                                    <NavItem
+                                        key={item.to}
+                                        to={item.to}
+                                        icon={item.icon}
+                                        label={item.label}
+                                        active={location.pathname === item.to}
+                                        newTab={item.newTab}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             </nav>
 
-            <div className="border-t border-gray-800 p-3 sm:p-4">
+            <div className="border-t border-white/6 p-3">
                 <button
                     type="button"
                     onClick={handleLogout}
-                    className="flex min-h-11 w-full items-center gap-3 rounded-lg px-4 py-2 text-left text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+                    className="flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-gray-400 transition hover:bg-white/[0.04] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60"
                 >
+                    <LogOut size={16} />
                     <span>Выйти</span>
                 </button>
             </div>
@@ -96,17 +139,17 @@ function NavItem({
     active: boolean;
     newTab?: boolean;
 }) {
-    const className = `group flex min-h-11 items-center gap-3 rounded-lg px-4 py-3 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 lg:w-full ${active
-        ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20 shadow-[0_0_15px_rgba(37,99,235,0.1)]'
-        : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+    const className = `group flex min-h-10 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 lg:w-full ${active
+        ? 'border border-blue-400/10 bg-[#1d2434] text-blue-100'
+        : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
         }`;
 
     const content = (
         <>
-            <div className={`transition-transform duration-200 ${active ? 'scale-110' : 'group-hover:scale-110'}`}>
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] transition duration-200 ${active ? 'text-blue-200' : 'text-gray-500 group-hover:text-gray-200'}`}>
                 {icon}
             </div>
-            <span className="font-medium">{label}</span>
+            <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
         </>
     );
 

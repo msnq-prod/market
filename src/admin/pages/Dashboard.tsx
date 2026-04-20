@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Archive, Boxes, MapPin, Truck, Users } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 
 type DashboardStats = {
@@ -79,60 +81,91 @@ export function Dashboard() {
         fetchStats();
     }, []);
 
-    return (
-        <div className="space-y-6">
-            <header className="mb-8">
-                <h1 className="text-3xl font-bold text-white">Дашборд HQ</h1>
-                <p className="text-gray-400 mt-1">Сводка по глобальным операциям.</p>
-            </header>
+    const cards = [
+        {
+            title: 'Локации',
+            to: '/admin/locations',
+            icon: <MapPin size={18} />,
+            accentClass: 'bg-amber-400/10 text-amber-200',
+            value: stats.locationsTotal,
+            subtitle: `С опубликованными товарами: ${stats.locationsPublished}`
+        },
+        {
+            title: 'Товары',
+            to: '/admin/products',
+            icon: <Boxes size={18} />,
+            accentClass: 'bg-blue-400/10 text-blue-200',
+            value: stats.productsTotal,
+            subtitle: `Опубликовано: ${stats.productsPublished}`
+        },
+        {
+            title: 'Пользователи',
+            to: '/admin/users',
+            icon: <Users size={18} />,
+            accentClass: 'bg-violet-400/10 text-violet-200',
+            value: stats.usersTotal,
+            subtitle: 'Все зарегистрированные роли'
+        },
+        {
+            title: 'Франчайзи',
+            to: '/admin/users',
+            icon: <Users size={18} />,
+            accentClass: 'bg-cyan-400/10 text-cyan-200',
+            value: stats.franchiseesTotal,
+            subtitle: 'Активные партнерские аккаунты'
+        },
+        {
+            title: 'Партии в пути',
+            to: '/admin/acceptance',
+            icon: <Truck size={18} />,
+            accentClass: 'bg-emerald-400/10 text-emerald-200',
+            value: stats.inTransitBatches,
+            subtitle: `Уже получены HQ: ${stats.receivedBatches}`
+        },
+        {
+            title: 'Товары на складе HQ',
+            to: '/admin/warehouse',
+            icon: <Archive size={18} />,
+            accentClass: 'bg-indigo-400/10 text-indigo-200',
+            value: stats.stockHQItems,
+            subtitle: `В онлайне: ${stats.stockOnlineItems}`
+        }
+    ];
 
+    return (
+        <div className="space-y-4">
             {error && (
-                <div className="bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl px-4 py-3">
+                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
                     {error}
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                <StatCard title="Локации" value={stats.locationsTotal} accent="blue" loading={loading} subtitle={`С опубликованными товарами: ${stats.locationsPublished}`} />
-                <StatCard title="Товары" value={stats.productsTotal} accent="green" loading={loading} subtitle={`Опубликовано: ${stats.productsPublished}`} />
-                <StatCard title="Пользователи" value={stats.usersTotal} accent="purple" loading={loading} subtitle="Все зарегистрированные роли" />
-                <StatCard title="Франчайзи" value={stats.franchiseesTotal} accent="sky" loading={loading} subtitle="Активные партнерские аккаунты" />
-                <StatCard title="Партии в пути" value={stats.inTransitBatches} accent="yellow" loading={loading} subtitle={`Уже получены HQ: ${stats.receivedBatches}`} />
-                <StatCard title="Товары на складе HQ" value={stats.stockHQItems} accent="emerald" loading={loading} subtitle={`В онлайне: ${stats.stockOnlineItems}`} />
-            </div>
+            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {cards.map((card) => (
+                    <Link
+                        key={card.title}
+                        to={card.to}
+                        className="admin-panel group rounded-[24px] px-5 py-5 transition duration-200 hover:border-white/10 hover:bg-[#1b1e24]"
+                    >
+                        <div className="flex items-start justify-between gap-4">
+                            <div>
+                                <div className="text-sm font-medium text-gray-400">{card.title}</div>
+                                <div className="mt-4 text-[2.2rem] font-semibold leading-none text-white">
+                                    {loading ? '...' : formatCount(card.value)}
+                                </div>
+                            </div>
+                            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${card.accentClass}`}>
+                                {card.icon}
+                            </div>
+                        </div>
+                        <p className="mt-4 text-sm text-gray-500">{card.subtitle}</p>
+                    </Link>
+                ))}
+            </section>
         </div>
     );
 }
 
-function StatCard({
-    title,
-    value,
-    subtitle,
-    accent,
-    loading
-}: {
-    title: string;
-    value: number;
-    subtitle: string;
-    accent: 'blue' | 'green' | 'purple' | 'sky' | 'yellow' | 'emerald';
-    loading: boolean;
-}) {
-    const accentClass: Record<typeof accent, { border: string; text: string }> = {
-        blue: { border: 'hover:border-blue-500/50', text: 'text-blue-400' },
-        green: { border: 'hover:border-green-500/50', text: 'text-green-400' },
-        purple: { border: 'hover:border-purple-500/50', text: 'text-purple-400' },
-        sky: { border: 'hover:border-sky-500/50', text: 'text-sky-400' },
-        yellow: { border: 'hover:border-yellow-500/50', text: 'text-yellow-400' },
-        emerald: { border: 'hover:border-emerald-500/50', text: 'text-emerald-400' },
-    };
-
-    return (
-        <div className={`bg-gray-900 p-6 rounded-2xl border border-gray-800 transition duration-300 ${accentClass[accent].border}`}>
-            <div className="text-gray-400 mb-1 font-medium">{title}</div>
-            <div className={`text-3xl font-bold ${accentClass[accent].text}`}>
-                {loading ? '...' : value}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">{subtitle}</div>
-        </div>
-    );
+function formatCount(value: number) {
+    return new Intl.NumberFormat('ru-RU').format(value);
 }

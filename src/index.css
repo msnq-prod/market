@@ -32,6 +32,42 @@
 }
 
 @layer components {
+  .admin-shell {
+    color-scheme: dark;
+    background: linear-gradient(180deg, #121317 0%, #0d0f13 100%);
+  }
+
+  .admin-shell::selection {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  .admin-panel {
+    background: linear-gradient(180deg, rgba(24, 27, 33, 0.94) 0%, rgba(20, 22, 27, 0.98) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.2);
+  }
+
+  .admin-panel-soft {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .admin-chip {
+    @apply inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.24em];
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(244, 244, 245, 0.72);
+  }
+
+  .admin-metric-line {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .admin-shell :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea) {
+    color-scheme: dark;
+  }
+
   .app-shell-light {
     color: #0f172a;
     color-scheme: light;

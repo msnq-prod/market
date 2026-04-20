@@ -170,6 +170,7 @@ const FONT_OPTIONS = [
 ];
 
 const FONT_WEIGHT_OPTIONS = [400, 500, 600, 700];
+const QR_CONTROL_CLASS = 'w-full rounded-xl border border-white/8 bg-[#11141a] text-sm text-gray-100 outline-none transition focus:border-blue-300/60';
 
 const createDefaultSettings = (): QrPrintSettings => ({
     labelWidthMm: 58,
@@ -1060,7 +1061,7 @@ export function QrPrint() {
             return;
         }
 
-        navigate('/admin');
+        navigate('/admin/products');
     };
 
     const openPrintableDocument = () => {
@@ -1106,7 +1107,7 @@ export function QrPrint() {
     };
 
     return (
-        <div className="qr-print-root flex h-[100svh] flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.18),_transparent_28%),linear-gradient(180deg,_#020617_0%,_#040814_100%)] text-slate-100">
+        <div className="admin-shell qr-print-root flex min-h-[100svh] flex-col overflow-y-auto text-gray-100 lg:h-[100svh] lg:overflow-hidden">
             <style>
                 {`
                     @page {
@@ -1185,82 +1186,85 @@ export function QrPrint() {
                 `}
             </style>
 
-            <header className="qr-screen-only shrink-0 border-b border-white/10 bg-slate-950/85 backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 xl:px-5">
-                    <div className="flex min-w-0 items-center gap-3">
+            <header className="qr-screen-only shrink-0 border-b border-white/6 bg-black/10">
+                <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
+                    <div className="flex min-w-0 items-start gap-3">
                         <button
                             type="button"
-                            onClick={() => navigate('/admin')}
-                            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-700 bg-slate-900/70 text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
-                            aria-label="Вернуться в админку"
+                            onClick={() => navigate('/admin/products')}
+                            className="mt-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                            aria-label="Вернуться к товарам"
                         >
                             <ArrowLeft size={18} />
                         </button>
                         <div className="min-w-0">
-                            <h1 className="truncate text-lg font-semibold text-white xl:text-xl">HQ-сервис печати QR</h1>
-                            <p className="truncate text-xs text-slate-400 xl:text-sm">
-                                Отдельный полноэкранный сервис без главного меню. Центр показывает лист A4, а превью одной этикетки встроено в настройки справа.
+                            <p className="admin-chip w-fit">Товары / QR-печать</p>
+                            <h1 className="mt-3 text-[1.9rem] font-semibold leading-tight tracking-tight text-white">HQ-сервис печати QR</h1>
+                            <p className="mt-1 max-w-2xl text-sm text-gray-500">
+                                Сбор печатного A4-листа из публичных QR партии. Источник, превью и настройки остаются на одном рабочем экране.
                             </p>
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                        <div className="hidden flex-wrap gap-2 xl:flex">
-                            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
+                        <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-xs text-gray-300">
                                 В документе: {documentItems.length}
                             </span>
-                            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                            <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-xs text-gray-300">
                                 {pageCaption}
                             </span>
                             {pack && (
-                                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                                <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs text-blue-100">
                                     Партия: {pack.batch.id}
                                 </span>
                             )}
                         </div>
 
-                        <button
-                            type="button"
-                            onClick={() => setSettings(createDefaultSettings())}
-                            className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/65 px-3.5 py-2.5 text-sm text-slate-100 transition hover:border-slate-500 hover:bg-slate-900"
-                        >
-                            <RotateCcw size={16} />
-                            Сбросить
-                        </button>
-                        <button
-                            type="button"
-                            onClick={openPrintableDocument}
-                            className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-500"
-                        >
-                            <Printer size={16} />
-                            Открыть документ
-                        </button>
-                        <button
-                            type="button"
-                            onClick={closeWindowOrReturn}
-                            className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/65 px-3.5 py-2.5 text-sm text-slate-100 transition hover:border-slate-500 hover:bg-slate-900"
-                        >
-                            <X size={16} />
-                            Закрыть
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setSettings(createDefaultSettings())}
+                                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                            >
+                                <RotateCcw size={16} />
+                                Сбросить
+                            </button>
+                            <button
+                                type="button"
+                                onClick={openPrintableDocument}
+                                className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500"
+                            >
+                                <Printer size={16} />
+                                Открыть документ
+                            </button>
+                            <button
+                                type="button"
+                                onClick={closeWindowOrReturn}
+                                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                            >
+                                <X size={16} />
+                                Закрыть
+                            </button>
+                        </div>
                     </div>
                 </div>
             </header>
 
-            <div className="grid min-h-0 flex-1 gap-3 p-3 xl:grid-cols-[308px_minmax(0,1fr)_400px] 2xl:grid-cols-[320px_minmax(0,1fr)_420px]">
-                    <section className="qr-screen-only flex min-h-0 flex-col rounded-[26px] border border-white/10 bg-slate-950/70 p-3 shadow-[0_16px_48px_rgba(2,6,23,0.38)] backdrop-blur">
-                        <div className="mb-3">
-                            <h2 className="text-base font-semibold text-white xl:text-lg">Источник данных</h2>
-                            <p className="text-xs text-slate-400 xl:text-sm">Сначала товар и партия, затем режим печати и состав документа.</p>
+            <div className="mx-auto grid w-full min-w-0 max-w-[1680px] flex-1 gap-4 px-4 py-4 sm:px-6 lg:min-h-0 lg:grid-cols-[312px_minmax(0,1fr)] lg:px-8 xl:grid-cols-[320px_minmax(0,1fr)_400px] 2xl:grid-cols-[332px_minmax(0,1fr)_420px]">
+                    <section className="admin-panel qr-screen-only flex min-h-[420px] min-w-0 flex-col rounded-[24px] px-4 py-4 lg:min-h-0">
+                        <div className="mb-4 border-b border-white/6 pb-4">
+                            <h2 className="text-base font-semibold text-white">Источник данных</h2>
+                            <p className="mt-1 text-sm text-gray-500">Выберите товар-шаблон, партию и состав QR для печати.</p>
                         </div>
 
-                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
+                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
                             <label className="block">
-                                <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Товар-шаблон</span>
+                                <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Товар-шаблон</span>
                                 <select
                                     value={activeProductId}
                                     onChange={(event) => handleProductChange(event.target.value)}
-                                    className="w-full rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500"
+                                    className={`${QR_CONTROL_CLASS} h-11 px-3`}
                                 >
                                     <option value="">Выберите товар-шаблон</option>
                                     {productsWithBatches.map((product) => (
@@ -1273,12 +1277,12 @@ export function QrPrint() {
 
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Партии</span>
-                                    {selectedProduct && <span className="text-xs text-slate-500">{selectedProduct.batches.length} шт.</span>}
+                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Партии</span>
+                                    {selectedProduct && <span className="text-xs text-gray-500">{selectedProduct.batches.length} шт.</span>}
                                 </div>
 
                                 {!selectedProduct ? (
-                                    <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-500">
+                                    <div className="rounded-xl border border-dashed border-white/8 bg-[#0f1217] px-3 py-4 text-sm text-gray-500">
                                         Выберите товар, чтобы увидеть партии.
                                     </div>
                                 ) : (
@@ -1290,19 +1294,19 @@ export function QrPrint() {
                                                     key={batch.id}
                                                     type="button"
                                                     onClick={() => handleBatchChange(batch.id)}
-                                                    className={`w-full rounded-2xl border px-3 py-2.5 text-left transition ${isActive
+                                                    className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${isActive
                                                         ? 'border-blue-500/40 bg-blue-500/10'
-                                                        : 'border-slate-800 bg-slate-950/75 hover:border-slate-600 hover:bg-slate-900'
+                                                        : 'border-white/6 bg-[#141821] hover:border-white/10 hover:bg-[#1b1e24]'
                                                         }`}
                                                 >
                                                     <div className="flex items-start justify-between gap-3">
                                                         <div className="min-w-0">
                                                             <p className="truncate text-sm font-semibold text-white">{batch.id}</p>
-                                                            <p className="mt-0.5 text-xs text-slate-500">
+                                                            <p className="mt-0.5 text-xs text-gray-500">
                                                                 {new Date(batch.created_at).toLocaleString('ru-RU')} • {batch.items_count} шт.
                                                             </p>
                                                         </div>
-                                                        <span className="rounded-full border border-slate-700 px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-300">
+                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-gray-300">
                                                             {batch.status}
                                                         </span>
                                                     </div>
@@ -1314,14 +1318,14 @@ export function QrPrint() {
                             </div>
 
                             <div className="space-y-2">
-                                <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Режим печати</span>
+                                <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Режим печати</span>
                                 <div className="grid grid-cols-2 gap-2">
                                     <button
                                         type="button"
                                         onClick={() => setSelectionMode('all')}
-                                        className={`rounded-2xl px-3 py-2.5 text-sm font-medium transition ${selectionMode === 'all'
+                                        className={`rounded-xl px-3 py-2.5 text-sm font-medium transition ${selectionMode === 'all'
                                             ? 'bg-blue-600 text-white'
-                                            : 'border border-slate-700 bg-slate-950/80 text-slate-300 hover:bg-slate-900'
+                                            : 'border border-white/8 bg-white/[0.04] text-gray-300 hover:bg-white/[0.07] hover:text-white'
                                             }`}
                                     >
                                         Печатать все
@@ -1329,9 +1333,9 @@ export function QrPrint() {
                                     <button
                                         type="button"
                                         onClick={() => setSelectionMode('selected')}
-                                        className={`rounded-2xl px-3 py-2.5 text-sm font-medium transition ${selectionMode === 'selected'
+                                        className={`rounded-xl px-3 py-2.5 text-sm font-medium transition ${selectionMode === 'selected'
                                             ? 'bg-blue-600 text-white'
-                                            : 'border border-slate-700 bg-slate-950/80 text-slate-300 hover:bg-slate-900'
+                                            : 'border border-white/8 bg-white/[0.04] text-gray-300 hover:bg-white/[0.07] hover:text-white'
                                             }`}
                                     >
                                         Выбрать вручную
@@ -1340,36 +1344,36 @@ export function QrPrint() {
                             </div>
 
                             {productsLoading && (
-                                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-400">
+                                <div className="rounded-xl border border-white/6 bg-[#0f1217] px-3 py-4 text-sm text-gray-400">
                                     Загружаем товарные шаблоны...
                                 </div>
                             )}
 
                             {productsError && (
-                                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                                     {productsError}
                                 </div>
                             )}
 
                             {packLoading && (
-                                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-400">
+                                <div className="rounded-xl border border-white/6 bg-[#0f1217] px-3 py-4 text-sm text-gray-400">
                                     Загружаем QR-пакет партии...
                                 </div>
                             )}
 
                             {packError && (
-                                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                                     {packError}
                                 </div>
                             )}
 
                             {!packLoading && pack && (
                                 <div className="space-y-2">
-                                    <div className="flex flex-wrap gap-2 text-xs text-slate-400">
-                                        <span className="rounded-full border border-slate-700 px-3 py-1">
+                                    <div className="flex flex-wrap gap-2 text-xs text-gray-400">
+                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1">
                                             Доступно QR: {pack.items.length}
                                         </span>
-                                        <span className="rounded-full border border-slate-700 px-3 py-1">
+                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1">
                                             В листе: {documentItems.length}
                                         </span>
                                     </div>
@@ -1377,7 +1381,7 @@ export function QrPrint() {
                                     {selectionMode === 'selected' ? (
                                         <div className="space-y-2">
                                             {pack.items.length === 0 ? (
-                                                <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-500">
+                                                <div className="rounded-xl border border-dashed border-white/8 bg-[#0f1217] px-3 py-4 text-sm text-gray-500">
                                                     В этой партии нет публичных QR-позиций.
                                                 </div>
                                             ) : (
@@ -1390,9 +1394,9 @@ export function QrPrint() {
                                                             key={item.id}
                                                             type="button"
                                                             onClick={() => toggleSelectedItem(item.id)}
-                                                            className={`w-full rounded-2xl border px-3 py-2.5 text-left transition ${isSelected
+                                                            className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${isSelected
                                                                 ? 'border-blue-500/40 bg-blue-500/10'
-                                                                : 'border-slate-800 bg-slate-950/75 hover:border-slate-600 hover:bg-slate-900'
+                                                                : 'border-white/6 bg-[#141821] hover:border-white/10 hover:bg-[#1b1e24]'
                                                                 }`}
                                                         >
                                                             <div className="flex items-start justify-between gap-3">
@@ -1400,7 +1404,7 @@ export function QrPrint() {
                                                                     <p className="truncate text-sm font-semibold text-white">
                                                                         {item.serial_number || item.temp_id}
                                                                     </p>
-                                                                    <p className="mt-0.5 text-xs text-slate-500">Позиция #{item.temp_id}</p>
+                                                                    <p className="mt-0.5 text-xs text-gray-500">Позиция #{item.temp_id}</p>
                                                                 </div>
                                                                 <div className="flex items-center gap-2">
                                                                     {isSelected && (
@@ -1408,7 +1412,7 @@ export function QrPrint() {
                                                                             #{selectedIndex + 1}
                                                                         </span>
                                                                     )}
-                                                                    <span className={`h-4 w-4 rounded-full border ${isSelected ? 'border-blue-400 bg-blue-400' : 'border-slate-600 bg-transparent'}`} />
+                                                                    <span className={`h-4 w-4 rounded-full border ${isSelected ? 'border-blue-400 bg-blue-400' : 'border-gray-600 bg-transparent'}`} />
                                                                 </div>
                                                             </div>
                                                         </button>
@@ -1417,7 +1421,7 @@ export function QrPrint() {
                                             )}
                                         </div>
                                     ) : (
-                                        <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-4 text-sm text-slate-500">
+                                        <div className="rounded-xl border border-dashed border-white/8 bg-[#0f1217] px-3 py-4 text-sm text-gray-500">
                                             В документ автоматически попадут все публичные QR этой партии.
                                         </div>
                                     )}
@@ -1426,22 +1430,25 @@ export function QrPrint() {
                         </div>
                     </section>
 
-                    <section className="qr-document-panel flex min-h-0 flex-col rounded-[26px] border border-white/10 bg-slate-950/70 p-4 shadow-[0_16px_48px_rgba(2,6,23,0.38)] backdrop-blur">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                            <h2 className="text-base font-semibold text-white xl:text-lg">Лист на печать</h2>
-                            <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                                <span className="rounded-full border border-slate-700 px-3 py-1">Масштаб превью: {Math.round(documentScale * 100)}%</span>
-                                {settings.invertColors && <span className="rounded-full border border-amber-400/30 px-3 py-1 text-amber-100">Инверсия</span>}
+                    <section className="admin-panel qr-document-panel flex min-h-[620px] min-w-0 flex-col rounded-[24px] p-4 lg:min-h-0">
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/6 pb-4">
+                            <div>
+                                <h2 className="text-base font-semibold text-white">Лист на печать</h2>
+                                <p className="mt-1 text-sm text-gray-500">Центральное превью показывает фактическую раскладку A4.</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2 text-xs text-gray-300">
+                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1">Масштаб: {Math.round(documentScale * 100)}%</span>
+                                {settings.invertColors && <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-amber-100">Инверсия</span>}
                             </div>
                         </div>
 
-                        <div ref={documentViewportRef} className="qr-document-pages qr-stable-scroll min-h-0 flex-1 space-y-6 overflow-y-auto overflow-x-hidden p-2">
+                        <div ref={documentViewportRef} className="qr-document-pages qr-stable-scroll min-h-0 flex-1 space-y-6 overflow-y-auto overflow-x-hidden rounded-2xl border border-white/6 bg-[#0f1217] p-3">
                             {previewPages.map((pageItems, pageIndex) => {
                                 const showEmptyState = documentItems.length === 0 && pageIndex === 0;
                                 return (
                                     <div
                                         key={`qr-document-page-frame-${pageIndex}`}
-                                        className="qr-document-page-frame relative mx-auto overflow-hidden rounded-[24px] bg-white shadow-2xl"
+                                        className="qr-document-page-frame relative mx-auto overflow-hidden rounded-[18px] bg-white shadow-[0_18px_48px_rgba(0,0,0,0.28)]"
                                         style={{
                                             width: `${pagePreviewMetrics.width}px`,
                                             height: `${pagePreviewMetrics.height}px`
@@ -1479,18 +1486,18 @@ export function QrPrint() {
                         </div>
                     </section>
 
-                    <section className="qr-screen-only flex min-h-0 flex-col rounded-[26px] border border-white/10 bg-slate-950/70 p-4 shadow-[0_16px_48px_rgba(2,6,23,0.38)] backdrop-blur">
-                        <div className="mb-3">
-                            <h2 className="text-base font-semibold text-white xl:text-lg">Настройки</h2>
-                            <p className="text-xs text-slate-400 xl:text-sm">Сверху интерактивное превью одной этикетки, ниже физика печати и параметры каждого поля.</p>
+                    <section className="admin-panel qr-screen-only flex min-h-[620px] min-w-0 flex-col rounded-[24px] p-4 lg:col-span-2 lg:min-h-0 xl:col-span-1">
+                        <div className="mb-4 border-b border-white/6 pb-4">
+                            <h2 className="text-base font-semibold text-white">Настройки</h2>
+                            <p className="mt-1 text-sm text-gray-500">Превью этикетки, геометрия листа и параметры полей.</p>
                         </div>
 
                         <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
-                            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                            <div className="admin-panel-soft rounded-2xl p-3">
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                     <div>
                                         <h3 className="text-sm font-semibold text-white">Интерактивное превью одной этикетки</h3>
-                                        <p className="text-xs text-slate-400">Здесь меняется порядок полей и сторона QR.</p>
+                                        <p className="text-xs text-gray-500">Меняйте порядок полей и сторону QR перетаскиванием.</p>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2 text-[11px]">
                                         <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-100">
@@ -1516,10 +1523,10 @@ export function QrPrint() {
                                 </div>
                             </div>
 
-                            <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                            <div className="admin-panel-soft space-y-3 rounded-2xl p-3">
                                 <div className="flex items-center justify-between gap-3">
-                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Геометрия листа</span>
-                                    <span className="text-xs text-slate-400">{pageCaption}</span>
+                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Геометрия листа</span>
+                                    <span className="text-xs text-gray-500">{pageCaption}</span>
                                 </div>
                                 <div className="grid gap-2 sm:grid-cols-2">
                                     <NumericField
@@ -1556,16 +1563,16 @@ export function QrPrint() {
                                     </div>
                                 </div>
 
-                                <label className="flex items-center justify-between gap-4 rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-3">
+                                <label className="flex items-center justify-between gap-4 rounded-xl border border-white/8 bg-[#11141a] px-3 py-3">
                                     <div>
                                         <p className="text-sm font-medium text-white">Инверсия для печати</p>
-                                        <p className="text-xs text-slate-400">Черный фон, светлый текст и инвертированный QR.</p>
+                                        <p className="text-xs text-gray-500">Черный фон, светлый текст и инвертированный QR.</p>
                                     </div>
                                     <input
                                         type="checkbox"
                                         checked={settings.invertColors}
                                         onChange={(event) => setSettings((current) => ({ ...current, invertColors: event.target.checked }))}
-                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                                        className="h-4 w-4 rounded border-gray-600 bg-[#11141a]"
                                     />
                                 </label>
                             </div>
@@ -1574,22 +1581,22 @@ export function QrPrint() {
                                 {FIELD_KEYS.map((fieldKey) => {
                                     const config = settings.fields[fieldKey];
                                     return (
-                                        <div key={fieldKey} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                                        <div key={fieldKey} className="rounded-xl border border-white/6 bg-[#141821] p-3">
                                             <div className="flex flex-wrap items-center justify-between gap-3">
                                                 <label className="inline-flex items-center gap-3 text-sm font-medium text-white">
                                                     <input
                                                         type="checkbox"
                                                         checked={config.enabled}
                                                         onChange={(event) => updateFieldConfig(fieldKey, { enabled: event.target.checked })}
-                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                                                        className="h-4 w-4 rounded border-gray-600 bg-[#11141a]"
                                                     />
                                                     {FIELD_LABELS[fieldKey]}
                                                 </label>
-                                                <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                                                    <span className="rounded-full border border-slate-700 px-2 py-1">
+                                                <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                                                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-1">
                                                         {config.enabled ? 'Включено' : 'Скрыто'}
                                                     </span>
-                                                    <span className="rounded-full border border-slate-700 px-2 py-1">
+                                                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-1">
                                                         #{settings.fieldOrder.indexOf(fieldKey) + 1}
                                                     </span>
                                                 </div>
@@ -1606,11 +1613,11 @@ export function QrPrint() {
                                                 />
 
                                                 <label className="block">
-                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Жирность</span>
+                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Жирность</span>
                                                     <select
                                                         value={String(config.fontWeight)}
                                                         onChange={(event) => updateFieldConfig(fieldKey, { fontWeight: Number(event.target.value) })}
-                                                        className="w-full rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500"
+                                                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
                                                     >
                                                         {FONT_WEIGHT_OPTIONS.map((option) => (
                                                             <option key={option} value={option}>
@@ -1621,11 +1628,11 @@ export function QrPrint() {
                                                 </label>
 
                                                 <label className="block">
-                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Шрифт</span>
+                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Шрифт</span>
                                                     <select
                                                         value={config.fontFamily}
                                                         onChange={(event) => updateFieldConfig(fieldKey, { fontFamily: event.target.value })}
-                                                        className="w-full rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500"
+                                                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
                                                     >
                                                         {FONT_OPTIONS.map((option) => (
                                                             <option key={option} value={option}>
@@ -1684,13 +1691,13 @@ function LabelEditorPreview({
     const slotWidthPx = Math.max(68, qrSizePx + 10);
     const textFields = visibleFieldOrder;
     const shellClass = settings.invertColors
-        ? 'border-slate-700 bg-black'
-        : 'border-slate-700 bg-slate-950';
+        ? 'border-white/10 bg-black'
+        : 'border-white/6 bg-[#0f1217]';
 
     return (
         <div className="h-full overflow-hidden">
             <div
-                className={`h-full rounded-[20px] border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${shellClass}`}
+                className={`h-full rounded-2xl border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${shellClass}`}
                 style={{
                     width: '100%',
                     minHeight: `${labelHeightPx}px`
@@ -1706,11 +1713,11 @@ function LabelEditorPreview({
                         invertColors={settings.invertColors}
                     />
 
-                    <div className={`flex min-w-0 flex-1 flex-col justify-between rounded-2xl border border-dashed p-2 ${settings.invertColors ? 'border-slate-700 bg-white/[0.03]' : 'border-slate-800 bg-black/20'}`}>
+                    <div className={`flex min-w-0 flex-1 flex-col justify-between rounded-xl border border-dashed p-2 ${settings.invertColors ? 'border-white/10 bg-white/[0.03]' : 'border-white/8 bg-black/20'}`}>
                         <SortableContext items={textFields} strategy={verticalListSortingStrategy}>
                             <div className="flex h-full flex-col gap-1.5 overflow-hidden">
                                 {textFields.length === 0 ? (
-                                    <div className={`rounded-xl border border-dashed px-3 py-4 text-xs ${settings.invertColors ? 'border-slate-700 text-slate-500' : 'border-slate-700 text-slate-500'}`}>
+                                    <div className="rounded-xl border border-dashed border-white/8 px-3 py-4 text-xs text-gray-500">
                                         Включите хотя бы одну надпись в настройках справа.
                                     </div>
                                 ) : (
@@ -1763,11 +1770,11 @@ function QrSlot({
     return (
         <div
             ref={setNodeRef}
-            className={`flex min-w-[72px] items-center justify-center rounded-2xl border p-2 transition ${isOver
+            className={`flex min-w-[72px] items-center justify-center rounded-xl border p-2 transition ${isOver
                 ? 'border-blue-400 bg-blue-500/10'
                 : invertColors
-                    ? 'border-dashed border-slate-700 bg-white/[0.03]'
-                    : 'border-dashed border-slate-700 bg-black/20'
+                    ? 'border-dashed border-white/10 bg-white/[0.03]'
+                    : 'border-dashed border-white/8 bg-black/20'
                 }`}
             style={{ width: `${slotWidthPx}px` }}
         >
@@ -1779,7 +1786,7 @@ function QrSlot({
                     invertColors={invertColors}
                 />
             ) : (
-                <div className="px-1 text-center text-[10px] text-slate-500">
+                <div className="px-1 text-center text-[10px] text-gray-500">
                     Перетащите QR сюда
                 </div>
             )}
@@ -1805,9 +1812,9 @@ function DraggableQrBlock({
             ref={setNodeRef}
             {...listeners}
             {...attributes}
-            className={`flex cursor-grab flex-col items-center gap-2 rounded-2xl border px-2 py-2 text-center active:cursor-grabbing ${invertColors
-                ? 'border-slate-700 bg-black text-white'
-                : 'border-slate-700 bg-white text-slate-900'
+            className={`flex cursor-grab flex-col items-center gap-2 rounded-xl border px-2 py-2 text-center active:cursor-grabbing ${invertColors
+                ? 'border-white/10 bg-black text-white'
+                : 'border-gray-200 bg-white text-slate-900'
                 } ${isDragging ? 'opacity-60' : ''}`}
             style={{
                 transform: CSS.Translate.toString(transform),
@@ -1858,25 +1865,25 @@ function SortableFieldPreview({
     return (
         <div
             ref={setNodeRef}
-            className={`rounded-2xl border px-2.5 py-2 ${invertColors ? 'border-slate-700 bg-white/[0.04]' : 'border-slate-800 bg-slate-900/80'} ${isDragging ? 'opacity-60' : ''}`}
+            className={`min-w-0 rounded-xl border px-2.5 py-2 ${invertColors ? 'border-white/10 bg-white/[0.04]' : 'border-white/8 bg-[#141821]'} ${isDragging ? 'opacity-60' : ''}`}
             style={{
                 transform: CSS.Transform.toString(transform),
                 transition
             }}
         >
             <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">{label}</span>
                 <button
                     type="button"
                     {...attributes}
                     {...listeners}
-                    className="inline-flex cursor-grab items-center gap-1 rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 active:cursor-grabbing"
+                    className="inline-flex h-6 w-6 cursor-grab items-center justify-center rounded-lg border border-white/8 bg-white/[0.03] text-gray-400 active:cursor-grabbing"
+                    aria-label="Переместить поле"
                 >
                     <GripVertical size={10} />
-                    Move
                 </button>
             </div>
-            <div className={`break-words leading-tight ${invertColors ? 'text-white' : 'text-white'}`} style={style}>
+            <div className="truncate leading-tight text-white" style={style} title={value}>
                 {value}
             </div>
         </div>
@@ -1987,14 +1994,14 @@ function NumericField({
 }) {
     return (
         <label className="block">
-            <span className={`block font-semibold uppercase tracking-[0.18em] text-slate-500 ${compact ? 'mb-1.5 text-[11px]' : 'mb-2 text-xs'}`}>{label}</span>
+            <span className={`block font-semibold uppercase tracking-[0.18em] text-gray-500 ${compact ? 'mb-1.5 text-[11px]' : 'mb-2 text-xs'}`}>{label}</span>
             <input
                 type="number"
                 min="0"
                 step="1"
                 value={value}
                 onChange={(event) => onChange(event.target.value)}
-                className={`w-full rounded-2xl border border-slate-700 bg-slate-900/80 text-sm text-white outline-none transition focus:border-blue-500 ${compact ? 'px-3 py-2.5' : 'px-4 py-3'}`}
+                className={`${QR_CONTROL_CLASS} ${compact ? 'px-3 py-2.5' : 'px-4 py-3'}`}
             />
         </label>
     );
