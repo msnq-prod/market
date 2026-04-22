@@ -17,6 +17,7 @@ import { AdminLayout } from './admin/components/AdminLayout'
 import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
 import { Dashboard } from './admin/pages/Dashboard'
 import { Products } from './admin/pages/Products'
+import { Brandbook } from './admin/pages/Brandbook'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
 
@@ -41,6 +42,18 @@ type ScrollLockSnapshot = {
 
 const scrollToTop = () => {
   window.scrollTo({ top: 0, behavior: 'auto' })
+}
+
+const normalizePageWheelDelta = (event: Pick<WheelEvent, 'deltaMode' | 'deltaY'>) => {
+  if (event.deltaMode === 1) {
+    return event.deltaY * 16
+  }
+
+  if (event.deltaMode === 2) {
+    return event.deltaY * window.innerHeight
+  }
+
+  return event.deltaY
 }
 
 const LIGHT_START_LONGITUDE = -40.35
@@ -489,6 +502,21 @@ function MainApp() {
     return () => document.removeEventListener('click', handleDocumentClick, true)
   }, [clearSelection])
 
+  useEffect(() => {
+    const sceneContainer = sceneContainerRef.current
+    if (!sceneContainer) return
+
+    const handleWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+
+      event.preventDefault()
+      window.scrollBy({ top: normalizePageWheelDelta(event), behavior: 'auto' })
+    }
+
+    sceneContainer.addEventListener('wheel', handleWheel, { capture: true, passive: false })
+    return () => sceneContainer.removeEventListener('wheel', handleWheel, { capture: true })
+  }, [])
+
   return (
     <div className="relative w-full min-h-[100svh] overflow-x-clip bg-black">
       {hasWebGL && <LoadingScreen />}
@@ -605,6 +633,7 @@ function App() {
           <Route path="sales-history" element={<SalesHistory />} />
           <Route path="locations" element={<Navigate to="/admin/products" replace />} />
           <Route path="products" element={<Products />} />
+          <Route path="brandbook" element={<Brandbook />} />
           <Route path="acceptance" element={<Acceptance />} />
           <Route path="allocation" element={<Allocation />} />
           <Route path="warehouse" element={<Warehouse />} />

@@ -548,7 +548,7 @@ function AuthCard({ onAuthenticated }: { onAuthenticated: (user: User) => void }
     };
 
     return (
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-5 space-y-4">
+        <div className="space-y-4">
             <div className="flex gap-2">
                 <button
                     type="button"
@@ -589,7 +589,7 @@ function AuthCard({ onAuthenticated }: { onAuthenticated: (user: User) => void }
                     <span className="text-sm text-gray-300">Пароль</span>
                     <input
                         required
-                        minLength={12}
+                        minLength={8}
                         type="password"
                         value={password}
                         onChange={(event) => setPassword(event.target.value)}

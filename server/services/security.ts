@@ -36,7 +36,7 @@ const KNOWN_WEAK_SHARED_PASSWORDS = new Set(['admin123', 'partner123']);
 
 const sleep = (delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
-export const MIN_PASSWORD_LENGTH = IS_LOCAL_AUTH_ENVIRONMENT ? 6 : 12;
+export const MIN_PASSWORD_LENGTH = 8;
 
 export const isKnownWeakSharedPassword = (value: string): boolean => KNOWN_WEAK_SHARED_PASSWORDS.has(value);
 

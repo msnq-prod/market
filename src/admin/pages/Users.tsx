@@ -354,7 +354,7 @@ export function Users() {
                                 <input
                                     type="password"
                                     required
-                                    minLength={12}
+                                    minLength={8}
                                     value={createForm.password}
                                     onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
                                     className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"

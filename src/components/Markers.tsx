@@ -1,10 +1,29 @@
 import { useStore } from '../store'
 import * as THREE from 'three'
-import React, { useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { getLocalizedValue } from '../utils/language'
 import type { Location } from '../data/db'
+
+const MARKER_Y_VAR = '--selected-location-marker-y'
+const DESCRIPTION_TOP_VAR = '--selected-location-description-top'
+
+function syncSelectedLocationLayout(markerElement: HTMLDivElement) {
+    const rect = markerElement.getBoundingClientRect()
+    const markerY = rect.top + 12
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const isMobile = window.innerWidth < 768
+    const minGap = isMobile ? 48 : 60
+    const bottomReserve = isMobile ? 140 : 88
+    const targetTop = markerY + ((viewportHeight - markerY) * 0.32)
+    const minTop = markerY + minGap
+    const maxTop = Math.max(minTop, viewportHeight - bottomReserve)
+    const descriptionTop = Math.min(Math.max(targetTop, minTop), maxTop)
+
+    document.documentElement.style.setProperty(MARKER_Y_VAR, `${Math.round(markerY)}px`)
+    document.documentElement.style.setProperty(DESCRIPTION_TOP_VAR, `${Math.round(descriptionTop)}px`)
+}
 
 export function Markers() {
     const selectLocation = useStore((state) => state.selectLocation)
@@ -43,6 +62,15 @@ const Marker = React.memo(function Marker({
 }) {
     const ref = useRef<HTMLDivElement>(null)
     const opacityRef = useRef(1)
+
+    useEffect(() => {
+        if (!isSelected) return
+
+        return () => {
+            document.documentElement.style.removeProperty(MARKER_Y_VAR)
+            document.documentElement.style.removeProperty(DESCRIPTION_TOP_VAR)
+        }
+    }, [isSelected])
 
     // Calculate position on sphere
     const position = useMemo(() => {
@@ -103,7 +131,9 @@ const Marker = React.memo(function Marker({
         ref.current.style.opacity = opacityRef.current.toString()
         ref.current.style.pointerEvents = opacityRef.current > 0.2 ? 'auto' : 'none'
 
-        // Scale effect based on selection is already in CSS classes, but we could add more here if needed.
+        if (isSelected) {
+            syncSelectedLocationLayout(ref.current)
+        }
     })
 
     // Fixed styling for now

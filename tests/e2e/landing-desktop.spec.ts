@@ -44,8 +44,45 @@ test.describe('Desktop landing page', () => {
 
         const productSheet = page.getByTestId('location-products-sheet');
         const firstProductCard = page.getByTestId('location-product-card').first();
+        const locationDescription = page.getByTestId('location-description');
+        await expect(locationDescription).toBeVisible();
         await expect(productSheet).toBeVisible();
         await expect(firstProductCard).toBeVisible();
+
+        const readDescriptionMetrics = async () => page.evaluate(() => {
+            const descriptionElement = document.querySelector('[data-testid="location-description"]');
+            const markerY = parseFloat(
+                getComputedStyle(document.documentElement).getPropertyValue('--selected-location-marker-y')
+            );
+
+            if (!descriptionElement || Number.isNaN(markerY)) {
+                return null;
+            }
+
+            const descriptionRect = descriptionElement.getBoundingClientRect();
+
+            return {
+                descriptionCenterY: descriptionRect.top + (descriptionRect.height / 2),
+                markerY,
+                viewportHeight: window.innerHeight
+            };
+        });
+
+        await expect.poll(
+            async () => {
+                const metrics = await readDescriptionMetrics();
+                return metrics ? metrics.descriptionCenterY - metrics.markerY : null;
+            },
+            { timeout: 5_000 }
+        ).toBeGreaterThan(32);
+
+        const locationDescriptionMetrics = await readDescriptionMetrics();
+
+        if (!locationDescriptionMetrics) {
+            throw new Error('Location description layout metrics are not available.');
+        }
+
+        expect(locationDescriptionMetrics.descriptionCenterY).toBeLessThan(locationDescriptionMetrics.viewportHeight - 48);
 
         const initialMetrics = await page.evaluate(() => {
             const productSheetElement = document.querySelector('[data-testid="location-products-sheet"]');

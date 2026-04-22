@@ -26,6 +26,10 @@ const pageMeta: Record<string, { title: string; description: string }> = {
         title: 'Товары',
         description: 'Карточки товаров, остатки и публикация.'
     },
+    '/admin/brandbook': {
+        title: 'Брендбук',
+        description: 'Референс темной дизайн-системы админской панели.'
+    },
     '/admin/acceptance': {
         title: 'Приемка',
         description: 'Поступающие партии и подготовка материалов.'

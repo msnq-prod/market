@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:22-alpine AS base
 
 WORKDIR /app
@@ -17,7 +19,8 @@ FROM base AS deps
 COPY package*.json ./
 COPY prisma ./prisma
 
-RUN npm ci --no-audit --no-fund && rm -rf /root/.npm
+RUN --mount=type=cache,target=/tmp/.npm \
+    npm ci --prefer-offline --no-audit --no-fund
 RUN npx prisma generate
 
 FROM deps AS builder
@@ -32,9 +35,9 @@ RUN npm run typecheck \
 
 FROM deps AS prod-deps
 
-RUN npm prune --omit=dev --omit=optional --no-audit --no-fund \
+RUN --mount=type=cache,target=/tmp/.npm \
+    npm prune --omit=dev --omit=optional --no-audit --no-fund \
     && npx prisma generate \
-    && rm -rf /root/.npm \
     && find node_modules -type f -name '*.map' -delete
 
 FROM node:22-alpine AS runtime

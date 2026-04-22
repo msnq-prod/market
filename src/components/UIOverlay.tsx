@@ -26,6 +26,18 @@ type Dictionary = {
     cart: string;
 };
 
+const normalizeWheelDelta = (event: React.WheelEvent<HTMLElement>) => {
+    if (event.deltaMode === 1) {
+        return event.deltaY * 16;
+    }
+
+    if (event.deltaMode === 2) {
+        return event.deltaY * event.currentTarget.clientHeight;
+    }
+
+    return event.deltaY;
+};
+
 function useIsMobile() {
     const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
@@ -844,6 +856,13 @@ function ProductsView({ onClose }: { onClose: () => void }) {
         backgroundImage = locationData?.image ?? null;
     }
 
+    const handleOverlayWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        if (event.target !== event.currentTarget) return;
+
+        event.currentTarget.scrollTop += normalizeWheelDelta(event);
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -876,7 +895,11 @@ function ProductsView({ onClose }: { onClose: () => void }) {
                 <button onClick={onClose} className="shrink-0 text-sm text-gray-400 hover:text-white md:text-lg">✕ ЗАКРЫТЬ</button>
             </div>
 
-            <div data-testid="products-overlay-scroll" className="relative z-10 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] md:px-6 md:pb-10">
+            <div
+                data-testid="products-overlay-scroll"
+                onWheel={handleOverlayWheel}
+                className="relative z-10 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] md:px-6 md:pb-10"
+            >
                 <div
                     className={`mb-8 py-4 ${isMobile ? 'space-y-4' : 'relative z-0 space-y-4 overflow-visible'}`}
                     style={isMobile ? undefined : { perspective: '1000px' }}
