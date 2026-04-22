@@ -23,6 +23,7 @@ required_vars=(
     DATABASE_URL
     ACCESS_TOKEN_SECRET
     REFRESH_TOKEN_SECRET
+    TELEGRAM_TOKEN_ENCRYPTION_KEY
     VIDEO_PROCESSOR_POLL_MS
     STONES_HELPER_ALLOWED_ORIGIN
 )
@@ -37,6 +38,7 @@ require_not_placeholder MYSQL_PASSWORD "$MYSQL_PASSWORD"
 require_not_placeholder MYSQL_ROOT_PASSWORD "$MYSQL_ROOT_PASSWORD"
 require_not_placeholder ACCESS_TOKEN_SECRET "$ACCESS_TOKEN_SECRET"
 require_not_placeholder REFRESH_TOKEN_SECRET "$REFRESH_TOKEN_SECRET"
+require_not_placeholder TELEGRAM_TOKEN_ENCRYPTION_KEY "$TELEGRAM_TOKEN_ENCRYPTION_KEY"
 client_url_normalized="$(normalize_url "$CLIENT_URL")"
 helper_origin_normalized="$(normalize_url "$STONES_HELPER_ALLOWED_ORIGIN")"
 expected_client_url="https://$APP_DOMAIN"
@@ -68,7 +70,7 @@ fi
 mkdir -p "$MYSQL_BACKUP_DIR"
 
 available_kb="$(df -Pk "$REPO_ROOT" | awk 'NR==2 { print $4 }')"
-minimum_free_gb="${STONES_MIN_FREE_GB:-5}"
+minimum_free_gb="${STONES_MIN_FREE_GB:-2}"
 
 if ! [[ "$minimum_free_gb" =~ ^[0-9]+$ ]] || (( minimum_free_gb < 1 )); then
     echo "STONES_MIN_FREE_GB must be a positive integer." >&2
