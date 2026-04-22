@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Copy, Download, Package, RefreshCw, Search, Truck } from 'lucide-react';
+import type { MouseEvent } from 'react';
+import { Check, ChevronDown, ChevronUp, Copy, Download, Loader2, Package, RefreshCw, Search } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import { Button, EmptyState, MetricTile, Panel, Select, StatusPill, partnerControlClassName, type PartnerTone } from '../components/ui';
 
 type BatchItem = {
     id: string;
@@ -144,7 +146,7 @@ export function Batches() {
         setExpandedBatchIds((prev) => prev.filter((id) => availableIds.has(id)));
     }, [filteredBatches]);
 
-    const handleCopyId = async (id: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    const handleCopyId = async (id: string, event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
         try {
@@ -194,116 +196,104 @@ export function Batches() {
     };
 
     return (
-        <div className="app-shell-light space-y-6">
-            <header className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold text-gray-900">Мои партии</h1>
-                    <p className="text-sm text-gray-500 mt-1">
-                        Отслеживайте отправленные и активные партии, а также продажи по позициям.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => void loadBatches()}
-                        className="ui-btn ui-btn-secondary"
-                    >
-                        <RefreshCw size={16} />
+        <div className="space-y-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="admin-chip w-fit">Batch Ledger</div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button type="button" variant="secondary" onClick={() => void loadBatches()}>
+                        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                         Обновить
-                    </button>
-                    <button
-                        onClick={exportCsv}
-                        disabled={filteredBatches.length === 0}
-                        className="ui-btn ui-btn-secondary"
-                    >
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={exportCsv} disabled={filteredBatches.length === 0}>
                         <Download size={16} />
                         CSV
-                    </button>
+                    </Button>
                 </div>
-            </header>
+            </div>
 
-            {error && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error ? (
+                <Panel className="border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
                     {error}
-                </div>
-            )}
+                </Panel>
+            ) : null}
 
-            <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <SummaryCard title="Всего партий" value={summary.totalBatches} />
-                <SummaryCard title="Отправлены" value={summary.sentBatches} />
-                <SummaryCard title="Завершены" value={summary.finishedBatches} />
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
+                <MetricTile title="Всего партий" value={summary.totalBatches} tone="blue" />
+                <MetricTile title="Отправлены" value={summary.sentBatches} tone="amber" />
+                <MetricTile title="Завершены" value={summary.finishedBatches} tone="emerald" />
+                <MetricTile title="Всего позиций" value={summary.totalItems} tone="violet" />
+                <MetricTile title="Продано" value={summary.soldItems} tone="emerald" />
+                <MetricTile title="Не продано" value={summary.unsoldItems} tone="muted" />
             </section>
 
-            <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <SummaryCard title="Всего позиций" value={summary.totalItems} />
-                <SummaryCard title="Продано" value={summary.soldItems} tone="success" />
-                <SummaryCard title="Не продано" value={summary.unsoldItems} tone="muted" />
-            </section>
+            <Panel className="p-4">
+                <div className="grid gap-3 xl:grid-cols-[minmax(280px,1fr)_auto_auto] xl:items-end">
+                    <label className="block">
+                        <span className="mb-1.5 block text-sm font-medium text-gray-400">Поиск</span>
+                        <span className="relative block">
+                            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                            <input
+                                value={query}
+                                onChange={(event) => setQuery(event.target.value)}
+                                placeholder="ID партии, item id или temp id"
+                                className={`${partnerControlClassName} pl-10`}
+                            />
+                        </span>
+                    </label>
 
-            <section className="ui-card">
-                <div className="p-4 border-b border-gray-100 space-y-3">
-                    <div className="relative">
-                        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                        <input
-                            value={query}
-                            onChange={(event) => setQuery(event.target.value)}
-                            placeholder="Поиск по ID партии, item id или temp id"
-                            className="ui-input pl-9"
-                        />
-                    </div>
+                    <Select
+                        label="Продажи"
+                        value={saleFilter}
+                        onChange={(event) => setSaleFilter(event.target.value as SaleFilter)}
+                        className="xl:w-48"
+                    >
+                        <option value="ALL">Все</option>
+                        <option value="SOLD">Где есть продажи</option>
+                        <option value="UNSOLD">Где есть непроданные</option>
+                    </Select>
 
-                    <div className="flex flex-wrap gap-2">
-                        <FilterButton label="Все" count={summary.totalBatches} active={batchFilter === 'ALL'} onClick={() => setBatchFilter('ALL')} />
-                        <FilterButton label="Отправлены" count={summary.sentBatches} active={batchFilter === 'SENT'} onClick={() => setBatchFilter('SENT')} />
-                        <FilterButton label="Завершены" count={summary.finishedBatches} active={batchFilter === 'FINISHED'} onClick={() => setBatchFilter('FINISHED')} />
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-gray-500">Продажи:</span>
-                        <select
-                            value={saleFilter}
-                            onChange={(event) => setSaleFilter(event.target.value as SaleFilter)}
-                            className="ui-select w-auto min-w-44 px-3 py-2 text-xs"
-                        >
-                            <option value="ALL">Все</option>
-                            <option value="SOLD">Где есть продажи</option>
-                            <option value="UNSOLD">Где есть непроданные</option>
-                        </select>
-
-                        <span className="text-xs text-gray-500">Сортировка:</span>
-                        <select
-                            value={sortBy}
-                            onChange={(event) => setSortBy(event.target.value as SortBy)}
-                            className="ui-select w-auto min-w-44 px-3 py-2 text-xs"
-                        >
-                            <option value="NEWEST">Сначала новые</option>
-                            <option value="OLDEST">Сначала старые</option>
-                            <option value="MOST_SOLD">Больше продаж</option>
-                            <option value="LEAST_SOLD">Меньше продаж</option>
-                        </select>
-                    </div>
+                    <Select
+                        label="Сортировка"
+                        value={sortBy}
+                        onChange={(event) => setSortBy(event.target.value as SortBy)}
+                        className="xl:w-48"
+                    >
+                        <option value="NEWEST">Сначала новые</option>
+                        <option value="OLDEST">Сначала старые</option>
+                        <option value="MOST_SOLD">Больше продаж</option>
+                        <option value="LEAST_SOLD">Меньше продаж</option>
+                    </Select>
                 </div>
 
+                <div className="mt-4 flex flex-wrap gap-2">
+                    <FilterButton label="Все" count={summary.totalBatches} active={batchFilter === 'ALL'} onClick={() => setBatchFilter('ALL')} />
+                    <FilterButton label="Отправлены" count={summary.sentBatches} active={batchFilter === 'SENT'} onClick={() => setBatchFilter('SENT')} />
+                    <FilterButton label="Завершены" count={summary.finishedBatches} active={batchFilter === 'FINISHED'} onClick={() => setBatchFilter('FINISHED')} />
+                </div>
+            </Panel>
+
+            <Panel className="overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left whitespace-nowrap">
-                        <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-500">
+                    <table className="w-full min-w-[900px] text-left whitespace-nowrap">
+                        <thead className="border-b border-white/6 bg-white/[0.03] text-xs uppercase tracking-wider text-gray-500">
                             <tr>
-                                <th className="px-4 py-3">ID партии</th>
-                                <th className="px-4 py-3">Статус</th>
-                                <th className="px-4 py-3">Позиции</th>
-                                <th className="px-4 py-3">Продано</th>
-                                <th className="px-4 py-3">Не продано</th>
-                                <th className="px-4 py-3 text-right">Детали</th>
-                                <th className="px-4 py-3 text-right">Дата</th>
+                                <th className="px-4 py-3 font-medium">ID партии</th>
+                                <th className="px-4 py-3 font-medium">Статус</th>
+                                <th className="px-4 py-3 font-medium">Позиции</th>
+                                <th className="px-4 py-3 font-medium">Продано</th>
+                                <th className="px-4 py-3 font-medium">Не продано</th>
+                                <th className="px-4 py-3 text-right font-medium">Детали</th>
+                                <th className="px-4 py-3 text-right font-medium">Дата</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-100">
-                            {loading && (
+                        <tbody className="divide-y divide-white/6">
+                            {loading ? (
                                 <tr>
-                                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-500">
-                                        Загрузка партий...
+                                    <td colSpan={7} className="px-4 py-10">
+                                        <EmptyState icon={<Loader2 size={18} className="animate-spin" />} title="Загрузка партий" />
                                     </td>
                                 </tr>
-                            )}
+                            ) : null}
 
                             {!loading && filteredBatches.map((batch) => {
                                 const sold = getSoldCount(batch.items);
@@ -312,93 +302,87 @@ export function Batches() {
 
                                 return (
                                     <Fragment key={batch.id}>
-                                        <tr className="hover:bg-blue-50/40 group">
+                                        <tr className="group transition hover:bg-white/[0.03]">
                                             <td className="px-4 py-3 text-sm">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="font-mono rounded bg-gray-100 px-2 py-1 text-xs text-gray-700">
+                                                    <span className="rounded-lg border border-white/8 bg-black/20 px-2 py-1 font-mono text-xs text-gray-300">
                                                         {batch.id.slice(0, 12)}...
                                                     </span>
                                                     <button
+                                                        type="button"
                                                         onClick={(event) => void handleCopyId(batch.id, event)}
-                                                        className="rounded p-1 text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                                        className="rounded-lg p-1 text-gray-500 opacity-100 transition hover:bg-white/[0.05] hover:text-blue-200 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
                                                         title="Копировать ID"
                                                         aria-label="Копировать ID"
                                                     >
-                                                        {copiedBatchId === batch.id ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                                                        {copiedBatchId === batch.id ? <Check size={14} className="text-emerald-300" /> : <Copy size={14} />}
                                                     </button>
                                                 </div>
                                             </td>
                                             <td className="px-4 py-3">
                                                 <StatusBadge status={batch.status} />
                                             </td>
-                                            <td className="px-4 py-3 text-sm text-gray-700">{batch.items.length}</td>
-                                            <td className="px-4 py-3 text-sm font-semibold text-emerald-700">{sold}</td>
-                                            <td className="px-4 py-3 text-sm font-semibold text-slate-700">{unsold}</td>
+                                            <td className="px-4 py-3 text-sm text-gray-300">{batch.items.length}</td>
+                                            <td className="px-4 py-3 text-sm font-semibold text-emerald-300">{sold}</td>
+                                            <td className="px-4 py-3 text-sm font-semibold text-gray-300">{unsold}</td>
                                             <td className="px-4 py-3 text-right">
-                                                <button
-                                                    onClick={() => toggleBatch(batch.id)}
-                                                    className="ui-btn ui-btn-secondary ui-btn-sm"
-                                                >
+                                                <Button type="button" variant="secondary" size="sm" onClick={() => toggleBatch(batch.id)}>
                                                     {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                                                     {expanded ? 'Скрыть' : 'Раскрыть'}
-                                                </button>
+                                                </Button>
                                             </td>
                                             <td className="px-4 py-3 text-right text-sm text-gray-500">
                                                 {new Date(batch.created_at).toLocaleDateString('ru-RU')}
                                             </td>
                                         </tr>
-                                        {expanded && (
-                                            <tr key={`${batch.id}-details`} className="bg-slate-50/70">
+                                        {expanded ? (
+                                            <tr key={`${batch.id}-details`} className="bg-black/15">
                                                 <td colSpan={7} className="px-4 pb-4 pt-2">
-                                                    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-                                                        <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2 text-xs">
-                                                            <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 font-medium text-emerald-700">
-                                                                Продано: {sold}
-                                                            </span>
-                                                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">
-                                                                Не продано: {unsold}
-                                                            </span>
-                                                            <span className="text-slate-500">
-                                                                Всего позиций: {batch.items.length}
-                                                            </span>
+                                                    <div className="overflow-hidden rounded-2xl border border-white/6 bg-[#0f1217]">
+                                                        <div className="flex flex-wrap items-center gap-2 border-b border-white/6 px-4 py-3 text-xs">
+                                                            <StatusPill label={`Продано: ${sold}`} tone="emerald" compact />
+                                                            <StatusPill label={`Не продано: ${unsold}`} tone="muted" compact />
+                                                            <span className="text-gray-500">Всего позиций: {batch.items.length}</span>
                                                         </div>
 
                                                         <div className="overflow-x-auto">
                                                             <table className="w-full text-left">
-                                                                <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
+                                                                <thead className="bg-white/[0.03] text-[11px] uppercase tracking-wider text-gray-500">
                                                                     <tr>
-                                                                        <th className="px-4 py-2.5">Temp ID</th>
-                                                                        <th className="px-4 py-2.5">Item ID</th>
-                                                                        <th className="px-4 py-2.5">Статус</th>
-                                                                        <th className="px-4 py-2.5 text-right">Продажа</th>
+                                                                        <th className="px-4 py-2.5 font-medium">Temp ID</th>
+                                                                        <th className="px-4 py-2.5 font-medium">Item ID</th>
+                                                                        <th className="px-4 py-2.5 font-medium">Статус</th>
+                                                                        <th className="px-4 py-2.5 text-right font-medium">Продажа</th>
                                                                     </tr>
                                                                 </thead>
-                                                                <tbody className="divide-y divide-slate-100">
-                                                                    {batch.items.length === 0 && (
+                                                                <tbody className="divide-y divide-white/6">
+                                                                    {batch.items.length === 0 ? (
                                                                         <tr>
-                                                                            <td colSpan={4} className="px-4 py-5 text-center text-xs text-slate-500">
+                                                                            <td colSpan={4} className="px-4 py-5 text-center text-xs text-gray-500">
                                                                                 В этой партии пока нет позиций.
                                                                             </td>
                                                                         </tr>
-                                                                    )}
+                                                                    ) : null}
 
                                                                     {batch.items.map((item) => {
                                                                         const isSold = SOLD_ITEM_STATUSES.has(item.status);
                                                                         return (
-                                                                            <tr key={item.id}>
-                                                                                <td className="px-4 py-2.5 text-xs font-semibold text-slate-700">
+                                                                            <tr key={item.id} className="hover:bg-white/[0.02]">
+                                                                                <td className="px-4 py-2.5 text-xs font-semibold text-gray-300">
                                                                                     #{item.temp_id}
                                                                                 </td>
-                                                                                <td className="px-4 py-2.5 text-xs font-mono text-slate-500">
+                                                                                <td className="px-4 py-2.5 font-mono text-xs text-gray-500">
                                                                                     {item.id.slice(0, 12)}...
                                                                                 </td>
                                                                                 <td className="px-4 py-2.5">
                                                                                     <ItemStatusBadge status={item.status} />
                                                                                 </td>
                                                                                 <td className="px-4 py-2.5 text-right">
-                                                                                    <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${isSold ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}>
-                                                                                        {isSold ? 'ПРОДАНО' : 'НЕ ПРОДАНО'}
-                                                                                    </span>
+                                                                                    <StatusPill
+                                                                                        label={isSold ? 'ПРОДАНО' : 'НЕ ПРОДАНО'}
+                                                                                        tone={isSold ? 'emerald' : 'muted'}
+                                                                                        compact
+                                                                                    />
                                                                                 </td>
                                                                             </tr>
                                                                         );
@@ -409,42 +393,26 @@ export function Batches() {
                                                     </div>
                                                 </td>
                                             </tr>
-                                        )}
+                                        ) : null}
                                     </Fragment>
                                 );
                             })}
 
-                            {!loading && filteredBatches.length === 0 && (
+                            {!loading && filteredBatches.length === 0 ? (
                                 <tr>
-                                    <td colSpan={7} className="px-4 py-10 text-center">
-                                        <div className="flex flex-col items-center gap-2 text-gray-500">
-                                            <Package size={28} className="text-gray-300" />
-                                            <p className="text-sm">
-                                                {batches.length === 0 ? 'Партии не найдены.' : 'По заданным фильтрам ничего не найдено.'}
-                                            </p>
-                                        </div>
+                                    <td colSpan={7} className="px-4 py-10">
+                                        <EmptyState
+                                            icon={<Package size={18} />}
+                                            title={batches.length === 0 ? 'Партии не найдены' : 'По заданным фильтрам ничего не найдено'}
+                                            description="Измените фильтры или создайте новую партию из принятого заказа."
+                                        />
                                     </td>
                                 </tr>
-                            )}
+                            ) : null}
                         </tbody>
                     </table>
                 </div>
-            </section>
-        </div>
-    );
-}
-
-function SummaryCard({ title, value, tone = 'default' }: { title: string; value: number; tone?: 'default' | 'success' | 'muted' }) {
-    const valueTone = tone === 'success'
-        ? 'text-emerald-700'
-        : tone === 'muted'
-            ? 'text-slate-700'
-            : 'text-gray-900';
-
-    return (
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <p className="text-xs uppercase tracking-wider text-gray-500">{title}</p>
-            <p className={`mt-1 text-2xl font-semibold ${valueTone}`}>{value}</p>
+            </Panel>
         </div>
     );
 }
@@ -452,10 +420,11 @@ function SummaryCard({ title, value, tone = 'default' }: { title: string; value:
 function FilterButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
     return (
         <button
+            type="button"
             onClick={onClick}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${active
-                ? 'border-blue-600 bg-blue-600 text-white'
-                : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${active
+                ? 'border-blue-400/20 bg-blue-500/20 text-blue-100'
+                : 'border-white/8 bg-white/[0.04] text-gray-400 hover:bg-white/[0.07] hover:text-white'
                 }`}
         >
             {label}: {count}
@@ -464,13 +433,6 @@ function FilterButton({ label, count, active, onClick }: { label: string; count:
 }
 
 function StatusBadge({ status }: { status: string }) {
-    const colors: Record<string, string> = {
-        TRANSIT: 'bg-amber-100 text-amber-700',
-        RECEIVED: 'bg-blue-100 text-blue-700',
-        FINISHED: 'bg-emerald-100 text-emerald-700',
-        ERROR: 'bg-red-100 text-red-700',
-        CANCELLED: 'bg-red-100 text-red-700'
-    };
     const labels: Record<string, string> = {
         TRANSIT: 'В ДОСТАВКЕ',
         RECEIVED: 'ПОЛУЧЕНО',
@@ -478,13 +440,20 @@ function StatusBadge({ status }: { status: string }) {
         ERROR: 'ОШИБКА',
         CANCELLED: 'ОТМЕНЕНО'
     };
+    const tones: Record<string, PartnerTone> = {
+        TRANSIT: 'amber',
+        RECEIVED: 'blue',
+        FINISHED: 'emerald',
+        ERROR: 'red',
+        CANCELLED: 'red'
+    };
 
     return (
-        <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${colors[status] || 'bg-gray-100 text-gray-700'}`}>
-            {status === 'TRANSIT' && <Truck size={12} />}
-            {status === 'FINISHED' && <Check size={12} />}
-            {labels[status] || status}
-        </span>
+        <StatusPill
+            label={labels[status] || status}
+            tone={tones[status] || 'muted'}
+            className="gap-1"
+        />
     );
 }
 
@@ -498,19 +467,15 @@ function ItemStatusBadge({ status }: { status: string }) {
         SOLD_ONLINE: 'ПРОДАН ОНЛАЙН',
         ACTIVATED: 'АКТИВИРОВАН'
     };
-    const colors: Record<string, string> = {
-        NEW: 'bg-slate-100 text-slate-700',
-        REJECTED: 'bg-red-100 text-red-700',
-        STOCK_HQ: 'bg-emerald-100 text-emerald-700',
-        STOCK_ONLINE: 'bg-blue-100 text-blue-700',
-        ON_CONSIGNMENT: 'bg-violet-100 text-violet-700',
-        SOLD_ONLINE: 'bg-amber-100 text-amber-700',
-        ACTIVATED: 'bg-green-100 text-green-700'
+    const tones: Record<string, PartnerTone> = {
+        NEW: 'slate',
+        REJECTED: 'red',
+        STOCK_HQ: 'emerald',
+        STOCK_ONLINE: 'blue',
+        ON_CONSIGNMENT: 'violet',
+        SOLD_ONLINE: 'amber',
+        ACTIVATED: 'emerald'
     };
 
-    return (
-        <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${colors[status] || 'bg-slate-100 text-slate-700'}`}>
-            {labels[status] || status}
-        </span>
-    );
+    return <StatusPill label={labels[status] || status} tone={tones[status] || 'muted'} compact />;
 }

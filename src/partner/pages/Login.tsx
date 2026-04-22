@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { PlanetSphere } from '../../components/PlanetSphere';
 import { persistAuthSession } from '../../utils/session';
 import { hasWebGLSupport } from '../../utils/webgl';
+import { partnerControlClassName } from '../components/ui';
 
 type LoginPortal = 'partner' | 'admin';
 
@@ -155,7 +156,7 @@ export function Login({ portal = 'partner' }: LoginProps) {
     const form = (
         <form onSubmit={handleLogin} className="space-y-6">
             <div>
-                <label className={isAdminPortal ? 'mb-2 block text-sm font-medium text-slate-200' : 'block text-sm font-medium text-gray-700 mb-1'}>Email</label>
+                <label className={isAdminPortal ? 'mb-2 block text-sm font-medium text-slate-200' : 'mb-2 block text-sm font-medium text-gray-400'}>Email</label>
                 <input
                     type="email"
                     required
@@ -163,17 +164,17 @@ export function Login({ portal = 'partner' }: LoginProps) {
                     onChange={(e) => setEmail(e.target.value)}
                     className={isAdminPortal
                         ? 'w-full rounded-xl border border-white/15 bg-white/[0.08] px-3.5 py-2.5 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] outline-none transition-all placeholder:text-slate-400 focus:border-sky-300/70 focus:bg-white/[0.11] focus:shadow-[0_0_0_4px_rgba(125,211,252,0.14),inset_0_1px_0_rgba(255,255,255,0.1)]'
-                        : 'ui-input text-slate-900 bg-white'}
+                        : partnerControlClassName}
                     style={isAdminPortal
                         ? { colorScheme: 'dark', WebkitTextFillColor: '#ffffff', caretColor: '#ffffff' }
-                        : { color: '#0f172a', backgroundColor: '#ffffff', WebkitTextFillColor: '#0f172a', opacity: 1 }}
+                        : { colorScheme: 'dark', WebkitTextFillColor: '#ffffff', caretColor: '#ffffff' }}
                     placeholder={isAdminPortal ? '' : 'yakutia.partner@stones.com'}
                     autoComplete="email"
                 />
             </div>
 
             <div>
-                <label className={isAdminPortal ? 'mb-2 block text-sm font-medium text-slate-200' : 'block text-sm font-medium text-gray-700 mb-1'}>Пароль</label>
+                <label className={isAdminPortal ? 'mb-2 block text-sm font-medium text-slate-200' : 'mb-2 block text-sm font-medium text-gray-400'}>Пароль</label>
                 <input
                     type="password"
                     required
@@ -181,10 +182,10 @@ export function Login({ portal = 'partner' }: LoginProps) {
                     onChange={(e) => setPassword(e.target.value)}
                     className={isAdminPortal
                         ? 'w-full rounded-xl border border-white/15 bg-white/[0.08] px-3.5 py-2.5 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] outline-none transition-all placeholder:text-slate-400 focus:border-sky-300/70 focus:bg-white/[0.11] focus:shadow-[0_0_0_4px_rgba(125,211,252,0.14),inset_0_1px_0_rgba(255,255,255,0.1)]'
-                        : 'ui-input text-slate-900 bg-white'}
+                        : partnerControlClassName}
                     style={isAdminPortal
                         ? { colorScheme: 'dark', WebkitTextFillColor: '#ffffff', caretColor: '#ffffff' }
-                        : { color: '#0f172a', backgroundColor: '#ffffff', WebkitTextFillColor: '#0f172a', opacity: 1 }}
+                        : { colorScheme: 'dark', WebkitTextFillColor: '#ffffff', caretColor: '#ffffff' }}
                     placeholder="••••••••"
                     autoComplete="current-password"
                 />
@@ -195,7 +196,7 @@ export function Login({ portal = 'partner' }: LoginProps) {
                 disabled={loading}
                 className={isAdminPortal
                     ? 'inline-flex w-full items-center justify-center rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black shadow-[0_18px_45px_rgba(0,0,0,0.32)] transition-all duration-200 hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/20 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400 disabled:shadow-none'
-                    : 'ui-btn ui-btn-primary w-full'}
+                    : 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-medium text-[#18181b] shadow-[0_18px_38px_rgba(0,0,0,0.22)] transition duration-200 hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 disabled:cursor-not-allowed disabled:opacity-50'}
             >
                 {loading ? 'Вход...' : 'Войти'}
             </button>
@@ -232,15 +233,18 @@ export function Login({ portal = 'partner' }: LoginProps) {
     }
 
     return (
-        <div className="app-shell-light min-h-screen flex items-center justify-center bg-slate-100 px-4 py-10">
-            <div className="ui-card w-full max-w-md p-8">
-                <div className="text-center mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
-                    <p className="text-gray-500 mt-2">{subtitle}</p>
+        <div className="partner-shell flex min-h-screen items-center justify-center px-4 py-10 text-white">
+            <div className="admin-panel w-full max-w-md rounded-[28px] p-8">
+                <div className="mb-8 text-center">
+                    <span className="mx-auto mb-5 inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-white/8 bg-white/[0.04] text-xl font-semibold text-blue-100">
+                        P
+                    </span>
+                    <h1 className="text-3xl font-semibold text-white">{title}</h1>
+                    <p className="mt-2 text-gray-500">{subtitle}</p>
                 </div>
 
                 {error && (
-                    <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-6 text-sm">
+                    <div className="mb-6 rounded-xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-100">
                         {error}
                     </div>
                 )}

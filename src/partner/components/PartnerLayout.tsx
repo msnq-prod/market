@@ -1,7 +1,44 @@
 import React, { useState } from 'react';
-import { Outlet, Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Package, RussianRuble, LogOut, Home, Menu, X, ListOrdered } from 'lucide-react';
+import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Home, ListOrdered, LogOut, Menu, Package, RussianRuble, X } from 'lucide-react';
 import { logoutSession } from '../../utils/session';
+
+type PageMeta = {
+    title: string;
+    description: string;
+};
+
+type NavConfig = {
+    to: string;
+    icon: React.ReactNode;
+    label: string;
+};
+
+const pageMeta: Record<string, PageMeta> = {
+    '/partner/dashboard': {
+        title: 'Партнерский дашборд',
+        description: 'Заказы на сбор, партии и текущий баланс.'
+    },
+    '/partner/batches': {
+        title: 'Мои партии',
+        description: 'Отправленные партии, продажи и статусы позиций.'
+    },
+    '/partner/batches/new': {
+        title: 'Выполнение заказа',
+        description: 'Создание партии из принятой задачи на сбор.'
+    },
+    '/partner/finance': {
+        title: 'Финансы',
+        description: 'Баланс, начисления и движения по счету партнера.'
+    }
+};
+
+const navItems: NavConfig[] = [
+    { to: '/partner/dashboard', icon: <Home size={18} />, label: 'Дашборд' },
+    { to: '/partner/batches', icon: <ListOrdered size={18} />, label: 'Мои партии' },
+    { to: '/partner/batches/new', icon: <Package size={18} />, label: 'Новая партия' },
+    { to: '/partner/finance', icon: <RussianRuble size={18} />, label: 'Финансы' }
+];
 
 export function PartnerLayout() {
     const navigate = useNavigate();
@@ -10,7 +47,6 @@ export function PartnerLayout() {
         const savedName = localStorage.getItem('userName');
         return savedName ? { name: savedName } : null;
     });
-
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
     const token = localStorage.getItem('accessToken');
@@ -20,7 +56,7 @@ export function PartnerLayout() {
 
     const handleLogout = () => {
         logoutSession();
-        navigate('/partner/login');
+        navigate('/partner/login', { replace: true });
     };
 
     if (location.pathname === '/partner/login') {
@@ -39,92 +75,133 @@ export function PartnerLayout() {
         return <Navigate to="/partner/login" replace />;
     }
 
+    const meta = pageMeta[location.pathname] || pageMeta['/partner/dashboard'];
+
     return (
-        <div className="app-shell-light min-h-screen bg-gray-50 flex flex-col md:flex-row">
-            {/* Mobile Header */}
-            <div className="md:hidden bg-white border-b border-gray-200 p-4 flex items-center justify-between sticky top-0 z-30 shadow-sm">
-                <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                    <span className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-lg shadow-sm">P</span>
-                    Партнер
-                </h1>
-                <button
-                    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                    {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-                </button>
-            </div>
-
-            {/* Backdrop for mobile */}
-            {isMobileMenuOpen && (
-                <div
-                    className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm transition-opacity"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                />
-            )}
-
-            {/* Sidebar / Mobile Menu */}
-            <aside className={`
-                fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-gray-200 flex flex-col transform transition-transform duration-300 ease-in-out shadow-xl md:shadow-none
-                ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
-                md:relative md:translate-x-0 md:w-64
-            `}>
-                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+        <div className="partner-shell min-h-screen text-gray-100 font-sans lg:flex">
+            <div className="flex min-h-screen w-full flex-col lg:flex-row">
+                <div className="sticky top-0 z-30 flex items-center justify-between border-b border-white/6 bg-[#14161b] px-4 py-3 lg:hidden">
                     <div>
-                        <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                            <span className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-lg shadow-sm">P</span>
-                            Партнер
-                        </h1>
-                        {user && <p className="text-sm text-gray-500 mt-2">Здравствуйте, <span className="font-medium text-gray-700">{user.name}</span></p>}
+                        <p className="text-lg font-semibold tracking-tight text-white">Партнер</p>
+                        <p className="text-xs text-gray-500">{user?.name || 'ZAGARAMI'}</p>
                     </div>
                     <button
-                        className="md:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                        onClick={() => setIsMobileMenuOpen(false)}
+                        type="button"
+                        onClick={() => setIsMobileMenuOpen(true)}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                        aria-label="Открыть меню"
                     >
-                        <X size={20} />
+                        <Menu size={20} />
                     </button>
                 </div>
 
-                <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
-                    <NavLink to="/partner/dashboard" icon={<Home size={20} />} label="Дашборд" active={location.pathname === '/partner/dashboard'} onClick={() => setIsMobileMenuOpen(false)} />
-                    <NavLink to="/partner/batches" icon={<ListOrdered size={20} />} label="Мои партии" active={location.pathname === '/partner/batches'} onClick={() => setIsMobileMenuOpen(false)} />
-                    <NavLink to="/partner/batches/new" icon={<Package size={20} />} label="Новая партия" active={location.pathname === '/partner/batches/new'} onClick={() => setIsMobileMenuOpen(false)} />
-                    <NavLink to="/partner/finance" icon={<RussianRuble size={20} />} label="Финансы" active={location.pathname === '/partner/finance'} onClick={() => setIsMobileMenuOpen(false)} />
-                </nav>
-
-                <div className="p-4 border-t border-gray-100 bg-gray-50/50">
+                {isMobileMenuOpen ? (
                     <button
-                        onClick={handleLogout}
-                        className="flex items-center gap-3 px-4 py-2.5 w-full text-left font-medium text-gray-600 hover:bg-red-50 hover:text-red-600 rounded-xl transition-all duration-200"
-                    >
-                        <LogOut size={20} />
-                        <span>Выйти</span>
-                    </button>
-                </div>
-            </aside>
+                        type="button"
+                        className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+                        onClick={() => setIsMobileMenuOpen(false)}
+                        aria-label="Закрыть меню"
+                    />
+                ) : null}
 
-            {/* Main Content */}
-            <main className="flex-1 overflow-y-auto h-[calc(100vh-73px)] md:h-screen bg-gray-50 md:bg-gray-50/50 p-4 md:p-8">
-                <div className="max-w-6xl mx-auto pb-10">
-                    <Outlet />
+                <aside className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-white/6 bg-[#14161b] shadow-2xl transition-transform duration-300 lg:relative lg:z-auto lg:w-[214px] lg:translate-x-0 lg:shadow-none ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                    <div className="border-b border-white/6 px-5 py-6">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h2 className="text-[1.85rem] font-semibold tracking-tight text-white">Партнер</h2>
+                                <p className="mt-1 text-xs text-gray-500">Кабинет франчайзи</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsMobileMenuOpen(false)}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-gray-500 transition hover:bg-white/[0.04] hover:text-white lg:hidden"
+                                aria-label="Закрыть меню"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                        {user ? (
+                            <p className="mt-4 truncate text-sm text-gray-400">
+                                Здравствуйте, <span className="font-medium text-gray-200">{user.name}</span>
+                            </p>
+                        ) : null}
+                    </div>
+
+                    <nav className="flex-1 overflow-y-auto px-3 py-4">
+                        <div className="px-3 pb-2 text-[10px] font-medium uppercase tracking-[0.24em] text-gray-600">
+                            Работа
+                        </div>
+                        <div className="space-y-1">
+                            {navItems.map((item) => (
+                                <NavItem
+                                    key={item.to}
+                                    to={item.to}
+                                    icon={item.icon}
+                                    label={item.label}
+                                    active={location.pathname === item.to}
+                                    onClick={() => setIsMobileMenuOpen(false)}
+                                />
+                            ))}
+                        </div>
+                    </nav>
+
+                    <div className="border-t border-white/6 p-3">
+                        <button
+                            type="button"
+                            onClick={handleLogout}
+                            className="flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-gray-400 transition hover:bg-red-500/10 hover:text-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60"
+                        >
+                            <LogOut size={16} />
+                            <span>Выйти</span>
+                        </button>
+                    </div>
+                </aside>
+
+                <div className="flex min-w-0 flex-1 flex-col">
+                    <header className="border-b border-white/6 bg-black/10">
+                        <div className="mx-auto w-full max-w-[1240px] px-4 py-6 sm:px-6 lg:px-8">
+                            <h1 className="text-[2rem] font-semibold tracking-tight text-white">{meta.title}</h1>
+                            <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
+                        </div>
+                    </header>
+
+                    <main className="min-h-0 flex-1 overflow-visible lg:overflow-auto">
+                        <div className="mx-auto max-w-[1240px] p-4 sm:p-6 lg:p-8">
+                            <Outlet />
+                        </div>
+                    </main>
                 </div>
-            </main>
+            </div>
         </div>
     );
 }
 
-function NavLink({ to, icon, label, active, onClick }: { to: string, icon: React.ReactNode, label: string, active: boolean, onClick?: () => void }) {
+function NavItem({
+    to,
+    icon,
+    label,
+    active,
+    onClick
+}: {
+    to: string;
+    icon: React.ReactNode;
+    label: string;
+    active: boolean;
+    onClick: () => void;
+}) {
     return (
         <Link
             to={to}
             onClick={onClick}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${active
-                    ? 'bg-blue-600 text-white font-medium shadow-md shadow-blue-500/20'
-                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 font-medium'
+            className={`group flex min-h-10 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 ${active
+                ? 'border border-blue-400/10 bg-[#1d2434] text-blue-100'
+                : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
                 }`}
         >
-            <div className={active ? 'text-white' : 'text-gray-400'}>{icon}</div>
-            <span>{label}</span>
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] transition duration-200 ${active ? 'text-blue-200' : 'text-gray-500 group-hover:text-gray-200'}`}>
+                {icon}
+            </div>
+            <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
         </Link>
     );
 }

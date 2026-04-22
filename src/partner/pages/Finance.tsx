@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowDownLeft, ArrowUpRight, CalendarRange, Download, Percent, RefreshCw, Search, Wallet } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowDownLeft, ArrowUpRight, CalendarRange, Download, Loader2, Percent, RefreshCw, Search, Wallet } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
+import { Button, EmptyState, MetricTile, Panel, Select, StatusPill, partnerControlClassName, type PartnerTone } from '../components/ui';
 
 type LedgerEntry = {
     id: string;
@@ -82,16 +83,16 @@ const toAmount = (amount: string) => {
 
 const getOperationLabel = (operation: string) => OPERATION_LABELS[operation] || operation;
 
-const getAmountTone = (amount: number) => {
-    if (amount > 0) return 'text-emerald-700';
-    if (amount < 0) return 'text-rose-700';
-    return 'text-slate-700';
+const getAmountTextTone = (amount: number) => {
+    if (amount > 0) return 'text-emerald-300';
+    if (amount < 0) return 'text-red-300';
+    return 'text-gray-300';
 };
 
-const getAmountBadgeTone = (amount: number) => {
-    if (amount > 0) return 'bg-emerald-50 text-emerald-700 border border-emerald-100';
-    if (amount < 0) return 'bg-rose-50 text-rose-700 border border-rose-100';
-    return 'bg-slate-100 text-slate-700 border border-slate-200';
+const getAmountPillTone = (amount: number): PartnerTone => {
+    if (amount > 0) return 'emerald';
+    if (amount < 0) return 'red';
+    return 'muted';
 };
 
 const formatCommission = (value?: string | number | null) => {
@@ -214,168 +215,150 @@ export function Finance() {
     };
 
     return (
-        <div className="app-shell-light space-y-6">
-            <header className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Финансы</h1>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-500">
-                        Баланс, начисления и история движений по счёту партнёра в одном месте.
-                    </p>
-                </div>
+        <div className="space-y-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="admin-chip w-fit">Financial Ledger</div>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                    <button onClick={() => void loadData()} className="ui-btn ui-btn-secondary" disabled={loading}>
+                    <Button type="button" variant="secondary" onClick={() => void loadData()} disabled={loading}>
                         <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                         Обновить
-                    </button>
-                    <button onClick={handleExportCsv} className="ui-btn ui-btn-primary" disabled={filteredTransactions.length === 0}>
+                    </Button>
+                    <Button type="button" onClick={handleExportCsv} disabled={filteredTransactions.length === 0}>
                         <Download size={16} />
                         Скачать CSV
-                    </button>
+                    </Button>
                 </div>
-            </header>
+            </div>
 
-            {error && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error ? (
+                <Panel className="border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
                     {error}
-                </div>
-            )}
+                </Panel>
+            ) : null}
 
             <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-3xl bg-gradient-to-br from-slate-950 via-blue-950 to-blue-700 p-6 text-white shadow-xl shadow-blue-900/10">
+                <Panel className="overflow-hidden p-6">
                     <div className="flex items-start justify-between gap-4">
-                        <div className="rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur-sm">
+                        <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-3 text-blue-100">
                             <Wallet size={22} />
                         </div>
-                        <span className="rounded-full bg-white/12 px-3 py-1 text-xs font-medium text-blue-100">
-                            {profile?.name || 'Партнер'}
-                        </span>
+                        <StatusPill label={profile?.name || 'Партнер'} tone="blue" />
                     </div>
-                    <p className="mt-8 text-sm text-blue-100/90">Текущий баланс</p>
-                    <p className="mt-2 text-3xl font-bold tracking-tight">{formatRub(profile?.balance ?? '0')}</p>
-                    <p className="mt-2 text-xs text-blue-100/80">
+                    <p className="mt-8 text-sm text-gray-500">Текущий баланс</p>
+                    <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{formatRub(profile?.balance ?? '0')}</p>
+                    <p className="mt-2 text-xs leading-5 text-gray-500">
                         Последнее движение: {latestTimestamp ? formatDateTime(latestTimestamp) : 'пока нет операций'}
                     </p>
-                </div>
+                </Panel>
 
-                <MetricCard
+                <MetricTile
                     title="Начислено"
                     value={formatRub(totals.income)}
                     note={`За период ${PERIOD_OPTIONS.find((option) => option.value === periodFilter)?.label.toLowerCase() || 'все время'}`}
                     icon={<ArrowDownLeft size={18} />}
-                    iconTone="bg-emerald-50 text-emerald-700"
-                    valueTone="text-emerald-700"
+                    tone="emerald"
                 />
-                <MetricCard
+                <MetricTile
                     title="Списано"
                     value={formatRub(totals.expense)}
                     note="Роялти, выводы и корректировки"
                     icon={<ArrowUpRight size={18} />}
-                    iconTone="bg-rose-50 text-rose-700"
-                    valueTone="text-rose-700"
+                    tone="red"
                 />
-                <MetricCard
+                <MetricTile
                     title="Комиссия HQ"
                     value={formatCommission(profile?.commission_rate)}
                     note={`Операций в выборке: ${filteredTransactions.length}`}
                     icon={<Percent size={18} />}
-                    iconTone="bg-blue-50 text-blue-700"
-                    valueTone="text-slate-900"
+                    tone="blue"
                 />
             </section>
 
-            <section className="ui-card p-5">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-                    <div className="w-full xl:max-w-md">
-                        <label className="mb-2 block text-sm font-medium text-slate-700">Поиск по item/серийнику/операции</label>
-                        <div className="relative">
-                            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Panel className="p-5">
+                <div className="grid gap-4 xl:grid-cols-[minmax(280px,1fr)_240px_minmax(260px,auto)] xl:items-end">
+                    <label className="block">
+                        <span className="mb-1.5 block text-sm font-medium text-gray-400">Поиск по item/серийнику/операции</span>
+                        <span className="relative block">
+                            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
                             <input
                                 value={query}
                                 onChange={(event) => setQuery(event.target.value)}
                                 placeholder="Например, RUSABC001234 или вывод"
-                                className="ui-input pl-10 text-slate-900 bg-white"
+                                className={`${partnerControlClassName} pl-10`}
                             />
-                        </div>
-                    </div>
+                        </span>
+                    </label>
 
-                    <div className="grid gap-4 sm:grid-cols-2 xl:w-auto">
-                        <div>
-                            <label className="mb-2 block text-sm font-medium text-slate-700">Тип операции</label>
-                            <select
-                                value={operationFilter}
-                                onChange={(event) => setOperationFilter(event.target.value)}
-                                className="ui-select min-w-56 text-slate-900 bg-white"
-                            >
-                                {operationOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                        {getOperationLabel(option)}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                    <Select
+                        label="Тип операции"
+                        value={operationFilter}
+                        onChange={(event) => setOperationFilter(event.target.value)}
+                    >
+                        {operationOptions.map((option) => (
+                            <option key={option} value={option}>
+                                {getOperationLabel(option)}
+                            </option>
+                        ))}
+                    </Select>
 
-                        <div>
-                            <label className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700">
-                                <CalendarRange size={15} />
-                                Период
-                            </label>
-                            <div className="flex flex-wrap gap-2">
-                                {PERIOD_OPTIONS.map((option) => {
-                                    const active = periodFilter === option.value;
-                                    return (
-                                        <button
-                                            key={option.value}
-                                            onClick={() => setPeriodFilter(option.value)}
-                                            className={`rounded-full px-3 py-2 text-xs font-semibold transition-colors ${active
-                                                ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
-                                                : 'border border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-slate-100'
-                                                }`}
-                                        >
-                                            {option.label}
-                                        </button>
-                                    );
-                                })}
-                            </div>
+                    <div>
+                        <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-gray-400">
+                            <CalendarRange size={15} />
+                            Период
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {PERIOD_OPTIONS.map((option) => {
+                                const active = periodFilter === option.value;
+                                return (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => setPeriodFilter(option.value)}
+                                        className={`rounded-full border px-3 py-2 text-xs font-semibold transition-colors ${active
+                                            ? 'border-blue-400/20 bg-blue-500/20 text-blue-100'
+                                            : 'border-white/8 bg-white/[0.04] text-gray-400 hover:bg-white/[0.07] hover:text-white'
+                                            }`}
+                                    >
+                                        {option.label}
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span className="rounded-full bg-slate-100 px-3 py-1.5">Проводок: {filteredTransactions.length}</span>
-                    <span className="rounded-full bg-slate-100 px-3 py-1.5">Связано с позициями: {totals.itemLinked}</span>
-                    <span className="rounded-full bg-slate-100 px-3 py-1.5">Баланс сейчас: {formatRub(profile?.balance ?? '0')}</span>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-500">
+                    <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1.5">Проводок: {filteredTransactions.length}</span>
+                    <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1.5">Связано с позициями: {totals.itemLinked}</span>
+                    <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1.5">Баланс сейчас: {formatRub(profile?.balance ?? '0')}</span>
                 </div>
-            </section>
+            </Panel>
 
-            <section className="ui-card overflow-hidden">
-                <div className="border-b border-slate-100 px-5 py-4">
-                    <h2 className="text-lg font-bold text-slate-900">История операций</h2>
-                    <p className="mt-1 text-sm text-slate-500">
-                        Список последних проводок с указанием суммы, типа операции и связанной позиции.
+            <Panel className="overflow-hidden">
+                <div className="border-b border-white/6 px-5 py-4">
+                    <h2 className="text-lg font-semibold text-white">История операций</h2>
+                    <p className="mt-1 text-sm text-gray-500">
+                        Последние проводки с суммой, типом операции и связанной позицией.
                     </p>
                 </div>
 
-                {loading && (
-                    <div className="flex items-center justify-center gap-3 px-6 py-16 text-sm text-slate-500">
-                        <RefreshCw size={16} className="animate-spin text-blue-600" />
-                        Загрузка финансовых данных...
-                    </div>
-                )}
+                {loading ? (
+                    <EmptyState icon={<Loader2 size={18} className="animate-spin" />} title="Загрузка финансовых данных" />
+                ) : null}
 
-                {!loading && !error && filteredTransactions.length === 0 && (
-                    <div className="px-6 py-16 text-center">
-                        <p className="text-base font-semibold text-slate-800">Проводки не найдены</p>
-                        <p className="mt-2 text-sm text-slate-500">
-                            Измените фильтры или дождитесь новых движений по счету.
-                        </p>
-                    </div>
-                )}
+                {!loading && !error && filteredTransactions.length === 0 ? (
+                    <EmptyState
+                        icon={<Wallet size={18} />}
+                        title="Проводки не найдены"
+                        description="Измените фильтры или дождитесь новых движений по счету."
+                    />
+                ) : null}
 
-                {!loading && !error && filteredTransactions.length > 0 && (
+                {!loading && !error && filteredTransactions.length > 0 ? (
                     <>
                         <div className="hidden overflow-x-auto xl:block">
                             <table className="w-full min-w-[980px] text-left">
-                                <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                                <thead className="border-b border-white/6 bg-white/[0.03] text-xs uppercase tracking-wider text-gray-500">
                                     <tr>
                                         <th className="px-5 py-3 font-medium">Дата</th>
                                         <th className="px-5 py-3 font-medium">Операция</th>
@@ -384,40 +367,41 @@ export function Finance() {
                                         <th className="px-5 py-3 text-right font-medium">Сумма</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-100">
+                                <tbody className="divide-y divide-white/6">
                                     {filteredTransactions.map((entry) => {
                                         const amount = toAmount(entry.amount);
                                         return (
-                                            <tr key={entry.id} className="hover:bg-slate-50/80">
-                                                <td className="px-5 py-4 text-sm text-slate-600">
+                                            <tr key={entry.id} className="transition hover:bg-white/[0.03]">
+                                                <td className="px-5 py-4 text-sm text-gray-400">
                                                     {formatDateTime(entry.timestamp)}
                                                 </td>
                                                 <td className="px-5 py-4">
                                                     <div className="space-y-1">
-                                                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getAmountBadgeTone(amount)}`}>
-                                                            {getOperationLabel(entry.operation)}
-                                                        </span>
-                                                        <p className="text-xs text-slate-500">
+                                                        <StatusPill
+                                                            label={getOperationLabel(entry.operation)}
+                                                            tone={getAmountPillTone(amount)}
+                                                        />
+                                                        <p className="text-xs text-gray-500">
                                                             {OPERATION_DESCRIPTIONS[entry.operation] || 'Операция по счету партнера.'}
                                                         </p>
                                                     </div>
                                                 </td>
-                                                <td className="px-5 py-4 text-sm text-slate-700">
+                                                <td className="px-5 py-4 text-sm text-gray-300">
                                                     {entry.item ? (
                                                         <div>
-                                                            <p className="font-semibold text-slate-800">#{entry.item.temp_id}</p>
-                                                            <p className="font-mono text-xs text-slate-500">
+                                                            <p className="font-semibold text-white">#{entry.item.temp_id}</p>
+                                                            <p className="font-mono text-xs text-gray-500">
                                                                 {entry.item.serial_number || entry.item.id}
                                                             </p>
                                                         </div>
                                                     ) : (
-                                                        <span className="text-slate-500">Системная операция</span>
+                                                        <span className="text-gray-500">Системная операция</span>
                                                     )}
                                                 </td>
-                                                <td className="px-5 py-4 font-mono text-xs text-slate-500">
+                                                <td className="px-5 py-4 font-mono text-xs text-gray-500">
                                                     {entry.id}
                                                 </td>
-                                                <td className={`px-5 py-4 text-right text-sm font-semibold ${getAmountTone(amount)}`}>
+                                                <td className={`px-5 py-4 text-right text-sm font-semibold ${getAmountTextTone(amount)}`}>
                                                     {amount > 0 ? '+' : amount < 0 ? '-' : ''}{formatRub(Math.abs(amount))}
                                                 </td>
                                             </tr>
@@ -427,30 +411,31 @@ export function Finance() {
                             </table>
                         </div>
 
-                        <div className="divide-y divide-slate-100 xl:hidden">
+                        <div className="divide-y divide-white/6 xl:hidden">
                             {filteredTransactions.map((entry) => {
                                 const amount = toAmount(entry.amount);
                                 return (
                                     <article key={entry.id} className="space-y-3 px-5 py-4">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
-                                                <p className="text-sm font-semibold text-slate-900">{getOperationLabel(entry.operation)}</p>
-                                                <p className="mt-1 text-xs text-slate-500">{formatDateTime(entry.timestamp)}</p>
+                                                <p className="text-sm font-semibold text-white">{getOperationLabel(entry.operation)}</p>
+                                                <p className="mt-1 text-xs text-gray-500">{formatDateTime(entry.timestamp)}</p>
                                             </div>
-                                            <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getAmountBadgeTone(amount)}`}>
-                                                {amount > 0 ? '+' : amount < 0 ? '-' : ''}{formatRub(Math.abs(amount))}
-                                            </span>
+                                            <StatusPill
+                                                label={`${amount > 0 ? '+' : amount < 0 ? '-' : ''}${formatRub(Math.abs(amount))}`}
+                                                tone={getAmountPillTone(amount)}
+                                            />
                                         </div>
 
-                                        <p className="text-sm text-slate-600">
+                                        <p className="text-sm leading-6 text-gray-400">
                                             {OPERATION_DESCRIPTIONS[entry.operation] || 'Операция по счету партнера.'}
                                         </p>
 
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                        <div className="rounded-2xl border border-white/6 bg-black/20 px-3 py-2 text-sm text-gray-300">
                                             {entry.item ? (
                                                 <>
-                                                    <p className="font-semibold text-slate-900">Позиция #{entry.item.temp_id}</p>
-                                                    <p className="mt-1 font-mono text-xs text-slate-500">
+                                                    <p className="font-semibold text-white">Позиция #{entry.item.temp_id}</p>
+                                                    <p className="mt-1 font-mono text-xs text-gray-500">
                                                         {entry.item.serial_number || entry.item.id}
                                                     </p>
                                                 </>
@@ -463,39 +448,8 @@ export function Finance() {
                             })}
                         </div>
                     </>
-                )}
-            </section>
-        </div>
-    );
-}
-
-function MetricCard({
-    title,
-    value,
-    note,
-    icon,
-    iconTone,
-    valueTone,
-}: {
-    title: string;
-    value: string;
-    note: string;
-    icon: ReactNode;
-    iconTone: string;
-    valueTone: string;
-}) {
-    return (
-        <div className="ui-card p-5">
-            <div className="flex items-start justify-between gap-4">
-                <div>
-                    <p className="text-sm font-medium text-slate-500">{title}</p>
-                    <p className={`mt-3 text-3xl font-bold tracking-tight ${valueTone}`}>{value}</p>
-                </div>
-                <div className={`rounded-2xl p-3 ${iconTone}`}>
-                    {icon}
-                </div>
-            </div>
-            <p className="mt-3 text-xs text-slate-500">{note}</p>
+                ) : null}
+            </Panel>
         </div>
     );
 }

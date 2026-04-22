@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, Package, Truck, Wallet, CheckCheck } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCheck, Loader2, Package, Truck, Wallet } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
+import { Button, EmptyState, MetricTile, Panel, StatusPill, type PartnerTone } from '../components/ui';
 
 type Batch = {
     id: string;
@@ -55,13 +57,13 @@ const requestStatusLabels: Record<string, string> = {
     CANCELLED: 'Отменен'
 };
 
-const requestStatusClass: Record<string, string> = {
-    OPEN: 'bg-blue-50 text-blue-700',
-    IN_PROGRESS: 'bg-amber-50 text-amber-700',
-    IN_TRANSIT: 'bg-sky-50 text-sky-700',
-    RECEIVED: 'bg-violet-50 text-violet-700',
-    IN_STOCK: 'bg-emerald-50 text-emerald-700',
-    CANCELLED: 'bg-red-50 text-red-700'
+const requestStatusTone: Record<string, PartnerTone> = {
+    OPEN: 'blue',
+    IN_PROGRESS: 'amber',
+    IN_TRANSIT: 'blue',
+    RECEIVED: 'violet',
+    IN_STOCK: 'emerald',
+    CANCELLED: 'red'
 };
 
 const batchStatusLabels: Record<string, string> = {
@@ -75,6 +77,14 @@ const batchStatusLabels: Record<string, string> = {
     FINISHED: 'На складе'
 };
 
+const batchStatusTone: Record<string, PartnerTone> = {
+    TRANSIT: 'amber',
+    RECEIVED: 'violet',
+    FINISHED: 'emerald',
+    ERROR: 'red',
+    CANCELLED: 'red'
+};
+
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
     const translation = translations.find((item) => item.language_id === 2)
         || translations.find((item) => item.language_id === 1)
@@ -82,6 +92,10 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
     const value = translation?.[field];
     return typeof value === 'string' ? value : '';
 };
+
+const getProductName = (request: CollectionRequest) => (
+    request.product ? getDefaultTranslationValue(request.product.translations, 'name') : request.title
+);
 
 export function Dashboard() {
     const [batches, setBatches] = useState<Batch[]>([]);
@@ -149,178 +163,180 @@ export function Dashboard() {
     };
 
     return (
-        <div className="space-y-8 animate-in fade-in duration-500">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Партнерский дашборд</h1>
-                    <p className="text-gray-500 mt-1 text-sm">Заказы на сбор, партии и текущий баланс.</p>
-                </div>
+        <div className="space-y-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="admin-chip w-fit">Partner Core</div>
                 <Link
                     to="/partner/batches/new"
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-medium text-[#18181b] shadow-[0_18px_38px_rgba(0,0,0,0.22)] transition duration-200 hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60"
                 >
                     <Package size={18} />
                     Выполнить заказ
                 </Link>
             </div>
 
-            {error && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
+            {error ? (
+                <Panel className="border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
                     {error}
-                </div>
-            )}
+                </Panel>
+            ) : null}
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Card
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <MetricTile
                     title="Баланс"
                     value={loading ? '...' : formatRub(profile?.balance ?? '0')}
-                    icon={<Wallet className="text-blue-700" size={22} />}
+                    icon={<Wallet size={20} />}
+                    tone="blue"
                 />
-                <Card
+                <MetricTile
                     title="Открытые заказы"
-                    value={String(openRequests.length)}
-                    icon={<Activity className="text-indigo-700" size={22} />}
+                    value={openRequests.length}
+                    icon={<Activity size={20} />}
+                    tone="violet"
                 />
-                <Card
+                <MetricTile
                     title="В доставке / получено"
                     value={`${sentBatches} / ${receivedBatches}`}
-                    icon={<Truck className="text-amber-700" size={22} />}
+                    icon={<Truck size={20} />}
+                    tone="amber"
                 />
-                <Card
+                <MetricTile
                     title="На складе / продано"
                     value={`${stockBatches} / ${soldItems}`}
-                    icon={<CheckCheck className="text-emerald-700" size={22} />}
+                    icon={<CheckCheck size={20} />}
+                    tone="emerald"
                 />
-            </div>
-
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="border-b border-gray-100 px-5 py-4">
-                    <h2 className="text-lg font-semibold text-gray-900">Доступные заказы на сбор</h2>
-                </div>
-
-                {loading ? (
-                    <div className="px-5 py-8 text-gray-500">Загрузка...</div>
-                ) : openRequests.length === 0 ? (
-                    <div className="px-5 py-8 text-gray-500">Открытых заказов сейчас нет.</div>
-                ) : (
-                    <div className="divide-y divide-gray-100">
-                        {openRequests.map((request) => {
-                            const productName = request.product ? getDefaultTranslationValue(request.product.translations, 'name') : request.title;
-                            return (
-                                <article key={request.id} className="px-5 py-4">
-                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                                        <div className="space-y-2">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <h3 className="font-semibold text-gray-900">{productName}</h3>
-                                                <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${requestStatusClass[request.status] || 'bg-gray-100 text-gray-600'}`}>
-                                                    {requestStatusLabels[request.status] || request.status}
-                                                </span>
-                                            </div>
-                                            <p className="text-sm text-gray-600">
-                                                Нужно собрать: {request.requested_qty} камней • код {request.product?.country_code}{request.product?.location_code}{request.product?.item_code}
-                                            </p>
-                                            {request.note && (
-                                                <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">{request.note}</p>
-                                            )}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => void handleAcknowledgeRequest(request.id)}
-                                            disabled={actionLoadingId === request.id}
-                                            className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
-                                        >
-                                            {actionLoadingId === request.id ? 'Отправка...' : 'Принять'}
-                                        </button>
-                                    </div>
-                                </article>
-                            );
-                        })}
-                    </div>
-                )}
             </section>
 
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="border-b border-gray-100 px-5 py-4">
-                    <h2 className="text-lg font-semibold text-gray-900">Мои заказы в работе</h2>
-                </div>
-
-                {loading ? (
-                    <div className="px-5 py-8 text-gray-500">Загрузка...</div>
-                ) : activeRequests.length === 0 ? (
-                    <div className="px-5 py-8 text-gray-500">Нет заказов, готовых к выполнению.</div>
-                ) : (
-                    <div className="divide-y divide-gray-100">
-                        {activeRequests.map((request) => {
-                            const productName = request.product ? getDefaultTranslationValue(request.product.translations, 'name') : request.title;
-                            return (
-                                <article key={request.id} className="px-5 py-4">
-                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                                        <div className="space-y-2">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <h3 className="font-semibold text-gray-900">{productName}</h3>
-                                                <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${requestStatusClass[request.status] || 'bg-gray-100 text-gray-600'}`}>
-                                                    {requestStatusLabels[request.status] || request.status}
-                                                </span>
-                                            </div>
-                                            <p className="text-sm text-gray-600">
-                                                Количество: {request.requested_qty} • дата создания: {new Date(request.created_at).toLocaleString('ru-RU')}
-                                            </p>
-                                        </div>
-                                        <Link
-                                            to={`/partner/batches/new?requestId=${encodeURIComponent(request.id)}`}
-                                            className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                                        >
-                                            Выполнить заказ
-                                        </Link>
-                                    </div>
-                                </article>
-                            );
-                        })}
-                    </div>
+            <RequestSection
+                title="Доступные заказы на сбор"
+                loading={loading}
+                requests={openRequests}
+                emptyTitle="Открытых заказов сейчас нет"
+                emptyDescription="Новые задачи появятся здесь после публикации HQ."
+                renderAction={(request) => (
+                    <Button
+                        type="button"
+                        onClick={() => void handleAcknowledgeRequest(request.id)}
+                        disabled={actionLoadingId === request.id}
+                    >
+                        {actionLoadingId === request.id ? <Loader2 size={16} className="animate-spin" /> : null}
+                        {actionLoadingId === request.id ? 'Отправка' : 'Принять'}
+                    </Button>
                 )}
-            </section>
+            />
 
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="border-b border-gray-100 px-5 py-4">
-                    <h2 className="text-lg font-semibold text-gray-900">Последние партии</h2>
+            <RequestSection
+                title="Мои заказы в работе"
+                loading={loading}
+                requests={activeRequests}
+                emptyTitle="Нет заказов, готовых к выполнению"
+                emptyDescription="Принятые задачи перейдут сюда перед созданием партии."
+                renderAction={(request) => (
+                    <Link
+                        to={`/partner/batches/new?requestId=${encodeURIComponent(request.id)}`}
+                        className="inline-flex min-h-11 items-center justify-center rounded-2xl bg-white px-4 py-2.5 text-sm font-medium text-[#18181b] transition hover:bg-zinc-100"
+                    >
+                        Выполнить заказ
+                    </Link>
+                )}
+            />
+
+            <Panel className="overflow-hidden">
+                <div className="border-b border-white/6 px-5 py-4">
+                    <h2 className="text-lg font-semibold text-white">Последние партии</h2>
                 </div>
 
                 {loading ? (
-                    <div className="px-5 py-8 text-gray-500">Загрузка...</div>
+                    <EmptyState icon={<Loader2 size={18} className="animate-spin" />} title="Загрузка партий" />
                 ) : batches.length === 0 ? (
-                    <div className="px-5 py-8 text-gray-500">Партии еще не созданы.</div>
+                    <EmptyState
+                        icon={<Package size={18} />}
+                        title="Партии еще не созданы"
+                        description="После выполнения первой задачи партия появится в этом списке."
+                    />
                 ) : (
-                    <div className="divide-y divide-gray-100">
+                    <div className="divide-y divide-white/6">
                         {batches.slice(0, 8).map((batch) => (
-                            <article key={batch.id} className="px-5 py-4">
+                            <article key={batch.id} className="px-5 py-4 transition hover:bg-white/[0.03]">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                        <h3 className="font-semibold text-gray-900">{batch.id}</h3>
-                                        <p className="text-sm text-gray-600">
-                                            {new Date(batch.created_at).toLocaleString('ru-RU')} • камней: {batch.items.length}
+                                    <div className="min-w-0">
+                                        <h3 className="truncate font-mono text-sm font-semibold text-white">{batch.id}</h3>
+                                        <p className="mt-1 text-sm text-gray-500">
+                                            {new Date(batch.created_at).toLocaleString('ru-RU')} · камней: {batch.items.length}
                                         </p>
                                     </div>
-                                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${requestStatusClass[batch.status] || 'bg-gray-100 text-gray-600'}`}>
-                                        {batchStatusLabels[batch.status] || batch.status}
-                                    </span>
+                                    <StatusPill
+                                        label={batchStatusLabels[batch.status] || batch.status}
+                                        tone={batchStatusTone[batch.status] || 'muted'}
+                                    />
                                 </div>
                             </article>
                         ))}
                     </div>
                 )}
-            </section>
+            </Panel>
         </div>
     );
 }
 
-function Card({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
+function RequestSection({
+    title,
+    loading,
+    requests,
+    emptyTitle,
+    emptyDescription,
+    renderAction
+}: {
+    title: string;
+    loading: boolean;
+    requests: CollectionRequest[];
+    emptyTitle: string;
+    emptyDescription: string;
+    renderAction: (request: CollectionRequest) => ReactNode;
+}) {
     return (
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-                <div className="text-sm text-gray-500">{title}</div>
-                <div className="rounded-xl bg-gray-100 p-2">{icon}</div>
+        <Panel className="overflow-hidden">
+            <div className="border-b border-white/6 px-5 py-4">
+                <h2 className="text-lg font-semibold text-white">{title}</h2>
             </div>
-            <div className="mt-4 text-2xl font-semibold text-gray-900">{value}</div>
-        </div>
+
+            {loading ? (
+                <EmptyState icon={<Loader2 size={18} className="animate-spin" />} title="Загрузка заказов" />
+            ) : requests.length === 0 ? (
+                <EmptyState
+                    icon={<AlertTriangle size={18} />}
+                    title={emptyTitle}
+                    description={emptyDescription}
+                />
+            ) : (
+                <div className="divide-y divide-white/6">
+                    {requests.map((request) => (
+                        <article key={request.id} className="px-5 py-4 transition hover:bg-white/[0.03]">
+                            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="min-w-0 space-y-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <h3 className="font-semibold text-white">{getProductName(request)}</h3>
+                                        <StatusPill
+                                            label={requestStatusLabels[request.status] || request.status}
+                                            tone={requestStatusTone[request.status] || 'muted'}
+                                        />
+                                    </div>
+                                    <p className="text-sm text-gray-400">
+                                        Нужно собрать: {request.requested_qty} камней · код {request.product?.country_code}{request.product?.location_code}{request.product?.item_code}
+                                    </p>
+                                    {request.note ? (
+                                        <p className="rounded-2xl border border-white/6 bg-black/20 px-3 py-2 text-sm leading-6 text-gray-300">
+                                            {request.note}
+                                        </p>
+                                    ) : null}
+                                </div>
+                                <div className="shrink-0">{renderAction(request)}</div>
+                            </div>
+                        </article>
+                    ))}
+                </div>
+            )}
+        </Panel>
     );
 }

@@ -68,6 +68,29 @@
     color-scheme: dark;
   }
 
+  .partner-shell {
+    color-scheme: dark;
+    background: linear-gradient(180deg, #121317 0%, #0d0f13 100%);
+  }
+
+  .partner-shell :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea) {
+    color: #ffffff;
+    background-color: #11141a;
+    color-scheme: dark;
+    -webkit-text-fill-color: #ffffff;
+    caret-color: #ffffff;
+  }
+
+  .partner-shell :where(input:not([type='checkbox']):not([type='radio']):not([type='file']), textarea)::placeholder {
+    color: #52525b;
+    -webkit-text-fill-color: #52525b;
+  }
+
+  .partner-shell option {
+    color: #f4f4f5;
+    background: #11141a;
+  }
+
   .app-shell-light {
     color: #0f172a;
     color-scheme: light;
