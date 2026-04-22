@@ -176,12 +176,51 @@ export interface SalesCustomer {
 export interface SalesInventoryRow {
     id: string;
     name: string;
+    location_id: string;
     location_name: string;
     country_code: string;
     location_code: string;
     item_code: string;
     price: number;
+    is_published: boolean;
     free_stock: number;
     reserved_stock: number;
     sold_stock: number;
+    total_stock: number;
+    low_stock: boolean;
+}
+
+export type SalesInventoryItemBucket = 'FREE' | 'RESERVED' | 'SOLD' | 'OTHER';
+
+export interface SalesInventoryDetailItem {
+    id: string;
+    temp_id: string;
+    serial_number?: string | null;
+    item_seq?: number | null;
+    status: string;
+    is_sold: boolean;
+    bucket: SalesInventoryItemBucket;
+    clone_url?: string | null;
+    batch: {
+        id: string;
+        status: string;
+        daily_batch_seq?: number | null;
+        created_at: string;
+    };
+    order_assignment?: {
+        id: string;
+        order_item_id: string;
+        order_id: string;
+        order_status: OrderStatus;
+        buyer: {
+            id: string;
+            name: string;
+            username?: string | null;
+            email?: string | null;
+        };
+    } | null;
+}
+
+export interface SalesInventoryDetail extends SalesInventoryRow {
+    items: SalesInventoryDetailItem[];
 }

@@ -139,6 +139,7 @@ export async function createProductFixture(options: ProductFixtureOptions = {}) 
     const base = await createCatalogFixtureBase(name, description, isPublished);
 
     let createdBatchId: string | null = null;
+    const itemSerialNumbers: string[] = [];
     if (stockOnlineCount > 0) {
         createdBatchId = batchId;
         const collectedDate = new Date('2026-04-07T00:00:00.000Z');
@@ -168,6 +169,7 @@ export async function createProductFixture(options: ProductFixtureOptions = {}) 
                     collectedDate,
                     index + 1
                 );
+                itemSerialNumbers.push(serialNumber);
 
                 return {
                     id: `e2e-item-${suffix}-${index + 1}`,
@@ -190,6 +192,7 @@ export async function createProductFixture(options: ProductFixtureOptions = {}) 
         productId: base.productId,
         batchId: createdBatchId,
         ownerId: base.ownerId,
+        itemSerialNumbers,
     };
 }
 

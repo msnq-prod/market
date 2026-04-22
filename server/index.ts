@@ -19,6 +19,7 @@ import collectionRequestsRoutes from './routes/collectionRequests.ts';
 import ordersRoutes from './routes/orders.ts';
 import salesRoutes from './routes/sales.ts';
 import telegramRoutes from './routes/telegram.ts';
+import qrPrintPresetRoutes from './routes/qrPrintPresets.ts';
 import { setUploadedMediaResponseHeaders } from './middleware/upload.ts';
 import { isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
@@ -263,6 +264,7 @@ app.use('/api/collection-requests', collectionRequestsRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/telegram', telegramRoutes);
+app.use('/api/qr-print-presets', qrPrintPresetRoutes);
 
 app.use('/api/upload', uploadRoutes);
 

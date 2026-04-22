@@ -285,18 +285,72 @@ test('UI e2e: партнер не видит QR-раздел, HQ сохраня�
         page.getByRole('button', { name: 'PDF всех QR' }).click()
     ]);
     await printPage.waitForURL(/\/admin\/qr\/print/);
-    await expect(printPage.getByRole('heading', { name: 'HQ-сервис QR PDF' })).toBeVisible();
-    await expect(printPage.getByRole('heading', { name: 'Интерактивное превью одной этикетки' })).toBeVisible();
     await expect(printPage.getByRole('button', { name: 'Сохранить PDF' })).toBeEnabled();
+    await expect(printPage.getByRole('heading', { name: 'Источник данных' })).toBeVisible();
+    await printPage.getByLabel('Свернуть источник данных').first().click();
+    await expect(printPage.getByRole('heading', { name: 'Источник данных' })).toHaveCount(0);
+    await printPage.getByLabel('Открыть источник данных').first().click();
+    await expect(printPage.getByRole('heading', { name: 'Источник данных' })).toBeVisible();
+    await printPage.getByRole('button', { name: 'Сбросить' }).click();
+    const presetName = `[e2e] QR preset ${randomKey()}`;
+    const presetSelect = printPage.getByLabel('Пресет печати');
+    const presetNameInput = printPage.getByLabel('Название пресета');
+    await presetNameInput.fill(presetName);
+    await printPage.getByRole('button', { name: 'Сохранить как новый' }).click();
+    await expect.poll(async () => presetSelect.inputValue()).not.toBe('');
+    await expect(presetSelect.locator('option', { hasText: presetName })).toHaveCount(1);
+    const savedPresetId = await presetSelect.inputValue();
+
+    await expect(printPage.getByLabel('Сверху, мм', { exact: true })).toHaveValue('3');
+    await expect(printPage.getByLabel('Справа, мм', { exact: true })).toHaveValue('3');
+    await expect(printPage.getByLabel('Снизу, мм', { exact: true })).toHaveValue('3');
+    await expect(printPage.getByLabel('Слева, мм', { exact: true })).toHaveValue('3');
+    const labelWidthInput = printPage.getByLabel('Ширина, мм');
+    await expect(labelWidthInput).toHaveValue('58');
+    await labelWidthInput.fill('64');
+    await presetSelect.selectOption({ label: presetName });
+    await expect(labelWidthInput).toHaveValue('58');
+    await labelWidthInput.fill('62');
+    await printPage.getByRole('button', { name: 'Сохранить', exact: true }).click();
+    await labelWidthInput.fill('64');
+    await presetSelect.selectOption('');
+    await presetSelect.selectOption(savedPresetId);
+    await expect(labelWidthInput).toHaveValue('62');
+    printPage.once('dialog', (dialog) => dialog.accept());
+    await printPage.getByRole('button', { name: 'Удалить' }).click();
+    await expect(presetSelect.locator('option', { hasText: presetName })).toHaveCount(0);
+    await expect(presetSelect).toHaveValue('');
+    await printPage.getByRole('button', { name: 'Сбросить' }).click();
+
+    const previewImage = printPage.getByTestId('qr-preview-page').first();
+    await expect(previewImage).toBeVisible({ timeout: 15_000 });
+    await expect(printPage.locator('.qr-document-panel .qr-label-card')).toHaveCount(0);
+    const initialPreviewMetrics = await previewImage.evaluate((element) => {
+        const image = element as HTMLImageElement;
+        return {
+            naturalWidth: image.naturalWidth,
+            naturalHeight: image.naturalHeight
+        };
+    });
+    expect(initialPreviewMetrics.naturalWidth).toBeGreaterThan(1000);
+    expect(initialPreviewMetrics.naturalHeight).toBeGreaterThan(1500);
+    await printPage.setViewportSize({ width: 980, height: 760 });
+    await expect.poll(async () => previewImage.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBe(initialPreviewMetrics.naturalWidth);
+    await expect.poll(async () => previewImage.evaluate((element) => (element as HTMLImageElement).naturalHeight)).toBe(initialPreviewMetrics.naturalHeight);
+    await printPage.setViewportSize({ width: 1280, height: 720 });
+
+    const initialPreviewSrc = await previewImage.getAttribute('src');
+    await printPage.getByLabel('Сверху, мм', { exact: true }).fill('5');
+    await expect.poll(async () => previewImage.getAttribute('src')).not.toBe(initialPreviewSrc);
     await expect(printPage.getByLabel('Скругление, мм')).toHaveValue('0');
-    await expect.poll(async () => (
-        printPage.locator('.qr-label-card').first().evaluate((element) => getComputedStyle(element).borderTopLeftRadius)
-    )).toBe('0px');
+    const previewAfterPadding = await previewImage.getAttribute('src');
     await printPage.getByLabel('Скругление, мм').fill('4');
-    await expect.poll(async () => (
-        printPage.locator('.qr-label-card').first().evaluate((element) => getComputedStyle(element).borderTopLeftRadius)
-    )).not.toBe('0px');
-    await printPage.getByLabel('Свое поле').check();
+    await expect.poll(async () => previewImage.getAttribute('src')).not.toBe(previewAfterPadding);
+    const titleSettings = printPage.getByTestId('qr-field-settings-productName');
+    const previewAfterRadius = await previewImage.getAttribute('src');
+    await titleSettings.getByLabel('Снизу', { exact: true }).fill('4');
+    await expect.poll(async () => previewImage.getAttribute('src')).not.toBe(previewAfterRadius);
+    await printPage.getByRole('checkbox', { name: 'Свое поле' }).check();
     const customInput = printPage.getByPlaceholder('Введите свой текст').first();
     await customInput.fill('Ручная подпись');
     await expect(customInput).toHaveValue('Ручная подпись');
@@ -319,7 +373,8 @@ test('UI e2e: партнер не видит QR-раздел, HQ сохраня�
         page.getByRole('button', { name: 'PDF выбранных QR' }).click()
     ]);
     await selectedPrintPage.waitForURL(/mode=selected/);
-    await expect(selectedPrintPage.getByText('В документе: 1')).toBeVisible();
+    await expect(selectedPrintPage.getByTestId('qr-preview-page')).toHaveCount(1, { timeout: 15_000 });
+    await expect(selectedPrintPage.locator('.qr-document-panel .qr-label-card')).toHaveCount(0);
     await selectedPrintPage.close();
 });
 

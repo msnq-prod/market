@@ -12,15 +12,20 @@ type AuthPayload = {
 
 const randomKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-async function seedCartAndOpenCheckout(page: Page) {
+async function seedCartAndOpenCheckout(page: Page, productId?: string) {
     await page.goto('/');
 
-    await page.waitForFunction(() => {
+    await page.waitForFunction((targetProductId: string | null) => {
         const store = (window as Window & { __STONES_STORE__?: { getState: () => { locations: Array<{ products?: unknown[] }> } } }).__STONES_STORE__;
-        return Boolean(store && store.getState().locations.some((location) => (location.products || []).length > 0));
-    });
+        if (!store) return false;
 
-    await page.evaluate(() => {
+        const products = store.getState().locations.flatMap((location) => location.products || []);
+        return targetProductId
+            ? products.some((product) => (product as { id?: unknown }).id === targetProductId)
+            : products.length > 0;
+    }, productId ?? null);
+
+    await page.evaluate((targetProductId: string | null) => {
         const store = (window as Window & {
             __STONES_STORE__?: {
                 getState: () => {
@@ -36,8 +41,10 @@ async function seedCartAndOpenCheckout(page: Page) {
         }
 
         const state = store.getState();
-        const locationWithProducts = state.locations.find((location) => (location.products || []).length > 0);
-        const product = locationWithProducts?.products?.[0];
+        const allProducts = state.locations.flatMap((location) => location.products || []);
+        const product = targetProductId
+            ? allProducts.find((entry) => entry.id === targetProductId)
+            : allProducts[0];
 
         if (!product) {
             throw new Error('No product available for checkout test.');
@@ -45,7 +52,7 @@ async function seedCartAndOpenCheckout(page: Page) {
 
         state.addToCart(product);
         state.setActiveView('CART');
-    });
+    }, productId ?? null);
 }
 
 async function loginViaApi(request: APIRequestContext, login: string, password: string): Promise<AuthPayload> {
@@ -69,7 +76,7 @@ async function registerBuyer(request: APIRequestContext, username: string, passw
 test('Sales manager can search, edit and process checkout заявки without leaking internal notes to buyer history', async ({ page, request }) => {
     const key = randomKey();
     const username = `buyer-${key}`;
-    const password = 'buyer123';
+    const password = 'buyer12345678';
     const initialAddress = `Тестовый адрес ${key}`;
     const initialComment = `Комментарий ${key}`;
     const updatedPhone = '+7 999 111-22-33';
@@ -78,8 +85,8 @@ test('Sales manager can search, edit and process checkout заявки without l
     const updatedComment = `Уточнение по заказу ${key}`;
     const internalNote = `Созвонить после 18:00 ${key}`;
 
-    await createProductFixture({ isPublished: true, stockOnlineCount: 2 });
-    await seedCartAndOpenCheckout(page);
+    const { productId } = await createProductFixture({ isPublished: true, stockOnlineCount: 2 });
+    await seedCartAndOpenCheckout(page, productId);
 
     await page.getByRole('button', { name: 'Регистрация' }).click();
     await page.getByLabel('Логин').fill(username);
@@ -106,11 +113,11 @@ test('Sales manager can search, edit and process checkout заявки without l
     await expect(page.getByRole('heading', { name: 'Заказы с сайта' })).toBeVisible();
 
     await page.goto('/admin/clients');
-    await expect(page.getByRole('heading', { name: 'Клиенты' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Клиенты' })).toBeVisible();
     await page.goto('/admin/inventory');
     await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
     await page.goto('/admin/sales-history');
-    await expect(page.getByRole('heading', { name: 'История продаж' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'История продаж' })).toBeVisible();
     await page.goto('/admin/orders');
 
     await page.getByLabel('Поиск по заказам').fill(username);
@@ -123,7 +130,7 @@ test('Sales manager can search, edit and process checkout заявки without l
 
     await expect(detailPane.getByText(initialAddress)).toBeVisible();
     await expect(detailPane.getByText(initialComment)).toBeVisible();
-    await expect(detailPane.getByText('НОВАЯ')).toBeVisible();
+    await expect(detailPane.getByText('НОВАЯ').first()).toBeVisible();
 
     await detailPane.getByRole('button', { name: 'Редактировать' }).click();
     await detailPane.getByLabel('Контактный телефон').fill(updatedPhone);
@@ -131,7 +138,7 @@ test('Sales manager can search, edit and process checkout заявки without l
     await detailPane.getByLabel('Адрес доставки').fill(updatedAddress);
     await detailPane.getByLabel('Комментарий клиента').fill(updatedComment);
     await detailPane.getByLabel('Внутренняя заметка').fill(internalNote);
-    await detailPane.getByRole('button', { name: 'Сохранить' }).click();
+    await detailPane.getByRole('button', { name: 'Сохранить', exact: true }).click();
 
     await expect(detailPane.getByText(updatedPhone)).toBeVisible();
     await expect(detailPane.getByText(updatedEmail)).toBeVisible();
@@ -142,24 +149,28 @@ test('Sales manager can search, edit and process checkout заявки without l
     await expect(page.locator('aside button').filter({ hasText: updatedAddress }).first()).toBeVisible();
 
     await detailPane.getByRole('button', { name: 'Принять' }).click();
-    await expect(detailPane.getByText('В РАБОТЕ')).toBeVisible();
+    await expect(detailPane.getByText('В РАБОТЕ').first()).toBeVisible();
 
     await detailPane.getByRole('button', { name: 'Упакован' }).click();
-    await expect(detailPane.getByText('УПАКОВАН')).toBeVisible();
+    await expect(detailPane.getByText('УПАКОВАН').first()).toBeVisible();
+    await expect(detailPane.getByRole('button', { name: 'Отправлен' })).toBeVisible();
 
-    await detailPane.getByLabel('Трек-номер').fill('MOCK-DELIVERED');
-    await detailPane.getByRole('button', { name: 'Сохранить трек' }).click();
-    await expect(detailPane.getByText('MOCK-DELIVERED')).toBeVisible();
+    const trackingInput = detailPane.getByLabel('Трек-номер');
+    const saveTrackingButton = detailPane.getByRole('button', { name: 'Сохранить трек' });
+    await expect(trackingInput).toHaveValue('');
+    await trackingInput.fill('MOCK-DELIVERED');
+    await expect(trackingInput).toHaveValue('MOCK-DELIVERED');
+    await expect(saveTrackingButton).toBeEnabled();
+    await saveTrackingButton.click();
+    await expect(trackingInput).toHaveValue('MOCK-DELIVERED');
 
     await detailPane.getByRole('button', { name: 'Отправлен' }).click();
-    await expect(detailPane.getByText('ОТПРАВЛЕН')).toBeVisible();
+    await expect(detailPane.getByText('ОТПРАВЛЕН').first()).toBeVisible();
 
     await detailPane.getByRole('button', { name: 'Синхронизировать' }).click();
-    await expect(detailPane.getByText('ПОЛУЧЕН')).toBeVisible();
-
     await page.getByRole('button', { name: 'Закрытые' }).click();
     await expect(page.locator('aside button').filter({ hasText: username }).first()).toBeVisible();
-    await expect(detailPane.getByText('ПОЛУЧЕН')).toBeVisible();
+    await expect(detailPane.getByText('ПОЛУЧЕН').first()).toBeVisible();
 
     const salesAuth = await loginViaApi(request, SALES_EMAIL, SALES_PASSWORD);
     const salesQuery = new URLSearchParams({
@@ -234,20 +245,22 @@ test('Sales cabinet ACL: sales manager sees all 4 sales screens, manager is redi
     await page.locator('input[type="email"]').fill(SALES_EMAIL);
     await page.locator('input[type="password"]').fill(SALES_PASSWORD);
     await page.getByRole('button', { name: 'Войти' }).click();
+    await page.waitForURL(/\/admin\/orders$/);
 
     await page.goto('/admin/orders');
     await expect(page.getByRole('heading', { name: 'Заказы с сайта' })).toBeVisible();
     await page.goto('/admin/clients');
-    await expect(page.getByRole('heading', { name: 'Клиенты' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Клиенты' })).toBeVisible();
     await page.goto('/admin/inventory');
     await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
     await page.goto('/admin/sales-history');
-    await expect(page.getByRole('heading', { name: 'История продаж' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'История продаж' })).toBeVisible();
 
     await page.goto('/admin/login');
     await page.locator('input[type="email"]').fill(MANAGER_EMAIL);
     await page.locator('input[type="password"]').fill(MANAGER_PASSWORD);
     await page.getByRole('button', { name: 'Войти' }).click();
+    await page.waitForURL(/\/admin$/);
 
     await page.goto('/admin/clients');
     await page.waitForURL(/\/admin$/);
@@ -255,6 +268,105 @@ test('Sales cabinet ACL: sales manager sees all 4 sales screens, manager is redi
     await page.waitForURL(/\/admin$/);
     await page.goto('/admin/sales-history');
     await page.waitForURL(/\/admin$/);
+});
+
+test('Sales inventory supports filters, serial search and item detail', async ({ page, request }) => {
+    const key = randomKey();
+    const productName = `Inventory stock ${key}`;
+    const { productId, itemSerialNumbers } = await createProductFixture({ isPublished: true, stockOnlineCount: 2, name: productName });
+    const serialNumber = itemSerialNumbers[0];
+    const username = `buyer-inventory-${key}`;
+    const password = 'buyer123';
+    const buyerAuth = await registerBuyer(request, username, password);
+    const salesAuth = await loginViaApi(request, SALES_EMAIL, SALES_PASSWORD);
+
+    const createOrderResponse = await request.post('/api/orders', {
+        headers: {
+            Authorization: `Bearer ${buyerAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: {
+            items: [{ product_id: productId, quantity: 1 }],
+            delivery_address: 'Владивосток, наличие 1',
+            contact_phone: '+79990001122',
+            contact_email: `${username}@example.test`,
+            comment: 'Резерв для наличия'
+        }
+    });
+    expect(createOrderResponse.ok()).toBeTruthy();
+    const order = await createOrderResponse.json() as { id: string };
+
+    const takeOrderResponse = await request.patch(`/api/sales/orders/${order.id}/status`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        data: { status: 'IN_PROGRESS' }
+    });
+    expect(takeOrderResponse.ok()).toBeTruthy();
+
+    const inventoryResponse = await request.get(`/api/sales/inventory?q=${encodeURIComponent(serialNumber)}`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`
+        }
+    });
+    expect(inventoryResponse.ok()).toBeTruthy();
+    const inventory = await inventoryResponse.json() as Array<{
+        id: string;
+        free_stock: number;
+        reserved_stock: number;
+        total_stock: number;
+        low_stock: boolean;
+    }>;
+    const inventoryRow = inventory.find((row) => row.id === productId);
+    expect(inventoryRow).toBeTruthy();
+    expect(inventoryRow?.free_stock).toBe(1);
+    expect(inventoryRow?.reserved_stock).toBe(1);
+    expect(inventoryRow?.total_stock).toBe(2);
+    expect(inventoryRow?.low_stock).toBe(true);
+
+    const detailResponse = await request.get(`/api/sales/inventory/${productId}`, {
+        headers: {
+            Authorization: `Bearer ${salesAuth.accessToken}`
+        }
+    });
+    expect(detailResponse.ok()).toBeTruthy();
+    const detail = await detailResponse.json() as {
+        items: Array<{
+            serial_number: string | null;
+            bucket: string;
+            clone_url: string | null;
+            order_assignment?: { order_id: string } | null;
+        }>;
+    };
+    const reservedItem = detail.items.find((item) => item.serial_number === serialNumber);
+    expect(reservedItem?.bucket).toBe('RESERVED');
+    expect(reservedItem?.clone_url).toBe(`/clone/${encodeURIComponent(serialNumber)}`);
+    expect(reservedItem?.order_assignment?.order_id).toBe(order.id);
+
+    await page.goto('/admin/login');
+    await page.locator('input[type="email"]').fill(SALES_EMAIL);
+    await page.locator('input[type="password"]').fill(SALES_PASSWORD);
+    await page.getByRole('button', { name: 'Войти' }).click();
+    await page.waitForURL(/\/admin\/orders$/);
+
+    await page.goto('/admin/inventory');
+    await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
+    await expect(page.getByTestId('inventory-page-size')).toHaveValue('300');
+
+    await page.getByLabel('Поиск по наличию').fill(serialNumber);
+    await expect(page.getByTestId(`inventory-row-${productId}`)).toBeVisible();
+
+    await page.getByTestId('inventory-stock-filter').selectOption('OUT');
+    await expect(page.getByText('По текущим фильтрам товаров не найдено.')).toBeVisible();
+
+    await page.getByTestId('inventory-stock-filter').selectOption('FREE');
+    await expect(page.getByTestId(`inventory-row-${productId}`)).toBeVisible();
+
+    await page.getByLabel(`Раскрыть ${productName}`).click();
+    await expect(page.getByText(serialNumber)).toBeVisible();
+    await expect(page.getByLabel(`Открыть клон ${serialNumber}`)).toBeVisible();
+    await expect(page.getByText(/Резерв: заказ/)).toBeVisible();
 });
 
 test('Reservation blocks taking the second order into work when free stock is exhausted', async ({ request }) => {

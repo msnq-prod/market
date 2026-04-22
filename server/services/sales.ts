@@ -170,6 +170,58 @@ const getLocationName = (translations: Array<{ language_id: number; name: string
     || 'Локация'
 );
 
+const LOW_STOCK_THRESHOLD = 2;
+
+type InventoryItemStockState = {
+    status: string;
+    is_sold: boolean;
+    order_assignments: Array<unknown>;
+};
+
+const getInventoryItemBucket = (item: InventoryItemStockState): 'FREE' | 'RESERVED' | 'SOLD' | 'OTHER' => {
+    if (item.is_sold || item.status === 'SOLD_ONLINE' || item.status === 'ACTIVATED') {
+        return 'SOLD';
+    }
+
+    if (item.status === 'STOCK_ONLINE' && item.order_assignments.length > 0) {
+        return 'RESERVED';
+    }
+
+    if (item.status === 'STOCK_ONLINE') {
+        return 'FREE';
+    }
+
+    return 'OTHER';
+};
+
+const getInventoryCounts = (items: InventoryItemStockState[]) => {
+    const counts = {
+        free_stock: 0,
+        reserved_stock: 0,
+        sold_stock: 0,
+        other_stock: 0,
+        total_stock: items.length
+    };
+
+    for (const item of items) {
+        const bucket = getInventoryItemBucket(item);
+        if (bucket === 'FREE') {
+            counts.free_stock += 1;
+        } else if (bucket === 'RESERVED') {
+            counts.reserved_stock += 1;
+        } else if (bucket === 'SOLD') {
+            counts.sold_stock += 1;
+        } else {
+            counts.other_stock += 1;
+        }
+    }
+
+    return {
+        ...counts,
+        low_stock: counts.free_stock > 0 && counts.free_stock <= LOW_STOCK_THRESHOLD
+    };
+};
+
 const getOrderProductIds = (order: Pick<SalesOrderRecord, 'items'>): string[] => (
     [...new Set(order.items.map((item) => item.product_id).filter(Boolean))]
 );
@@ -1101,6 +1153,11 @@ export const listSalesInventory = async (db: PrismaClient, searchQuery = '') => 
                         select: {
                             id: true
                         }
+                    },
+                    batch: {
+                        select: {
+                            id: true
+                        }
                     }
                 }
             }
@@ -1112,23 +1169,29 @@ export const listSalesInventory = async (db: PrismaClient, searchQuery = '') => 
 
     return products
         .map((product) => {
-            const freeStock = product.items.filter((item) => item.status === 'STOCK_ONLINE' && !item.is_sold && item.order_assignments.length === 0).length;
-            const reservedStock = product.items.filter((item) => item.status === 'STOCK_ONLINE' && !item.is_sold && item.order_assignments.length > 0).length;
-            const soldStock = product.items.filter((item) => item.is_sold || item.status === 'SOLD_ONLINE' || item.status === 'ACTIVATED').length;
+            const counts = getInventoryCounts(product.items);
             const locationName = getLocationName(product.location.translations);
             const productName = getProductName(product.translations);
 
             return {
                 id: product.id,
                 name: productName,
+                location_id: product.location_id,
                 location_name: locationName,
                 country_code: product.country_code,
                 location_code: product.location_code,
                 item_code: product.item_code,
                 price: toNumber(product.price),
-                free_stock: freeStock,
-                reserved_stock: reservedStock,
-                sold_stock: soldStock
+                is_published: product.is_published,
+                free_stock: counts.free_stock,
+                reserved_stock: counts.reserved_stock,
+                sold_stock: counts.sold_stock,
+                total_stock: counts.total_stock,
+                low_stock: counts.low_stock,
+                item_search_index: product.items
+                    .flatMap((item) => [item.serial_number, item.temp_id])
+                    .filter(Boolean)
+                    .join(' ')
             };
         })
         .filter((product) => {
@@ -1141,12 +1204,132 @@ export const listSalesInventory = async (db: PrismaClient, searchQuery = '') => 
                 product.location_name,
                 product.country_code,
                 product.location_code,
-                product.item_code
+                product.item_code,
+                product.item_search_index
             ]
                 .join(' ')
                 .toLowerCase()
                 .includes(normalizedQuery);
-        });
+        })
+        .map(({ item_search_index: _itemSearchIndex, ...product }) => product);
+};
+
+export const getSalesInventoryDetail = async (db: PrismaClient, productId: string) => {
+    const product = await db.product.findFirst({
+        where: {
+            id: productId,
+            deleted_at: null
+        },
+        include: {
+            location: {
+                include: {
+                    translations: true
+                }
+            },
+            translations: true,
+            items: {
+                where: {
+                    deleted_at: null,
+                    batch: {
+                        is: {
+                            deleted_at: null
+                        }
+                    }
+                },
+                include: {
+                    batch: {
+                        select: {
+                            id: true,
+                            status: true,
+                            daily_batch_seq: true,
+                            created_at: true
+                        }
+                    },
+                    order_assignments: {
+                        select: {
+                            id: true,
+                            order_item_id: true,
+                            order_item: {
+                                select: {
+                                    order_id: true,
+                                    order: {
+                                        select: {
+                                            id: true,
+                                            status: true,
+                                            user: {
+                                                select: {
+                                                    id: true,
+                                                    name: true,
+                                                    username: true,
+                                                    email: true
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                orderBy: [
+                    { created_at: 'asc' },
+                    { item_seq: 'asc' }
+                ]
+            }
+        }
+    });
+
+    if (!product) {
+        throw createHttpError('Товар не найден.', 404);
+    }
+
+    const counts = getInventoryCounts(product.items);
+    const locationName = getLocationName(product.location.translations);
+    const productName = getProductName(product.translations);
+
+    return {
+        id: product.id,
+        name: productName,
+        location_id: product.location_id,
+        location_name: locationName,
+        country_code: product.country_code,
+        location_code: product.location_code,
+        item_code: product.item_code,
+        price: toNumber(product.price),
+        is_published: product.is_published,
+        free_stock: counts.free_stock,
+        reserved_stock: counts.reserved_stock,
+        sold_stock: counts.sold_stock,
+        total_stock: counts.total_stock,
+        low_stock: counts.low_stock,
+        items: product.items.map((item) => {
+            const assignment = item.order_assignments[0] || null;
+
+            return {
+                id: item.id,
+                temp_id: item.temp_id,
+                serial_number: item.serial_number,
+                item_seq: item.item_seq,
+                status: item.status,
+                is_sold: item.is_sold,
+                bucket: getInventoryItemBucket(item),
+                clone_url: item.serial_number ? `/clone/${encodeURIComponent(item.serial_number)}` : null,
+                batch: {
+                    id: item.batch.id,
+                    status: item.batch.status,
+                    daily_batch_seq: item.batch.daily_batch_seq,
+                    created_at: item.batch.created_at
+                },
+                order_assignment: assignment ? {
+                    id: assignment.id,
+                    order_item_id: assignment.order_item_id,
+                    order_id: assignment.order_item.order_id,
+                    order_status: assignment.order_item.order.status,
+                    buyer: assignment.order_item.order.user
+                } : null
+            };
+        })
+    };
 };
 
 export const listSalesHistory = async (db: PrismaClient, searchQuery = '') => {

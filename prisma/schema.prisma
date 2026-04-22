@@ -305,8 +305,31 @@ model User {
   accepted_collection_requests CollectionRequest[] @relation("CollectionRequestAcceptedBy")
   requested_video_jobs         VideoProcessingJob[] @relation("VideoProcessingRequestedBy")
   requested_video_exports      BatchVideoExportSession[] @relation("BatchVideoExportRequestedBy")
+  created_qr_print_presets     QrPrintPreset[] @relation("QrPrintPresetCreatedBy")
+  updated_qr_print_presets     QrPrintPreset[] @relation("QrPrintPresetUpdatedBy")
 
   @@map("users")
+}
+
+model QrPrintPreset {
+  id                 String    @id @default(uuid())
+  name               String    @db.VarChar(80)
+  settings           Json
+  created_by_user_id String
+  updated_by_user_id String?
+  deleted_at         DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  created_by_user User  @relation("QrPrintPresetCreatedBy", fields: [created_by_user_id], references: [id])
+  updated_by_user User? @relation("QrPrintPresetUpdatedBy", fields: [updated_by_user_id], references: [id])
+
+  @@index([deleted_at])
+  @@index([name])
+  @@index([updated_at])
+  @@index([created_by_user_id])
+  @@index([updated_by_user_id])
+  @@map("qr_print_presets")
 }
 
 model AuthSession {

@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
     closestCenter,
@@ -6,8 +6,6 @@ import {
     type DragEndEvent,
     KeyboardSensor,
     PointerSensor,
-    useDraggable,
-    useDroppable,
     useSensor,
     useSensors
 } from '@dnd-kit/core';
@@ -19,8 +17,10 @@ import {
     verticalListSortingStrategy
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ArrowLeft, Download, GripVertical, MoveHorizontal, QrCode, RotateCcw, X } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, GripVertical, RotateCcw, X } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+
+type Html2CanvasRenderer = typeof import('html2canvas').default;
 
 type Translation = {
     language_id: number;
@@ -94,12 +94,18 @@ export type QrFieldConfig = {
     fontSizePx: number;
     fontWeight: number;
     fontFamily: string;
+    spacingBeforeMm: number;
+    spacingAfterMm: number;
 };
 
 export type QrPrintSettings = {
     labelWidthMm: number;
     labelHeightMm: number;
     labelRadiusMm: number;
+    labelPaddingTopMm: number;
+    labelPaddingRightMm: number;
+    labelPaddingBottomMm: number;
+    labelPaddingLeftMm: number;
     qrSizeMm: number;
     pagePaddingMm: number;
     gapMm: number;
@@ -130,20 +136,39 @@ export type QrPrintDraft = {
     customFieldValues: Record<string, string>;
 };
 
+type QrPreviewPageImage = {
+    id: string;
+    dataUrl: string;
+    width: number;
+    height: number;
+    pageNumber: number;
+};
+
+type QrPrintPreset = {
+    id: string;
+    name: string;
+    settings: QrPrintSettings;
+    created_by_user_id: string;
+    updated_by_user_id: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
 const QR_PRINT_LAYOUT_KEY = 'qr-print-layout:v1';
 const QR_PRINT_DRAFT_VERSION = 1;
-const QR_BLOCK_ID = 'qr-block';
-const QR_SLOT_LEFT_ID = 'qr-slot-left';
-const QR_SLOT_RIGHT_ID = 'qr-slot-right';
 const A4_WIDTH_MM = 210;
 const A4_HEIGHT_MM = 297;
 const MM_TO_PX = 96 / 25.4;
 const A4_WIDTH_PX = A4_WIDTH_MM * MM_TO_PX;
 const A4_HEIGHT_PX = A4_HEIGHT_MM * MM_TO_PX;
 const A4_ASPECT_RATIO = A4_WIDTH_MM / A4_HEIGHT_MM;
-const LABEL_PADDING_MM = 3;
+const DEFAULT_LABEL_PADDING_MM = 3;
+const DEFAULT_FIELD_SPACING_BEFORE_MM = 0;
+const DEFAULT_FIELD_SPACING_AFTER_MM = 1.6;
 const LABEL_CONTENT_GAP_MM = 3;
 const PDF_EXPORT_SCALE = 2;
+const QR_PREVIEW_RENDER_SCALE = 2;
+const QR_PREVIEW_RENDER_DEBOUNCE_MS = 250;
 const PDF_GEOMETRY_TOLERANCE_PX = 2;
 
 const FIELD_KEYS: QrFieldKey[] = [
@@ -181,6 +206,10 @@ const createDefaultSettings = (): QrPrintSettings => ({
     labelWidthMm: 58,
     labelHeightMm: 36,
     labelRadiusMm: 0,
+    labelPaddingTopMm: DEFAULT_LABEL_PADDING_MM,
+    labelPaddingRightMm: DEFAULT_LABEL_PADDING_MM,
+    labelPaddingBottomMm: DEFAULT_LABEL_PADDING_MM,
+    labelPaddingLeftMm: DEFAULT_LABEL_PADDING_MM,
     qrSizeMm: 18,
     pagePaddingMm: 8,
     gapMm: 4,
@@ -192,37 +221,49 @@ const createDefaultSettings = (): QrPrintSettings => ({
             enabled: true,
             fontSizePx: 18,
             fontWeight: 700,
-            fontFamily: FONT_OPTIONS[0]
+            fontFamily: FONT_OPTIONS[0],
+            spacingBeforeMm: DEFAULT_FIELD_SPACING_BEFORE_MM,
+            spacingAfterMm: DEFAULT_FIELD_SPACING_AFTER_MM
         },
         locationName: {
             enabled: true,
             fontSizePx: 13,
             fontWeight: 600,
-            fontFamily: FONT_OPTIONS[1]
+            fontFamily: FONT_OPTIONS[1],
+            spacingBeforeMm: DEFAULT_FIELD_SPACING_BEFORE_MM,
+            spacingAfterMm: DEFAULT_FIELD_SPACING_AFTER_MM
         },
         coordinates: {
             enabled: true,
             fontSizePx: 12,
             fontWeight: 500,
-            fontFamily: FONT_OPTIONS[5]
+            fontFamily: FONT_OPTIONS[5],
+            spacingBeforeMm: DEFAULT_FIELD_SPACING_BEFORE_MM,
+            spacingAfterMm: DEFAULT_FIELD_SPACING_AFTER_MM
         },
         collectionTime: {
             enabled: true,
             fontSizePx: 12,
             fontWeight: 500,
-            fontFamily: FONT_OPTIONS[2]
+            fontFamily: FONT_OPTIONS[2],
+            spacingBeforeMm: DEFAULT_FIELD_SPACING_BEFORE_MM,
+            spacingAfterMm: DEFAULT_FIELD_SPACING_AFTER_MM
         },
         serialNumber: {
             enabled: true,
             fontSizePx: 12,
             fontWeight: 700,
-            fontFamily: FONT_OPTIONS[5]
+            fontFamily: FONT_OPTIONS[5],
+            spacingBeforeMm: DEFAULT_FIELD_SPACING_BEFORE_MM,
+            spacingAfterMm: DEFAULT_FIELD_SPACING_AFTER_MM
         },
         customText: {
             enabled: false,
             fontSizePx: 13,
             fontWeight: 600,
-            fontFamily: FONT_OPTIONS[0]
+            fontFamily: FONT_OPTIONS[0],
+            spacingBeforeMm: DEFAULT_FIELD_SPACING_BEFORE_MM,
+            spacingAfterMm: DEFAULT_FIELD_SPACING_AFTER_MM
         }
     }
 });
@@ -268,6 +309,10 @@ const parseLayoutSettings = (raw: string | null): QrPrintSettings => {
             labelWidthMm: clampNumber(parsed.labelWidthMm, 30, 140, defaults.labelWidthMm),
             labelHeightMm: clampNumber(parsed.labelHeightMm, 20, 120, defaults.labelHeightMm),
             labelRadiusMm: clampNumber(parsed.labelRadiusMm, 0, 16, defaults.labelRadiusMm),
+            labelPaddingTopMm: clampNumber(parsed.labelPaddingTopMm, 0, 20, defaults.labelPaddingTopMm),
+            labelPaddingRightMm: clampNumber(parsed.labelPaddingRightMm, 0, 20, defaults.labelPaddingRightMm),
+            labelPaddingBottomMm: clampNumber(parsed.labelPaddingBottomMm, 0, 20, defaults.labelPaddingBottomMm),
+            labelPaddingLeftMm: clampNumber(parsed.labelPaddingLeftMm, 0, 20, defaults.labelPaddingLeftMm),
             qrSizeMm: clampNumber(parsed.qrSizeMm, 10, 60, defaults.qrSizeMm),
             pagePaddingMm: clampNumber(parsed.pagePaddingMm, 4, 20, defaults.pagePaddingMm),
             gapMm: clampNumber(parsed.gapMm, 2, 20, defaults.gapMm),
@@ -284,7 +329,9 @@ const parseLayoutSettings = (raw: string | null): QrPrintSettings => {
                         : defaults.fields[key].fontWeight,
                     fontFamily: FONT_OPTIONS.includes(String(source.fontFamily))
                         ? String(source.fontFamily)
-                        : defaults.fields[key].fontFamily
+                        : defaults.fields[key].fontFamily,
+                    spacingBeforeMm: clampNumber(source.spacingBeforeMm, 0, 20, defaults.fields[key].spacingBeforeMm),
+                    spacingAfterMm: clampNumber(source.spacingAfterMm, 0, 20, defaults.fields[key].spacingAfterMm)
                 };
                 return acc;
             }, {} as Record<QrFieldKey, QrFieldConfig>)
@@ -406,24 +453,6 @@ const buildDocumentItem = (pack: QrPackResponse, item: QrPackItem, customText: s
     customText
 });
 
-const buildPreviewFallback = (pack: QrPackResponse | null, product: ProductSummary | null, customTextEnabled: boolean): QrDocumentItem => ({
-    id: 'preview',
-    itemId: 'preview',
-    tempId: '001',
-    serialNumber: pack?.items[0]?.serial_number || 'SN-00000001',
-    qrUrl: pack?.items[0]?.qr_url || '',
-    productName: getDefaultTranslationValue(pack?.product?.translations || product?.translations, 'name') || 'Название товара',
-    locationName: getDefaultTranslationValue(pack?.product?.location?.translations || product?.location?.translations, 'name') || 'Название локации',
-    coordinates: formatCoordinates(pack?.batch.gps_lat ?? product?.location?.lat ?? null, pack?.batch.gps_lng ?? product?.location?.lng ?? null) || '55.7500, 37.6100',
-    collectionTime: formatCollectionTime(
-        pack?.items[0]?.collected_date || null,
-        pack?.items[0]?.collected_time || null,
-        pack?.batch.collected_date || null,
-        pack?.batch.collected_time || null
-    ) || '10.04.2026 · 13:45',
-    customText: customTextEnabled ? 'Любой ваш текст' : ''
-});
-
 const splitIntoPages = <T,>(items: T[], size: number) => {
     if (size <= 0) {
         return [items];
@@ -436,20 +465,13 @@ const splitIntoPages = <T,>(items: T[], size: number) => {
     return pages;
 };
 
-const getFieldStyle = (config: QrFieldConfig): CSSProperties => ({
-    fontSize: `${config.fontSizePx}px`,
-    fontWeight: config.fontWeight,
-    fontFamily: config.fontFamily,
-    lineHeight: 1.2
-});
+const getLabelInnerWidthMm = (settings: QrPrintSettings) => (
+    settings.labelWidthMm - settings.labelPaddingLeftMm - settings.labelPaddingRightMm
+);
 
-const buildPageGridStyle = (settings: QrPrintSettings, cardsPerRow: number): CSSProperties => ({
-    padding: `${settings.pagePaddingMm}mm`,
-    gap: `${settings.gapMm}mm`,
-    gridTemplateColumns: `repeat(${cardsPerRow}, ${settings.labelWidthMm}mm)`,
-    gridAutoRows: `${settings.labelHeightMm}mm`,
-    alignContent: 'start'
-});
+const getLabelInnerHeightMm = (settings: QrPrintSettings) => (
+    settings.labelHeightMm - settings.labelPaddingTopMm - settings.labelPaddingBottomMm
+);
 
 const formatMmValue = (value: number) => {
     const rounded = Math.round(value * 10) / 10;
@@ -477,6 +499,23 @@ const setElementStyles = (element: HTMLElement, styles: Record<string, string>) 
     });
 };
 
+const getA4CaptureOptions = (scale: number): NonNullable<Parameters<Html2CanvasRenderer>[1]> => ({
+    backgroundColor: '#ffffff',
+    scale,
+    useCORS: true,
+    logging: false,
+    width: Math.ceil(A4_WIDTH_PX),
+    height: Math.ceil(A4_HEIGHT_PX),
+    windowWidth: Math.ceil(A4_WIDTH_PX),
+    windowHeight: Math.ceil(A4_HEIGHT_PX),
+    scrollX: 0,
+    scrollY: 0
+});
+
+const captureA4Page = (html2canvas: Html2CanvasRenderer, pageElement: HTMLElement, scale: number) => (
+    html2canvas(pageElement, getA4CaptureOptions(scale))
+);
+
 const applyPdfFieldStyle = (element: HTMLElement, config: QrFieldConfig) => {
     setElementStyles(element, {
         'font-size': `${config.fontSizePx}px`,
@@ -485,7 +524,9 @@ const applyPdfFieldStyle = (element: HTMLElement, config: QrFieldConfig) => {
         'line-height': '1.2',
         'overflow-wrap': 'break-word',
         'word-break': 'break-word',
-        margin: '0'
+        margin: '0',
+        'margin-top': formatCssMm(config.spacingBeforeMm),
+        'margin-bottom': formatCssMm(config.spacingAfterMm)
     });
 };
 
@@ -503,8 +544,8 @@ const validatePdfSettings = (settings: QrPrintSettings, cardsPerRow: number, row
     const contentHeightMm = A4_HEIGHT_MM - settings.pagePaddingMm * 2;
     const usedWidthMm = cardsPerRow * settings.labelWidthMm + Math.max(0, cardsPerRow - 1) * settings.gapMm;
     const usedHeightMm = rowsPerPage * settings.labelHeightMm + Math.max(0, rowsPerPage - 1) * settings.gapMm;
-    const labelInnerWidthMm = settings.labelWidthMm - LABEL_PADDING_MM * 2;
-    const labelInnerHeightMm = settings.labelHeightMm - LABEL_PADDING_MM * 2;
+    const labelInnerWidthMm = getLabelInnerWidthMm(settings);
+    const labelInnerHeightMm = getLabelInnerHeightMm(settings);
     const maxRadiusMm = Math.min(settings.labelWidthMm, settings.labelHeightMm) / 2;
 
     if (usedWidthMm - contentWidthMm > 0.01) {
@@ -515,7 +556,9 @@ const validatePdfSettings = (settings: QrPrintSettings, cardsPerRow: number, row
         errors.push(`Высота ряда ${formatMmValue(usedHeightMm)} мм больше доступной области A4 ${formatMmValue(contentHeightMm)} мм.`);
     }
 
-    if (settings.qrSizeMm - labelInnerWidthMm > 0.01 || settings.qrSizeMm - labelInnerHeightMm > 0.01) {
+    if (labelInnerWidthMm <= 0 || labelInnerHeightMm <= 0) {
+        errors.push(`Внутренние отступы больше размера этикетки: доступно ${formatMmValue(labelInnerWidthMm)} × ${formatMmValue(labelInnerHeightMm)} мм.`);
+    } else if (settings.qrSizeMm - labelInnerWidthMm > 0.01 || settings.qrSizeMm - labelInnerHeightMm > 0.01) {
         errors.push(`QR ${formatMmValue(settings.qrSizeMm)} мм не помещается во внутреннюю область этикетки ${formatMmValue(labelInnerWidthMm)} × ${formatMmValue(labelInnerHeightMm)} мм.`);
     }
 
@@ -591,7 +634,10 @@ const createPdfLabelElement = (item: QrDocumentItem, settings: QrPrintSettings) 
         'flex-direction': settings.qrSide === 'left' ? 'row' : 'row-reverse',
         width: `${settings.labelWidthMm}mm`,
         height: `${settings.labelHeightMm}mm`,
-        padding: `${LABEL_PADDING_MM}mm`,
+        'padding-top': formatCssMm(settings.labelPaddingTopMm),
+        'padding-right': formatCssMm(settings.labelPaddingRightMm),
+        'padding-bottom': formatCssMm(settings.labelPaddingBottomMm),
+        'padding-left': formatCssMm(settings.labelPaddingLeftMm),
         gap: `${LABEL_CONTENT_GAP_MM}mm`,
         overflow: 'hidden',
         border: `1px solid ${isInverted ? '#334155' : '#e2e8f0'}`,
@@ -638,7 +684,7 @@ const createPdfLabelElement = (item: QrDocumentItem, settings: QrPrintSettings) 
         flex: '1',
         height: '100%',
         overflow: 'hidden',
-        'align-items': 'center',
+        'align-items': 'flex-start',
         'box-sizing': 'border-box'
     });
 
@@ -646,10 +692,8 @@ const createPdfLabelElement = (item: QrDocumentItem, settings: QrPrintSettings) 
     setElementStyles(textStack, {
         display: 'flex',
         width: '100%',
-        height: '100%',
         'flex-direction': 'column',
-        'justify-content': 'center',
-        gap: '1.6mm',
+        'justify-content': 'flex-start',
         overflow: 'hidden'
     });
 
@@ -737,6 +781,49 @@ const validateExportDomGeometry = (
     return errors;
 };
 
+const renderPreviewPageImages = async ({
+    pages,
+    settings,
+    cardsPerRow
+}: {
+    pages: QrDocumentItem[][];
+    settings: QrPrintSettings;
+    cardsPerRow: number;
+}): Promise<QrPreviewPageImage[]> => {
+    const { default: html2canvas } = await import('html2canvas');
+    const exportRoot = createPdfExportRoot({ pages, settings, cardsPerRow });
+
+    try {
+        document.body.appendChild(exportRoot);
+        await document.fonts?.ready;
+        await waitForExportImages(exportRoot);
+
+        const expectedLabelCount = pages.reduce((total, pageItems) => total + pageItems.length, 0);
+        const geometryErrors = validateExportDomGeometry(exportRoot, settings, pages.length, expectedLabelCount);
+        if (geometryErrors.length > 0) {
+            throw new Error(`Превью не обновлено: документ отличается от заданных параметров.\n\n${geometryErrors.join('\n')}`);
+        }
+
+        const pageElements = Array.from(exportRoot.querySelectorAll<HTMLElement>('[data-qr-pdf-page="true"]'));
+        const renderedPages: QrPreviewPageImage[] = [];
+
+        for (const [pageIndex, pageElement] of pageElements.entries()) {
+            const canvas = await captureA4Page(html2canvas, pageElement, QR_PREVIEW_RENDER_SCALE);
+            renderedPages.push({
+                id: `preview-page-${pageIndex + 1}-${canvas.width}x${canvas.height}`,
+                dataUrl: canvas.toDataURL('image/png'),
+                width: canvas.width,
+                height: canvas.height,
+                pageNumber: pageIndex + 1
+            });
+        }
+
+        return renderedPages;
+    } finally {
+        exportRoot.remove();
+    }
+};
+
 export function QrPrint() {
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -774,12 +861,17 @@ export function QrPrint() {
     ));
     const [hydratedBatchId, setHydratedBatchId] = useState('');
     const [pdfExporting, setPdfExporting] = useState(false);
-    const documentViewportRef = useRef<HTMLDivElement | null>(null);
-    const [pagePreviewMetrics, setPagePreviewMetrics] = useState(() => ({
-        width: A4_WIDTH_PX,
-        height: A4_HEIGHT_PX,
-        scale: 1
-    }));
+    const [sourcePanelOpen, setSourcePanelOpen] = useState(true);
+    const [previewImages, setPreviewImages] = useState<QrPreviewPageImage[]>([]);
+    const [previewRendering, setPreviewRendering] = useState(false);
+    const [previewError, setPreviewError] = useState('');
+    const [printPresets, setPrintPresets] = useState<QrPrintPreset[]>([]);
+    const [presetsLoading, setPresetsLoading] = useState(false);
+    const [presetSaving, setPresetSaving] = useState(false);
+    const [presetError, setPresetError] = useState('');
+    const [activePresetId, setActivePresetId] = useState('');
+    const [presetName, setPresetName] = useState('');
+    const previewRenderSeqRef = useRef(0);
 
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -814,18 +906,8 @@ export function QrPrint() {
         return orderedItems.map((item) => buildDocumentItem(pack, item, customFieldValues[item.id] || ''));
     }, [customFieldValues, itemLookup, pack, selectedItemIds, selectionMode]);
 
-    const previewItem = useMemo(
-        () => documentItems[0] || buildPreviewFallback(pack, selectedProduct, settings.fields.customText.enabled),
-        [documentItems, pack, selectedProduct, settings.fields.customText.enabled]
-    );
-
     const hasDraftChanges = activeBatchId.length > 0
         && (selectionMode === 'selected' || Object.values(customFieldValues).some((value) => value.trim().length > 0));
-
-    const visibleFieldOrder = useMemo(
-        () => settings.fieldOrder.filter((fieldKey) => settings.fields[fieldKey].enabled),
-        [settings.fieldOrder, settings.fields]
-    );
 
     const cardsPerRow = Math.max(
         1,
@@ -837,6 +919,33 @@ export function QrPrint() {
     );
     const cardsPerPage = Math.max(1, cardsPerRow * rowsPerPage);
     const pages = useMemo(() => splitIntoPages(documentItems, cardsPerPage), [cardsPerPage, documentItems]);
+
+    const upsertPrintPreset = useCallback((preset: QrPrintPreset) => {
+        setPrintPresets((current) => (
+            [preset, ...current.filter((item) => item.id !== preset.id)]
+                .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
+        ));
+    }, []);
+
+    const loadPrintPresets = useCallback(async () => {
+        setPresetsLoading(true);
+        setPresetError('');
+
+        try {
+            const response = await authFetch('/api/qr-print-presets');
+            const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить пресеты печати.' }));
+
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось загрузить пресеты печати.');
+            }
+
+            setPrintPresets(Array.isArray(payload) ? payload as QrPrintPreset[] : []);
+        } catch (error) {
+            setPresetError(error instanceof Error ? error.message : 'Не удалось загрузить пресеты печати.');
+        } finally {
+            setPresetsLoading(false);
+        }
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -873,6 +982,10 @@ export function QrPrint() {
             cancelled = true;
         };
     }, []);
+
+    useEffect(() => {
+        void loadPrintPresets();
+    }, [loadPrintPresets]);
 
     useEffect(() => {
         if (!activeBatchId || productsWithBatches.length === 0) {
@@ -1011,31 +1124,59 @@ export function QrPrint() {
     }, [activeBatchId, selectedItemIds, selectionMode, setSearchParams]);
 
     useEffect(() => {
-        const viewport = documentViewportRef.current;
-        if (!viewport || typeof ResizeObserver === 'undefined') {
+        const renderSeq = previewRenderSeqRef.current + 1;
+        previewRenderSeqRef.current = renderSeq;
+
+        if (documentItems.length === 0) {
+            setPreviewImages([]);
+            setPreviewRendering(false);
+            setPreviewError('');
             return;
         }
 
-        const updateScale = () => {
-            const availableWidth = Math.max(viewport.clientWidth - 24, 180);
-            const availableHeight = Math.max(viewport.clientHeight - 24, 240);
-            const fitWidth = Math.min(availableWidth, availableHeight * A4_ASPECT_RATIO);
-            const unclampedScale = fitWidth / A4_WIDTH_PX;
-            const nextScale = Math.min(1, Math.max(0.2, unclampedScale));
+        const settingsErrors = validatePdfSettings(settings, cardsPerRow, rowsPerPage);
+        if (settingsErrors.length > 0) {
+            setPreviewImages([]);
+            setPreviewRendering(false);
+            setPreviewError(`Превью не обновлено: параметры документа расходятся с A4.\n\n${settingsErrors.join('\n')}`);
+            return;
+        }
 
-            setPagePreviewMetrics({
-                width: A4_WIDTH_PX * nextScale,
-                height: A4_HEIGHT_PX * nextScale,
-                scale: nextScale
-            });
+        let cancelled = false;
+        setPreviewRendering(true);
+        setPreviewError('');
+
+        const timeoutId = window.setTimeout(() => {
+            void renderPreviewPageImages({ pages, settings, cardsPerRow })
+                .then((renderedPages) => {
+                    if (cancelled || previewRenderSeqRef.current !== renderSeq) {
+                        return;
+                    }
+
+                    setPreviewImages(renderedPages);
+                    setPreviewError('');
+                })
+                .catch((error) => {
+                    if (cancelled || previewRenderSeqRef.current !== renderSeq) {
+                        return;
+                    }
+
+                    setPreviewError(error instanceof Error ? error.message : 'Не удалось обновить превью PDF.');
+                })
+                .finally(() => {
+                    if (cancelled || previewRenderSeqRef.current !== renderSeq) {
+                        return;
+                    }
+
+                    setPreviewRendering(false);
+                });
+        }, QR_PREVIEW_RENDER_DEBOUNCE_MS);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timeoutId);
         };
-
-        updateScale();
-        const observer = new ResizeObserver(updateScale);
-        observer.observe(viewport);
-
-        return () => observer.disconnect();
-    }, []);
+    }, [cardsPerRow, documentItems.length, pages, rowsPerPage, settings]);
 
     const confirmBatchSwitch = (nextBatchId: string) => {
         if (!activeBatchId || nextBatchId === activeBatchId || !hasDraftChanges) {
@@ -1108,7 +1249,16 @@ export function QrPrint() {
     };
 
     const updateNumericSetting = (
-        key: 'labelWidthMm' | 'labelHeightMm' | 'labelRadiusMm' | 'qrSizeMm' | 'pagePaddingMm' | 'gapMm',
+        key: 'labelWidthMm'
+            | 'labelHeightMm'
+            | 'labelRadiusMm'
+            | 'labelPaddingTopMm'
+            | 'labelPaddingRightMm'
+            | 'labelPaddingBottomMm'
+            | 'labelPaddingLeftMm'
+            | 'qrSizeMm'
+            | 'pagePaddingMm'
+            | 'gapMm',
         value: string,
         minimum: number,
         maximum: number
@@ -1132,19 +1282,102 @@ export function QrPrint() {
         }));
     };
 
-    const handlePreviewDragEnd = (event: DragEndEvent) => {
-        const { active, over } = event;
-        if (!over) {
+    const handlePresetSelection = (presetId: string) => {
+        setActivePresetId(presetId);
+        setPresetError('');
+
+        if (!presetId) {
             return;
         }
 
-        if (active.id === QR_BLOCK_ID) {
-            if (over.id === QR_SLOT_LEFT_ID || over.id === QR_SLOT_RIGHT_ID) {
-                setSettings((current) => ({
-                    ...current,
-                    qrSide: over.id === QR_SLOT_LEFT_ID ? 'left' : 'right'
-                }));
+        const preset = printPresets.find((item) => item.id === presetId);
+        if (!preset) {
+            return;
+        }
+
+        setPresetName(preset.name);
+        setSettings(preset.settings);
+    };
+
+    const savePrintPreset = async (forceCreate = false) => {
+        const name = presetName.trim();
+        if (!name) {
+            setPresetError('Укажите название пресета.');
+            return;
+        }
+
+        const shouldUpdate = Boolean(activePresetId) && !forceCreate;
+        const endpoint = shouldUpdate
+            ? `/api/qr-print-presets/${activePresetId}`
+            : '/api/qr-print-presets';
+
+        setPresetSaving(true);
+        setPresetError('');
+
+        try {
+            const response = await authFetch(endpoint, {
+                method: shouldUpdate ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, settings })
+            });
+            const payload = await response.json().catch(() => ({ error: 'Не удалось сохранить пресет печати.' }));
+
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось сохранить пресет печати.');
             }
+
+            const savedPreset = payload as QrPrintPreset;
+            upsertPrintPreset(savedPreset);
+            setActivePresetId(savedPreset.id);
+            setPresetName(savedPreset.name);
+            setSettings(savedPreset.settings);
+        } catch (error) {
+            setPresetError(error instanceof Error ? error.message : 'Не удалось сохранить пресет печати.');
+        } finally {
+            setPresetSaving(false);
+        }
+    };
+
+    const deletePrintPreset = async () => {
+        if (!activePresetId) {
+            return;
+        }
+
+        const preset = printPresets.find((item) => item.id === activePresetId);
+        if (!preset) {
+            return;
+        }
+
+        if (!window.confirm(`Удалить пресет "${preset.name}"?`)) {
+            return;
+        }
+
+        setPresetSaving(true);
+        setPresetError('');
+
+        try {
+            const response = await authFetch(`/api/qr-print-presets/${activePresetId}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось удалить пресет печати.' }));
+                throw new Error(payload.error || 'Не удалось удалить пресет печати.');
+            }
+
+            setPrintPresets((current) => current.filter((item) => item.id !== activePresetId));
+            setActivePresetId('');
+            setPresetName('');
+        } catch (error) {
+            setPresetError(error instanceof Error ? error.message : 'Не удалось удалить пресет печати.');
+        } finally {
+            setPresetSaving(false);
+        }
+    };
+
+    const handleFieldSettingsDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over) {
             return;
         }
 
@@ -1166,8 +1399,6 @@ export function QrPrint() {
     };
 
     const pageCaption = `На лист A4 помещается ${cardsPerRow} × ${rowsPerPage} = ${cardsPerPage} этикеток`;
-    const documentScale = pagePreviewMetrics.scale;
-    const previewPages = pages.length > 0 ? pages : [[] as QrDocumentItem[]];
     const emptyPageMessage = !activeBatchId
         ? 'Выберите товар и партию слева, чтобы собрать лист.'
         : packLoading
@@ -1236,18 +1467,7 @@ export function QrPrint() {
                     pdf.addPage();
                 }
 
-                const canvas = await html2canvas(pageElement, {
-                    backgroundColor: '#ffffff',
-                    scale: PDF_EXPORT_SCALE,
-                    useCORS: true,
-                    logging: false,
-                    width: Math.ceil(A4_WIDTH_PX),
-                    height: Math.ceil(A4_HEIGHT_PX),
-                    windowWidth: Math.ceil(A4_WIDTH_PX),
-                    windowHeight: Math.ceil(A4_HEIGHT_PX),
-                    scrollX: 0,
-                    scrollY: 0
-                });
+                const canvas = await captureA4Page(html2canvas, pageElement, PDF_EXPORT_SCALE);
                 pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_WIDTH_MM, A4_HEIGHT_MM);
             }
 
@@ -1261,7 +1481,7 @@ export function QrPrint() {
     };
 
     return (
-        <div className="admin-shell qr-print-root flex min-h-[100svh] flex-col overflow-y-auto text-gray-100 lg:h-[100svh] lg:overflow-hidden">
+        <div className="admin-shell qr-print-root flex h-[100svh] min-h-[100svh] flex-col overflow-hidden text-gray-100">
             <style>
                 {`
                     @page {
@@ -1330,80 +1550,142 @@ export function QrPrint() {
                 `}
             </style>
 
-            <header className="qr-screen-only shrink-0 border-b border-white/6 bg-black/10">
-                <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-                    <div className="flex min-w-0 items-start gap-3">
-                        <button
-                            type="button"
-                            onClick={() => navigate('/admin/products')}
-                            className="mt-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
-                            aria-label="Вернуться к товарам"
-                        >
-                            <ArrowLeft size={18} />
-                        </button>
-                        <div className="min-w-0">
-                            <p className="admin-chip w-fit">Товары / QR-печать</p>
-                            <h1 className="mt-3 text-[1.9rem] font-semibold leading-tight tracking-tight text-white">HQ-сервис QR PDF</h1>
-                            <p className="mt-1 max-w-2xl text-sm text-gray-500">
-                                Сбор PDF-документа A4 из публичных QR партии. Источник, превью и настройки остаются на одном рабочем экране.
-                            </p>
-                        </div>
-                    </div>
+            <header className="qr-screen-only flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/6 bg-black/10 px-3">
+                <div className="flex min-w-0 items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => navigate('/admin/products')}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                        aria-label="Вернуться к товарам"
+                    >
+                        <ArrowLeft size={18} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setSourcePanelOpen((current) => !current)}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                        aria-label={sourcePanelOpen ? 'Свернуть источник данных' : 'Открыть источник данных'}
+                    >
+                        {sourcePanelOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+                    </button>
+                </div>
 
-                    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
-                        <div className="flex flex-wrap gap-2">
-                            <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-xs text-gray-300">
-                                В документе: {documentItems.length}
-                            </span>
-                            <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-xs text-gray-300">
-                                {pageCaption}
-                            </span>
-                            {pack && (
-                                <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs text-blue-100">
-                                    Партия: {pack.batch.id}
-                                </span>
-                            )}
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => setSettings(createDefaultSettings())}
-                                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
-                            >
-                                <RotateCcw size={16} />
-                                Сбросить
-                            </button>
-                            <button
-                                type="button"
-                                onClick={savePdfDocument}
-                                disabled={pdfExporting || documentItems.length === 0}
-                                className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                <Download size={16} />
-                                {pdfExporting ? 'Сохраняем PDF...' : 'Сохранить PDF'}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={closeWindowOrReturn}
-                                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
-                            >
-                                <X size={16} />
-                                Закрыть
-                            </button>
-                        </div>
-                    </div>
+                <div className="flex min-w-0 items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setSettings(createDefaultSettings())}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                    >
+                        <RotateCcw size={16} />
+                        Сбросить
+                    </button>
+                    <button
+                        type="button"
+                        onClick={savePdfDocument}
+                        disabled={pdfExporting || documentItems.length === 0}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <Download size={16} />
+                        {pdfExporting ? 'Сохраняем PDF...' : 'Сохранить PDF'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={closeWindowOrReturn}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                    >
+                        <X size={16} />
+                        Закрыть
+                    </button>
                 </div>
             </header>
 
-            <div className="mx-auto grid w-full min-w-0 max-w-[1680px] flex-1 gap-4 px-4 py-4 sm:px-6 lg:min-h-0 lg:grid-cols-[312px_minmax(0,1fr)] lg:px-8 xl:grid-cols-[320px_minmax(0,1fr)_400px] 2xl:grid-cols-[332px_minmax(0,1fr)_420px]">
-                    <section className="admin-panel qr-screen-only flex min-h-[420px] min-w-0 flex-col rounded-[24px] px-4 py-4 lg:min-h-0">
-                        <div className="mb-4 border-b border-white/6 pb-4">
-                            <h2 className="text-base font-semibold text-white">Источник данных</h2>
-                            <p className="mt-1 text-sm text-gray-500">Выберите товар-шаблон, партию и состав QR для PDF.</p>
-                        </div>
+            <div
+                className="grid min-h-0 w-full min-w-0 flex-1 grid-cols-1 gap-3 p-3 transition-[grid-template-columns] duration-300 lg:grid-cols-[var(--qr-workspace-columns)]"
+                style={{
+                    '--qr-workspace-columns': sourcePanelOpen
+                        ? '300px minmax(0,1fr) 390px'
+                        : 'minmax(0,1fr) 390px'
+                } as CSSProperties}
+            >
+                    {sourcePanelOpen && (
+                        <section className="admin-panel qr-screen-only flex min-h-[360px] min-w-0 flex-col rounded-[18px] px-3 py-3 lg:min-h-0">
+                            <div className="mb-3 flex items-center justify-between gap-2 border-b border-white/6 pb-3">
+                                <h2 className="text-sm font-semibold text-white">Источник данных</h2>
+                                <button
+                                    type="button"
+                                    onClick={() => setSourcePanelOpen(false)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+                                    aria-label="Свернуть источник данных"
+                                >
+                                    <ChevronLeft size={16} />
+                                </button>
+                            </div>
 
-                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
+                            <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
+                            <div className="space-y-2 rounded-2xl border border-white/6 bg-[#11141a] p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Пресеты печати</span>
+                                    {presetsLoading && <span className="text-[11px] text-gray-500">Загрузка...</span>}
+                                </div>
+                                <label className="block">
+                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Пресет печати</span>
+                                    <select
+                                        value={activePresetId}
+                                        onChange={(event) => handlePresetSelection(event.target.value)}
+                                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
+                                        disabled={presetsLoading || presetSaving}
+                                    >
+                                        <option value="">Текущая конфигурация</option>
+                                        {printPresets.map((preset) => (
+                                            <option key={preset.id} value={preset.id}>
+                                                {preset.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="block">
+                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Название пресета</span>
+                                    <input
+                                        value={presetName}
+                                        onChange={(event) => setPresetName(event.target.value)}
+                                        placeholder="Например: 58 × 36, QR справа"
+                                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
+                                        disabled={presetSaving}
+                                    />
+                                </label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => void savePrintPreset(false)}
+                                        disabled={presetSaving}
+                                        className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Сохранить
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void savePrintPreset(true)}
+                                        disabled={presetSaving}
+                                        className="rounded-xl border border-white/8 bg-white/[0.04] px-3 py-2 text-xs font-medium text-gray-200 transition hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Сохранить как новый
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void deletePrintPreset()}
+                                        disabled={!activePresetId || presetSaving}
+                                        className="col-span-2 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-100 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Удалить
+                                    </button>
+                                </div>
+                                {presetError && (
+                                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                                        {presetError}
+                                    </div>
+                                )}
+                            </div>
+
                             <label className="block">
                                 <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Товар-шаблон</span>
                                 <select
@@ -1570,101 +1852,120 @@ export function QrPrint() {
                                             В документ автоматически попадут все публичные QR этой партии.
                                         </div>
                                     )}
+
+                                    {settings.fields.customText.enabled && documentItems.length > 0 && (
+                                        <div className="space-y-2 border-t border-white/6 pt-3">
+                                            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Свое поле</span>
+                                            <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                                                {documentItems.map((item) => (
+                                                    <label
+                                                        key={item.itemId}
+                                                        className="block rounded-xl border border-white/6 bg-[#11141a] px-3 py-2"
+                                                    >
+                                                        <span className="mb-1.5 block truncate text-[11px] font-medium text-gray-400">
+                                                            {item.serialNumber || `Позиция ${item.tempId}`}
+                                                        </span>
+                                                        <input
+                                                            value={customFieldValues[item.itemId] || ''}
+                                                            onChange={(event) => updateCustomFieldValue(item.itemId, event.target.value)}
+                                                            placeholder="Введите свой текст"
+                                                            className={`${QR_CONTROL_CLASS} h-9 px-2.5 text-xs`}
+                                                        />
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            </div>
+                        </section>
+                    )}
+
+                    <section className="admin-panel qr-document-panel relative flex min-h-[520px] min-w-0 flex-col rounded-[18px] p-0 lg:min-h-0">
+                        {previewRendering && previewImages.length > 0 && (
+                            <div className="qr-screen-only absolute right-4 top-4 z-20 rounded-full border border-blue-400/20 bg-blue-500/15 px-3 py-1 text-xs font-medium text-blue-100 shadow-[0_12px_30px_rgba(37,99,235,0.18)]">
+                                Обновляем превью...
+                            </div>
+                        )}
+
+                        <div className="qr-document-pages qr-stable-scroll min-h-0 flex-1 space-y-6 overflow-y-auto overflow-x-hidden rounded-[18px] bg-[#0f1217] p-2">
+                            {documentItems.length === 0 ? (
+                                <div className="flex min-h-full items-center justify-center px-10 text-center text-sm text-slate-500">
+                                    {emptyPageMessage}
+                                </div>
+                            ) : previewImages.length > 0 ? (
+                                <>
+                                    {previewError && (
+                                        <div className="mx-auto max-w-xl rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                                            {previewError}
+                                        </div>
+                                    )}
+                                    {previewImages.map((page) => (
+                                        <div
+                                            key={page.id}
+                                            className="qr-preview-page-frame relative mx-auto overflow-hidden rounded-[18px] bg-white shadow-[0_18px_48px_rgba(0,0,0,0.28)]"
+                                            style={{
+                                                aspectRatio: `${A4_WIDTH_MM} / ${A4_HEIGHT_MM}`,
+                                                maxWidth: '100%',
+                                                width: `min(${A4_WIDTH_PX}px, calc((100svh - 6.5rem) * ${A4_ASPECT_RATIO}), 100%)`
+                                            }}
+                                        >
+                                            <img
+                                                data-testid="qr-preview-page"
+                                                src={page.dataUrl}
+                                                alt={`PDF-превью страницы ${page.pageNumber}`}
+                                                width={page.width}
+                                                height={page.height}
+                                                draggable={false}
+                                                className="block h-full w-full select-none object-contain"
+                                            />
+                                        </div>
+                                    ))}
+                                </>
+                            ) : (
+                                <div
+                                    className="mx-auto flex w-full max-w-full items-center justify-center rounded-[18px] border border-white/8 bg-white text-center text-sm text-slate-500 shadow-[0_18px_48px_rgba(0,0,0,0.28)]"
+                                    style={{
+                                        aspectRatio: `${A4_WIDTH_MM} / ${A4_HEIGHT_MM}`,
+                                        width: `min(${A4_WIDTH_PX}px, calc((100svh - 6.5rem) * ${A4_ASPECT_RATIO}), 100%)`
+                                    }}
+                                >
+                                    {previewError || (previewRendering ? 'Готовим достоверное превью PDF...' : 'Превью PDF пока не готово.')}
                                 </div>
                             )}
                         </div>
                     </section>
 
-                    <section className="admin-panel qr-document-panel flex min-h-[620px] min-w-0 flex-col rounded-[24px] p-4 lg:min-h-0">
-                        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/6 pb-4">
-                            <div>
-                                <h2 className="text-base font-semibold text-white">PDF-лист</h2>
-                                <p className="mt-1 text-sm text-gray-500">Центральное превью показывает фактическую раскладку A4.</p>
-                            </div>
-                            <div className="flex flex-wrap gap-2 text-xs text-gray-300">
-                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1">Масштаб: {Math.round(documentScale * 100)}%</span>
-                                {settings.invertColors && <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-amber-100">Инверсия</span>}
-                            </div>
+                    <section className="admin-panel qr-screen-only flex min-h-[520px] min-w-0 flex-col rounded-[18px] p-3 lg:min-h-0">
+                        <div className="mb-3 border-b border-white/6 pb-3">
+                            <h2 className="text-sm font-semibold text-white">Настройки</h2>
                         </div>
 
-                        <div ref={documentViewportRef} className="qr-document-pages qr-stable-scroll min-h-0 flex-1 space-y-6 overflow-y-auto overflow-x-hidden rounded-2xl border border-white/6 bg-[#0f1217] p-3">
-                            {previewPages.map((pageItems, pageIndex) => {
-                                const showEmptyState = documentItems.length === 0 && pageIndex === 0;
-                                return (
-                                    <div
-                                        key={`qr-document-page-frame-${pageIndex}`}
-                                        className="qr-document-page-frame relative mx-auto overflow-hidden rounded-[18px] bg-white shadow-[0_18px_48px_rgba(0,0,0,0.28)]"
-                                        style={{
-                                            width: `${pagePreviewMetrics.width}px`,
-                                            height: `${pagePreviewMetrics.height}px`
-                                        }}
+                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1">
+                            <div className="admin-panel-soft space-y-2 rounded-2xl p-3">
+                                <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Положение QR</span>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSettings((current) => ({ ...current, qrSide: 'left' }))}
+                                        className={`rounded-xl px-3 py-2.5 text-sm font-medium transition ${settings.qrSide === 'left'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'border border-white/8 bg-white/[0.04] text-gray-300 hover:bg-white/[0.07] hover:text-white'
+                                            }`}
                                     >
-                                        <article
-                                            className="qr-document-page absolute left-0 top-0 bg-white"
-                                            style={{
-                                                width: `${A4_WIDTH_MM}mm`,
-                                                height: `${A4_HEIGHT_MM}mm`,
-                                                transform: `scale(${documentScale})`,
-                                                transformOrigin: 'top left'
-                                            }}
-                                        >
-                                            {showEmptyState ? (
-                                                <div className={`absolute inset-0 flex items-center justify-center px-10 text-center text-sm ${packError ? 'text-red-500' : 'text-slate-500'}`}>
-                                                    {emptyPageMessage}
-                                                </div>
-                                            ) : (
-                                                <div className="grid" style={buildPageGridStyle(settings, cardsPerRow)}>
-                                                    {pageItems.map((item) => (
-                                                        <PrintLabelCard
-                                                            key={item.id}
-                                                            item={item}
-                                                            settings={settings}
-                                                            onCustomTextChange={updateCustomFieldValue}
-                                                        />
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </article>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </section>
-
-                    <section className="admin-panel qr-screen-only flex min-h-[620px] min-w-0 flex-col rounded-[24px] p-4 lg:col-span-2 lg:min-h-0 xl:col-span-1">
-                        <div className="mb-4 border-b border-white/6 pb-4">
-                            <h2 className="text-base font-semibold text-white">Настройки</h2>
-                            <p className="mt-1 text-sm text-gray-500">Превью этикетки, геометрия листа и параметры полей.</p>
-                        </div>
-
-                        <div className="qr-stable-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1">
-                            <div className="admin-panel-soft rounded-2xl p-3">
-                                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                    <div>
-                                        <h3 className="text-sm font-semibold text-white">Интерактивное превью одной этикетки</h3>
-                                        <p className="text-xs text-gray-500">Меняйте порядок полей и сторону QR перетаскиванием.</p>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                                        <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-100">
-                                            <MoveHorizontal size={12} />
-                                            QR {settings.qrSide === 'left' ? 'слева' : 'справа'}
-                                        </span>
-                                        {settings.invertColors && (
-                                            <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-amber-100">
-                                                Инверсия
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="h-[236px] overflow-hidden">
-                                    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handlePreviewDragEnd}>
-                                        <LabelEditorPreview
-                                            item={previewItem}
-                                            settings={settings}
-                                            visibleFieldOrder={visibleFieldOrder}
-                                        />
-                                    </DndContext>
+                                        QR слева
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSettings((current) => ({ ...current, qrSide: 'right' }))}
+                                        className={`rounded-xl px-3 py-2.5 text-sm font-medium transition ${settings.qrSide === 'right'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'border border-white/8 bg-white/[0.04] text-gray-300 hover:bg-white/[0.07] hover:text-white'
+                                            }`}
+                                    >
+                                        QR справа
+                                    </button>
                                 </div>
                             </div>
 
@@ -1712,6 +2013,44 @@ export function QrPrint() {
                                     />
                                 </div>
 
+                                <div className="space-y-2 border-t border-white/6 pt-3">
+                                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Внутренние отступы</span>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="col-span-2 mx-auto w-full sm:w-[calc(50%-0.25rem)]">
+                                            <NumericField
+                                                compact
+                                                label="Сверху, мм"
+                                                value={settings.labelPaddingTopMm}
+                                                step="0.1"
+                                                onChange={(value) => updateNumericSetting('labelPaddingTopMm', value, 0, 20)}
+                                            />
+                                        </div>
+                                        <NumericField
+                                            compact
+                                            label="Слева, мм"
+                                            value={settings.labelPaddingLeftMm}
+                                            step="0.1"
+                                            onChange={(value) => updateNumericSetting('labelPaddingLeftMm', value, 0, 20)}
+                                        />
+                                        <NumericField
+                                            compact
+                                            label="Справа, мм"
+                                            value={settings.labelPaddingRightMm}
+                                            step="0.1"
+                                            onChange={(value) => updateNumericSetting('labelPaddingRightMm', value, 0, 20)}
+                                        />
+                                        <div className="col-span-2 mx-auto w-full sm:w-[calc(50%-0.25rem)]">
+                                            <NumericField
+                                                compact
+                                                label="Снизу, мм"
+                                                value={settings.labelPaddingBottomMm}
+                                                step="0.1"
+                                                onChange={(value) => updateNumericSetting('labelPaddingBottomMm', value, 0, 20)}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <label className="flex items-center justify-between gap-4 rounded-xl border border-white/8 bg-[#11141a] px-3 py-3">
                                     <div>
                                         <p className="text-sm font-medium text-white">Инверсия для PDF</p>
@@ -1726,75 +2065,23 @@ export function QrPrint() {
                                 </label>
                             </div>
 
-                            <div className="space-y-2">
-                                {FIELD_KEYS.map((fieldKey) => {
+                            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleFieldSettingsDragEnd}>
+                                <SortableContext items={settings.fieldOrder} strategy={verticalListSortingStrategy}>
+                                    <div className="space-y-2">
+                                        {settings.fieldOrder.map((fieldKey) => {
                                     const config = settings.fields[fieldKey];
                                     return (
-                                        <div key={fieldKey} className="rounded-xl border border-white/6 bg-[#141821] p-3">
-                                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                                <label className="inline-flex items-center gap-3 text-sm font-medium text-white">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={config.enabled}
-                                                        onChange={(event) => updateFieldConfig(fieldKey, { enabled: event.target.checked })}
-                                                        className="h-4 w-4 rounded border-gray-600 bg-[#11141a]"
-                                                    />
-                                                    {FIELD_LABELS[fieldKey]}
-                                                </label>
-                                                <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                                                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-1">
-                                                        {config.enabled ? 'Включено' : 'Скрыто'}
-                                                    </span>
-                                                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-1">
-                                                        #{settings.fieldOrder.indexOf(fieldKey) + 1}
-                                                    </span>
-                                                </div>
-                                            </div>
-
-                                            <div className="mt-3 grid gap-2 sm:grid-cols-[96px_110px_minmax(0,1fr)]">
-                                                <NumericField
-                                                    compact
-                                                    label="Размер, px"
-                                                    value={config.fontSizePx}
-                                                    onChange={(value) => updateFieldConfig(fieldKey, {
-                                                        fontSizePx: clampNumber(value, 9, 40, config.fontSizePx)
-                                                    })}
-                                                />
-
-                                                <label className="block">
-                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Жирность</span>
-                                                    <select
-                                                        value={String(config.fontWeight)}
-                                                        onChange={(event) => updateFieldConfig(fieldKey, { fontWeight: Number(event.target.value) })}
-                                                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
-                                                    >
-                                                        {FONT_WEIGHT_OPTIONS.map((option) => (
-                                                            <option key={option} value={option}>
-                                                                {option}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                </label>
-
-                                                <label className="block">
-                                                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Шрифт</span>
-                                                    <select
-                                                        value={config.fontFamily}
-                                                        onChange={(event) => updateFieldConfig(fieldKey, { fontFamily: event.target.value })}
-                                                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
-                                                    >
-                                                        {FONT_OPTIONS.map((option) => (
-                                                            <option key={option} value={option}>
-                                                                {option}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                </label>
-                                            </div>
-                                        </div>
+                                        <SortableFieldSettingsCard
+                                            key={fieldKey}
+                                            fieldKey={fieldKey}
+                                            config={config}
+                                            onConfigChange={updateFieldConfig}
+                                        />
                                     );
-                                })}
-                            </div>
+                                        })}
+                                    </div>
+                                </SortableContext>
+                            </DndContext>
                         </div>
                     </section>
             </div>
@@ -1803,311 +2090,123 @@ export function QrPrint() {
     );
 }
 
-function LabelEditorPreview({
-    item,
-    settings,
-    visibleFieldOrder
+function SortableFieldSettingsCard({
+    fieldKey,
+    config,
+    onConfigChange
 }: {
-    item: QrDocumentItem;
-    settings: QrPrintSettings;
-    visibleFieldOrder: QrFieldKey[];
+    fieldKey: QrFieldKey;
+    config: QrFieldConfig;
+    onConfigChange: (fieldKey: QrFieldKey, patch: Partial<QrFieldConfig>) => void;
 }) {
-    const labelHeightPx = Math.max(210, settings.labelHeightMm * 3.4);
-    const qrSizePx = Math.min(96, Math.max(56, settings.qrSizeMm * 2.5));
-    const slotWidthPx = Math.max(68, qrSizePx + 10);
-    const textFields = visibleFieldOrder;
-    const shellClass = settings.invertColors
-        ? 'border-white/10 bg-black'
-        : 'border-white/6 bg-[#0f1217]';
-
-    return (
-        <div className="h-full overflow-hidden">
-            <div
-                className={`h-full rounded-2xl border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${shellClass}`}
-                style={{
-                    width: '100%',
-                    minHeight: `${labelHeightPx}px`
-                }}
-            >
-                <div className="flex h-full items-stretch gap-2">
-                    <QrSlot
-                        slotId={QR_SLOT_LEFT_ID}
-                        isActive={settings.qrSide === 'left'}
-                        qrSizePx={qrSizePx}
-                        slotWidthPx={slotWidthPx}
-                        item={item}
-                        invertColors={settings.invertColors}
-                    />
-
-                    <div className={`flex min-w-0 flex-1 flex-col justify-between rounded-xl border border-dashed p-2 ${settings.invertColors ? 'border-white/10 bg-white/[0.03]' : 'border-white/8 bg-black/20'}`}>
-                        <SortableContext items={textFields} strategy={verticalListSortingStrategy}>
-                            <div className="flex h-full flex-col gap-1.5 overflow-hidden">
-                                {textFields.length === 0 ? (
-                                    <div className="rounded-xl border border-dashed border-white/8 px-3 py-4 text-xs text-gray-500">
-                                        Включите хотя бы одну надпись в настройках справа.
-                                    </div>
-                                ) : (
-                                    textFields.map((fieldKey) => (
-                                        <SortableFieldPreview
-                                            key={fieldKey}
-                                            id={fieldKey}
-                                            label={FIELD_LABELS[fieldKey]}
-                                            value={getFieldValue(item, fieldKey) || FIELD_LABELS[fieldKey]}
-                                            style={getFieldStyle(settings.fields[fieldKey])}
-                                            invertColors={settings.invertColors}
-                                        />
-                                    ))
-                                )}
-                            </div>
-                        </SortableContext>
-                    </div>
-
-                    <QrSlot
-                        slotId={QR_SLOT_RIGHT_ID}
-                        isActive={settings.qrSide === 'right'}
-                        qrSizePx={qrSizePx}
-                        slotWidthPx={slotWidthPx}
-                        item={item}
-                        invertColors={settings.invertColors}
-                    />
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function QrSlot({
-    slotId,
-    isActive,
-    qrSizePx,
-    slotWidthPx,
-    item,
-    invertColors
-}: {
-    slotId: string;
-    isActive: boolean;
-    qrSizePx: number;
-    slotWidthPx: number;
-    item: QrDocumentItem;
-    invertColors: boolean;
-}) {
-    const { isOver, setNodeRef } = useDroppable({ id: slotId });
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: fieldKey });
 
     return (
         <div
             ref={setNodeRef}
-            className={`flex min-w-[72px] items-center justify-center rounded-xl border p-2 transition ${isOver
-                ? 'border-blue-400 bg-blue-500/10'
-                : invertColors
-                    ? 'border-dashed border-white/10 bg-white/[0.03]'
-                    : 'border-dashed border-white/8 bg-black/20'
-                }`}
-            style={{ width: `${slotWidthPx}px` }}
-        >
-            {isActive ? (
-                <DraggableQrBlock
-                    qrSizePx={qrSizePx}
-                    qrUrl={item.qrUrl}
-                    serialNumber={item.serialNumber}
-                    invertColors={invertColors}
-                />
-            ) : (
-                <div className="px-1 text-center text-[10px] text-gray-500">
-                    Перетащите QR сюда
-                </div>
-            )}
-        </div>
-    );
-}
-
-function DraggableQrBlock({
-    qrSizePx,
-    qrUrl,
-    serialNumber,
-    invertColors
-}: {
-    qrSizePx: number;
-    qrUrl: string;
-    serialNumber: string;
-    invertColors: boolean;
-}) {
-    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: QR_BLOCK_ID });
-
-    return (
-        <div
-            ref={setNodeRef}
-            {...listeners}
-            {...attributes}
-            className={`flex cursor-grab flex-col items-center gap-2 rounded-xl border px-2 py-2 text-center active:cursor-grabbing ${invertColors
-                ? 'border-white/10 bg-black text-white'
-                : 'border-gray-200 bg-white text-slate-900'
-                } ${isDragging ? 'opacity-60' : ''}`}
-            style={{
-                transform: CSS.Translate.toString(transform),
-                width: `${Math.max(qrSizePx + 12, 72)}px`
-            }}
-        >
-            <div
-                className={`flex items-center justify-center rounded-xl border ${invertColors ? 'border-slate-700 bg-black' : 'border-gray-200 bg-white'}`}
-                style={{
-                    width: `${qrSizePx}px`,
-                    height: `${qrSizePx}px`
-                }}
-            >
-                {qrUrl ? (
-                    <img
-                        src={qrUrl}
-                        alt={`QR ${serialNumber}`}
-                        className="h-full w-full object-contain"
-                        style={{ filter: invertColors ? 'invert(1)' : 'none' }}
-                    />
-                ) : (
-                    <QrCode size={Math.max(36, qrSizePx * 0.55)} className={invertColors ? 'text-white' : 'text-gray-300'} />
-                )}
-            </div>
-            <div className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${invertColors ? 'border-slate-700 text-slate-300' : 'border-gray-200 text-gray-500'}`}>
-                <MoveHorizontal size={12} />
-                QR
-            </div>
-        </div>
-    );
-}
-
-function SortableFieldPreview({
-    id,
-    label,
-    value,
-    style,
-    invertColors
-}: {
-    id: QrFieldKey;
-    label: string;
-    value: string;
-    style: CSSProperties;
-    invertColors: boolean;
-}) {
-    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-
-    return (
-        <div
-            ref={setNodeRef}
-            className={`min-w-0 rounded-xl border px-2.5 py-2 ${invertColors ? 'border-white/10 bg-white/[0.04]' : 'border-white/8 bg-[#141821]'} ${isDragging ? 'opacity-60' : ''}`}
+            data-testid={`qr-field-settings-${fieldKey}`}
+            className={`rounded-xl border border-white/6 bg-[#141821] p-3 ${isDragging ? 'opacity-70' : ''}`}
             style={{
                 transform: CSS.Transform.toString(transform),
                 transition
             }}
         >
-            <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">{label}</span>
-                <button
-                    type="button"
-                    {...attributes}
-                    {...listeners}
-                    className="inline-flex h-6 w-6 cursor-grab items-center justify-center rounded-lg border border-white/8 bg-white/[0.03] text-gray-400 active:cursor-grabbing"
-                    aria-label="Переместить поле"
-                >
-                    <GripVertical size={10} />
-                </button>
-            </div>
-            <div className="truncate leading-tight text-white" style={style} title={value}>
-                {value}
-            </div>
-        </div>
-    );
-}
-
-function PrintLabelCard({
-    item,
-    settings,
-    onCustomTextChange
-}: {
-    item: QrDocumentItem;
-    settings: QrPrintSettings;
-    onCustomTextChange: (itemId: string, value: string) => void;
-}) {
-    const orderedFields = settings.fieldOrder.filter((fieldKey) => settings.fields[fieldKey].enabled);
-    const isInverted = settings.invertColors;
-
-    return (
-        <article
-            className={`qr-label-card flex overflow-hidden border ${settings.qrSide === 'left' ? '' : 'flex-row-reverse'}`}
-            style={{
-                width: `${settings.labelWidthMm}mm`,
-                height: `${settings.labelHeightMm}mm`,
-                padding: formatCssMm(LABEL_PADDING_MM),
-                gap: formatCssMm(LABEL_CONTENT_GAP_MM),
-                borderColor: isInverted ? '#334155' : '#e2e8f0',
-                backgroundColor: isInverted ? '#020617' : '#ffffff',
-                color: isInverted ? '#ffffff' : '#0f172a',
-                borderRadius: formatCssMm(settings.labelRadiusMm)
-            }}
-        >
-            <div
-                className="flex shrink-0 items-center justify-center overflow-hidden border"
-                style={{
-                    width: `${settings.qrSizeMm}mm`,
-                    height: `${settings.qrSizeMm}mm`,
-                    borderColor: isInverted ? '#334155' : '#e2e8f0',
-                    backgroundColor: isInverted ? '#020617' : '#ffffff',
-                    borderRadius: formatCssMm(Math.min(settings.labelRadiusMm, 3))
-                }}
-            >
-                {item.qrUrl ? (
-                    <img
-                        src={item.qrUrl}
-                        alt={`QR ${item.serialNumber}`}
-                        className="h-full w-full object-contain"
-                        style={{ filter: isInverted ? 'invert(1)' : 'none' }}
+            <div className="flex items-center justify-between gap-3">
+                <label className="inline-flex items-center gap-3 text-sm font-medium text-white">
+                    <input
+                        type="checkbox"
+                        checked={config.enabled}
+                        onChange={(event) => onConfigChange(fieldKey, { enabled: event.target.checked })}
+                        className="h-4 w-4 rounded border-gray-600 bg-[#11141a]"
                     />
-                ) : (
-                    <QrCode className={isInverted ? 'text-white' : 'text-slate-300'} size={32} />
-                )}
-            </div>
-
-            <div className="min-w-0 flex-1 overflow-hidden">
-                <div className="flex h-full flex-col justify-center gap-[1.6mm] overflow-hidden">
-                    {orderedFields.map((fieldKey) => {
-                        const fieldConfig = settings.fields[fieldKey];
-
-                        if (fieldKey === 'customText') {
-                            return (
-                                <div key={fieldKey} className="min-w-0" style={getFieldStyle(fieldConfig)}>
-                                    <input
-                                        value={item.customText}
-                                        onChange={(event) => onCustomTextChange(item.itemId, event.target.value)}
-                                        placeholder="Введите свой текст"
-                                        className={`qr-editable-input w-full rounded-[2mm] border border-dashed px-[1.6mm] py-[1.2mm] text-inherit outline-none ${isInverted
-                                            ? 'border-slate-600 bg-black/30 text-white placeholder:text-slate-500'
-                                            : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'
-                                            }`}
-                                        style={{
-                                            ...getFieldStyle(fieldConfig),
-                                            borderRadius: formatCssMm(Math.min(settings.labelRadiusMm, 2))
-                                        }}
-                                    />
-                                    {item.customText.trim() && (
-                                        <div className="qr-print-value break-words">
-                                            {item.customText}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        }
-
-                        const value = getFieldValue(item, fieldKey);
-                        if (!value) {
-                            return null;
-                        }
-
-                        return (
-                            <p key={fieldKey} className="break-words" style={getFieldStyle(fieldConfig)}>
-                                {value}
-                            </p>
-                        );
-                    })}
+                    {FIELD_LABELS[fieldKey]}
+                </label>
+                <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                    <button
+                        type="button"
+                        {...attributes}
+                        {...listeners}
+                        className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded-lg border border-white/8 bg-white/[0.03] text-gray-400 transition hover:bg-white/[0.07] hover:text-white active:cursor-grabbing"
+                        aria-label={`Переместить поле ${FIELD_LABELS[fieldKey]}`}
+                    >
+                        <GripVertical size={13} />
+                    </button>
                 </div>
             </div>
-        </article>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <NumericField
+                    compact
+                    label="Размер, px"
+                    value={config.fontSizePx}
+                    onChange={(value) => onConfigChange(fieldKey, {
+                        fontSizePx: clampNumber(value, 9, 40, config.fontSizePx)
+                    })}
+                />
+
+                <label className="block">
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Жирность</span>
+                    <select
+                        value={String(config.fontWeight)}
+                        onChange={(event) => onConfigChange(fieldKey, { fontWeight: Number(event.target.value) })}
+                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
+                    >
+                        {FONT_WEIGHT_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                                {option}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+
+                <div className="sm:col-span-2">
+                    <div className="mb-1.5 flex items-center gap-3">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Отступы, мм:</span>
+                        <div className="grid flex-1 grid-cols-2 gap-2">
+                            <label className="block">
+                                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Сверху</span>
+                                <input
+                                    type="number"
+                                    value={config.spacingBeforeMm}
+                                    step="0.1"
+                                    onChange={(event) => onConfigChange(fieldKey, {
+                                        spacingBeforeMm: clampNumber(event.target.value, 0, 20, config.spacingBeforeMm)
+                                    })}
+                                    className={`${QR_CONTROL_CLASS} h-8 px-2 text-xs`}
+                                />
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Снизу</span>
+                                <input
+                                    type="number"
+                                    value={config.spacingAfterMm}
+                                    step="0.1"
+                                    onChange={(event) => onConfigChange(fieldKey, {
+                                        spacingAfterMm: clampNumber(event.target.value, 0, 20, config.spacingAfterMm)
+                                    })}
+                                    className={`${QR_CONTROL_CLASS} h-8 px-2 text-xs`}
+                                />
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <label className="block sm:col-span-2">
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Шрифт</span>
+                    <select
+                        value={config.fontFamily}
+                        onChange={(event) => onConfigChange(fieldKey, { fontFamily: event.target.value })}
+                        className={`${QR_CONTROL_CLASS} h-10 px-3`}
+                    >
+                        {FONT_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                                {option}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            </div>
+        </div>
     );
 }
 
@@ -2115,12 +2214,14 @@ function NumericField({
     label,
     value,
     onChange,
-    compact = false
+    compact = false,
+    step = '1'
 }: {
     label: string;
     value: number;
     onChange: (value: string) => void;
     compact?: boolean;
+    step?: string;
 }) {
     return (
         <label className="block">
@@ -2128,7 +2229,7 @@ function NumericField({
             <input
                 type="number"
                 min="0"
-                step="1"
+                step={step}
                 value={value}
                 onChange={(event) => onChange(event.target.value)}
                 className={`${QR_CONTROL_CLASS} ${compact ? 'px-3 py-2.5' : 'px-4 py-3'}`}

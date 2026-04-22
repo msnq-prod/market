@@ -98,6 +98,7 @@ export function AdminLayout() {
         title: 'Рабочая область',
         description: ''
     };
+    const isWideWorkspace = location.pathname === '/admin/inventory';
 
     return (
         <div className="admin-shell min-h-screen text-gray-100 font-sans lg:flex">
@@ -106,7 +107,7 @@ export function AdminLayout() {
 
                 <div className="flex min-w-0 flex-1 flex-col">
                     <header className="border-b border-white/6 bg-black/10">
-                        <div className="mx-auto w-full max-w-[1240px] px-4 py-6 sm:px-6 lg:px-8">
+                        <div className={`mx-auto w-full px-4 py-6 sm:px-6 ${isWideWorkspace ? 'max-w-none lg:px-4' : 'max-w-[1240px] lg:px-8'}`}>
                             <h1 className="text-[2rem] font-semibold tracking-tight text-white">{meta.title}</h1>
                             {meta.description ? (
                                 <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
@@ -115,7 +116,7 @@ export function AdminLayout() {
                     </header>
 
                     <main className="admin-main min-h-0 flex-1 overflow-visible lg:overflow-auto">
-                        <div className="admin-main-inner mx-auto max-w-[1240px] p-4 sm:p-6 lg:p-8">
+                        <div className={`admin-main-inner mx-auto ${isWideWorkspace ? 'max-w-none p-2 sm:p-3 lg:p-4' : 'max-w-[1240px] p-4 sm:p-6 lg:p-8'}`}>
                             {isDev && !isStaff && (
                                 <div className="mb-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
                                     Режим DEV: админ-интерфейс разблокирован для нештатных ролей в локальном тесте.

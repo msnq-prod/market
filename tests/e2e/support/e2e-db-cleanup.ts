@@ -24,10 +24,15 @@ type CleanupOptions = {
 };
 
 type CleanupSummary = {
+    orderStatusEvents: number;
+    orderShipments: number;
+    orderItemAssignments: number;
     orderItems: number;
     orders: number;
+    authSessions: number;
     ledger: number;
     auditLogs: number;
+    qrPrintPresets: number;
     videoProcessingJobs: number;
     batchVideoExportSessions: number;
     items: number;
@@ -43,10 +48,15 @@ type CleanupSummary = {
 };
 
 const emptySummary = (): CleanupSummary => ({
+    orderStatusEvents: 0,
+    orderShipments: 0,
+    orderItemAssignments: 0,
     orderItems: 0,
     orders: 0,
+    authSessions: 0,
     ledger: 0,
     auditLogs: 0,
+    qrPrintPresets: 0,
     videoProcessingJobs: 0,
     batchVideoExportSessions: 0,
     items: 0,
@@ -205,6 +215,26 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
     })).map((entry) => entry.id));
 
     if (hasValues(orderIds)) {
+        summary.orderStatusEvents = (await prisma.orderStatusEvent.deleteMany({
+            where: { order_id: { in: orderIds } },
+        })).count;
+
+        summary.orderShipments = (await prisma.orderShipment.deleteMany({
+            where: { order_id: { in: orderIds } },
+        })).count;
+    }
+
+    if (hasValues(orderIds)) {
+        summary.orderItemAssignments = (await prisma.orderItemAssignment.deleteMany({
+            where: {
+                order_item: {
+                    order_id: { in: orderIds },
+                },
+            },
+        })).count;
+    }
+
+    if (hasValues(orderIds)) {
         summary.orderItems = (await prisma.orderItem.deleteMany({
             where: { order_id: { in: orderIds } },
         })).count;
@@ -214,6 +244,24 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
         summary.orders = (await prisma.order.deleteMany({
             where: { id: { in: orderIds } },
         })).count;
+    }
+
+    if (hasValues(buyerUserIds)) {
+        const authSessionIds = unique((await prisma.authSession.findMany({
+            where: { user_id: { in: buyerUserIds } },
+            select: { id: true },
+        })).map((entry) => entry.id));
+
+        if (hasValues(authSessionIds)) {
+            await prisma.authSession.updateMany({
+                where: { parent_session_id: { in: authSessionIds } },
+                data: { parent_session_id: null },
+            });
+
+            summary.authSessions = (await prisma.authSession.deleteMany({
+                where: { id: { in: authSessionIds } },
+            })).count;
+        }
     }
 
     if (hasValues(itemIds) || hasValues(buyerUserIds)) {
@@ -237,6 +285,10 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
             where: { user_id: { in: buyerUserIds } },
         })).count;
     }
+
+    summary.qrPrintPresets = (await prisma.qrPrintPreset.deleteMany({
+        where: { name: { startsWith: E2E_NOTE_PREFIX } },
+    })).count;
 
     if (hasValues(batchIds)) {
         summary.videoProcessingJobs = (await prisma.videoProcessingJob.deleteMany({

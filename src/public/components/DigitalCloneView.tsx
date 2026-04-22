@@ -62,6 +62,23 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
     const coordinatesLabel = formatCoordinates(item.gps_lat, item.gps_lng);
     const photoLightboxOpen = activeOverlay?.kind === 'photo' && activeOverlay.itemKey === itemKey;
     const videoOverlayOpen = activeOverlay?.kind === 'video' && activeOverlay.itemKey === itemKey;
+    const pageMinHeightClass = previewMode ? 'min-h-[760px]' : 'min-h-screen';
+    const contentMinHeightClass = previewMode ? 'min-h-[760px]' : 'min-h-screen';
+    const headerGridClass = previewMode
+        ? 'grid grid-cols-[minmax(0,1fr)_8rem] items-start gap-4'
+        : 'grid grid-cols-[minmax(0,1fr)_8.75rem] items-start gap-4 sm:grid-cols-[minmax(0,1fr)_10rem] sm:gap-6 lg:grid-cols-[minmax(0,34rem)_14rem]';
+    const titleSectionClass = previewMode
+        ? 'max-w-[15rem] pt-3'
+        : 'max-w-[34rem] pt-3 sm:pt-5 lg:pt-8';
+    const titleClass = previewMode
+        ? 'max-w-none text-[2.15rem] font-light leading-[1.02] tracking-[-0.02em] text-white break-words'
+        : 'max-w-[12ch] text-[clamp(2.2rem,5.9vw,5rem)] font-light leading-[0.92] tracking-[-0.07em] text-white [overflow-wrap:anywhere]';
+    const mediaColumnOuterClass = previewMode
+        ? 'justify-self-end pt-3'
+        : 'justify-self-end pt-3 sm:pt-5 lg:pt-8';
+    const mediaColumnClass = previewMode
+        ? 'flex w-[8rem] flex-col gap-3'
+        : 'flex w-[8.75rem] flex-col gap-3 sm:w-[10rem] lg:w-[14rem]';
 
     useEffect(() => {
         if (!photoLightboxOpen && !videoOverlayOpen) {
@@ -85,7 +102,7 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
 
     return (
         <>
-            <div className="relative min-h-screen overflow-hidden bg-black text-white">
+            <div className={`relative overflow-hidden bg-black text-white ${pageMinHeightClass}`}>
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(94,215,255,0.12),transparent_26%),linear-gradient(180deg,rgba(0,0,0,0.22)_0%,rgba(0,0,0,0.44)_44%,rgba(0,0,0,0.72)_100%)]" />
 
                 <div className="absolute inset-0">
@@ -100,10 +117,10 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
                 <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(1,4,10,0.1)_0%,rgba(1,4,10,0.22)_24%,rgba(1,4,10,0.42)_52%,rgba(1,4,10,0.82)_100%)]" />
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_left_top,rgba(2,8,20,0.62),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(2,6,14,0.78),transparent_32%)]" />
 
-                <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:px-8">
-                    <div className="grid grid-cols-[minmax(0,1fr)_8.75rem] items-start gap-4 sm:grid-cols-[minmax(0,1fr)_10rem] sm:gap-6 lg:grid-cols-[minmax(0,34rem)_14rem]">
-                        <section className="max-w-[34rem] pt-3 sm:pt-5 lg:pt-8">
-                            <h1 className="max-w-[12ch] text-[clamp(2.2rem,5.9vw,5rem)] font-light leading-[0.92] tracking-[-0.07em] text-white [overflow-wrap:anywhere]">
+                <div className={`relative z-10 mx-auto flex max-w-7xl flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:px-8 ${contentMinHeightClass}`}>
+                    <div className={headerGridClass}>
+                        <section className={titleSectionClass}>
+                            <h1 className={titleClass}>
                                 {item.product_name}
                             </h1>
 
@@ -119,8 +136,8 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
                             </div>
                         </section>
 
-                        <div className="justify-self-end pt-3 sm:pt-5 lg:pt-8">
-                            <div className="flex w-[8.75rem] flex-col gap-3 sm:w-[10rem] lg:w-[14rem]">
+                        <div className={mediaColumnOuterClass}>
+                            <div className={mediaColumnClass}>
                                 <PhotoWindow
                                     photoUrl={photoUrl}
                                     hasPhotoAsset={hasPhotoAsset}

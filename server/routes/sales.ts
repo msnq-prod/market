@@ -4,6 +4,7 @@ import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
     getSalesCustomerDetail,
+    getSalesInventoryDetail,
     getSalesOrder,
     getSalesOrderStatus,
     isSalesStaffRole,
@@ -175,6 +176,18 @@ router.get('/inventory', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Не удалось загрузить наличие.' });
+    }
+});
+
+router.get('/inventory/:productId', async (req, res) => {
+    try {
+        const detail = await getSalesInventoryDetail(prisma, req.params.productId);
+        res.json(detail);
+    } catch (error) {
+        console.error(error);
+        const statusCode = typeof (error as { statusCode?: number })?.statusCode === 'number' ? (error as { statusCode: number }).statusCode : 500;
+        const message = error instanceof Error ? error.message : 'Не удалось загрузить детали наличия.';
+        res.status(statusCode).json({ error: message });
     }
 });
 

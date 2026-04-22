@@ -238,7 +238,7 @@ export function CloneContent() {
 
                 <section className="rounded-2xl border border-gray-800 bg-black/60 p-4">
                     <div className="max-h-[calc(100vh-170px)] overflow-auto rounded-[28px] bg-[#02040a]">
-                        <div className="mx-auto max-w-[430px]">
+                        <div className="mx-auto w-[430px] max-w-full">
                             <DigitalCloneView
                                 item={previewItem}
                                 content={draft}
