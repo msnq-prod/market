@@ -55,9 +55,6 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
     const itemKey = item.serial_number || item.clone_url || item.product_name;
     const [activeOverlay, setActiveOverlay] = useState<null | { kind: 'photo' | 'video'; itemKey: string }>(null);
     const description = item.location_description || item.product_description || content.hero_description;
-    const extraText = item.location_description
-        ? (item.product_description || content.authenticity_text)
-        : content.authenticity_text;
     const collectionDate = formatCollectionDate(item.collection_date);
     const coordinatesLabel = formatCoordinates(item.gps_lat, item.gps_lng);
     const photoLightboxOpen = activeOverlay?.kind === 'photo' && activeOverlay.itemKey === itemKey;
@@ -65,20 +62,20 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
     const pageMinHeightClass = previewMode ? 'min-h-[760px]' : 'min-h-screen';
     const contentMinHeightClass = previewMode ? 'min-h-[760px]' : 'min-h-screen';
     const headerGridClass = previewMode
-        ? 'grid grid-cols-[minmax(0,1fr)_8rem] items-start gap-4'
-        : 'grid grid-cols-[minmax(0,1fr)_8.75rem] items-start gap-4 sm:grid-cols-[minmax(0,1fr)_10rem] sm:gap-6 lg:grid-cols-[minmax(0,34rem)_14rem]';
+        ? 'flex w-full min-w-0 flex-col gap-4'
+        : 'flex w-full min-w-0 flex-col gap-4 md:grid md:grid-cols-[minmax(0,1fr)_10rem] md:items-start md:gap-6 lg:grid-cols-[minmax(0,34rem)_14rem]';
     const titleSectionClass = previewMode
-        ? 'max-w-[15rem] pt-3'
-        : 'max-w-[34rem] pt-3 sm:pt-5 lg:pt-8';
+        ? 'w-full min-w-0 pt-3'
+        : 'w-full min-w-0 pt-3 sm:pt-5 lg:pt-8';
     const titleClass = previewMode
-        ? 'max-w-none text-[2.15rem] font-light leading-[1.02] tracking-[-0.02em] text-white break-words'
-        : 'max-w-[12ch] text-[clamp(2.2rem,5.9vw,5rem)] font-light leading-[0.92] tracking-[-0.07em] text-white [overflow-wrap:anywhere]';
+        ? 'w-full max-w-none text-[2.15rem] font-light leading-[1.02] text-white [overflow-wrap:anywhere]'
+        : 'w-full max-w-none text-[clamp(2.35rem,11vw,4.7rem)] font-light leading-[0.96] text-white [overflow-wrap:anywhere] sm:text-[clamp(3rem,8vw,5rem)] md:max-w-[12ch] md:leading-[0.92] lg:max-w-none';
     const mediaColumnOuterClass = previewMode
-        ? 'justify-self-end pt-3'
-        : 'justify-self-end pt-3 sm:pt-5 lg:pt-8';
+        ? 'w-full min-w-0'
+        : 'w-full min-w-0 md:justify-self-end md:pt-5 lg:pt-8';
     const mediaColumnClass = previewMode
-        ? 'flex w-[8rem] flex-col gap-3'
-        : 'flex w-[8.75rem] flex-col gap-3 sm:w-[10rem] lg:w-[14rem]';
+        ? 'flex w-full min-w-0 flex-col gap-3'
+        : 'flex w-full min-w-0 max-w-[24rem] flex-col gap-3 md:w-[10rem] md:max-w-none lg:w-[14rem]';
 
     useEffect(() => {
         if (!photoLightboxOpen && !videoOverlayOpen) {
@@ -102,12 +99,12 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
 
     return (
         <>
-            <div className={`relative overflow-hidden bg-black text-white ${pageMinHeightClass}`}>
+            <div className={`relative w-full min-w-0 overflow-hidden bg-black text-white ${pageMinHeightClass}`}>
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(94,215,255,0.12),transparent_26%),linear-gradient(180deg,rgba(0,0,0,0.22)_0%,rgba(0,0,0,0.44)_44%,rgba(0,0,0,0.72)_100%)]" />
 
-                <div className="absolute inset-0">
+                <div className="absolute inset-0 overflow-hidden">
                     <PassportPlanetScene
-                        className="-translate-x-[12%] sm:-translate-x-[10%] lg:-translate-x-[6%]"
+                        className="translate-x-0"
                         lat={item.gps_lat}
                         lng={item.gps_lng}
                         locationName={item.location_name}
@@ -117,18 +114,12 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
                 <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(1,4,10,0.1)_0%,rgba(1,4,10,0.22)_24%,rgba(1,4,10,0.42)_52%,rgba(1,4,10,0.82)_100%)]" />
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_left_top,rgba(2,8,20,0.62),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(2,6,14,0.78),transparent_32%)]" />
 
-                <div className={`relative z-10 mx-auto flex max-w-7xl flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:px-8 ${contentMinHeightClass}`}>
+                <div className={`relative z-10 mx-auto flex w-full min-w-0 max-w-7xl flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:px-8 ${contentMinHeightClass}`}>
                     <div className={headerGridClass}>
                         <section className={titleSectionClass}>
                             <h1 className={titleClass}>
                                 {item.product_name}
                             </h1>
-
-                            {item.serial_number ? (
-                                <p className="mt-4 font-mono text-[11px] tracking-[0.26em] text-white/72 sm:text-[12px]">
-                                    {item.serial_number}
-                                </p>
-                            ) : null}
 
                             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[15px] font-semibold text-white/82 sm:text-[17px]">
                                 {collectionDate ? <span>{collectionDate}</span> : null}
@@ -162,7 +153,6 @@ export function DigitalCloneView({ item, content, previewMode = false }: Digital
                     <div className="pb-1">
                         <DescriptionCard
                             description={description}
-                            extraText={extraText}
                         />
                     </div>
 
@@ -234,7 +224,7 @@ function PhotoWindow({
             <button
                 type="button"
                 onClick={onOpen}
-                className="transition-transform hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
+                className="w-full transition-transform hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
                 aria-label={actionLabel}
             >
                 {image}
@@ -253,25 +243,15 @@ function PhotoWindow({
 }
 
 function DescriptionCard({
-    description,
-    extraText
+    description
 }: {
     description: string;
-    extraText: string;
 }) {
     return (
         <div className="rounded-[1.75rem] border border-white/10 bg-black/28 px-4 py-5 shadow-[0_22px_70px_rgba(0,0,0,0.28)] backdrop-blur-md sm:px-5 sm:py-6 lg:max-w-[34rem]">
             <p className="text-base leading-7 text-white/82 sm:text-[17px] sm:leading-8">
                 {description}
             </p>
-
-            {extraText ? (
-                <div className="mt-4 border-t border-white/8 pt-4">
-                    <p className="text-sm leading-7 text-white/54">
-                        {extraText}
-                    </p>
-                </div>
-            ) : null}
         </div>
     );
 }

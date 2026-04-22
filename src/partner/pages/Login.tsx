@@ -1,8 +1,8 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useTexture } from '@react-three/drei';
 import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import * as THREE from 'three';
-import { PlanetSphere } from '../../components/PlanetSphere';
 import { persistAuthSession } from '../../utils/session';
 import { hasWebGLSupport } from '../../utils/webgl';
 import { partnerControlClassName } from '../components/ui';
@@ -39,6 +39,20 @@ function AdminLoginCameraRig() {
 
 function AdminLoginPlanet() {
     const planetRef = useRef<THREE.Group>(null);
+    const sourceColorMap = useTexture('/textures/earth_login_daymap.webp');
+    const colorMap = React.useMemo(() => {
+        const texture = sourceColorMap.clone();
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.needsUpdate = true;
+        return texture;
+    }, [sourceColorMap]);
+
+    useEffect(() => {
+        return () => colorMap.dispose();
+    }, [colorMap]);
 
     useFrame((_, delta) => {
         if (!planetRef.current) return;
@@ -47,14 +61,12 @@ function AdminLoginPlanet() {
     });
 
     return (
-        <>
-            <ambientLight intensity={0.46} />
-            <directionalLight position={ADMIN_LOGIN_CAMERA_POSITION} intensity={4.2} />
-            <directionalLight position={[3, -2, 4]} intensity={0.34} color="#d7dde8" />
-            <group ref={planetRef} scale={1.45}>
-                <PlanetSphere />
-            </group>
-        </>
+        <group ref={planetRef} scale={1.45}>
+            <mesh>
+                <sphereGeometry args={[1, 32, 16]} />
+                <meshBasicMaterial map={colorMap} toneMapped={false} />
+            </mesh>
+        </group>
     );
 }
 
@@ -66,8 +78,8 @@ function AdminLoginBackdrop() {
             {hasWebGL ? (
                 <Canvas
                     camera={{ position: ADMIN_LOGIN_CAMERA_POSITION, fov: 45, near: 0.1, far: 20 }}
-                    dpr={[1, 1.25]}
-                    gl={{ antialias: true, alpha: true, powerPreference: 'low-power', stencil: false }}
+                    dpr={1}
+                    gl={{ antialias: false, alpha: true, powerPreference: 'low-power', stencil: false, depth: false }}
                     className="translate-x-[8vw] opacity-100 brightness-[1.45] contrast-[1.12] saturate-[0.55]"
                 >
                     <AdminLoginCameraRig />

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, PencilLine, QrCode } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, PencilLine, Plus, QrCode } from 'lucide-react';
 import { Button, Input, Modal, Textarea } from '../components/ui';
 import { TranslationModal } from '../components/TranslationModal';
 import { authFetch } from '../../utils/authFetch';
@@ -611,6 +611,12 @@ export function Products() {
         setIsLocationModalOpen(true);
     };
 
+    const openLocationCreateModal = () => {
+        setEditingLocationId(null);
+        setLocationForm(emptyLocationForm);
+        setIsLocationModalOpen(true);
+    };
+
     const closeLocationModal = () => {
         setIsLocationModalOpen(false);
         setEditingLocationId(null);
@@ -619,7 +625,6 @@ export function Products() {
 
     const handleSaveLocation = async (event: React.FormEvent) => {
         event.preventDefault();
-        if (!editingLocationId) return;
 
         const lat = parseFloat(locationForm.lat);
         const lng = parseFloat(locationForm.lng);
@@ -654,8 +659,8 @@ export function Products() {
 
         setIsLocationSaving(true);
         try {
-            const response = await authFetch(`/api/locations/${editingLocationId}`, {
-                method: 'PUT',
+            const response = await authFetch(editingLocationId ? `/api/locations/${editingLocationId}` : '/api/locations', {
+                method: editingLocationId ? 'PUT' : 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     lat,
@@ -969,12 +974,20 @@ export function Products() {
                     {selectedLocation ? (
                         <Button onClick={() => openCreateModal(selectedLocation.id)}>+ Добавить шаблон</Button>
                     ) : (
-                        <Button
-                            variant={isLocationEditMode ? 'secondary' : 'primary'}
-                            onClick={() => setIsLocationEditMode((prev) => !prev)}
-                        >
-                            {isLocationEditMode ? 'Готово' : 'Редактировать локации'}
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                            {isLocationEditMode ? (
+                                <Button variant="primary" onClick={openLocationCreateModal}>
+                                    <Plus size={16} />
+                                    Добавить локацию
+                                </Button>
+                            ) : null}
+                            <Button
+                                variant={isLocationEditMode ? 'secondary' : 'primary'}
+                                onClick={() => setIsLocationEditMode((prev) => !prev)}
+                            >
+                                {isLocationEditMode ? 'Готово' : 'Редактировать локации'}
+                            </Button>
+                        </div>
                     )}
                 </div>
             </section>
@@ -1229,96 +1242,104 @@ export function Products() {
             <Modal
                 isOpen={isLocationModalOpen}
                 onClose={closeLocationModal}
-                title="Редактировать локацию"
-                className="max-w-3xl"
+                title={editingLocationId ? 'Редактировать локацию' : 'Новая локация'}
+                className="max-w-5xl p-0"
             >
-                <form onSubmit={handleSaveLocation} className="space-y-5">
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        <Input
-                            label="Название локации"
-                            value={locationForm.name}
-                            onChange={(event) => setLocationForm((prev) => ({ ...prev, name: event.target.value }))}
-                            required
-                        />
-                        <Input
-                            label="Страна"
-                            value={locationForm.country}
-                            onChange={(event) => setLocationForm((prev) => ({ ...prev, country: event.target.value }))}
-                            required
-                        />
-                    </div>
+                <form onSubmit={handleSaveLocation} className="flex max-h-[calc(90vh-86px)] flex-col">
+                    <div className="grid flex-1 gap-5 overflow-y-auto px-6 pb-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+                        <div className="space-y-5">
+                            <FormPanel title="Основное" description="Название и описание, которые используются в витрине и паспортах.">
+                                <Input
+                                    label="Название локации"
+                                    value={locationForm.name}
+                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, name: event.target.value }))}
+                                    required
+                                />
+                                <Input
+                                    label="Страна"
+                                    value={locationForm.country}
+                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, country: event.target.value }))}
+                                    required
+                                />
+                                <Textarea
+                                    label="Описание"
+                                    value={locationForm.description}
+                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, description: event.target.value }))}
+                                    rows={5}
+                                    className="min-h-[132px]"
+                                />
+                            </FormPanel>
 
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        <Input
-                            label="Широта"
-                            type="number"
-                            step="any"
-                            value={locationForm.lat}
-                            onChange={(event) => setLocationForm((prev) => ({ ...prev, lat: event.target.value }))}
-                            required
-                        />
-                        <Input
-                            label="Долгота"
-                            type="number"
-                            step="any"
-                            value={locationForm.lng}
-                            onChange={(event) => setLocationForm((prev) => ({ ...prev, lng: event.target.value }))}
-                            required
-                        />
-                    </div>
-
-                    <div className="rounded-2xl border border-white/8 bg-[#11141a] p-4">
-                        <label className="mb-3 block text-sm font-medium text-gray-400">Изображение локации</label>
-                        <div className="grid gap-4 md:grid-cols-[132px_minmax(0,1fr)]">
-                            <div className="h-[132px] overflow-hidden rounded-2xl border border-white/8 bg-[#0f1217]">
-                                {locationForm.image ? (
-                                    <img src={locationForm.image} alt="Превью локации" className="h-full w-full object-cover" />
-                                ) : (
-                                    <div className="flex h-full items-center justify-center text-xs text-gray-600">Нет изображения</div>
-                                )}
-                            </div>
-                            <div className="space-y-3">
+                            <FormPanel title="Медиа" description="Изображение для карточки локации и публичной витрины.">
                                 <Input
                                     label="URL изображения"
                                     value={locationForm.image}
                                     onChange={(event) => setLocationForm((prev) => ({ ...prev, image: event.target.value }))}
                                     placeholder="/uploads/... или /locations/..."
                                 />
-                                <input
-                                    className={productFileInputClassName}
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={handleLocationImageUpload}
-                                    disabled={isLocationUploading}
-                                />
-                                <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-                                    {isLocationUploading ? <span>Загрузка изображения...</span> : null}
+                                <div className="rounded-2xl border border-white/8 bg-[#15181f] px-4 py-3">
+                                    <label className="mb-2 block text-sm font-medium text-gray-400">Загрузить файл</label>
+                                    <input
+                                        className={productFileInputClassName}
+                                        type="file"
+                                        accept="image/*"
+                                        onChange={handleLocationImageUpload}
+                                        disabled={isLocationUploading}
+                                    />
+                                    {isLocationUploading ? <p className="mt-2 text-xs text-gray-500">Загрузка изображения...</p> : null}
                                     {locationForm.image ? (
                                         <button
                                             type="button"
                                             onClick={() => setLocationForm((prev) => ({ ...prev, image: '' }))}
-                                            className="text-gray-400 transition hover:text-white"
+                                            className="mt-2 text-xs text-gray-400 transition hover:text-white"
                                         >
                                             Убрать изображение
                                         </button>
                                     ) : null}
                                 </div>
-                            </div>
+                            </FormPanel>
                         </div>
+
+                        <aside className="space-y-5">
+                            <FormPanel title="Координаты" description="Точка на глобусе и в публичном паспорте товара.">
+                                <Input
+                                    label="Широта"
+                                    type="number"
+                                    step="any"
+                                    value={locationForm.lat}
+                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, lat: event.target.value }))}
+                                    required
+                                />
+                                <Input
+                                    label="Долгота"
+                                    type="number"
+                                    step="any"
+                                    value={locationForm.lng}
+                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, lng: event.target.value }))}
+                                    required
+                                />
+                            </FormPanel>
+
+                            <FormPanel title="Превью" description="Так изображение будет выглядеть в карточке локации.">
+                                <div className="aspect-[4/3] overflow-hidden rounded-2xl border border-white/8 bg-[#0f1217]">
+                                    {locationForm.image ? (
+                                        <img src={locationForm.image} alt="Превью локации" className="h-full w-full object-cover" />
+                                    ) : (
+                                        <div className="flex h-full items-center justify-center text-xs text-gray-600">Нет изображения</div>
+                                    )}
+                                </div>
+                            </FormPanel>
+                        </aside>
                     </div>
 
-                    <Textarea
-                        label="Описание"
-                        value={locationForm.description}
-                        onChange={(event) => setLocationForm((prev) => ({ ...prev, description: event.target.value }))}
-                        rows={4}
-                    />
-
-                    <div className="flex justify-end gap-3 border-t border-white/6 pt-4">
-                        <Button type="button" variant="ghost" onClick={closeLocationModal}>Отмена</Button>
-                        <Button type="submit" disabled={isLocationSaving}>
-                            {isLocationSaving ? 'Сохранение...' : 'Сохранить'}
-                        </Button>
+                    <div className="sticky bottom-0 flex flex-col gap-3 border-t border-white/6 bg-[#171a20]/95 px-6 py-4 backdrop-blur md:flex-row md:items-center md:justify-between">
+                        <p className="text-xs text-gray-500">Поля названия, страны и координат обязательны.</p>
+                        <div className="flex justify-end gap-3">
+                            <Button type="button" variant="ghost" onClick={closeLocationModal}>Отмена</Button>
+                            <Button type="submit" disabled={isLocationSaving}>
+                                {isLocationSaving ? 'Сохранение...' : editingLocationId ? 'Сохранить' : 'Создать'}
+                            </Button>
+                        </div>
                     </div>
                 </form>
             </Modal>
