@@ -588,6 +588,7 @@ import { Clients } from './admin/pages/Clients'
 import { SalesInventory } from './admin/pages/SalesInventory'
 import { SalesHistory } from './admin/pages/SalesHistory'
 import { VideoTool } from './admin/pages/VideoTool'
+import { VideoToolLauncher } from './admin/pages/VideoToolLauncher'
 import { PhotoTool } from './admin/pages/PhotoTool'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
 import { TelegramBots } from './admin/pages/TelegramBots'
@@ -637,6 +638,7 @@ function App() {
           <Route path="acceptance" element={<Acceptance />} />
           <Route path="allocation" element={<Allocation />} />
           <Route path="warehouse" element={<Warehouse />} />
+          <Route path="video-tool" element={<VideoToolLauncher />} />
           <Route path="users" element={<Users />} />
           <Route path="telegram-bots" element={<TelegramBots />} />
           <Route path="clone-content" element={<CloneContent />} />

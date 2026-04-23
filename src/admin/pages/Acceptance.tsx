@@ -99,13 +99,13 @@ const itemStatusLabel: Record<string, string> = {
 };
 
 const itemStatusClass: Record<string, string> = {
-    NEW: 'bg-gray-800 text-gray-300',
-    REJECTED: 'bg-red-500/15 text-red-200',
-    STOCK_HQ: 'bg-emerald-500/15 text-emerald-200',
-    STOCK_ONLINE: 'bg-emerald-500/15 text-emerald-200',
-    ON_CONSIGNMENT: 'bg-amber-500/15 text-amber-200',
-    SOLD_ONLINE: 'bg-blue-500/15 text-blue-200',
-    ACTIVATED: 'bg-violet-500/15 text-violet-200'
+    NEW: 'border-white/8 bg-white/[0.04] text-gray-400',
+    REJECTED: 'border-red-500/30 bg-red-500/15 text-red-200',
+    STOCK_HQ: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
+    STOCK_ONLINE: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
+    ON_CONSIGNMENT: 'border-amber-500/30 bg-amber-500/15 text-amber-200',
+    SOLD_ONLINE: 'border-blue-500/30 bg-blue-500/15 text-blue-200',
+    ACTIVATED: 'border-violet-500/30 bg-violet-500/15 text-violet-200'
 };
 
 const videoProcessingLabel: Record<string, string> = {
@@ -394,16 +394,9 @@ export function Acceptance() {
     };
 
     return (
-        <div className="space-y-8">
-            <header className="space-y-2">
-                <h1 className="text-2xl font-bold text-white">Складская приемка</h1>
-                <p className="text-gray-500">
-                    Единый экран приемки HQ: выбор партии, перевод в статус получено, media-полнота и перевод на склад без legacy-операций.
-                </p>
-            </header>
-
+        <div className="space-y-5">
             {error && (
-                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
+                <div className="rounded-[24px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                     {error}
                 </div>
             )}
@@ -416,35 +409,37 @@ export function Acceptance() {
             </section>
 
             <div className="grid gap-6 xl:grid-cols-[340px,minmax(0,1fr)]">
-                <section className="rounded-2xl border border-gray-800 bg-gray-900">
-                    <div className="border-b border-gray-800 px-5 py-4">
+                <section className="admin-panel overflow-hidden rounded-[24px]">
+                    <div className="border-b border-white/6 px-5 py-4">
                         <div className="flex items-center gap-2">
-                            <PackageCheck size={18} className="text-blue-300" />
+                            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-blue-100">
+                                <PackageCheck size={18} />
+                            </span>
                             <h2 className="text-lg font-semibold text-white">Партии приемки</h2>
                         </div>
                         <p className="mt-1 text-sm text-gray-500">Показываются только партии в стадиях `TRANSIT` и `RECEIVED`.</p>
                     </div>
 
-                    <div className="border-b border-gray-800 px-5 py-4">
-                        <label className="block text-sm font-medium text-gray-400 mb-2">Поиск партии</label>
+                    <div className="border-b border-white/6 px-5 py-4">
+                        <label className="mb-2 block text-sm font-medium text-gray-400">Поиск партии</label>
                         <div className="relative">
                             <Search className="absolute left-3 top-3 text-gray-500" size={18} />
                             <input
                                 value={batchQuery}
                                 onChange={(event) => setBatchQuery(event.target.value)}
                                 placeholder="ID партии, товар или партнер"
-                                className="w-full rounded-xl border border-gray-700 bg-gray-950 py-2.5 pl-10 pr-4 text-white outline-none transition focus:border-blue-500"
+                                className="h-11 w-full rounded-xl border border-white/8 bg-[#11141a] py-2.5 pl-10 pr-4 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-blue-300/60"
                             />
                         </div>
                     </div>
 
                     <div className="max-h-[720px] overflow-y-auto p-3">
                         {loading ? (
-                            <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-sm text-gray-400">
+                            <div className="admin-panel-soft rounded-2xl px-4 py-6 text-sm text-gray-400">
                                 Загружаем партии приемки...
                             </div>
                         ) : filteredBatches.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950 px-4 py-8 text-sm text-gray-500">
+                            <div className="rounded-2xl border border-dashed border-white/8 bg-[#11141a] px-4 py-8 text-sm text-gray-500">
                                 По текущему фильтру нет партий для приемки.
                             </div>
                         ) : (
@@ -460,8 +455,8 @@ export function Acceptance() {
                                             type="button"
                                             onClick={() => handleSelectBatch(batch.id)}
                                             className={`w-full rounded-2xl border p-4 text-left transition ${isSelected
-                                                ? 'border-blue-500/40 bg-blue-500/10 shadow-[0_0_24px_rgba(59,130,246,0.12)]'
-                                                : 'border-gray-800 bg-gray-950 hover:border-gray-700 hover:bg-gray-900'
+                                                ? 'border-blue-400/35 bg-blue-500/10 shadow-[0_0_24px_rgba(147,197,253,0.10)]'
+                                                : 'border-white/6 bg-[#11141a] hover:border-white/10 hover:bg-[#171a20]'
                                                 }`}
                                         >
                                             <div className="flex items-start justify-between gap-3">
@@ -474,13 +469,13 @@ export function Acceptance() {
                                                 </span>
                                             </div>
                                             <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                <span className="rounded-full border border-gray-700 px-2.5 py-1">
+                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
                                                     {batch.owner?.name || 'Без партнера'}
                                                 </span>
-                                                <span className="rounded-full border border-gray-700 px-2.5 py-1">
+                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
                                                     Камней: {batch.items.length}
                                                 </span>
-                                                <span className="rounded-full border border-gray-700 px-2.5 py-1">
+                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
                                                     Media: {counts.fullyReady}/{counts.total}
                                                 </span>
                                             </div>
@@ -494,15 +489,15 @@ export function Acceptance() {
 
                 <section className="space-y-6">
                     {!selectedBatch ? (
-                        <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900 px-6 py-12 text-center text-gray-500">
+                        <div className="admin-panel rounded-[24px] border-dashed px-6 py-12 text-center text-gray-500">
                             Выберите партию слева, чтобы открыть рабочее место приемки.
                         </div>
                     ) : (
                         <>
-                            <article className="rounded-2xl border border-gray-800 bg-gray-900">
-                                <div className="border-b border-gray-800 px-6 py-5">
+                            <article className="admin-panel overflow-hidden rounded-[24px]">
+                                <div className="border-b border-white/6 px-6 py-5">
                                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                                        <div className="space-y-3 min-w-0">
+                                        <div className="min-w-0 space-y-3">
                                             <div className="flex flex-wrap items-center gap-3">
                                                 <h2 className="text-xl font-semibold text-white">
                                                     {selectedBatch.product
@@ -561,14 +556,14 @@ export function Acceptance() {
                                                     </Button>
                                                     <Link
                                                         to={`/admin/photo-tool/${encodeURIComponent(selectedBatch.id)}`}
-                                                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-700 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10"
+                                                        className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-cyan-100 transition hover:bg-white/[0.07] hover:text-white"
                                                     >
                                                         <Camera size={16} />
                                                         Photo Tool
                                                     </Link>
                                                     <Link
                                                         to={`/admin/video-tool/${encodeURIComponent(selectedBatch.id)}`}
-                                                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-700 px-3 py-2 text-sm text-emerald-100 hover:bg-emerald-500/10"
+                                                        className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-white/[0.07] hover:text-white"
                                                     >
                                                         <Video size={16} />
                                                         Монтаж видео
@@ -593,7 +588,7 @@ export function Acceptance() {
                                 </div>
 
                                 {selectedBatch.status === 'RECEIVED' && (
-                                    <div className="border-t border-gray-800 px-6 py-5">
+                                    <div className="border-t border-white/6 px-6 py-5">
                                         <div className="grid gap-4 lg:grid-cols-3">
                                             <NoticeCard
                                                 title="Фото"
@@ -619,14 +614,14 @@ export function Acceptance() {
                                                 <button
                                                     type="button"
                                                     onClick={() => setSelectedQrItemIds(printableItemIds)}
-                                                    className="rounded-full border border-gray-700 px-3 py-1 hover:bg-gray-800"
+                                                    className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1 transition hover:bg-white/[0.07] hover:text-white"
                                                 >
                                                     Выбрать все
                                                 </button>
                                                 <button
                                                     type="button"
                                                     onClick={() => setSelectedQrItemIds([])}
-                                                    className="rounded-full border border-gray-700 px-3 py-1 hover:bg-gray-800"
+                                                    className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1 transition hover:bg-white/[0.07] hover:text-white"
                                                 >
                                                     Сбросить выбор
                                                 </button>
@@ -636,15 +631,15 @@ export function Acceptance() {
                                 )}
                             </article>
 
-                            <article className="rounded-2xl border border-gray-800 bg-gray-900">
-                                    <div className="border-b border-gray-800 px-6 py-4">
+                            <article className="admin-panel overflow-hidden rounded-[24px]">
+                                    <div className="border-b border-white/6 px-6 py-4">
                                         <h3 className="text-lg font-semibold text-white">Позиции партии</h3>
                                         <p className="mt-1 text-sm text-gray-500">Здесь находится вся приемка товара на склад: серийники, media-статус и быстрые ссылки.</p>
                                     </div>
 
-                                    <div className="divide-y divide-gray-800">
+                                    <div className="divide-y divide-white/6">
                                         {selectedBatch.items.map((item) => (
-                                        <div key={item.id} className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between">
+                                        <div key={item.id} className="flex flex-col gap-4 px-6 py-4 transition hover:bg-white/[0.025] xl:flex-row xl:items-center xl:justify-between">
                                             <div className="min-w-0 space-y-2">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     {selectedBatch.status === 'RECEIVED' && (
@@ -653,35 +648,35 @@ export function Acceptance() {
                                                             checked={selectedQrItemIds.includes(item.id)}
                                                             onChange={() => toggleQrItem(item.id)}
                                                             disabled={!isPublicPassportItem(selectedBatch.status, item.status)}
-                                                            className="h-4 w-4 rounded border-gray-600 bg-gray-900"
+                                                            className="h-4 w-4 rounded border-white/10 bg-[#11141a] accent-blue-300"
                                                         />
                                                     )}
                                                     <p className="font-semibold text-white">{item.serial_number || item.temp_id}</p>
-                                                    <span className={`rounded-full px-2.5 py-1 text-xs ${itemStatusClass[item.status] || 'bg-gray-800 text-gray-300'}`}>
+                                                    <span className={`rounded-full border px-2.5 py-1 text-xs ${itemStatusClass[item.status] || 'border-white/8 bg-white/[0.04] text-gray-300'}`}>
                                                         {itemStatusLabel[item.status] || item.status}
                                                     </span>
                                                     {isPublicPassportItem(selectedBatch.status, item.status) ? (
-                                                        <span className="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs text-blue-200">
+                                                        <span className="rounded-full border border-blue-500/30 bg-blue-500/15 px-2.5 py-1 text-xs text-blue-200">
                                                             Публичный паспорт доступен
                                                         </span>
                                                     ) : (
-                                                        <span className="rounded-full bg-gray-800 px-2.5 py-1 text-xs text-gray-400">
+                                                        <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-xs text-gray-400">
                                                             QR недоступен
                                                         </span>
                                                     )}
                                                 </div>
                                                 <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-                                                    <span className="rounded-full border border-gray-700 px-2.5 py-1">Пакет: {item.temp_id}</span>
+                                                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">Пакет: {item.temp_id}</span>
                                                     {item.item_seq != null && (
-                                                        <span className="rounded-full border border-gray-700 px-2.5 py-1">Позиция: {String(item.item_seq).padStart(3, '0')}</span>
+                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">Позиция: {String(item.item_seq).padStart(3, '0')}</span>
                                                     )}
-                                                    <span className="rounded-full border border-gray-700 px-2.5 py-1">{item.is_sold ? 'Продан' : 'Не продан'}</span>
+                                                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">{item.is_sold ? 'Продан' : 'Не продан'}</span>
                                                 </div>
                                                 <div className="flex flex-wrap gap-2 text-xs">
-                                                    <span className={`rounded-full px-2.5 py-1 ${item.item_photo_url ? 'bg-emerald-500/15 text-emerald-200' : 'bg-gray-800 text-gray-400'}`}>
+                                                    <span className={`rounded-full border px-2.5 py-1 ${item.item_photo_url ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200' : 'border-white/8 bg-white/[0.04] text-gray-400'}`}>
                                                         Фото {item.item_photo_url ? 'есть' : 'нет'}
                                                     </span>
-                                                    <span className={`rounded-full px-2.5 py-1 ${item.item_video_url ? 'bg-emerald-500/15 text-emerald-200' : 'bg-gray-800 text-gray-400'}`}>
+                                                    <span className={`rounded-full border px-2.5 py-1 ${item.item_video_url ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200' : 'border-white/8 bg-white/[0.04] text-gray-400'}`}>
                                                         Видео {item.item_video_url ? 'есть' : 'нет'}
                                                     </span>
                                                 </div>
@@ -695,7 +690,7 @@ export function Acceptance() {
                                                             target="_blank"
                                                             rel="noreferrer"
                                                             aria-disabled={!item.qr_url}
-                                                            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500"
+                                                            className="inline-flex items-center gap-2 rounded-xl border border-blue-400/20 bg-blue-500/20 px-3 py-2 text-sm font-medium text-blue-100 transition hover:bg-blue-500/30"
                                                         >
                                                             <QrCode size={16} />
                                                             QR
@@ -705,14 +700,14 @@ export function Acceptance() {
                                                                 href={createClonePath(item.serial_number) || '#'}
                                                                 target="_blank"
                                                                 rel="noreferrer"
-                                                                className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                                                                className="inline-flex items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3 py-2 text-sm font-medium text-gray-200 transition hover:bg-white/[0.07] hover:text-white"
                                                             >
                                                                 Просмотр
                                                             </a>
                                                         )}
                                                     </>
                                                 ) : (
-                                                    <span className="inline-flex items-center rounded-lg border border-gray-800 px-3 py-2 text-sm text-gray-500">
+                                                    <span className="inline-flex items-center rounded-xl border border-white/6 bg-white/[0.03] px-3 py-2 text-sm text-gray-500">
                                                         Паспорт появится после публикации
                                                     </span>
                                                 )}
@@ -732,7 +727,7 @@ export function Acceptance() {
 
 function MetricCard({ title, value }: { title: string; value: number }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 px-5 py-4">
+        <div className="admin-panel-soft rounded-[24px] px-5 py-4">
             <p className="text-sm text-gray-500">{title}</p>
             <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
         </div>
@@ -741,7 +736,7 @@ function MetricCard({ title, value }: { title: string; value: number }) {
 
 function InfoTile({ title, value, note }: { title: string; value: string; note: string }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4">
+        <div className="admin-panel-soft rounded-[24px] px-4 py-4">
             <p className="text-sm text-gray-500">{title}</p>
             <p className="mt-2 text-xl font-semibold text-white">{value}</p>
             <p className="mt-2 text-xs text-gray-500">{note}</p>
@@ -754,10 +749,10 @@ function NoticeCard({ title, text, tone = 'default' }: { title: string; text: st
         ? 'border-emerald-500/20 bg-emerald-500/10'
         : tone === 'warning'
         ? 'border-amber-500/20 bg-amber-500/10'
-        : 'border-gray-800 bg-gray-950';
+        : 'border-white/6 bg-[#11141a]';
 
     return (
-        <div className={`rounded-2xl border px-4 py-4 ${toneClass}`}>
+        <div className={`rounded-[24px] border px-4 py-4 ${toneClass}`}>
             <p className="text-sm font-semibold text-white">{title}</p>
             <p className="mt-2 text-sm text-gray-400">{text}</p>
         </div>

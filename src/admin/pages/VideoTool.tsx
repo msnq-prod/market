@@ -13,6 +13,10 @@ const VIDEO_HELPER_DOWNLOAD_URL_ARM64 = DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64;
 const MIN_SEGMENT_DURATION_MS = 200;
 const CROSSFADE_MS = 200;
 const TIMELINE_ZOOM_STEP = 1.2;
+const PREVIEW_PANEL_WIDTH_STORAGE_KEY = 'video-tool-preview-panel-width';
+const PREVIEW_PANEL_MIN_WIDTH = 280;
+const PREVIEW_PANEL_DEFAULT_WIDTH = 390;
+const PREVIEW_PANEL_MAX_WIDTH = 760;
 const TIMELINE_RULER_STEPS_MS = [
     500,
     1000,
@@ -205,6 +209,18 @@ const clampVisibleStart = (durationMs: number, proposedVisibleStartMs: number, v
     0,
     Math.max(0, durationMs - visibleDurationMs)
 );
+const readStoredPreviewPanelWidth = () => {
+    if (typeof window === 'undefined') {
+        return PREVIEW_PANEL_DEFAULT_WIDTH;
+    }
+
+    const stored = Number(window.localStorage.getItem(PREVIEW_PANEL_WIDTH_STORAGE_KEY));
+    if (!Number.isFinite(stored)) {
+        return PREVIEW_PANEL_DEFAULT_WIDTH;
+    }
+
+    return clamp(Math.round(stored), PREVIEW_PANEL_MIN_WIDTH, PREVIEW_PANEL_MAX_WIDTH);
+};
 const getRulerStepMs = (visibleDurationMs: number) => {
     const targetStep = Math.max(500, visibleDurationMs / 7);
     return TIMELINE_RULER_STEPS_MS.find((step) => step >= targetStep) || TIMELINE_RULER_STEPS_MS[TIMELINE_RULER_STEPS_MS.length - 1];
@@ -492,6 +508,7 @@ export function VideoTool() {
     const dragBoundaryIndexRef = useRef<number | null>(null);
     const dragPlayheadRef = useRef(false);
     const panViewportRef = useRef<{ source: 'timeline' | 'scrollbar'; startClientX: number; startVisibleStartMs: number } | null>(null);
+    const previewResizeRef = useRef<{ startClientX: number; startWidth: number } | null>(null);
     const segmentHistoryRef = useRef<Segment[][]>([]);
     const sourceObjectUrlRef = useRef<string | null>(null);
 
@@ -518,6 +535,7 @@ export function VideoTool() {
     const [notice, setNotice] = useState<InlineNotice | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [leftRailOpen, setLeftRailOpen] = useState(true);
+    const [previewPanelWidth, setPreviewPanelWidth] = useState(readStoredPreviewPanelWidth);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
         visibleStartMs: 0,
@@ -531,6 +549,21 @@ export function VideoTool() {
     const visibleDurationMs = durationMs ? (timelineViewport.visibleDurationMs || durationMs) : 0;
     const visibleStartMs = durationMs ? clampVisibleStart(durationMs, timelineViewport.visibleStartMs, visibleDurationMs || durationMs) : 0;
     const visibleEndMs = visibleStartMs + visibleDurationMs;
+    const clampPreviewPanelWidth = useCallback((nextWidth: number) => {
+        const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
+        const leftRailWidth = leftRailOpen ? 224 : 0;
+        const mainWorkspaceMinWidth = 560;
+        const maxWidthByViewport = Math.max(
+            PREVIEW_PANEL_MIN_WIDTH,
+            viewportWidth - leftRailWidth - mainWorkspaceMinWidth
+        );
+
+        return clamp(
+            Math.round(nextWidth),
+            PREVIEW_PANEL_MIN_WIDTH,
+            Math.min(PREVIEW_PANEL_MAX_WIDTH, maxWidthByViewport)
+        );
+    }, [leftRailOpen]);
     const activeSegments = useMemo(
         () => segments.filter((segment) => !segment.deleted),
         [segments]
@@ -870,7 +903,31 @@ export function VideoTool() {
     }, [batchId, helperSourceId, pendingSerials, segments, session?.session_id, session?.version, sourceFingerprint]);
 
     useEffect(() => {
+        setPreviewPanelWidth((current) => clampPreviewPanelWidth(current));
+    }, [clampPreviewPanelWidth]);
+
+    useEffect(() => {
+        localStorage.setItem(PREVIEW_PANEL_WIDTH_STORAGE_KEY, String(previewPanelWidth));
+    }, [previewPanelWidth]);
+
+    useEffect(() => {
+        const handleResize = () => {
+            setPreviewPanelWidth((current) => clampPreviewPanelWidth(current));
+        };
+
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [clampPreviewPanelWidth]);
+
+    useEffect(() => {
         const handlePointerMove = (event: PointerEvent) => {
+            const previewResize = previewResizeRef.current;
+            if (previewResize) {
+                const deltaPx = event.clientX - previewResize.startClientX;
+                setPreviewPanelWidth(clampPreviewPanelWidth(previewResize.startWidth - deltaPx));
+                return;
+            }
+
             if (dragPlayheadRef.current && timelineRef.current && durationMs && visibleDurationMs) {
                 const rect = timelineRef.current.getBoundingClientRect();
                 const nextMs = timelineClientXToMs(event.clientX, rect);
@@ -907,6 +964,7 @@ export function VideoTool() {
         };
 
         const handlePointerUp = () => {
+            previewResizeRef.current = null;
             dragPlayheadRef.current = false;
             dragBoundaryIndexRef.current = null;
             if (panViewportRef.current) {
@@ -922,7 +980,7 @@ export function VideoTool() {
             window.removeEventListener('pointermove', handlePointerMove);
             window.removeEventListener('pointerup', handlePointerUp);
         };
-    }, [durationMs, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
+    }, [clampPreviewPanelWidth, durationMs, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
 
     const timelineCuts = useMemo(
         () => segments.slice(1).map((segment) => segment.startMs),
@@ -1648,8 +1706,8 @@ export function VideoTool() {
                     className="grid min-h-0 flex-1 transition-[grid-template-columns] duration-300"
                     style={{
                         gridTemplateColumns: leftRailOpen
-                            ? 'minmax(196px,224px) minmax(0,3.4fr) minmax(300px,1.15fr)'
-                            : 'minmax(0,3.8fr) minmax(280px,1fr)'
+                            ? `minmax(196px,224px) minmax(0,1fr) ${previewPanelWidth}px`
+                            : `minmax(0,1fr) ${previewPanelWidth}px`
                     }}
                 >
                     {leftRailOpen && (
@@ -2238,11 +2296,37 @@ export function VideoTool() {
                         </div>
                     </section>
 
-                    <section className="min-h-0 border-l border-zinc-800 bg-[#121317] p-3">
+                    <section className="relative min-h-0 border-l border-zinc-800 bg-[#121317] p-3">
+                        <button
+                            type="button"
+                            className="absolute bottom-0 left-0 top-0 z-30 w-2 -translate-x-1/2 cursor-col-resize touch-none border-l border-transparent text-zinc-700 transition hover:border-emerald-300/70 hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70"
+                            onPointerDown={(event) => {
+                                event.preventDefault();
+                                previewResizeRef.current = {
+                                    startClientX: event.clientX,
+                                    startWidth: previewPanelWidth
+                                };
+                            }}
+                            aria-label="Изменить ширину окна просмотра"
+                            title="Потяните, чтобы изменить ширину просмотра"
+                        >
+                            <span className="pointer-events-none absolute left-1/2 top-1/2 h-16 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current" />
+                        </button>
                         <div className="relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-[28px] border border-zinc-800 bg-[#090a0d]">
                             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/65 via-black/25 to-transparent px-4 py-4 text-[11px] uppercase tracking-[0.18em] text-zinc-300">
                                 <span>Просмотр</span>
-                                <span>{selectedSegmentRow?.displaySequence || (selectedSegmentRow?.isDeleted ? 'del' : '—')}</span>
+                                <span className="inline-flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPreviewPanelWidth(clampPreviewPanelWidth(PREVIEW_PANEL_DEFAULT_WIDTH))}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 hover:text-white"
+                                        aria-label="Сбросить ширину просмотра"
+                                        title="Сбросить ширину просмотра"
+                                    >
+                                        <RotateCcw size={13} />
+                                    </button>
+                                    <span>{selectedSegmentRow?.displaySequence || (selectedSegmentRow?.isDeleted ? 'del' : '—')}</span>
+                                </span>
                             </div>
 
                             <div className="absolute inset-x-0 top-12 z-10 flex items-center justify-between px-4 text-xs text-zinc-400">
