@@ -61,7 +61,33 @@ npm run ops:deploy
 - production checkout не должен содержать незакоммиченных tracked-изменений;
 - `docker` и `docker compose` доступны для пользователя деплоя.
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL` может отсутствовать: тогда UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`.
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` может отсутствовать: тогда UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`.
 - по умолчанию preflight требует 2 GiB свободного места, но порог можно переопределить через `STONES_MIN_FREE_GB`.
+
+## 1.2 Desktop helper для zagarami.com
+
+Production helper должен быть собран под канонический origin `https://zagarami.com`.
+
+Базовый путь:
+
+```bash
+STONES_HELPER_ALLOWED_ORIGIN=https://zagarami.com npm run video-export-helper:desktop:dist
+```
+
+После сборки в `dist-electron/` должны лежать:
+
+- versioned DMG от `electron-builder`;
+- стабильный `ZAGARAMI-Video-Helper.dmg` для Intel;
+- стабильный `ZAGARAMI-Video-Helper-arm64.dmg` для Apple Silicon.
+
+Если используются same-origin ссылки по умолчанию, опубликуйте оба DMG по путям:
+
+- `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
+- `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
+
+Если используются внешние URL, заполните `VITE_VIDEO_HELPER_DOWNLOAD_URL` и `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64`.
+
+При первом обращении `https://zagarami.com` к локальному `http://127.0.0.1:3012` браузер может запросить доступ к localhost или локальной сети. Этот доступ нужно разрешить, иначе Video Tool будет считать helper недоступным.
 
 ## 2. Backup базы данных
 

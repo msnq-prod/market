@@ -9,7 +9,8 @@ const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
 const VIDEO_HELPER_DOWNLOAD_URL = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL).trim();
-const VIDEO_HELPER_DOWNLOAD_URL_ARM64 = DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64;
+const VIDEO_HELPER_DOWNLOAD_URL_ARM64 = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64 || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64).trim();
+const ZAGARAMI_PRODUCTION_ORIGIN = 'https://zagarami.com';
 const MIN_SEGMENT_DURATION_MS = 200;
 const CROSSFADE_MS = 200;
 const TIMELINE_ZOOM_STEP = 1.2;
@@ -31,6 +32,48 @@ const TIMELINE_RULER_STEPS_MS = [
     600000,
     900000
 ];
+
+type HelperRequestInit = RequestInit & {
+    targetAddressSpace?: 'local';
+};
+
+const helperUrlHostname = (() => {
+    try {
+        return new URL(VIDEO_EXPORT_HELPER_URL).hostname;
+    } catch {
+        return '';
+    }
+})();
+
+const helperUsesLoopback = helperUrlHostname === '127.0.0.1'
+    || helperUrlHostname === 'localhost'
+    || helperUrlHostname === '::1';
+
+const buildHelperIssueMessage = (rawMessage?: string) => {
+    const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+    const currentOrigin = typeof window !== 'undefined'
+        ? window.location.origin
+        : ZAGARAMI_PRODUCTION_ORIGIN;
+    const expectedOrigin = currentOrigin.includes('zagarami.com')
+        ? currentOrigin
+        : ZAGARAMI_PRODUCTION_ORIGIN;
+
+    if (message.includes('Origin helper запроса не разрешён') || message.includes('Mutating helper requests требуют разрешённый Origin.')) {
+        return `Этот helper собран не для ${expectedOrigin}. Скачайте актуальный DMG с ${expectedOrigin}, откройте приложение снова и перепроверьте статус.`;
+    }
+
+    if (message.includes('Helper принимает запросы только с loopback-интерфейса.')) {
+        return `Браузер не смог обратиться к helper через localhost. Откройте систему через ${expectedOrigin} и перепроверьте статус helper.`;
+    }
+
+    if (message.includes('Failed to fetch') || message.includes('Load failed') || message.includes('NetworkError')) {
+        return helperUsesLoopback
+            ? `Браузер заблокировал доступ к локальному helper. Разрешите ${expectedOrigin} доступ к localhost или локальной сети и перепроверьте статус.`
+            : 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
+    }
+
+    return message || 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
+};
 
 type VideoToolBatch = {
     id: string;
@@ -473,10 +516,16 @@ const helperFetch = async (input: string, init?: RequestInit) => {
         headers.set('X-Stones-Video-Helper-Version', VIDEO_EXPORT_HELPER_PROTOCOL_VERSION);
     }
 
-    const response = await fetch(`${VIDEO_EXPORT_HELPER_URL}${input}`, {
+    const requestInit: HelperRequestInit = {
         ...init,
         headers
-    });
+    };
+
+    if (helperUsesLoopback) {
+        requestInit.targetAddressSpace = 'local';
+    }
+
+    const response = await fetch(`${VIDEO_EXPORT_HELPER_URL}${input}`, requestInit);
     return response;
 };
 
@@ -517,6 +566,7 @@ export function VideoTool() {
     const [error, setError] = useState('');
     const [helperStatus, setHelperStatus] = useState<HelperStatus>('checking');
     const [helperHealth, setHelperHealth] = useState<HelperHealthPayload | null>(null);
+    const [helperIssueMessage, setHelperIssueMessage] = useState('');
     const [sourceFile, setSourceFile] = useState<File | null>(null);
     const [sourceUrl, setSourceUrl] = useState('');
     const [sourceFingerprint, setSourceFingerprint] = useState<SourceFingerprint | null>(null);
@@ -804,22 +854,26 @@ export function VideoTool() {
 
     const checkHelper = async () => {
         setHelperStatus('checking');
+        setHelperIssueMessage('');
         try {
             const response = await helperFetch('/health');
             const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
             if (!response.ok || !payload.ok) {
-                throw new Error(payload.error || 'Helper ffmpeg недоступен.');
+                throw new Error(buildHelperIssueMessage(payload.error || 'Helper ffmpeg недоступен.'));
             }
 
             setHelperHealth(payload);
             if (payload.protocol_version !== VIDEO_EXPORT_HELPER_PROTOCOL_VERSION) {
+                setHelperIssueMessage('Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
                 setHelperStatus('version_mismatch');
                 return;
             }
 
+            setHelperIssueMessage('');
             setHelperStatus('ready');
         } catch (helperError) {
             setHelperHealth(null);
+            setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : ''));
             setHelperStatus('unavailable');
             console.error(helperError);
         }
@@ -1625,12 +1679,13 @@ export function VideoTool() {
         ? 'Обновите ZAGARAMI Video Helper'
         : 'Установите ZAGARAMI Video Helper';
     const helperInstallDescription = helperStatus === 'version_mismatch'
-        ? 'Локальный helper устарел. Скачайте актуальную версию, откройте приложение и перепроверьте статус.'
-        : 'Монтаж и экспорт работают через локальный macOS helper. Скачайте его, один раз откройте приложение и вернитесь к монтажу.';
+        ? 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
+        : helperIssueMessage || 'Монтаж и экспорт работают через локальный macOS helper. Скачайте его, один раз откройте приложение и вернитесь к монтажу.';
     const statusMessage = error
         || session?.error_message
         || exportMessage
         || notice?.message
+        || helperIssueMessage
         || helperSidebarStatus;
     const normalizedStatusMessage = statusMessage === 'Load failed'
         ? 'Не удалось загрузить исходник.'

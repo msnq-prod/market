@@ -20,6 +20,7 @@ export const DEFAULT_MAX_SOURCE_DURATION_MS = 60 * 60 * 1000;
 export const DEFAULT_PREVIEW_WIDTH = 540;
 export const DEFAULT_PREVIEW_HEIGHT = 960;
 export const DEFAULT_ALLOWED_ORIGINS = [
+    'https://zagarami.com',
     'http://127.0.0.1:3001',
     'http://localhost:3001',
     'http://127.0.0.1:5173',
@@ -742,6 +743,9 @@ export async function startVideoExportHelperServer(options = {}) {
             res.setHeader('Vary', 'Origin');
             res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Stones-Video-Helper-Version');
+            if (req.headers['access-control-request-private-network'] === 'true') {
+                res.setHeader('Access-Control-Allow-Private-Network', 'true');
+            }
         }
 
         if (req.method === 'OPTIONS') {

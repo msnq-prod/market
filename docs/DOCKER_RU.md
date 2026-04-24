@@ -83,14 +83,15 @@ cp .env.production.example .env.production
 - `TELEGRAM_WORKER_MAX_ATTEMPTS`
 - `STONES_HELPER_ALLOWED_ORIGIN`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, если нужен внешний URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
+- `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` — опционально, если нужен отдельный arm64 URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
 
 Инварианты:
 
-- `CLIENT_URL` должен быть `https://<APP_DOMAIN>`
+- `CLIENT_URL` должен быть `https://<APP_DOMAIN>`; для production ZAGARAMI это `https://zagarami.com`
 - `STONES_HELPER_ALLOWED_ORIGIN` должен совпадать с `CLIENT_URL`
 - `DATABASE_URL` должен указывать на `db:3306`
 - `TELEGRAM_TOKEN_ENCRYPTION_KEY` обязателен и для `app`, и для `telegram-worker`
-- если `VITE_VIDEO_HELPER_DOWNLOAD_URL` не задан, UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
+- если `VITE_VIDEO_HELPER_DOWNLOAD_URL` и `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` не заданы, UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg` и `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
 
 ## 5. Production deploy через scripts/ops
 

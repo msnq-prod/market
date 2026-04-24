@@ -35,9 +35,38 @@ const parseAllowedOrigin = (rawValue) => {
     return parsedUrl.origin;
 };
 
+const syncStableDmgArtifacts = async (outputDir) => {
+    const stableArtifactNames = new Map([
+        ['x64', 'ZAGARAMI-Video-Helper.dmg'],
+        ['arm64', 'ZAGARAMI-Video-Helper-arm64.dmg']
+    ]);
+
+    const entries = await fs.readdir(outputDir, { withFileTypes: true });
+
+    for (const [arch, stableName] of stableArtifactNames) {
+        const sourceEntry = entries.find((entry) => (
+            entry.isFile()
+            && /^ZAGARAMI-Video-Helper-.*\.dmg$/.test(entry.name)
+            && entry.name.endsWith(`-${arch}.dmg`)
+        ));
+
+        if (!sourceEntry) {
+            continue;
+        }
+
+        const sourcePath = path.join(outputDir, sourceEntry.name);
+        const stablePath = path.join(outputDir, stableName);
+        await fs.copyFile(sourcePath, stablePath);
+    }
+};
+
 const main = async () => {
     const allowedOrigin = parseAllowedOrigin(process.env.STONES_HELPER_ALLOWED_ORIGIN || '');
     const baseConfig = JSON.parse(await fs.readFile(builderConfigPath, 'utf8'));
+    const outputDir = path.join(
+        projectRoot,
+        typeof baseConfig?.directories?.output === 'string' ? baseConfig.directories.output : 'dist-electron'
+    );
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stones-helper-builder-'));
     const tempConfigPath = path.join(tempDir, 'electron-builder.json');
 
@@ -71,6 +100,8 @@ const main = async () => {
                 reject(new Error(`electron-builder завершился с кодом ${code ?? 'unknown'}.`));
             });
         });
+
+        await syncStableDmgArtifacts(outputDir);
     } finally {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }

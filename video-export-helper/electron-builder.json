@@ -11,12 +11,19 @@
   "files": [
     "video-export-helper/**/*",
     "package.json",
-    "node_modules/ffmpeg-static/**/*",
-    "node_modules/ffprobe-static/**/*"
+    "!node_modules/**/*",
+    "node_modules/ffmpeg-static/index.js",
+    "node_modules/ffmpeg-static/package.json",
+    "node_modules/ffmpeg-static/LICENSE",
+    "node_modules/ffmpeg-static/ffmpeg",
+    "node_modules/ffprobe-static/index.js",
+    "node_modules/ffprobe-static/package.json",
+    "node_modules/ffprobe-static/LICENSE",
+    "node_modules/ffprobe-static/bin/darwin/**/*"
   ],
   "asarUnpack": [
-    "node_modules/ffmpeg-static/**/*",
-    "node_modules/ffprobe-static/**/*"
+    "node_modules/ffmpeg-static/ffmpeg",
+    "node_modules/ffprobe-static/bin/darwin/**/*"
   ],
   "mac": {
     "target": [
