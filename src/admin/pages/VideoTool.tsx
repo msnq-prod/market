@@ -59,7 +59,7 @@ const buildHelperIssueMessage = (rawMessage?: string) => {
         : ZAGARAMI_PRODUCTION_ORIGIN;
 
     if (message.includes('Origin helper запроса не разрешён') || message.includes('Mutating helper requests требуют разрешённый Origin.')) {
-        return `Этот helper собран не для ${expectedOrigin}. Скачайте актуальный DMG с ${expectedOrigin}, откройте приложение снова и перепроверьте статус.`;
+        return `Этот helper собран не для ${expectedOrigin}. Закройте старый Stones Video Helper, скачайте актуальный DMG с ${expectedOrigin}, откройте ZAGARAMI Video Helper снова и перепроверьте статус.`;
     }
 
     if (message.includes('Helper принимает запросы только с loopback-интерфейса.')) {

@@ -1,4 +1,5 @@
 const fsp = require('fs/promises');
+const http = require('http');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
@@ -11,6 +12,8 @@ let startupErrorMessage = '';
 
 const DESKTOP_STATE_FILE = 'desktop-state.json';
 const PLACEHOLDER_HELPER_VERSION = '0.0.0';
+const HELPER_PORT = 3012;
+const PRODUCTION_ORIGIN = 'https://zagarami.com';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -33,14 +36,55 @@ const createTrayIcon = () => {
     return icon.resize({ width: 18, height: 18 });
 };
 
-const normalizeStartupError = (error) => {
+const readRunningHelperHealth = () => new Promise((resolve) => {
+    const request = http.get({
+        hostname: '127.0.0.1',
+        port: HELPER_PORT,
+        path: '/health',
+        timeout: 800
+    }, (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+            body += chunk;
+        });
+        response.on('end', () => {
+            try {
+                resolve(JSON.parse(body));
+            } catch {
+                resolve(null);
+            }
+        });
+    });
+
+    request.on('timeout', () => {
+        request.destroy();
+        resolve(null);
+    });
+    request.on('error', () => resolve(null));
+});
+
+const normalizeStartupError = async (error) => {
     const message = error instanceof Error ? error.message : '';
     if (/ffmpeg|ffprobe/i.test(message)) {
         return 'Helper не смог проверить ffmpeg или ffprobe. Переустановите ZAGARAMI Video Helper.';
     }
 
     if (/EADDRINUSE/i.test(message)) {
-        return 'Helper не запустился: локальный порт 3012 уже занят. Закройте другой экземпляр и откройте ZAGARAMI Video Helper снова.';
+        const runningHelperHealth = await readRunningHelperHealth();
+        const allowedOrigins = Array.isArray(runningHelperHealth?.allowed_origins)
+            ? runningHelperHealth.allowed_origins
+            : [];
+        const storageRoot = typeof runningHelperHealth?.storage_root === 'string'
+            ? runningHelperHealth.storage_root
+            : '';
+        const isOldStonesHelper = storageRoot.includes('Stones Video Helper') || !allowedOrigins.includes(PRODUCTION_ORIGIN);
+
+        if (isOldStonesHelper) {
+            return 'Helper не запустился: порт 3012 занят старым Stones Video Helper. Закройте Stones Video Helper, удалите его из /Applications и откройте ZAGARAMI Video Helper снова.';
+        }
+
+        return 'Helper не запустился: локальный порт 3012 уже занят. Закройте другой экземпляр helper и откройте ZAGARAMI Video Helper снова.';
     }
 
     return message || 'Helper не смог запуститься. Перезапустите приложение или переустановите ZAGARAMI Video Helper.';
@@ -283,7 +327,7 @@ if (hasSingleInstanceLock) {
                 await writeDesktopState({ hasCompletedInitialLaunch: true });
             }
         } catch (error) {
-            startupErrorMessage = normalizeStartupError(error);
+            startupErrorMessage = await normalizeStartupError(error);
             console.error('[video-export-helper-desktop] failed to start helper', error);
             await showMainWindow();
         }
