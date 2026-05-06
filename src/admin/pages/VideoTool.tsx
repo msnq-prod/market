@@ -4,7 +4,9 @@ import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upl
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
-const VIDEO_EXPORT_HELPER_URL = (import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012').trim().replace(/\/+$/, '');
+const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
+
+const VIDEO_EXPORT_HELPER_URL = normalizeHelperUrl(import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012');
 const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
@@ -37,17 +39,40 @@ type HelperRequestInit = RequestInit & {
     targetAddressSpace?: 'local';
 };
 
-const helperUrlHostname = (() => {
+const helperUrlHostname = (helperUrl: string) => {
     try {
-        return new URL(VIDEO_EXPORT_HELPER_URL).hostname;
+        return new URL(helperUrl).hostname;
     } catch {
         return '';
     }
-})();
+};
 
-const helperUsesLoopback = helperUrlHostname === '127.0.0.1'
-    || helperUrlHostname === 'localhost'
-    || helperUrlHostname === '::1';
+const helperUsesLoopback = (helperUrl: string) => {
+    const hostname = helperUrlHostname(helperUrl);
+    return hostname === '127.0.0.1'
+        || hostname === 'localhost'
+        || hostname === '::1';
+};
+
+const buildHelperUrlCandidates = () => {
+    const candidates = [VIDEO_EXPORT_HELPER_URL];
+    try {
+        const helperUrl = new URL(VIDEO_EXPORT_HELPER_URL);
+        if (helperUrl.hostname === '127.0.0.1') {
+            helperUrl.hostname = 'localhost';
+            candidates.push(normalizeHelperUrl(helperUrl.toString()));
+        } else if (helperUrl.hostname === 'localhost') {
+            helperUrl.hostname = '127.0.0.1';
+            candidates.push(normalizeHelperUrl(helperUrl.toString()));
+        }
+    } catch {
+        // Keep the configured helper URL as-is.
+    }
+
+    return Array.from(new Set(candidates));
+};
+
+const VIDEO_EXPORT_HELPER_URL_CANDIDATES = buildHelperUrlCandidates();
 
 const buildHelperIssueMessage = (rawMessage?: string) => {
     const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
@@ -67,8 +92,8 @@ const buildHelperIssueMessage = (rawMessage?: string) => {
     }
 
     if (message.includes('Failed to fetch') || message.includes('Load failed') || message.includes('NetworkError')) {
-        return helperUsesLoopback
-            ? `Браузер заблокировал доступ к локальному helper. Разрешите ${expectedOrigin} доступ к localhost или локальной сети и перепроверьте статус.`
+        return VIDEO_EXPORT_HELPER_URL_CANDIDATES.some(helperUsesLoopback)
+            ? `Браузер заблокировал доступ к локальному helper. Нажмите «Разрешить доступ» и подтвердите доступ ${expectedOrigin} к локальной сети.`
             : 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
     }
 
@@ -509,7 +534,7 @@ const sameFingerprint = (left: SourceFingerprint | null, right: SourceFingerprin
         && Math.abs(left.durationMs - right.durationMs) <= 10;
 };
 
-const helperFetch = async (input: string, init?: RequestInit) => {
+const helperFetch = async (helperUrl: string, input: string, init?: RequestInit) => {
     const method = (init?.method || 'GET').toUpperCase();
     const headers = new Headers(init?.headers);
     if (method !== 'GET' && method !== 'HEAD') {
@@ -521,11 +546,11 @@ const helperFetch = async (input: string, init?: RequestInit) => {
         headers
     };
 
-    if (helperUsesLoopback) {
+    if (helperUsesLoopback(helperUrl)) {
         requestInit.targetAddressSpace = 'local';
     }
 
-    const response = await fetch(`${VIDEO_EXPORT_HELPER_URL}${input}`, requestInit);
+    const response = await fetch(`${helperUrl}${input}`, requestInit);
     return response;
 };
 
@@ -568,6 +593,7 @@ export function VideoTool() {
     const [helperHealth, setHelperHealth] = useState<HelperHealthPayload | null>(null);
     const [helperIssueMessage, setHelperIssueMessage] = useState('');
     const [helperAccessRequesting, setHelperAccessRequesting] = useState(false);
+    const [helperBaseUrl, setHelperBaseUrl] = useState(VIDEO_EXPORT_HELPER_URL);
     const [sourceFile, setSourceFile] = useState<File | null>(null);
     const [sourceUrl, setSourceUrl] = useState('');
     const [sourceFingerprint, setSourceFingerprint] = useState<SourceFingerprint | null>(null);
@@ -867,16 +893,37 @@ export function VideoTool() {
         }
     });
 
-    const checkHelper = async () => {
+    const helperUrlCandidates = useMemo(() => Array.from(new Set([
+        helperBaseUrl,
+        ...VIDEO_EXPORT_HELPER_URL_CANDIDATES
+    ])), [helperBaseUrl]);
+
+    const fetchHelperHealth = useCallback(async (init?: RequestInit) => {
+        let lastError: unknown = null;
+
+        for (const helperUrl of helperUrlCandidates) {
+            try {
+                const response = await helperFetch(helperUrl, '/health', init);
+                const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
+                return { helperUrl, response, payload };
+            } catch (helperError) {
+                lastError = helperError;
+            }
+        }
+
+        throw lastError instanceof Error ? lastError : new Error('Локальный helper не отвечает.');
+    }, [helperUrlCandidates]);
+
+    const checkHelper = useCallback(async () => {
         setHelperStatus('checking');
         setHelperIssueMessage('');
         try {
-            const response = await helperFetch('/health');
-            const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
+            const { helperUrl, response, payload } = await fetchHelperHealth();
             if (!response.ok || !payload.ok) {
                 throw new Error(buildHelperIssueMessage(payload.error || 'Helper ffmpeg недоступен.'));
             }
 
+            setHelperBaseUrl(helperUrl);
             setHelperHealth(payload);
             if (payload.protocol_version !== VIDEO_EXPORT_HELPER_PROTOCOL_VERSION) {
                 setHelperIssueMessage('Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
@@ -892,14 +939,23 @@ export function VideoTool() {
             setHelperStatus('unavailable');
             console.error(helperError);
         }
-    };
+    }, [fetchHelperHealth]);
     const requestHelperBrowserAccess = async () => {
         setHelperAccessRequesting(true);
         setHelperStatus('checking');
         setHelperIssueMessage('');
         try {
-            await helperFetch('/health', { cache: 'no-store' });
-            await checkHelper();
+            const { helperUrl, response, payload } = await fetchHelperHealth({ cache: 'no-store' });
+            if (!response.ok || !payload.ok) {
+                throw new Error(buildHelperIssueMessage(payload.error || 'Helper ffmpeg недоступен.'));
+            }
+
+            setHelperBaseUrl(helperUrl);
+            setHelperHealth(payload);
+            setHelperStatus(payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION ? 'ready' : 'version_mismatch');
+            setHelperIssueMessage(payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
+                ? ''
+                : 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
         } catch (helperError) {
             setHelperHealth(null);
             setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : ''));
@@ -927,7 +983,7 @@ export function VideoTool() {
     useEffect(() => {
         void loadPageData();
         void checkHelper();
-    }, [batchId]);
+    }, [batchId, checkHelper]);
 
     useEffect(() => {
         if (helperStatus === 'unavailable' || helperStatus === 'version_mismatch') {
@@ -1296,7 +1352,7 @@ export function VideoTool() {
             form.append('file', file);
             form.append('lastModified', String(file.lastModified));
 
-            const response = await helperFetch('/sources', {
+            const response = await helperFetch(helperBaseUrl, '/sources', {
                 method: 'POST',
                 body: form
             });
@@ -1465,7 +1521,7 @@ export function VideoTool() {
         let sourceId = await ensureHelperSource();
 
         for (let attempt = 0; attempt < 2; attempt += 1) {
-            const renderResponse = await helperFetch('/render-jobs', {
+            const renderResponse = await helperFetch(helperBaseUrl, '/render-jobs', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1499,7 +1555,7 @@ export function VideoTool() {
 
     const waitForRenderCompletion = async (jobId: string) => {
         while (true) {
-            const response = await helperFetch(`/render-jobs/${jobId}`);
+            const response = await helperFetch(helperBaseUrl, `/render-jobs/${jobId}`);
             const payload = await response.json().catch(() => ({ error: 'Не удалось получить статус render job.' }));
             if (!response.ok) {
                 throw new Error(payload.error || 'Не удалось получить статус render job.');
@@ -1531,7 +1587,7 @@ export function VideoTool() {
             const serialNumber = serials[index];
             setExportMessage(`Загрузка ${index + 1}/${serials.length}: ${serialNumber}.mp4`);
 
-            const fileResponse = await helperFetch(`/render-jobs/${jobId}/files/${encodeURIComponent(serialNumber)}`);
+            const fileResponse = await helperFetch(helperBaseUrl, `/render-jobs/${jobId}/files/${encodeURIComponent(serialNumber)}`);
             if (!fileResponse.ok) {
                 const payload = await fileResponse.json().catch(() => ({ error: 'Не удалось получить готовый файл из helper.' }));
                 throw new Error(payload.error || 'Не удалось получить готовый файл из helper.');
@@ -1636,7 +1692,7 @@ export function VideoTool() {
             setExportMessage('Загрузка готовых роликов на сервер...');
             await uploadPendingFiles(renderJob.jobId, nextSession.session_id, pending);
 
-            const cleanupResponse = await helperFetch(`/render-jobs/${renderJob.jobId}/cleanup`, {
+            const cleanupResponse = await helperFetch(helperBaseUrl, `/render-jobs/${renderJob.jobId}/cleanup`, {
                 method: 'POST'
             });
             if (!cleanupResponse.ok) {
