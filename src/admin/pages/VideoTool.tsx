@@ -622,10 +622,24 @@ export function VideoTool() {
     const itemDelta = activeProductCount - expectedOutputCount;
     const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
     const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
-    const exportBlockedReason = helperStatus === 'unavailable'
-        ? 'Нужен ZAGARAMI Video Helper.'
+    const helperIssueKind = helperStatus === 'version_mismatch'
+        ? 'version'
+        : helperIssueMessage.includes('заблокировал доступ') || helperIssueMessage.includes('доступ к localhost')
+            ? 'browser'
+            : helperIssueMessage.includes('старый Stones Video Helper') || helperIssueMessage.includes('собран не для')
+                ? 'old'
+                : 'missing';
+    const helperBlockReason = helperStatus === 'unavailable'
+        ? helperIssueKind === 'browser'
+            ? 'Разрешите доступ к localhost.'
+            : 'Запустите ZAGARAMI Video Helper.'
         : helperStatus === 'version_mismatch'
             ? 'Обновите ZAGARAMI Video Helper.'
+            : '';
+    const exportBlockedReason = helperStatus === 'unavailable'
+        ? helperBlockReason
+        : helperStatus === 'version_mismatch'
+            ? helperBlockReason
             : helperStatus !== 'ready'
                 ? 'Проверяем ZAGARAMI Video Helper.'
         : !sourceFile || !durationMs
@@ -1652,12 +1666,15 @@ export function VideoTool() {
     const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
     const hasExportError = Boolean(error || session?.error_message || exportPhase === 'error');
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
+    const helperNeedsDownload = helperIssueKind !== 'browser';
     const helperSidebarStatus = helperStatus === 'checking'
             ? 'Проверяем локальный helper.'
         : helperStatus === 'version_mismatch'
             ? 'Локальный helper устарел. Обновите приложение и перепроверьте статус.'
-            : helperStatus === 'unavailable'
-                ? 'Локальный helper не найден или не запущен.'
+        : helperStatus === 'unavailable'
+                ? helperIssueKind === 'browser'
+                    ? 'Доступ к helper заблокирован браузером.'
+                    : 'Локальный helper не найден или не запущен.'
                 : 'Готово к нарезке и экспорту.';
     const blockingStatusLabel = hasExportError
         ? 'Ошибка экспорта'
@@ -1675,12 +1692,31 @@ export function VideoTool() {
                 : exportBlockedReason || exportPhase === 'cancelled'
                     ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
                     : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
-    const helperInstallTitle = helperStatus === 'version_mismatch'
-        ? 'Обновите ZAGARAMI Video Helper'
-        : 'Установите ZAGARAMI Video Helper';
-    const helperInstallDescription = helperStatus === 'version_mismatch'
-        ? 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
-        : helperIssueMessage || 'Монтаж и экспорт работают через локальный macOS helper. Скачайте его, один раз откройте приложение и вернитесь к монтажу.';
+    const helperProblemTitle = helperStatus === 'version_mismatch'
+        ? 'Helper устарел'
+        : helperIssueKind === 'browser'
+            ? 'Доступ к helper заблокирован'
+            : helperIssueKind === 'old'
+                ? 'Запущен старый helper'
+                : 'Helper не запущен';
+    const helperProblemDescription = helperStatus === 'version_mismatch'
+        ? 'Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
+        : helperIssueKind === 'browser'
+            ? 'Разрешите zagarami.com доступ к localhost или локальной сети в запросе браузера. Затем нажмите проверку.'
+            : helperIssueKind === 'old'
+                ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
+                : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
+    const helperSteps = helperIssueKind === 'browser'
+        ? ['Разрешите доступ к localhost', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник']
+        : ['Откройте ZAGARAMI Video Helper', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник'];
+    const helperQuickActionTitle = helperStatus === 'version_mismatch'
+        ? 'Обновите desktop helper'
+        : helperIssueKind === 'browser'
+            ? 'Helper не отвечает в браузере'
+            : 'Нужен ZAGARAMI Video Helper';
+    const helperQuickActionDescription = helperIssueKind === 'browser'
+        ? 'Если разрешение localhost не появилось или helper скачан давно, установите свежий DMG и проверьте снова.'
+        : helperProblemDescription;
     const statusMessage = error
         || session?.error_message
         || exportMessage
@@ -1757,8 +1793,55 @@ export function VideoTool() {
                     </div>
                 </header>
 
+                {helperNeedsAttention && (
+                    <section
+                        data-testid="helper-quick-actions"
+                        className="shrink-0 border-b border-amber-400/20 bg-[#22190b] px-4 py-3"
+                    >
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="min-w-[240px] flex-1">
+                                <p className="text-sm font-semibold text-amber-50">{helperQuickActionTitle}</p>
+                                <p className="mt-1 text-xs leading-5 text-amber-100/75">{helperQuickActionDescription}</p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                {helperDownloadArm64Configured && (
+                                    <button
+                                        type="button"
+                                        data-testid="helper-download-arm64-top"
+                                        onClick={openHelperDownloadArm64}
+                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
+                                    >
+                                        <HardDriveDownload size={14} />
+                                        Скачать Apple Silicon
+                                    </button>
+                                )}
+                                {helperDownloadConfigured && (
+                                    <button
+                                        type="button"
+                                        data-testid="helper-download-top"
+                                        onClick={openHelperDownload}
+                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-50 transition hover:bg-amber-200/15"
+                                    >
+                                        <HardDriveDownload size={14} />
+                                        Скачать Intel
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    data-testid="helper-recheck-top"
+                                    onClick={() => void checkHelper()}
+                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-600 bg-zinc-950/70 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:border-zinc-400"
+                                >
+                                    <RefreshCw size={14} />
+                                    Проверить снова
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                )}
+
                 <div
-                    className="grid min-h-0 flex-1 transition-[grid-template-columns] duration-300"
+                    className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[grid-template-columns] duration-300 lg:grid lg:overflow-hidden"
                     style={{
                         gridTemplateColumns: leftRailOpen
                             ? `minmax(196px,224px) minmax(0,1fr) ${previewPanelWidth}px`
@@ -1766,8 +1849,8 @@ export function VideoTool() {
                     }}
                 >
                     {leftRailOpen && (
-                        <aside className="min-h-0 border-r border-zinc-800 bg-[#17181c] p-3">
-                            <div className="flex h-full min-h-0 flex-col gap-3">
+                        <aside className="min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-3">
+                            <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto pb-3 pr-1">
                                 <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
                                     <div className="min-w-0">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Исходник</p>
@@ -1810,7 +1893,7 @@ export function VideoTool() {
                                     </div>
                                 </section>
 
-                                <section className="min-h-0 flex-1 rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
+                                <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
                                     <div className="flex items-center justify-between gap-3">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Статус</p>
                                         <button
@@ -1832,44 +1915,52 @@ export function VideoTool() {
                                             data-testid="helper-install-panel"
                                             className="mt-4 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-3"
                                         >
-                                            <p className="text-sm font-medium text-amber-50">{helperInstallTitle}</p>
-                                            <p className="mt-2 text-sm leading-6 text-amber-100/90">
-                                                {helperInstallDescription}
-                                            </p>
-                                            <div className="mt-3 flex flex-wrap gap-2">
-                                                {helperDownloadConfigured && (
+                                            <p className="text-sm font-medium text-amber-50">{helperProblemTitle}</p>
+                                            <p className="mt-2 text-sm leading-6 text-amber-100/90">{helperProblemDescription}</p>
+                                            <ol className="mt-3 grid gap-2 text-xs text-amber-50/85">
+                                                {helperSteps.map((step, index) => (
+                                                    <li key={step} className="flex gap-2">
+                                                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-200/15 text-[10px] text-amber-50">
+                                                            {index + 1}
+                                                        </span>
+                                                        <span>{step}</span>
+                                                    </li>
+                                                ))}
+                                            </ol>
+                                            <div className="mt-3 grid gap-2">
+                                                {helperNeedsDownload && helperDownloadConfigured && (
                                                     <button
                                                         type="button"
                                                         data-testid="helper-download"
                                                         onClick={openHelperDownload}
-                                                        className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
+                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
                                                     >
                                                         <HardDriveDownload size={14} />
-                                                        Скачать ZAGARAMI Video Helper (Intel)
+                                                        Скачать для Intel
                                                     </button>
                                                 )}
-                                                {helperDownloadArm64Configured && (
+                                                {helperNeedsDownload && helperDownloadArm64Configured && (
                                                     <button
                                                         type="button"
                                                         data-testid="helper-download-arm64"
                                                         onClick={openHelperDownloadArm64}
-                                                        className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
+                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
                                                     >
                                                         <HardDriveDownload size={14} />
-                                                        Скачать ZAGARAMI Video Helper (Apple Silicon)
+                                                        Скачать для Apple Silicon
                                                     </button>
                                                 )}
                                                 <button
                                                     type="button"
                                                     data-testid="helper-recheck"
                                                     onClick={() => void checkHelper()}
-                                                    className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500 hover:text-white"
+                                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500 hover:text-white"
                                                 >
                                                     <RefreshCw size={14} />
-                                                    Я установил, перепроверить
+                                                    Проверить снова
                                                 </button>
                                             </div>
-                                            {!helperDownloadConfigured && !helperDownloadArm64Configured && (
+                                            {helperNeedsDownload && !helperDownloadConfigured && !helperDownloadArm64Configured && (
                                                 <p className="mt-3 text-xs leading-5 text-amber-100/75">
                                                     Ссылка на production DMG ещё не настроена в `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
                                                 </p>
@@ -1916,7 +2007,7 @@ export function VideoTool() {
                                     </div>
                                 </section>
 
-                                <div className="mt-auto pt-1">
+                                <div className="pt-1">
                                     <button
                                         type="button"
                                         onClick={() => setLeftRailOpen(false)}
@@ -1942,15 +2033,20 @@ export function VideoTool() {
                             </button>
                         )}
                         <div className="flex h-full min-h-0 flex-col gap-3">
-                            <section className="min-h-0 flex-1 overflow-hidden rounded-[24px] border border-zinc-800 bg-[#17191e]">
+                            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-zinc-800 bg-[#17191e]">
                                 <div className="border-b border-zinc-800 px-4 py-3">
                                     <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Клипы партии</p>
                                 </div>
 
-                                <div className="min-h-0 h-full overflow-y-auto p-3">
+                                <div className={`min-h-0 flex-1 p-3 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                                     {segments.length === 0 ? (
                                         <div className="flex h-full min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/40 p-6 text-center text-sm text-zinc-500">
-                                            Загрузите вертикальный исходник, чтобы получить стартовый фрагмент и перейти к нарезке.
+                                            <div className="max-w-xl">
+                                                <p className="text-base font-medium text-zinc-200">Рабочая область появится после исходника</p>
+                                                <p className="mt-2 leading-6">
+                                                    Сначала решите статус helper’а, затем загрузите вертикальный ролик. После загрузки здесь появятся интро, товарные клипы и стыки.
+                                                </p>
+                                            </div>
                                         </div>
                                     ) : (
                                         <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
@@ -2033,8 +2129,8 @@ export function VideoTool() {
                             </section>
 
                             <section className="shrink-0 overflow-hidden rounded-[24px] border border-zinc-800 bg-[#15171c]">
-                                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
-                                    <div className="flex flex-wrap items-center gap-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
+                                        <div className="flex flex-wrap items-center gap-2">
                                         <Button
                                             data-testid="action-cut"
                                             aria-label="Разрезать"
@@ -2124,6 +2220,11 @@ export function VideoTool() {
                                             Показать всё
                                         </button>
                                     </div>
+                                    {exportBlockedReason && exportPhase === 'idle' && (
+                                        <p className="w-full text-xs text-zinc-500 lg:text-right">
+                                            Действия ограничены: {exportBlockedReason}
+                                        </p>
+                                    )}
                                 </div>
 
                                 <div className="h-[280px] px-3 pb-3 pt-3">
@@ -2417,13 +2518,30 @@ export function VideoTool() {
                                         <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(42,45,54,0.55),rgba(4,5,8,1))] p-8 text-center">
                                             <div className="max-w-[18rem]">
                                                 <p className="text-base font-medium text-zinc-100">
-                                                    {sourceUrl && sourcePreviewUnavailable ? 'Превью недоступно' : 'Загрузите вертикальный исходник'}
-                                                </p>
-                                                <p className="mt-2 text-sm text-zinc-400">
                                                     {sourceUrl && sourcePreviewUnavailable
-                                                        ? 'MOV/H.265 уже принят helper. Можно резать таймлайн и запускать экспорт без превью.'
-                                                        : 'После загрузки появятся просмотр и навигация по стыкам.'}
+                                                        ? 'Превью недоступно'
+                                                        : helperNeedsAttention
+                                                            ? helperProblemTitle
+                                                            : 'Загрузите вертикальный исходник'}
                                                 </p>
+                                                {helperNeedsAttention && !sourceUrl ? (
+                                                    <ol className="mt-4 grid gap-2 text-left text-xs leading-5 text-zinc-300">
+                                                        {helperSteps.map((step, index) => (
+                                                            <li key={`preview-helper-step-${step}`} className="flex gap-2">
+                                                                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] text-zinc-100">
+                                                                    {index + 1}
+                                                                </span>
+                                                                <span>{step}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ol>
+                                                ) : (
+                                                    <p className="mt-2 text-sm text-zinc-400">
+                                                        {sourceUrl && sourcePreviewUnavailable
+                                                            ? 'MOV/H.265 уже принят helper. Можно резать таймлайн и запускать экспорт без превью.'
+                                                            : 'После загрузки появятся просмотр и навигация по стыкам.'}
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
                                     )}
