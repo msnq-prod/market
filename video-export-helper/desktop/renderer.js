@@ -40,6 +40,7 @@ const loadStatus = async () => {
         renderRows(runtimeMeta, [
             ['Версия helper', status.helper_version || '0.0.0'],
             ['Порт', String(status.port)],
+            ['Loopback', Array.isArray(status.listen_hosts) ? status.listen_hosts.join(', ') : status.host || '127.0.0.1'],
             ['Активных render jobs', String(status.queued_jobs)]
         ]);
 

@@ -2,7 +2,8 @@ import { startVideoExportHelperServer } from './server.js';
 
 const main = async () => {
     const helper = await startVideoExportHelperServer();
-    console.log(`[video-export-helper] listening on http://${helper.host}:${helper.port}`);
+    const listeningUrls = helper.listenHosts.map((host) => `http://${host.includes(':') ? `[${host}]` : host}:${helper.port}`);
+    console.log(`[video-export-helper] listening on ${listeningUrls.join(', ')}`);
 };
 
 main().catch((error) => {

@@ -53,7 +53,8 @@ const port = process.env.PORT || 3001;
 const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 const DEFAULT_HELPER_CONNECT_ORIGINS = [
     'http://127.0.0.1:3012',
-    'http://localhost:3012'
+    'http://localhost:3012',
+    'http://[::1]:3012'
 ];
 
 const parseHelperConnectOrigins = () => {

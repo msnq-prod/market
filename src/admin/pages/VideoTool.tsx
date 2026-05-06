@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -8,6 +8,7 @@ const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
 
 const VIDEO_EXPORT_HELPER_URL = normalizeHelperUrl(import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012');
 const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
+const HELPER_HEALTH_TIMEOUT_MS = 2500;
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
 const VIDEO_HELPER_DOWNLOAD_URL = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL).trim();
@@ -51,19 +52,20 @@ const helperUsesLoopback = (helperUrl: string) => {
     const hostname = helperUrlHostname(helperUrl);
     return hostname === '127.0.0.1'
         || hostname === 'localhost'
-        || hostname === '::1';
+        || hostname === '::1'
+        || hostname === '[::1]';
 };
 
 const buildHelperUrlCandidates = () => {
     const candidates = [VIDEO_EXPORT_HELPER_URL];
     try {
         const helperUrl = new URL(VIDEO_EXPORT_HELPER_URL);
-        if (helperUrl.hostname === '127.0.0.1') {
-            helperUrl.hostname = 'localhost';
-            candidates.push(normalizeHelperUrl(helperUrl.toString()));
-        } else if (helperUrl.hostname === 'localhost') {
-            helperUrl.hostname = '127.0.0.1';
-            candidates.push(normalizeHelperUrl(helperUrl.toString()));
+        if (['127.0.0.1', 'localhost', '[::1]', '::1'].includes(helperUrl.hostname)) {
+            for (const hostname of ['127.0.0.1', 'localhost', '[::1]']) {
+                const nextUrl = new URL(helperUrl.toString());
+                nextUrl.hostname = hostname;
+                candidates.push(normalizeHelperUrl(nextUrl.toString()));
+            }
         }
     } catch {
         // Keep the configured helper URL as-is.
@@ -219,11 +221,22 @@ type HelperHealthPayload = {
     ok: boolean;
     helper_version?: string;
     protocol_version?: string;
+    listen_hosts?: string[];
     storage_root?: string;
     free_bytes?: number;
     allowed_origins?: string[];
     queued_jobs?: number;
     error?: string;
+};
+
+type HelperDiagnosticStatus = 'ok' | 'blocked' | 'connection failed' | 'bad protocol' | 'cors/pna failed';
+
+type HelperDiagnosticEntry = {
+    url: string;
+    status: HelperDiagnosticStatus;
+    detail: string;
+    httpStatus?: number;
+    protocolVersion?: string;
 };
 
 type HelperSourceUploadPayload = {
@@ -554,6 +567,26 @@ const helperFetch = async (helperUrl: string, input: string, init?: RequestInit)
     return response;
 };
 
+const classifyHelperFetchError = (error: unknown): HelperDiagnosticStatus => {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+        return 'connection failed';
+    }
+
+    if (error instanceof TypeError) {
+        return 'blocked';
+    }
+
+    return 'connection failed';
+};
+
+const getHelperErrorDetail = (error: unknown) => {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+
+    return 'Запрос не выполнен.';
+};
+
 const revokeObjectUrl = (value: string | null) => {
     if (value?.startsWith('blob:')) {
         URL.revokeObjectURL(value);
@@ -594,6 +627,8 @@ export function VideoTool() {
     const [helperIssueMessage, setHelperIssueMessage] = useState('');
     const [helperAccessRequesting, setHelperAccessRequesting] = useState(false);
     const [helperBaseUrl, setHelperBaseUrl] = useState(VIDEO_EXPORT_HELPER_URL);
+    const [helperDiagnostics, setHelperDiagnostics] = useState<HelperDiagnosticEntry[]>([]);
+    const [helperDiagnosticCopied, setHelperDiagnosticCopied] = useState(false);
     const [sourceFile, setSourceFile] = useState<File | null>(null);
     const [sourceUrl, setSourceUrl] = useState('');
     const [sourceFingerprint, setSourceFingerprint] = useState<SourceFingerprint | null>(null);
@@ -900,14 +935,44 @@ export function VideoTool() {
 
     const fetchHelperHealth = useCallback(async (init?: RequestInit) => {
         let lastError: unknown = null;
+        const diagnostics: HelperDiagnosticEntry[] = [];
 
         for (const helperUrl of helperUrlCandidates) {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), HELPER_HEALTH_TIMEOUT_MS);
             try {
-                const response = await helperFetch(helperUrl, '/health', init);
+                const response = await helperFetch(helperUrl, '/health', {
+                    ...init,
+                    signal: controller.signal
+                });
                 const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
+                const detail = payload.error || (response.ok ? 'Helper ответил.' : `HTTP ${response.status}`);
+                const diagnostic: HelperDiagnosticEntry = {
+                    url: helperUrl,
+                    status: response.ok && payload.ok
+                        ? payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
+                            ? 'ok'
+                            : 'bad protocol'
+                        : detail.includes('Origin helper запроса') || detail.includes('Private Network')
+                            ? 'cors/pna failed'
+                            : 'connection failed',
+                    detail,
+                    httpStatus: response.status,
+                    protocolVersion: payload.protocol_version
+                };
+                diagnostics.push(diagnostic);
+                setHelperDiagnostics(diagnostics);
                 return { helperUrl, response, payload };
             } catch (helperError) {
                 lastError = helperError;
+                diagnostics.push({
+                    url: helperUrl,
+                    status: classifyHelperFetchError(helperError),
+                    detail: getHelperErrorDetail(helperError)
+                });
+            } finally {
+                window.clearTimeout(timeoutId);
+                setHelperDiagnostics(diagnostics);
             }
         }
 
@@ -1378,7 +1443,11 @@ export function VideoTool() {
             if (payload.preview_url) {
                 revokeObjectUrl(sourceObjectUrlRef.current);
                 sourceObjectUrlRef.current = null;
-                setSourceUrl(payload.preview_url);
+                try {
+                    setSourceUrl(`${helperBaseUrl}${new URL(payload.preview_url).pathname}`);
+                } catch {
+                    setSourceUrl(payload.preview_url);
+                }
                 setSourcePreviewUnavailable(false);
             }
 
@@ -1809,6 +1878,47 @@ export function VideoTool() {
                 ? 'border-sky-400/20 bg-sky-400/10 text-sky-100'
                 : 'border-zinc-800 bg-zinc-950/80 text-zinc-300';
     const canCancelSession = Boolean(session && ['OPEN', 'UPLOADING', 'FAILED', 'ABANDONED'].includes(session.status));
+    const helperDiagnosticReport = useMemo(() => JSON.stringify({
+        page: typeof window === 'undefined' ? '' : window.location.href,
+        userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
+        helperStatus,
+        helperIssueMessage,
+        helperBaseUrl,
+        expectedProtocol: VIDEO_EXPORT_HELPER_PROTOCOL_VERSION,
+        candidates: helperDiagnostics,
+        health: helperHealth
+            ? {
+                helper_version: helperHealth.helper_version,
+                protocol_version: helperHealth.protocol_version,
+                listen_hosts: helperHealth.listen_hosts,
+                allowed_origins: helperHealth.allowed_origins
+            }
+            : null
+    }, null, 2), [helperBaseUrl, helperDiagnostics, helperHealth, helperIssueMessage, helperStatus]);
+    const copyHelperDiagnostics = async () => {
+        try {
+            await navigator.clipboard.writeText(helperDiagnosticReport);
+            setHelperDiagnosticCopied(true);
+            window.setTimeout(() => setHelperDiagnosticCopied(false), 2200);
+        } catch (copyError) {
+            console.error(copyError);
+            setNotice({
+                tone: 'warning',
+                message: 'Не удалось скопировать диагностику. Откройте DevTools и скопируйте ошибку из Console.'
+            });
+        }
+    };
+    const helperDiagnosticToneClass = (status: HelperDiagnosticStatus) => {
+        if (status === 'ok') {
+            return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-100';
+        }
+
+        if (status === 'bad protocol') {
+            return 'border-amber-300/25 bg-amber-300/10 text-amber-100';
+        }
+
+        return 'border-red-400/25 bg-red-400/10 text-red-100';
+    };
 
     if (loading) {
         return (
@@ -2041,6 +2151,46 @@ export function VideoTool() {
                                                     Проверить снова
                                                 </button>
                                             </div>
+                                            {helperDiagnostics.length > 0 && (
+                                                <div
+                                                    data-testid="helper-diagnostics"
+                                                    className="mt-3 rounded-2xl border border-zinc-700/70 bg-zinc-950/70 p-3"
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <p className="text-xs font-medium text-zinc-100">Диагностика браузера</p>
+                                                        <button
+                                                            type="button"
+                                                            data-testid="helper-copy-diagnostics"
+                                                            onClick={() => void copyHelperDiagnostics()}
+                                                            className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-100 transition hover:border-zinc-500"
+                                                        >
+                                                            <Clipboard size={13} />
+                                                            {helperDiagnosticCopied ? 'Скопировано' : 'Скопировать'}
+                                                        </button>
+                                                    </div>
+                                                    <div className="mt-3 grid gap-2">
+                                                        {helperDiagnostics.map((entry) => (
+                                                            <div
+                                                                key={entry.url}
+                                                                className={`rounded-xl border px-2.5 py-2 text-[11px] leading-5 ${helperDiagnosticToneClass(entry.status)}`}
+                                                            >
+                                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                    <span className="font-mono text-[10px]">{entry.url}</span>
+                                                                    <span className="uppercase tracking-[0.12em]">{entry.status}</span>
+                                                                </div>
+                                                                <p className="mt-1 text-zinc-300">
+                                                                    {entry.httpStatus ? `HTTP ${entry.httpStatus}. ` : ''}
+                                                                    {entry.protocolVersion ? `protocol ${entry.protocolVersion}. ` : ''}
+                                                                    {entry.detail}
+                                                                </p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <p className="mt-3 break-words text-[10px] leading-4 text-zinc-500">
+                                                        {typeof navigator === 'undefined' ? '' : navigator.userAgent}
+                                                    </p>
+                                                </div>
+                                            )}
                                             {helperNeedsDownload && !helperDownloadConfigured && !helperDownloadArm64Configured && (
                                                 <p className="mt-3 text-xs leading-5 text-amber-100/75">
                                                     Ссылка на production DMG ещё не настроена в `VITE_VIDEO_HELPER_DOWNLOAD_URL`.

@@ -14,6 +14,7 @@ const execFileAsync = promisify(execFile);
 export const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
 export const DEFAULT_PORT = 3012;
 export const DEFAULT_HOST = '127.0.0.1';
+export const DEFAULT_ADDITIONAL_HOSTS = ['::1'];
 export const DEFAULT_CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024;
 export const DEFAULT_MAX_SOURCE_DURATION_MS = 60 * 60 * 1000;
@@ -178,6 +179,22 @@ const mergeAllowedOrigins = (...entries) => Array.from(new Set(
         .map((item) => typeof item === 'string' ? item.trim() : '')
         .filter(Boolean)
 ));
+
+const normalizeListenHosts = (primaryHost, additionalHosts = DEFAULT_ADDITIONAL_HOSTS) => {
+    const hosts = [
+        primaryHost,
+        ...additionalHosts
+    ]
+        .map((entry) => typeof entry === 'string' ? entry.trim() : '')
+        .filter(Boolean);
+
+    return Array.from(new Set(hosts));
+};
+
+const listenOnHost = (app, port, host) => new Promise((resolve, reject) => {
+    const nextServer = app.listen(port, host, () => resolve(nextServer));
+    nextServer.on('error', reject);
+});
 
 const normalizeSegments = (segments) => {
     if (!Array.isArray(segments) || segments.length < 2) {
@@ -415,6 +432,7 @@ export async function startVideoExportHelperServer(options = {}) {
     const app = express();
     const port = Number.parseInt(String(options.port || process.env.VIDEO_EXPORT_HELPER_PORT || DEFAULT_PORT), 10) || DEFAULT_PORT;
     const host = typeof options.host === 'string' ? options.host : DEFAULT_HOST;
+    const listenHosts = normalizeListenHosts(host, options.additionalHosts);
     const storageRoot = options.storageRoot || process.env.VIDEO_EXPORT_HELPER_STORAGE_ROOT || getDefaultStorageRoot();
     const sourceRoot = path.join(storageRoot, 'sources');
     const previewRoot = path.join(storageRoot, 'previews');
@@ -546,6 +564,8 @@ export async function startVideoExportHelperServer(options = {}) {
             helper_version: helperVersion,
             protocol_version: HELPER_PROTOCOL_VERSION,
             port,
+            host,
+            listen_hosts: listenHosts,
             storage_root: storageRoot,
             allowed_origins: allowedOrigins,
             free_bytes: freeBytes,
@@ -1042,14 +1062,27 @@ export async function startVideoExportHelperServer(options = {}) {
         res.status(statusCode).json({ error: message });
     });
 
-    const server = await new Promise((resolve) => {
-        const nextServer = app.listen(port, host, () => resolve(nextServer));
-    });
+    const servers = [];
+    const [primaryListenHost, ...optionalListenHosts] = listenHosts;
+    const server = await listenOnHost(app, port, primaryListenHost);
+    servers.push({ host: primaryListenHost, server });
+
+    for (const optionalHost of optionalListenHosts) {
+        try {
+            const optionalServer = await listenOnHost(app, port, optionalHost);
+            servers.push({ host: optionalHost, server: optionalServer });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[video-export-helper] optional listener failed on ${optionalHost}:${port}: ${message}`);
+        }
+    }
 
     return {
         app,
         server,
+        servers,
         host,
+        listenHosts: servers.map((entry) => entry.host),
         port,
         storageRoot,
         allowedOrigins,
@@ -1059,15 +1092,17 @@ export async function startVideoExportHelperServer(options = {}) {
         ffprobePath,
         getHealthInfo,
         cleanupOldAssets,
-        stop: async () => new Promise((resolve, reject) => {
-            server.close((error) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+        stop: async () => {
+            await Promise.all(servers.map(({ server: currentServer }) => new Promise((resolve, reject) => {
+                currentServer.close((error) => {
+                    if (error) {
+                        reject(error);
+                        return;
+                    }
 
-                resolve();
-            });
-        })
+                    resolve();
+                });
+            })));
+        }
     };
 }
