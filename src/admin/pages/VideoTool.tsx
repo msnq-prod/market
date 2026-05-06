@@ -567,6 +567,7 @@ export function VideoTool() {
     const [helperStatus, setHelperStatus] = useState<HelperStatus>('checking');
     const [helperHealth, setHelperHealth] = useState<HelperHealthPayload | null>(null);
     const [helperIssueMessage, setHelperIssueMessage] = useState('');
+    const [helperAccessRequesting, setHelperAccessRequesting] = useState(false);
     const [sourceFile, setSourceFile] = useState<File | null>(null);
     const [sourceUrl, setSourceUrl] = useState('');
     const [sourceFingerprint, setSourceFingerprint] = useState<SourceFingerprint | null>(null);
@@ -890,6 +891,22 @@ export function VideoTool() {
             setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : ''));
             setHelperStatus('unavailable');
             console.error(helperError);
+        }
+    };
+    const requestHelperBrowserAccess = async () => {
+        setHelperAccessRequesting(true);
+        setHelperStatus('checking');
+        setHelperIssueMessage('');
+        try {
+            await helperFetch('/health', { cache: 'no-store' });
+            await checkHelper();
+        } catch (helperError) {
+            setHelperHealth(null);
+            setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : ''));
+            setHelperStatus('unavailable');
+            console.error(helperError);
+        } finally {
+            setHelperAccessRequesting(false);
         }
     };
     const openHelperDownload = () => {
@@ -1702,12 +1719,12 @@ export function VideoTool() {
     const helperProblemDescription = helperStatus === 'version_mismatch'
         ? 'Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
         : helperIssueKind === 'browser'
-            ? 'Разрешите zagarami.com доступ к localhost или локальной сети в запросе браузера. Затем нажмите проверку.'
+            ? 'Нажмите «Разрешить доступ», подтвердите запрос браузера к локальной сети или localhost, затем перепроверьте статус.'
             : helperIssueKind === 'old'
                 ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
                 : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
     const helperSteps = helperIssueKind === 'browser'
-        ? ['Разрешите доступ к localhost', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник']
+        ? ['Нажмите «Разрешить доступ»', 'Подтвердите запрос браузера', 'Нажмите «Проверить снова»']
         : ['Откройте ZAGARAMI Video Helper', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник'];
     const helperQuickActionTitle = helperStatus === 'version_mismatch'
         ? 'Обновите desktop helper'
@@ -1715,7 +1732,7 @@ export function VideoTool() {
             ? 'Helper не отвечает в браузере'
             : 'Нужен ZAGARAMI Video Helper';
     const helperQuickActionDescription = helperIssueKind === 'browser'
-        ? 'Если разрешение localhost не появилось или helper скачан давно, установите свежий DMG и проверьте снова.'
+        ? 'Сайт может вызвать запрос доступа только по клику. Если браузер не покажет окно, разрешение уже заблокировано в настройках браузера или macOS.'
         : helperProblemDescription;
     const statusMessage = error
         || session?.error_message
@@ -1804,6 +1821,18 @@ export function VideoTool() {
                                 <p className="mt-1 text-xs leading-5 text-amber-100/75">{helperQuickActionDescription}</p>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
+                                {helperIssueKind === 'browser' && (
+                                    <button
+                                        type="button"
+                                        data-testid="helper-request-access-top"
+                                        onClick={() => void requestHelperBrowserAccess()}
+                                        disabled={helperAccessRequesting}
+                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <RefreshCw size={14} />
+                                        {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
+                                    </button>
+                                )}
                                 {helperDownloadArm64Configured && (
                                     <button
                                         type="button"
@@ -1875,22 +1904,6 @@ export function VideoTool() {
                                         />
                                     </label>
 
-                                    <div className="mt-4 grid grid-cols-2 gap-2">
-                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
-                                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Длительность</div>
-                                            <div className="mt-1 text-sm text-zinc-100">
-                                                {durationMs
-                                                    ? formatDuration(durationMs)
-                                                    : draft?.sourceFingerprint
-                                                        ? formatDuration(draft.sourceFingerprint.durationMs)
-                                                        : '—'}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
-                                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Нарезка</div>
-                                            <div className="mt-1 text-sm text-zinc-100">{`${totalSegments}/${expectedOutputCount}`}</div>
-                                        </div>
-                                    </div>
                                 </section>
 
                                 <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
@@ -1928,6 +1941,18 @@ export function VideoTool() {
                                                 ))}
                                             </ol>
                                             <div className="mt-3 grid gap-2">
+                                                {helperIssueKind === 'browser' && (
+                                                    <button
+                                                        type="button"
+                                                        data-testid="helper-request-access"
+                                                        onClick={() => void requestHelperBrowserAccess()}
+                                                        disabled={helperAccessRequesting}
+                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                                    >
+                                                        <RefreshCw size={14} />
+                                                        {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
+                                                    </button>
+                                                )}
                                                 {helperNeedsDownload && helperDownloadConfigured && (
                                                     <button
                                                         type="button"
@@ -2129,7 +2154,7 @@ export function VideoTool() {
                             </section>
 
                             <section className="shrink-0 overflow-hidden rounded-[24px] border border-zinc-800 bg-[#15171c]">
-                                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-2.5">
                                         <div className="flex flex-wrap items-center gap-2">
                                         <Button
                                             data-testid="action-cut"
@@ -2137,7 +2162,8 @@ export function VideoTool() {
                                             size="sm"
                                             onClick={() => applySegmentEdit((current) => splitSegmentAt(current, playheadMs))}
                                             disabled={!sourceFile || !durationMs}
-                                            className="border-blue-500/30 bg-blue-500/15 text-blue-50 hover:bg-blue-500/20 disabled:opacity-40"
+                                            variant="secondary"
+                                            className="min-h-9 rounded-xl border-zinc-700 bg-zinc-900 px-3 text-xs text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
                                         >
                                             <Scissors size={16} />
                                             Разрезать
@@ -2150,8 +2176,8 @@ export function VideoTool() {
                                             onClick={() => applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex))}
                                             disabled={!selectedSegment}
                                             className={selectedSegmentIsDeleted
-                                                ? 'border border-emerald-400/30 bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/20 hover:text-emerald-50 disabled:opacity-40'
-                                                : 'disabled:opacity-40'}
+                                                ? 'min-h-9 rounded-xl border border-emerald-400/40 bg-emerald-400/12 px-3 text-xs text-emerald-100 hover:bg-emerald-400/18 hover:text-emerald-50 disabled:opacity-40'
+                                                : 'min-h-9 rounded-xl px-3 text-xs shadow-none disabled:opacity-40'}
                                         >
                                             {selectedSegmentIsDeleted ? <RotateCcw size={16} /> : <Trash2 size={16} />}
                                             {selectedSegmentIsDeleted ? 'Вернуть' : 'Удалить'}
@@ -2162,7 +2188,8 @@ export function VideoTool() {
                                             size="sm"
                                             onClick={() => void handleExport()}
                                             disabled={Boolean(exportBlockedReason) || exportPhase === 'preparing' || exportPhase === 'rendering' || exportPhase === 'uploading'}
-                                            className="bg-[#2f63ff] text-white hover:bg-[#3f72ff] disabled:opacity-40"
+                                            variant="primary"
+                                            className="min-h-9 rounded-xl px-3 text-xs shadow-none disabled:opacity-40"
                                         >
                                             <HardDriveDownload size={16} />
                                             Экспорт
@@ -2170,9 +2197,10 @@ export function VideoTool() {
                                         {canCancelSession && (
                                             <Button
                                                 variant="danger"
-                                                size="sm"
-                                                onClick={() => void handleCancelSession()}
-                                                disabled={exportPhase === 'rendering' || exportPhase === 'uploading'}
+                                            size="sm"
+                                            onClick={() => void handleCancelSession()}
+                                            disabled={exportPhase === 'rendering' || exportPhase === 'uploading'}
+                                            className="min-h-9 rounded-xl px-3 text-xs shadow-none"
                                             >
                                                 <Ban size={16} />
                                                 Отменить
@@ -2183,22 +2211,22 @@ export function VideoTool() {
                                     <div className="flex flex-wrap items-center justify-end gap-2">
                                         <span
                                             data-testid="clip-counter"
-                                            className="rounded-full border border-zinc-700 bg-zinc-950 px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-zinc-200"
+                                            className="rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-zinc-200"
                                         >
                                             {clipCounterText}
                                         </span>
                                         <span
                                             data-testid="blocking-status"
-                                            className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.16em] ${blockingStatusToneClass}`}
+                                            className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${blockingStatusToneClass}`}
                                         >
                                             {blockingStatusLabel}
                                         </span>
-                                        <span className="text-[11px] text-zinc-500">Масштаб {timelineViewport.zoom.toFixed(1)}x</span>
+                                        <span className="text-[10px] text-zinc-500">Масштаб {timelineViewport.zoom.toFixed(1)}x</span>
                                         <button
                                             type="button"
                                             onClick={() => zoomTimelineByFactor(TIMELINE_ZOOM_STEP)}
                                             disabled={!durationMs || visibleDurationMs >= durationMs}
-                                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                                         >
                                             <Minus size={14} />
                                         </button>
@@ -2206,7 +2234,7 @@ export function VideoTool() {
                                             type="button"
                                             onClick={() => zoomTimelineByFactor(1 / TIMELINE_ZOOM_STEP)}
                                             disabled={!durationMs || visibleDurationMs <= getTimelineMinVisibleDuration(durationMs)}
-                                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                                         >
                                             <Plus size={14} />
                                         </button>
@@ -2214,7 +2242,7 @@ export function VideoTool() {
                                             type="button"
                                             onClick={fitTimelineToAll}
                                             disabled={!durationMs}
-                                            className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                            className="inline-flex h-7 items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                                         >
                                             <Maximize2 size={14} />
                                             Показать всё
