@@ -40,6 +40,10 @@ type HelperRequestInit = RequestInit & {
     targetAddressSpace?: 'local';
 };
 
+type HelperFetchOptions = {
+    useTargetAddressSpace?: boolean;
+};
+
 const helperUrlHostname = (helperUrl: string) => {
     try {
         return new URL(helperUrl).hostname;
@@ -235,6 +239,7 @@ type HelperDiagnosticEntry = {
     url: string;
     status: HelperDiagnosticStatus;
     detail: string;
+    mode?: 'standard' | 'pna';
     httpStatus?: number;
     protocolVersion?: string;
 };
@@ -547,7 +552,7 @@ const sameFingerprint = (left: SourceFingerprint | null, right: SourceFingerprin
         && Math.abs(left.durationMs - right.durationMs) <= 10;
 };
 
-const helperFetch = async (helperUrl: string, input: string, init?: RequestInit) => {
+const helperFetch = async (helperUrl: string, input: string, init?: RequestInit, options?: HelperFetchOptions) => {
     const method = (init?.method || 'GET').toUpperCase();
     const headers = new Headers(init?.headers);
     if (method !== 'GET' && method !== 'HEAD') {
@@ -559,7 +564,7 @@ const helperFetch = async (helperUrl: string, input: string, init?: RequestInit)
         headers
     };
 
-    if (helperUsesLoopback(helperUrl)) {
+    if (options?.useTargetAddressSpace && helperUsesLoopback(helperUrl)) {
         requestInit.targetAddressSpace = 'local';
     }
 
@@ -938,41 +943,45 @@ export function VideoTool() {
         const diagnostics: HelperDiagnosticEntry[] = [];
 
         for (const helperUrl of helperUrlCandidates) {
-            const controller = new AbortController();
-            const timeoutId = window.setTimeout(() => controller.abort(), HELPER_HEALTH_TIMEOUT_MS);
-            try {
-                const response = await helperFetch(helperUrl, '/health', {
-                    ...init,
-                    signal: controller.signal
-                });
-                const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
-                const detail = payload.error || (response.ok ? 'Helper ответил.' : `HTTP ${response.status}`);
-                const diagnostic: HelperDiagnosticEntry = {
-                    url: helperUrl,
-                    status: response.ok && payload.ok
-                        ? payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
-                            ? 'ok'
-                            : 'bad protocol'
-                        : detail.includes('Origin helper запроса') || detail.includes('Private Network')
-                            ? 'cors/pna failed'
-                            : 'connection failed',
-                    detail,
-                    httpStatus: response.status,
-                    protocolVersion: payload.protocol_version
-                };
-                diagnostics.push(diagnostic);
-                setHelperDiagnostics(diagnostics);
-                return { helperUrl, response, payload };
-            } catch (helperError) {
-                lastError = helperError;
-                diagnostics.push({
-                    url: helperUrl,
-                    status: classifyHelperFetchError(helperError),
-                    detail: getHelperErrorDetail(helperError)
-                });
-            } finally {
-                window.clearTimeout(timeoutId);
-                setHelperDiagnostics(diagnostics);
+            for (const mode of ['standard', 'pna'] as const) {
+                const controller = new AbortController();
+                const timeoutId = window.setTimeout(() => controller.abort(), HELPER_HEALTH_TIMEOUT_MS);
+                try {
+                    const response = await helperFetch(helperUrl, '/health', {
+                        ...init,
+                        signal: controller.signal
+                    }, { useTargetAddressSpace: mode === 'pna' });
+                    const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
+                    const detail = payload.error || (response.ok ? 'Helper ответил.' : `HTTP ${response.status}`);
+                    const diagnostic: HelperDiagnosticEntry = {
+                        url: helperUrl,
+                        mode,
+                        status: response.ok && payload.ok
+                            ? payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
+                                ? 'ok'
+                                : 'bad protocol'
+                            : detail.includes('Origin helper запроса') || detail.includes('Private Network')
+                                ? 'cors/pna failed'
+                                : 'connection failed',
+                        detail,
+                        httpStatus: response.status,
+                        protocolVersion: payload.protocol_version
+                    };
+                    diagnostics.push(diagnostic);
+                    setHelperDiagnostics(diagnostics);
+                    return { helperUrl, response, payload };
+                } catch (helperError) {
+                    lastError = helperError;
+                    diagnostics.push({
+                        url: helperUrl,
+                        mode,
+                        status: classifyHelperFetchError(helperError),
+                        detail: getHelperErrorDetail(helperError)
+                    });
+                } finally {
+                    window.clearTimeout(timeoutId);
+                    setHelperDiagnostics(diagnostics);
+                }
             }
         }
 
@@ -2171,11 +2180,11 @@ export function VideoTool() {
                                                     <div className="mt-3 grid gap-2">
                                                         {helperDiagnostics.map((entry) => (
                                                             <div
-                                                                key={entry.url}
+                                                                key={`${entry.url}-${entry.mode || 'standard'}`}
                                                                 className={`rounded-xl border px-2.5 py-2 text-[11px] leading-5 ${helperDiagnosticToneClass(entry.status)}`}
                                                             >
                                                                 <div className="flex flex-wrap items-center justify-between gap-2">
-                                                                    <span className="font-mono text-[10px]">{entry.url}</span>
+                                                                    <span className="font-mono text-[10px]">{entry.url}{entry.mode ? ` (${entry.mode})` : ''}</span>
                                                                     <span className="uppercase tracking-[0.12em]">{entry.status}</span>
                                                                 </div>
                                                                 <p className="mt-1 text-zinc-300">
