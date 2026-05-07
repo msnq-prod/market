@@ -80,6 +80,16 @@ const buildHelperUrlCandidates = () => {
 
 const VIDEO_EXPORT_HELPER_URL_CANDIDATES = buildHelperUrlCandidates();
 
+const browserLooksLikeSafari = () => {
+    if (typeof navigator === 'undefined') {
+        return false;
+    }
+
+    const userAgent = navigator.userAgent;
+    return userAgent.includes('Safari/')
+        && !/(Chrome|Chromium|CriOS|FxiOS|Edg|OPR|YaBrowser)\//.test(userAgent);
+};
+
 const buildHelperIssueMessage = (rawMessage?: string) => {
     const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
     const currentOrigin = typeof window !== 'undefined'
@@ -98,9 +108,13 @@ const buildHelperIssueMessage = (rawMessage?: string) => {
     }
 
     if (message.includes('Failed to fetch') || message.includes('Load failed') || message.includes('NetworkError')) {
-        return VIDEO_EXPORT_HELPER_URL_CANDIDATES.some(helperUsesLoopback)
-            ? `Браузер заблокировал доступ к локальному helper. Нажмите «Разрешить доступ» и подтвердите доступ ${expectedOrigin} к локальной сети.`
-            : 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
+        if (!VIDEO_EXPORT_HELPER_URL_CANDIDATES.some(helperUsesLoopback)) {
+            return 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
+        }
+
+        return browserLooksLikeSafari()
+            ? `Safari блокирует HTTP-доступ ${expectedOrigin} к локальному helper. Для монтажа откройте эту страницу в Chrome или Яндекс Браузере.`
+            : `Браузер заблокировал доступ к локальному helper. Нажмите «Разрешить доступ» и подтвердите доступ ${expectedOrigin} к локальной сети.`;
     }
 
     return message || 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
@@ -691,13 +705,18 @@ export function VideoTool() {
     const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
     const helperIssueKind = helperStatus === 'version_mismatch'
         ? 'version'
+        : helperIssueMessage.includes('Safari блокирует')
+            ? 'safari'
         : helperIssueMessage.includes('заблокировал доступ') || helperIssueMessage.includes('доступ к localhost')
             ? 'browser'
             : helperIssueMessage.includes('старый Stones Video Helper') || helperIssueMessage.includes('собран не для')
                 ? 'old'
                 : 'missing';
+    const helperNeedsDownload = !['browser', 'safari'].includes(helperIssueKind);
     const helperBlockReason = helperStatus === 'unavailable'
-        ? helperIssueKind === 'browser'
+        ? helperIssueKind === 'safari'
+            ? 'Откройте страницу в Chrome или Яндекс Браузере.'
+            : helperIssueKind === 'browser'
             ? 'Разрешите доступ к localhost.'
             : 'Запустите ZAGARAMI Video Helper.'
         : helperStatus === 'version_mismatch'
@@ -1817,13 +1836,14 @@ export function VideoTool() {
     const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
     const hasExportError = Boolean(error || session?.error_message || exportPhase === 'error');
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
-    const helperNeedsDownload = helperIssueKind !== 'browser';
     const helperSidebarStatus = helperStatus === 'checking'
             ? 'Проверяем локальный helper.'
         : helperStatus === 'version_mismatch'
             ? 'Локальный helper устарел. Обновите приложение и перепроверьте статус.'
         : helperStatus === 'unavailable'
-                ? helperIssueKind === 'browser'
+                ? helperIssueKind === 'safari'
+                    ? 'Safari не поддерживает текущий доступ к helper.'
+                    : helperIssueKind === 'browser'
                     ? 'Доступ к helper заблокирован браузером.'
                     : 'Локальный helper не найден или не запущен.'
                 : 'Готово к нарезке и экспорту.';
@@ -1845,6 +1865,8 @@ export function VideoTool() {
                     : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
     const helperProblemTitle = helperStatus === 'version_mismatch'
         ? 'Helper устарел'
+        : helperIssueKind === 'safari'
+            ? 'Safari не подходит для helper'
         : helperIssueKind === 'browser'
             ? 'Доступ к helper заблокирован'
             : helperIssueKind === 'old'
@@ -1852,20 +1874,28 @@ export function VideoTool() {
                 : 'Helper не запущен';
     const helperProblemDescription = helperStatus === 'version_mismatch'
         ? 'Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
+        : helperIssueKind === 'safari'
+            ? 'Safari блокирует локальный HTTP helper с production HTTPS-страницы. Для текущей версии инструмента используйте Chrome или Яндекс Браузер.'
         : helperIssueKind === 'browser'
             ? 'Нажмите «Разрешить доступ», подтвердите запрос браузера к локальной сети или localhost, затем перепроверьте статус.'
             : helperIssueKind === 'old'
                 ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
                 : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
-    const helperSteps = helperIssueKind === 'browser'
+    const helperSteps = helperIssueKind === 'safari'
+        ? ['Откройте эту страницу в Chrome или Яндекс Браузере', 'Убедитесь, что ZAGARAMI Video Helper запущен', 'Нажмите «Проверить снова»']
+        : helperIssueKind === 'browser'
         ? ['Нажмите «Разрешить доступ»', 'Подтвердите запрос браузера', 'Нажмите «Проверить снова»']
         : ['Откройте ZAGARAMI Video Helper', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник'];
     const helperQuickActionTitle = helperStatus === 'version_mismatch'
         ? 'Обновите desktop helper'
+        : helperIssueKind === 'safari'
+            ? 'Safari блокирует helper'
         : helperIssueKind === 'browser'
             ? 'Helper не отвечает в браузере'
             : 'Нужен ZAGARAMI Video Helper';
-    const helperQuickActionDescription = helperIssueKind === 'browser'
+    const helperQuickActionDescription = helperIssueKind === 'safari'
+        ? 'Chrome уже поддерживает этот сценарий после последнего исправления. В Safari текущая HTTP-связка с локальным helper остаётся заблокированной.'
+        : helperIssueKind === 'browser'
         ? 'Сайт может вызвать запрос доступа только по клику. Если браузер не покажет окно, разрешение уже заблокировано в настройках браузера или macOS.'
         : helperProblemDescription;
     const statusMessage = error
@@ -2008,7 +2038,7 @@ export function VideoTool() {
                                         {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
                                     </button>
                                 )}
-                                {helperDownloadArm64Configured && (
+                                {helperNeedsDownload && helperDownloadArm64Configured && (
                                     <button
                                         type="button"
                                         data-testid="helper-download-arm64-top"
@@ -2019,7 +2049,7 @@ export function VideoTool() {
                                         Скачать Apple Silicon
                                     </button>
                                 )}
-                                {helperDownloadConfigured && (
+                                {helperNeedsDownload && helperDownloadConfigured && (
                                     <button
                                         type="button"
                                         data-testid="helper-download-top"
