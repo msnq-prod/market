@@ -175,12 +175,12 @@ type LocationGroup = {
 };
 
 const workflowStatusMeta: Record<string, { label: string; className: string }> = {
-    OPEN: { label: 'Открыт', className: 'bg-blue-500/15 text-blue-200 border border-blue-500/30' },
+    OPEN: { label: 'Открыт', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
     IN_PROGRESS: { label: 'В работе', className: 'bg-amber-500/15 text-amber-200 border border-amber-500/30' },
-    IN_TRANSIT: { label: 'В пути', className: 'bg-sky-500/15 text-sky-200 border border-sky-500/30' },
+    IN_TRANSIT: { label: 'В пути', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
     DRAFT: { label: 'Черновик', className: 'bg-amber-500/15 text-amber-200 border border-amber-500/30' },
-    TRANSIT: { label: 'В пути', className: 'bg-sky-500/15 text-sky-200 border border-sky-500/30' },
-    RECEIVED: { label: 'Принята', className: 'bg-violet-500/15 text-violet-200 border border-violet-500/30' },
+    TRANSIT: { label: 'В пути', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
+    RECEIVED: { label: 'Принята', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
     IN_STOCK: { label: 'На складе', className: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30' },
     FINISHED: { label: 'Завершена', className: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30' },
     ERROR: { label: 'Ошибка', className: 'bg-red-500/15 text-red-200 border border-red-500/30' },
@@ -188,13 +188,13 @@ const workflowStatusMeta: Record<string, { label: string; className: string }> =
 };
 
 const itemStatusMeta: Record<string, { label: string; className: string }> = {
-    NEW: { label: 'Новый', className: 'bg-gray-800 text-gray-300' },
+    NEW: { label: 'Новый', className: 'bg-[#1b1e24] text-gray-300' },
     REJECTED: { label: 'Отклонен', className: 'bg-red-500/15 text-red-200' },
     STOCK_HQ: { label: 'На складе HQ', className: 'bg-emerald-500/15 text-emerald-200' },
-    STOCK_ONLINE: { label: 'Онлайн', className: 'bg-blue-500/15 text-blue-200' },
+    STOCK_ONLINE: { label: 'Онлайн', className: 'bg-white/[0.06] text-gray-100' },
     ON_CONSIGNMENT: { label: 'Консигнация', className: 'bg-amber-500/15 text-amber-200' },
-    SOLD_ONLINE: { label: 'Продан онлайн', className: 'bg-indigo-500/15 text-indigo-200' },
-    ACTIVATED: { label: 'Активирован', className: 'bg-violet-500/15 text-violet-200' }
+    SOLD_ONLINE: { label: 'Продан онлайн', className: 'bg-white/[0.06] text-gray-100' },
+    ACTIVATED: { label: 'Активирован', className: 'bg-white/[0.06] text-gray-100' }
 };
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
@@ -482,13 +482,13 @@ export function Warehouse() {
         return [...groups.entries()]
             .sort((left, right) => left[0].localeCompare(right[0], 'ru'))
             .map(([groupKey, groupItems]) => (
-                <div key={groupKey} className="rounded-2xl border border-gray-800 bg-gray-950">
-                    <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
+                <div key={groupKey} className="rounded-2xl border border-white/6 bg-[#0f1217]">
+                    <div className="flex items-center justify-between border-b border-white/6 px-4 py-3">
                         <div>
                             <p className="text-sm font-semibold text-white">{groupKey}</p>
                             <p className="text-xs text-gray-500">Группа по семейству серийного номера</p>
                         </div>
-                        <span className="rounded-full border border-gray-700 px-3 py-1 text-xs text-gray-300">
+                        <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-gray-300">
                             {groupItems.length} шт.
                         </span>
                     </div>
@@ -521,8 +521,8 @@ export function Warehouse() {
                 <SummaryCard title="Консигнация" value={summary.consignment} icon={<Boxes size={18} />} />
             </section>
 
-            <section className="rounded-3xl border border-gray-800 bg-gray-900">
-                <div className="border-b border-gray-800 px-6 py-5">
+            <section className="rounded-3xl border border-white/6 bg-[#14161b]">
+                <div className="border-b border-white/6 px-6 py-5">
                     <h2 className="text-lg font-semibold text-white">Дерево склада</h2>
                     <p className="mt-1 text-sm text-gray-500">
                         Сначала локации каталога, затем товары. Для каждого товара можно включить режим `Партии` или `Все товары`.
@@ -542,7 +542,7 @@ export function Warehouse() {
                                 <div key={location.key} className="px-4 py-4 sm:px-6">
                                     <button
                                         type="button"
-                                        className="flex w-full items-start gap-4 rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4 text-left transition hover:border-gray-700 hover:bg-gray-900"
+                                        className="flex w-full items-start gap-4 rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-4 text-left transition hover:border-white/10 hover:bg-[#14161b]"
                                         onClick={() => setExpandedLocationKeys((current) => ({ ...current, [location.key]: !isLocationExpanded }))}
                                     >
                                         <div className="mt-1 text-gray-500">
@@ -551,7 +551,7 @@ export function Warehouse() {
                                         <div className="min-w-0 flex-1">
                                             <div className="flex flex-wrap items-center gap-3">
                                                 <p className="text-base font-semibold text-white">{location.name}</p>
-                                                <span className="rounded-full border border-gray-700 px-3 py-1 text-xs text-gray-300">
+                                                <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-gray-300">
                                                     {location.productGroups.length} товаров
                                                 </span>
                                             </div>
@@ -577,7 +577,7 @@ export function Warehouse() {
                                                     : 'LEGACY';
 
                                                 return (
-                                                    <div key={productGroup.key} className="rounded-2xl border border-gray-800 bg-gray-950">
+                                                    <div key={productGroup.key} className="rounded-2xl border border-white/6 bg-[#0f1217]">
                                                         <div className="flex flex-col gap-4 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
                                                             <button
                                                                 type="button"
@@ -590,7 +590,7 @@ export function Warehouse() {
                                                                 <div className="min-w-0">
                                                                     <div className="flex flex-wrap items-center gap-3">
                                                                         <p className="text-sm font-semibold text-white">{productGroup.name}</p>
-                                                                        <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">
+                                                                        <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-gray-300">
                                                                             {productCode}
                                                                         </span>
                                                                     </div>
@@ -621,7 +621,7 @@ export function Warehouse() {
                                                         </div>
 
                                                         {isProductExpanded && (
-                                                            <div className="border-t border-gray-800 px-4 py-4">
+                                                            <div className="border-t border-white/6 px-4 py-4">
                                                                 {mode === 'batches' ? (
                                                                     <div className="space-y-4">
                                                                         {productGroup.batches.map((batch) => {
@@ -630,7 +630,7 @@ export function Warehouse() {
                                                                             const unsoldCount = batch.items.length - soldCount;
 
                                                                             return (
-                                                                                <div key={batch.id} className="rounded-2xl border border-gray-800 bg-gray-900">
+                                                                                <div key={batch.id} className="rounded-2xl border border-white/6 bg-[#14161b]">
                                                                                     <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
                                                                                         <button
                                                                                             type="button"
@@ -649,9 +649,9 @@ export function Warehouse() {
                                                                                                     {batch.owner?.name || 'Без владельца'} • {formatDateTime(batch.created_at)}
                                                                                                 </p>
                                                                                                 <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                                                                    <span className="rounded-full border border-gray-700 px-3 py-1">Всего: {batch.items.length}</span>
-                                                                                                    <span className="rounded-full border border-gray-700 px-3 py-1">Непроданных: {unsoldCount}</span>
-                                                                                                    <span className="rounded-full border border-gray-700 px-3 py-1">Проданных: {soldCount}</span>
+                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Всего: {batch.items.length}</span>
+                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Непроданных: {unsoldCount}</span>
+                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Проданных: {soldCount}</span>
                                                                                                 </div>
                                                                                             </div>
                                                                                         </button>
@@ -692,8 +692,8 @@ export function Warehouse() {
                 )}
             </section>
 
-            <section className="rounded-3xl border border-gray-800 bg-gray-900">
-                <div className="border-b border-gray-800 px-6 py-5">
+            <section className="rounded-3xl border border-white/6 bg-[#14161b]">
+                <div className="border-b border-white/6 px-6 py-5">
                     <h2 className="text-lg font-semibold text-white">Заказы на сбор</h2>
                     <p className="mt-1 text-sm text-gray-500">Вторичный блок. Складская навигация выше, а запросы на сбор остаются как контекст планирования.</p>
                 </div>
@@ -722,13 +722,13 @@ export function Warehouse() {
                                                 {locationName} • запрос: {request.requested_qty} • доступно онлайн: {request.metrics.available_now}
                                             </p>
                                             <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                <span className="rounded-full border border-gray-700 px-3 py-1">Создан: {formatDateTime(request.created_at)}</span>
-                                                {request.target_user && <span className="rounded-full border border-gray-700 px-3 py-1">Назначен: {request.target_user.name}</span>}
-                                                {request.accepted_by_user && <span className="rounded-full border border-gray-700 px-3 py-1">Взял: {request.accepted_by_user.name}</span>}
-                                                {request.batch && <span className="rounded-full border border-gray-700 px-3 py-1">Партия: {request.batch.id}</span>}
+                                                <span className="rounded-full border border-white/10 px-3 py-1">Создан: {formatDateTime(request.created_at)}</span>
+                                                {request.target_user && <span className="rounded-full border border-white/10 px-3 py-1">Назначен: {request.target_user.name}</span>}
+                                                {request.accepted_by_user && <span className="rounded-full border border-white/10 px-3 py-1">Взял: {request.accepted_by_user.name}</span>}
+                                                {request.batch && <span className="rounded-full border border-white/10 px-3 py-1">Партия: {request.batch.id}</span>}
                                             </div>
                                         </div>
-                                        <div className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-3 text-xs text-gray-400">
+                                        <div className="rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-3 text-xs text-gray-400">
                                             media: {request.metrics.media_ready_count}/{request.metrics.produced_count || request.requested_qty}
                                         </div>
                                     </div>
@@ -759,12 +759,12 @@ export function Warehouse() {
                             </div>
                         )}
 
-                        <div className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4 text-sm text-gray-300">
+                        <div className="rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-4 text-sm text-gray-300">
                             <div className="flex flex-wrap items-center gap-2">
                                 <StatusPill meta={itemStatusMeta[selectedItem.status]} fallbackLabel={selectedItem.status} compact />
-                                <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">{selectedItem.batch.id}</span>
+                                <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-gray-300">{selectedItem.batch.id}</span>
                                 {selectedItem.product && (
-                                    <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">
+                                    <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-gray-300">
                                         {selectedItem.product.country_code}{selectedItem.product.location_code}{selectedItem.product.item_code}
                                     </span>
                                 )}
@@ -772,11 +772,11 @@ export function Warehouse() {
                             <p className="mt-3 text-xs text-gray-500">ID: {selectedItem.id}</p>
                             <p className="mt-1 text-xs text-gray-500">Серийный номер: {selectedItem.serial_number || 'Не указан'}</p>
                             <div className="mt-3 flex flex-wrap gap-2">
-                                <a href={selectedItem.qr_url || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500">
+                                <a href={selectedItem.qr_url || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white hover:bg-white/[0.11]">
                                     <QrCode size={16} /> QR
                                 </a>
                                 {createItemPath(selectedItem.serial_number) && (
-                                    <a href={createItemPath(selectedItem.serial_number) || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800">
+                                    <a href={createItemPath(selectedItem.serial_number) || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24]">
                                         <ExternalLink size={16} /> Клон
                                     </a>
                                 )}
@@ -815,13 +815,13 @@ export function Warehouse() {
                                 <input value={itemForm.sales_channel || 'Не назначен'} readOnly disabled className={readOnlyInputClassName} />
                             </Field>
                             <Field label="is_sold">
-                                <label className="flex h-[46px] items-center gap-3 rounded-xl border border-gray-800 bg-gray-900 px-4 text-sm text-gray-400">
+                                <label className="flex h-[46px] items-center gap-3 rounded-xl border border-white/6 bg-[#14161b] px-4 text-sm text-gray-400">
                                     <input
                                         type="checkbox"
                                         checked={itemForm.is_sold}
                                         readOnly
                                         disabled
-                                        className="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500"
+                                        className="h-4 w-4 rounded border-gray-600 bg-[#14161b] text-white"
                                     />
                                     Продан
                                 </label>
@@ -866,7 +866,7 @@ export function Warehouse() {
 
 function SummaryCard({ title, value, icon }: { title: string; value: number; icon: ReactNode }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 px-4 py-4">
+        <div className="rounded-2xl border border-white/6 bg-[#14161b] px-4 py-4">
             <div className="flex items-center justify-between text-gray-500">
                 <p className="text-sm">{title}</p>
                 {icon}
@@ -894,7 +894,7 @@ function StatusPill({
 
 function StatusCounter({ label, value, compact = false }: { label: string; value: number; compact?: boolean }) {
     return (
-        <span className={`rounded-full border border-gray-700 px-3 py-1 ${compact ? 'text-[11px]' : 'text-xs'}`}>
+        <span className={`rounded-full border border-white/10 px-3 py-1 ${compact ? 'text-[11px]' : 'text-xs'}`}>
             {label}: {value}
         </span>
     );
@@ -906,8 +906,8 @@ function ModeButton({ active, label, onClick }: { active: boolean; label: string
             type="button"
             onClick={onClick}
             className={`rounded-xl px-3 py-2 text-sm font-medium transition ${active
-                ? 'bg-blue-600 text-white'
-                : 'border border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-800'
+                ? 'border border-white/16 bg-white/[0.08] text-white'
+                : 'border border-white/10 bg-[#14161b] text-gray-300 hover:bg-[#1b1e24]'
             }`}
         >
             {label}
@@ -917,7 +917,7 @@ function ModeButton({ active, label, onClick }: { active: boolean; label: string
 
 function ItemGrid({ items, onSelectItem }: { items: BatchItem[]; onSelectItem: (itemId: string) => void }) {
     return (
-        <div className="grid gap-3 border-t border-gray-800 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-3 border-t border-white/6 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {items.map((item) => {
                 const previewImage = item.item_photo_url || item.photo_url || createFallbackImage;
                 return (
@@ -925,9 +925,9 @@ function ItemGrid({ items, onSelectItem }: { items: BatchItem[]; onSelectItem: (
                         key={item.id}
                         type="button"
                         onClick={() => void onSelectItem(item.id)}
-                        className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 text-left transition hover:border-blue-500/50 hover:bg-gray-900 ${item.is_sold ? 'opacity-55' : ''}`}
+                        className={`overflow-hidden rounded-2xl border border-white/6 bg-[#0f1217] text-left transition hover:border-white/16 hover:bg-[#14161b] ${item.is_sold ? 'opacity-55' : ''}`}
                     >
-                        <div className="aspect-square bg-gray-900">
+                        <div className="aspect-square bg-[#14161b]">
                             <img src={previewImage} alt={item.serial_number || item.temp_id} className="h-full w-full object-cover" />
                         </div>
                         <div className="space-y-2 px-3 py-3">
@@ -961,4 +961,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     );
 }
 
-const readOnlyInputClassName = 'w-full rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 text-sm text-gray-300 outline-none disabled:cursor-not-allowed disabled:opacity-100';
+const readOnlyInputClassName = 'w-full rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 text-sm text-gray-300 outline-none disabled:cursor-not-allowed disabled:opacity-100';

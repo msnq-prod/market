@@ -99,10 +99,22 @@ type AssignmentDraft = {
 const PHOTO_TOOL_DRAFT_VERSION = 1;
 const PHOTO_TOOL_DRAFT_DB = 'stones-photo-tool-drafts';
 const PHOTO_TOOL_DRAFT_STORE = 'photo-files';
+const PHOTO_TOOL_ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.avif,.tif,.tiff,.bmp,.heic,.heif';
+const PHOTO_TOOL_ALLOWED_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'heic', 'heif', 'jpeg', 'jpg', 'png', 'tif', 'tiff', 'webp']);
+const PHOTO_TOOL_RAW_EXTENSIONS = new Set(['arw', 'cr2', 'cr3', 'dng', 'nef', 'orf', 'raf', 'rw2']);
+const PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS = new Set(['heic', 'heif']);
+const PHOTO_TOOL_ALLOWED_FORMAT_LABEL = 'JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP, HEIC/HEIF';
 
 const padItemSeq = (value: number | null) => value == null ? '' : String(value).padStart(3, '0');
 const draftKeyFor = (batchId: string) => `photo-tool-draft:${batchId}`;
 const normalizeAssignmentInput = (value: string) => value.replace(/\D/g, '').slice(0, 3);
+const getFileExtension = (value: string) => {
+    const normalized = value.split('?')[0]?.split('#')[0] || value;
+    const lastSegment = normalized.split('/').pop() || normalized;
+    const dotIndex = lastSegment.lastIndexOf('.');
+
+    return dotIndex >= 0 ? lastSegment.slice(dotIndex + 1).toLowerCase() : '';
+};
 const extractPhotoName = (value: string) => {
     const base = value.split('?')[0]?.split('#')[0] || value;
     const lastSegment = base.split('/').pop() || value;
@@ -113,6 +125,10 @@ const extractPhotoName = (value: string) => {
         return lastSegment;
     }
 };
+
+const canPreviewPhotoInBrowser = (photo: WorkingPhoto) => (
+    photo.source === 'persisted' || !PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS.has(getFileExtension(photo.name))
+);
 
 const comparePhotoNames = (left: WorkingPhoto, right: WorkingPhoto) =>
     left.name.localeCompare(right.name, 'ru', { numeric: true, sensitivity: 'base' });
@@ -655,7 +671,39 @@ export function PhotoTool() {
         setError('');
         setSuccessMessage('');
 
-        const localPhotos = Array.from(fileList).map((file) => createLocalPhoto(file));
+        const rejectedRawFiles: string[] = [];
+        const rejectedFiles: string[] = [];
+        const acceptedFiles = Array.from(fileList).filter((file) => {
+            const extension = getFileExtension(file.name);
+            if (PHOTO_TOOL_RAW_EXTENSIONS.has(extension)) {
+                rejectedRawFiles.push(file.name);
+                return false;
+            }
+
+            if (!PHOTO_TOOL_ALLOWED_EXTENSIONS.has(extension)) {
+                rejectedFiles.push(file.name);
+                return false;
+            }
+
+            return true;
+        });
+
+        if (acceptedFiles.length === 0) {
+            setError(rejectedRawFiles.length > 0
+                ? 'DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.'
+                : `Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`
+            );
+            return;
+        }
+
+        if (rejectedRawFiles.length > 0 || rejectedFiles.length > 0) {
+            setError(rejectedRawFiles.length > 0
+                ? `Часть файлов пропущена: DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.`
+                : `Часть файлов пропущена. Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`
+            );
+        }
+
+        const localPhotos = acceptedFiles.map((file) => createLocalPhoto(file));
         const reordered = orderPhotos([...buildPhotosWithPendingDraft(photos), ...localPhotos], sortMode, sortDescending);
         const nextPhotos = fillMissingAssignments(reordered, itemSeqs, assignmentDescending);
         clearAssignmentDraft();
@@ -993,7 +1041,7 @@ export function PhotoTool() {
                         )}
                     </header>
 
-                    <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
+                    <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="flex min-h-0 flex-col border-r border-white/5 bg-[#14171b]">
                             <div className="border-b border-white/5 px-4 py-4">
                                 <input
@@ -1001,7 +1049,7 @@ export function PhotoTool() {
                                     data-testid="photo-upload-input"
                                     type="file"
                                     multiple
-                                    accept="image/*"
+                                    accept={PHOTO_TOOL_ACCEPT}
                                     className="hidden"
                                     onChange={(event) => {
                                         handleAddFiles(event.target.files);
@@ -1084,7 +1132,7 @@ export function PhotoTool() {
                                                         className="flex min-w-0 flex-1 items-center gap-3 text-left"
                                                     >
                                                         <div className="relative h-16 w-16 overflow-hidden rounded-2xl bg-black/50 shadow-[0_10px_22px_rgba(0,0,0,0.28)]">
-                                                            <img src={photo.preview_url} alt={photo.name} className="h-full w-full object-cover" />
+                                                            <PhotoPreview photo={photo} className="h-full w-full object-cover" compact />
                                                             {photo.assigned_item_seq == null && (
                                                                 <div data-testid={`photo-unassigned-overlay-${index}`} className="absolute inset-0 bg-red-500/35" />
                                                             )}
@@ -1162,7 +1210,7 @@ export function PhotoTool() {
                                     <section className="relative min-h-[460px] overflow-hidden rounded-[30px] bg-[#090b0f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.35)]">
                                         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.07),_transparent_52%),linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_22%,_transparent_78%,_rgba(255,255,255,0.03))]" />
                                         <div className="relative flex h-full items-center justify-center px-5 py-6 xl:px-8 xl:py-8">
-                                            <div className="grid h-full w-full grid-cols-[minmax(150px,0.78fr)_minmax(440px,1.85fr)_minmax(150px,0.78fr)] items-center gap-5 xl:gap-8">
+                                            <div className="grid h-full w-full grid-cols-1 items-center gap-5 lg:grid-cols-[minmax(150px,0.78fr)_minmax(360px,1.85fr)_minmax(150px,0.78fr)] xl:gap-8">
                                                 <CarouselStageCard
                                                     title="Предыдущая"
                                                     photo={prevPhoto}
@@ -1274,6 +1322,26 @@ function WorkspaceToggle({
     );
 }
 
+function PhotoPreview({ photo, className, compact = false }: { photo: WorkingPhoto; className: string; compact?: boolean }) {
+    if (canPreviewPhotoInBrowser(photo)) {
+        return <img src={photo.preview_url} alt={photo.name} className={className} />;
+    }
+
+    return (
+        <div className={`${className} flex flex-col items-center justify-center bg-[#0d1117] text-center`}>
+            <FileImage size={compact ? 18 : 34} className="text-white/25" />
+            {!compact && (
+                <>
+                    <p className="mt-4 px-5 text-sm font-medium text-white/72">HEIC/HEIF</p>
+                    <p className="mt-2 max-w-[260px] px-5 text-xs leading-5 text-white/42">
+                        Превью появится после сохранения и конвертации в JPEG.
+                    </p>
+                </>
+            )}
+        </div>
+    );
+}
+
 function CarouselStageCard({
     title,
     photo,
@@ -1332,9 +1400,8 @@ function CarouselStageCard({
                 >
                     <button type="button" onClick={() => onActivate(photo)} className="absolute inset-0">
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(255,255,255,0.06),transparent_62%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_18%,transparent_72%,rgba(255,255,255,0.03))]" />
-                        <img
-                            src={photo.preview_url}
-                            alt={photo.name}
+                        <PhotoPreview
+                            photo={photo}
                             className={`absolute inset-0 h-full w-full object-contain px-4 py-4 ${active ? 'xl:px-6 xl:py-6' : 'opacity-90'}`}
                         />
                     </button>

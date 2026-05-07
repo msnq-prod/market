@@ -306,6 +306,12 @@ const buildItemFormState = (item: ItemDetail): ItemFormState => ({
 
 const createItemPath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
 const createFallbackImage = '/locations/crystal-caves.jpg';
+const handleImageFallback = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const fallbackUrl = new URL(createFallbackImage, window.location.origin).href;
+    if (event.currentTarget.src !== fallbackUrl) {
+        event.currentTarget.src = createFallbackImage;
+    }
+};
 const readOnlyInputClassName = 'w-full rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 text-sm text-gray-300 outline-none disabled:cursor-not-allowed disabled:opacity-100';
 const filterSelectClassName = 'h-10 rounded-xl border border-white/8 bg-[#11141a] px-3 text-sm text-gray-200 outline-none transition focus:border-blue-300/50';
 const productSelectClassName = 'h-12 w-full rounded-2xl border border-white/8 bg-[#15181f] px-4 text-sm text-white outline-none transition focus:border-blue-300/60';
@@ -1577,6 +1583,7 @@ function LocationTile({
                 <img
                     src={location.image}
                     alt={location.locationName}
+                    onError={handleImageFallback}
                     className="h-full w-full object-cover opacity-80 transition duration-500 group-hover:scale-105 group-hover:opacity-95"
                 />
                 <div className="absolute inset-x-0 bottom-0 h-[86px] bg-gradient-to-b from-[#14161b]/0 via-[#14161b]/70 to-[#14161b]" />
@@ -1926,7 +1933,7 @@ function ItemGrid({ items, onSelectItem }: { items: BatchItem[]; onSelectItem: (
                         className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 text-left transition hover:border-blue-500/50 hover:bg-gray-900 ${item.is_sold ? 'opacity-55' : ''}`}
                     >
                         <div className="aspect-square bg-gray-900">
-                            <img src={previewImage} alt={item.serial_number || item.temp_id} className="h-full w-full object-cover" />
+                            <img src={previewImage} alt={item.serial_number || item.temp_id} onError={handleImageFallback} className="h-full w-full object-cover" />
                         </div>
                         <div className="space-y-2 px-3 py-3">
                             <div className="flex items-start justify-between gap-2">

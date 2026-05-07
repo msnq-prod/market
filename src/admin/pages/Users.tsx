@@ -212,11 +212,11 @@ export function Users() {
                     <h1 className="text-2xl font-bold text-white">Управление пользователями</h1>
                     <p className="text-gray-500">Доступы, роли и ручная Telegram-привязка получателей уведомлений.</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex w-full flex-wrap gap-2 sm:w-auto">
                     <button
                         type="button"
                         onClick={() => void fetchUsers()}
-                        className="inline-flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-white hover:bg-gray-800"
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-white hover:bg-gray-800 sm:flex-none"
                     >
                         <RefreshCw size={16} />
                         Обновить
@@ -224,7 +224,7 @@ export function Users() {
                     <button
                         type="button"
                         onClick={() => setIsCreateOpen(true)}
-                        className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-500"
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-500 sm:flex-none"
                     >
                         <UserPlus size={18} />
                         Добавить пользователя
@@ -244,8 +244,8 @@ export function Users() {
                 </div>
             )}
 
-            <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900">
-                <table className="w-full text-left">
+            <div className="overflow-x-auto rounded-xl border border-gray-800 bg-gray-900">
+                <table className="w-full min-w-[940px] text-left">
                     <thead className="bg-gray-800 text-xs uppercase tracking-wider text-gray-400">
                         <tr>
                             <th className="p-4">Пользователь</th>

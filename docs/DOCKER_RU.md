@@ -36,6 +36,47 @@ docker compose up -d --build
 - сиды не выполняются автоматически
 - runtime image использует системный `ffmpeg` из Alpine; desktop helper-зависимости `ffmpeg-static` и `ffprobe-static` в compose-сборку не устанавливаются
 
+## 2.1 Dev stack для редактирования UI без пересборки контейнера
+
+Для этапа редактирования интерфейса используйте отдельный dev compose:
+
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+Он запускает:
+
+- `db` — MySQL 8.0, наружу `3307:3306`
+- `app` — Node.js dev container с bind mount репозитория
+- Vite dev server — `http://localhost:5173`
+- backend API — `http://localhost:3001`
+
+В этом режиме исходники монтируются в контейнер через `.:/app`, поэтому изменения в `src/` видны в браузере через Vite HMR без пересборки Docker-образа.
+
+Первый запуск может занять время: контейнер устанавливает зависимости в отдельный Docker volume `stones_dev_node_modules`.
+
+Если нужно применить миграции и заполнить dev-БД:
+
+```bash
+docker compose -f docker-compose.dev.yml exec app npm run db:migrate
+docker compose -f docker-compose.dev.yml exec app npm run db:seed:languages
+docker compose -f docker-compose.dev.yml exec app npm run db:seed
+```
+
+Остановка без удаления данных:
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+Полная очистка dev-БД, uploads и `node_modules` volume:
+
+```bash
+docker compose -f docker-compose.dev.yml down -v
+```
+
+Важно: `docker-compose.yml` остается production-like режимом и требует пересборки для изменений frontend bundle. Для live-редактирования UI используйте только `docker-compose.dev.yml`.
+
 ## 3. Production stack
 
 Production compose рассчитан на один сервер и один публичный домен.

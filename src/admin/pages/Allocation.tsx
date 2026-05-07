@@ -116,7 +116,7 @@ export function Allocation() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in slide-in-from-bottom-4">
                 <div className="lg:col-span-1 space-y-4">
-                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
+                    <div className="bg-[#14161b] p-6 rounded-xl border border-white/6">
                         <h3 className="font-bold text-white mb-4">Выбрано: {selectedItems.length} позиций</h3>
                         <p className="mb-4 text-sm text-gray-400">В MVP доступно только онлайн-распределение на витрину.</p>
 
@@ -124,7 +124,7 @@ export function Allocation() {
                             <button
                                 onClick={() => void handleAllocate()}
                                 disabled={selectedItems.length === 0 || loading}
-                                className="w-full bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-lg flex items-center justify-between group disabled:opacity-50"
+                                className="group flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.06] p-3 text-white transition hover:bg-white/[0.1] disabled:opacity-50"
                             >
                                 <span className="flex items-center gap-2"><Globe size={18} /> Онлайн-маркетплейс</span>
                                 <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -133,11 +133,11 @@ export function Allocation() {
                     </div>
                 </div>
 
-                <div className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-                    <div className="p-4 border-b border-gray-800 flex justify-between">
+                <div className="lg:col-span-2 bg-[#14161b] border border-white/6 rounded-xl overflow-hidden">
+                    <div className="p-4 border-b border-white/6 flex justify-between">
                         <h3 className="font-bold text-white">Доступный склад</h3>
                         <div className="flex items-center gap-3">
-                            <button onClick={() => setSelectedItems(filteredItems.map((item) => item.id))} className="text-xs text-blue-400 hover:text-blue-300">
+                            <button onClick={() => setSelectedItems(filteredItems.map((item) => item.id))} className="text-xs text-gray-300 hover:text-white">
                                 Выбрать видимые
                             </button>
                             <button onClick={() => setSelectedItems([])} className="text-xs text-gray-400 hover:text-white">
@@ -145,12 +145,12 @@ export function Allocation() {
                             </button>
                         </div>
                     </div>
-                    <div className="p-4 border-b border-gray-800">
+                    <div className="p-4 border-b border-white/6">
                         <input
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             placeholder="Поиск по № упаковки или item id..."
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm"
+                            className="w-full bg-[#1b1e24] border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
                         />
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 p-4 max-h-[600px] overflow-y-auto">
@@ -159,17 +159,17 @@ export function Allocation() {
                                 key={item.id}
                                 onClick={() => handleSelect(item.id)}
                                 className={`relative cursor-pointer group border rounded-lg overflow-hidden transition-all ${selectedItems.includes(item.id)
-                                    ? 'border-blue-500 ring-2 ring-blue-500/30'
-                                    : 'border-gray-700 hover:border-gray-500'
+                                    ? 'border-white/35 ring-2 ring-white/10'
+                                    : 'border-white/10 hover:border-gray-500'
                                     }`}
                             >
-                                <img src={item.photo_url || 'https://placehold.co/200'} className="w-full h-32 object-cover bg-gray-800" />
-                                <div className="p-2 bg-gray-800">
+                                <img src={item.photo_url || 'https://placehold.co/200'} className="w-full h-32 object-cover bg-[#1b1e24]" />
+                                <div className="p-2 bg-[#1b1e24]">
                                     <div className="text-xs font-mono text-gray-400 truncate">#{item.temp_id}</div>
                                 </div>
                                 {selectedItems.includes(item.id) && (
-                                    <div className="absolute inset-0 bg-blue-500/20 flex items-center justify-center">
-                                        <div className="bg-blue-600 rounded-full p-1"><ArrowRight className="text-white" size={12} /></div>
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/45">
+                                        <div className="rounded-full bg-white p-1"><ArrowRight className="text-gray-950" size={12} /></div>
                                     </div>
                                 )}
                             </div>

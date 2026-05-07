@@ -50,8 +50,8 @@ const statusLabel: Record<string, string> = {
 };
 
 const statusClass: Record<string, string> = {
-    TRANSIT: 'border-sky-500/30 bg-sky-500/15 text-sky-200',
-    RECEIVED: 'border-violet-500/30 bg-violet-500/15 text-violet-200'
+    TRANSIT: 'border-white/12 bg-white/[0.06] text-gray-100',
+    RECEIVED: 'border-white/12 bg-white/[0.06] text-gray-100'
 };
 
 const videoExportLabel: Record<string, string> = {
@@ -64,7 +64,7 @@ const videoExportLabel: Record<string, string> = {
 };
 
 const videoExportClass: Record<string, string> = {
-    OPEN: 'border-sky-500/30 bg-sky-500/15 text-sky-200',
+    OPEN: 'border-white/12 bg-white/[0.06] text-gray-100',
     UPLOADING: 'border-amber-500/30 bg-amber-500/15 text-amber-200',
     COMPLETED: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
     FAILED: 'border-red-500/30 bg-red-500/15 text-red-200',
@@ -152,7 +152,7 @@ export function VideoToolLauncher() {
             <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div>
                     <div className="flex items-center gap-3">
-                        <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-500/10 text-emerald-200">
+                        <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06] text-gray-200">
                             <Video size={20} />
                         </span>
                         <div>
@@ -175,11 +175,11 @@ export function VideoToolLauncher() {
                 </div>
             )}
 
-            <section className="rounded-2xl border border-gray-800 bg-gray-900">
-                <div className="flex flex-col gap-4 border-b border-gray-800 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+            <section className="rounded-2xl border border-white/6 bg-[#14161b]">
+                <div className="flex flex-col gap-4 border-b border-white/6 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                         <div className="flex items-center gap-2">
-                            <PackageCheck size={18} className="text-blue-300" />
+                            <PackageCheck size={18} className="text-gray-400" />
                             <h2 className="text-lg font-semibold text-white">Партии с поставкой</h2>
                         </div>
                         <p className="mt-1 text-sm text-gray-500">Доступны партии в статусах `TRANSIT` и `RECEIVED`.</p>
@@ -191,18 +191,18 @@ export function VideoToolLauncher() {
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
                             placeholder="ID партии, товар или партнер"
-                            className="w-full rounded-xl border border-gray-700 bg-gray-950 py-2.5 pl-10 pr-4 text-white outline-none transition focus:border-blue-500"
+                            className="w-full rounded-xl border border-white/10 bg-[#0f1217] py-2.5 pl-10 pr-4 text-white outline-none transition focus:border-white/20"
                         />
                     </label>
                 </div>
 
                 <div className="p-4">
                     {loading ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-8 text-sm text-gray-400">
+                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-8 text-sm text-gray-400">
                             Загружаем партии для Video Tool...
                         </div>
                     ) : filteredBatches.length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950 px-4 py-10 text-sm text-gray-500">
+                        <div className="rounded-xl border border-dashed border-white/6 bg-[#0f1217] px-4 py-10 text-sm text-gray-500">
                             Нет партий, подходящих под текущий фильтр.
                         </div>
                     ) : (
@@ -213,7 +213,7 @@ export function VideoToolLauncher() {
                                 const photoReady = countPhotoReady(batch);
 
                                 return (
-                                    <article key={batch.id} className="rounded-2xl border border-gray-800 bg-gray-950 p-4 transition hover:border-gray-700">
+                                    <article key={batch.id} className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 transition hover:border-white/10">
                                         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                                             <div className="min-w-0">
                                                 <h3 className="truncate text-lg font-semibold text-white">{productName}</h3>
@@ -224,11 +224,11 @@ export function VideoToolLauncher() {
                                             </div>
 
                                             <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
-                                                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass[batch.status] || 'border-gray-700 bg-gray-800 text-gray-300'}`}>
+                                                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass[batch.status] || 'border-white/10 bg-[#1b1e24] text-gray-300'}`}>
                                                     {statusLabel[batch.status] || batch.status}
                                                 </span>
                                                 {batch.video_export && (
-                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${videoExportClass[batch.video_export.status] || 'border-gray-700 bg-gray-800 text-gray-300'}`}>
+                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${videoExportClass[batch.video_export.status] || 'border-white/10 bg-[#1b1e24] text-gray-300'}`}>
                                                         Монтаж: {videoExportLabel[batch.video_export.status] || batch.video_export.status}
                                                     </span>
                                                 )}
@@ -245,7 +245,7 @@ export function VideoToolLauncher() {
                                         <div className="mt-4 flex justify-end">
                                             <Link
                                                 to={`/admin/video-tool/${encodeURIComponent(batch.id)}`}
-                                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60"
+                                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/12 px-4 py-2 text-sm font-medium text-gray-100 transition hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
                                             >
                                                 <Video size={16} />
                                                 Открыть Video Tool
@@ -273,7 +273,7 @@ function Metric({ label, value }: { label: string; value: number | string }) {
 
 function Info({ label, value }: { label: string; value: number | string }) {
     return (
-        <div className="rounded-xl border border-gray-800 bg-gray-900 px-3 py-2">
+        <div className="rounded-xl border border-white/6 bg-[#14161b] px-3 py-2">
             <div className="text-xs text-gray-500">{label}</div>
             <div className="mt-1 truncate text-sm font-medium text-gray-100">{value}</div>
         </div>

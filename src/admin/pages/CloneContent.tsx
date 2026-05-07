@@ -159,25 +159,25 @@ export function CloneContent() {
 
     return (
         <div className="space-y-6">
-            <header className="flex items-start justify-between gap-4">
-                <div>
+            <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                     <h1 className="text-2xl font-bold text-white">Страница цифрового клона</h1>
                     <p className="text-gray-500 mt-1">
                         Live-редактирование текста. Справа вы видите, как текст встаёт в реальный макет.
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
                     <button
                         onClick={handleReset}
                         disabled={!hasChanges || saving}
-                        className="px-4 py-2 rounded-lg border border-gray-700 text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+                        className="flex-1 rounded-lg border border-white/10 px-4 py-2 text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50 sm:flex-none"
                     >
                         Сбросить
                     </button>
                     <button
                         onClick={() => void handleSave()}
                         disabled={!hasChanges || saving}
-                        className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+                        className="flex-1 rounded-lg border border-white/10 bg-white/[0.07] px-4 py-2 text-white hover:bg-white/[0.11] disabled:opacity-50 sm:flex-none"
                     >
                         {saving ? 'Сохранение...' : 'Сохранить'}
                     </button>
@@ -185,26 +185,26 @@ export function CloneContent() {
             </header>
 
             {statusText && (
-                <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-200">
+                <div className="rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-gray-200">
                     {statusText}
                 </div>
             )}
 
             <div className="grid grid-cols-1 xl:grid-cols-[460px_1fr] gap-6">
                 <section className="space-y-4">
-                    <div className="rounded-2xl border border-gray-800 bg-gray-900 p-4 space-y-3">
+                    <div className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-3">
                         <h2 className="text-sm uppercase tracking-wider text-gray-400">Предпросмотр по серийному номеру</h2>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 sm:flex-row">
                             <input
                                 value={previewSerialNumber}
                                 onChange={(e) => setPreviewSerialNumber(e.target.value)}
-                                className="flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white"
+                                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white"
                                 placeholder="Введите serial_number (необязательно)"
                             />
                             <button
                                 onClick={() => void handleLoadPreviewItem()}
                                 disabled={loadingPreview}
-                                className="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm text-white"
+                                className="rounded-lg bg-[#1b1e24] px-3 py-2 text-sm text-white hover:bg-white/[0.07]"
                             >
                                 {loadingPreview ? '...' : 'Загрузить'}
                             </button>
@@ -212,7 +212,7 @@ export function CloneContent() {
                         {previewStatus && <p className="text-xs text-gray-400">{previewStatus}</p>}
                     </div>
 
-                    <div className="rounded-2xl border border-gray-800 bg-gray-900 p-4 space-y-4 max-h-[calc(100vh-260px)] overflow-auto">
+                    <div className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-4 max-h-[calc(100vh-260px)] overflow-auto">
                         {FIELD_CONFIG.map((field) => (
                             <label key={field.key} className="block">
                                 <span className="block text-sm text-gray-300 mb-1">{field.label}</span>
@@ -222,13 +222,13 @@ export function CloneContent() {
                                         value={draft[field.key]}
                                         onChange={(e) => handleFieldChange(field.key, e.target.value)}
                                         rows={3}
-                                        className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white"
+                                        className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white"
                                     />
                                 ) : (
                                     <input
                                         value={draft[field.key]}
                                         onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                                        className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white"
+                                        className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white"
                                     />
                                 )}
                             </label>
@@ -236,7 +236,7 @@ export function CloneContent() {
                     </div>
                 </section>
 
-                <section className="rounded-2xl border border-gray-800 bg-black/60 p-4">
+                <section className="rounded-2xl border border-white/6 bg-black/60 p-4">
                     <div className="max-h-[calc(100vh-170px)] overflow-auto rounded-[28px] bg-[#02040a]">
                         <div className="mx-auto w-[430px] max-w-full">
                             <DigitalCloneView

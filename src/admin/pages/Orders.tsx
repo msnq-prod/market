@@ -29,10 +29,10 @@ const orderStatusLabels: Record<OrderStatus, string> = {
 };
 
 const orderStatusClasses: Record<OrderStatus, string> = {
-    NEW: 'bg-blue-500/20 text-blue-200 border border-blue-500/40',
+    NEW: 'bg-white/[0.06] text-gray-100 border border-white/12',
     IN_PROGRESS: 'bg-amber-500/20 text-amber-100 border border-amber-500/40',
-    PACKED: 'bg-violet-500/20 text-violet-100 border border-violet-500/40',
-    SHIPPED: 'bg-cyan-500/20 text-cyan-100 border border-cyan-500/40',
+    PACKED: 'bg-white/[0.06] text-gray-100 border border-white/12',
+    SHIPPED: 'bg-white/[0.06] text-gray-100 border border-white/12',
     RECEIVED: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40',
     RETURN_REQUESTED: 'bg-orange-500/20 text-orange-100 border border-orange-500/40',
     RETURN_IN_TRANSIT: 'bg-rose-500/20 text-rose-100 border border-rose-500/40',
@@ -450,7 +450,7 @@ export function Orders() {
                 <button
                     type="button"
                     onClick={() => setReloadToken((value) => value + 1)}
-                    className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                    className="bg-[#1b1e24] hover:bg-white/[0.07] text-white px-4 py-2 rounded-lg flex items-center gap-2"
                 >
                     <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                     Обновить
@@ -473,11 +473,11 @@ export function Orders() {
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <aside className="rounded-2xl border border-gray-800 bg-gray-900 p-4 space-y-4">
+                <aside className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-4">
                     <div className="space-y-3">
                         <label className="block space-y-2">
                             <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по заказам</span>
-                            <div className="flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-3 py-2">
+                            <div className="flex items-center gap-3 rounded-xl border border-white/6 bg-[#0f1217] px-3 py-2">
                                 <Search size={16} className="text-gray-500" />
                                 <input
                                     value={query}
@@ -507,11 +507,11 @@ export function Orders() {
                     </div>
 
                     {loading && orders.length === 0 ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-gray-400">
+                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
                             Загружаем заказы...
                         </div>
                     ) : filteredOrders.length === 0 ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-gray-400">
+                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
                             По текущему поиску и фильтру заказов нет.
                         </div>
                     ) : (
@@ -522,8 +522,8 @@ export function Orders() {
                                     type="button"
                                     onClick={() => handleSelectOrder(order)}
                                     className={`w-full rounded-2xl border p-4 text-left transition-colors ${selectedOrder?.id === order.id
-                                        ? 'border-blue-500/50 bg-blue-500/10'
-                                        : 'border-gray-800 bg-gray-950 hover:bg-gray-900'
+                                        ? 'border-white/16 bg-white/[0.055]'
+                                        : 'border-white/6 bg-[#0f1217] hover:bg-[#14161b]'
                                     }`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
@@ -540,18 +540,18 @@ export function Orders() {
                                     <div className="mt-1 text-sm text-gray-400">{order.contact_phone || order.contact_email || 'Контакты не указаны'}</div>
                                     <div className="mt-2 text-xs text-gray-500">{shortAddress(order.delivery_address)}</div>
                                     {order.shipment?.tracking_number && (
-                                        <div className="mt-2 text-xs font-mono text-cyan-300">{order.shipment.tracking_number}</div>
+                                        <div className="mt-2 text-xs font-mono text-gray-300">{order.shipment.tracking_number}</div>
                                     )}
-                                    <div className="mt-3 font-mono text-sm text-blue-300">{formatRub(order.total)}</div>
+                                    <div className="mt-3 font-mono text-sm text-white">{formatRub(order.total)}</div>
                                 </button>
                             ))}
                         </div>
                     )}
                 </aside>
 
-                <section className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+                <section className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
                     {!selectedOrder ? (
-                        <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950 px-6 py-10 text-center text-gray-500">
+                        <div className="rounded-xl border border-dashed border-white/10 bg-[#0f1217] px-6 py-10 text-center text-gray-500">
                             Выберите заказ слева, чтобы открыть рабочую карточку.
                         </div>
                     ) : (
@@ -577,7 +577,7 @@ export function Orders() {
                                 </div>
 
                                 <div className="flex flex-col items-start gap-3 xl:items-end">
-                                    <div className="text-3xl font-bold text-blue-300">{formatRub(selectedOrder.total)}</div>
+                                    <div className="text-3xl font-bold text-white">{formatRub(selectedOrder.total)}</div>
                                     <div className="flex flex-wrap gap-2">
                                         {!isEditing ? (
                                             <button
@@ -587,7 +587,7 @@ export function Orders() {
                                                     setIsEditing(true);
                                                     setError('');
                                                 }}
-                                                className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                                                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24]"
                                             >
                                                 <PencilLine size={15} />
                                                 Редактировать
@@ -611,7 +611,7 @@ export function Orders() {
                                                         setError('');
                                                     }}
                                                     disabled={saving}
-                                                    className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+                                                    className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50"
                                                 >
                                                     <X size={15} />
                                                     Отменить
@@ -700,7 +700,7 @@ export function Orders() {
                             )}
 
                             <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-                                <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-4">
+                                <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
                                     <div className="text-xs uppercase tracking-wider text-gray-500">Контакты и доставка</div>
                                     <Field
                                         label="Контактный телефон"
@@ -726,7 +726,7 @@ export function Orders() {
                                     />
                                 </section>
 
-                                <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-4">
+                                <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
                                     <div className="text-xs uppercase tracking-wider text-gray-500">Комментарии</div>
                                     <Field
                                         label="Комментарий клиента"
@@ -746,12 +746,12 @@ export function Orders() {
                                     />
 
                                     {(selectedOrder.status === 'SHIPPED' || isReturnFlow(selectedOrder.status)) && (
-                                        <label className="block rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-2">
+                                        <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
                                             <span className="text-xs uppercase tracking-wider text-gray-500">Причина возврата</span>
                                             <select
                                                 value={returnReason}
                                                 onChange={(event) => setReturnReason(event.target.value as ReturnReason)}
-                                                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                                                className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white focus:border-white/20 focus:outline-none"
                                             >
                                                 <option value="REFUSED_BY_CUSTOMER">{returnReasonLabels.REFUSED_BY_CUSTOMER}</option>
                                                 <option value="NOT_PICKED_UP">{returnReasonLabels.NOT_PICKED_UP}</option>
@@ -761,24 +761,24 @@ export function Orders() {
                                 </section>
                             </div>
 
-                            <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-4">
+                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
                                 <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-gray-500">
                                     <Truck size={14} />
                                     Доставка СДЭК
                                 </div>
 
                                 <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-                                    <label className="block rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-2">
+                                    <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
                                         <span className="text-xs uppercase tracking-wider text-gray-500">Трек-номер</span>
                                         <input
                                             value={trackingNumber}
                                             onChange={(event) => setTrackingNumber(event.target.value)}
-                                            className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
+                                            className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-white/20 focus:outline-none"
                                             placeholder="Например, 1234567890"
                                         />
                                     </label>
 
-                                    <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
+                                    <div className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
                                         <div className="text-xs uppercase tracking-wider text-gray-500">Статус трекинга</div>
                                         <div className="mt-2 text-sm text-gray-200">{selectedOrder.shipment?.tracking_status_label || 'Пока нет синхронизации'}</div>
                                         <div className="mt-1 text-xs text-gray-500">
@@ -792,7 +792,7 @@ export function Orders() {
                                         type="button"
                                         onClick={() => void handleSaveShipment()}
                                         disabled={savingShipment || !trackingNumber.trim() || !shipmentChanged}
-                                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/10 disabled:opacity-50"
+                                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50"
                                     >
                                         <Save size={15} />
                                         {savingShipment ? 'Сохраняем...' : 'Сохранить трек'}
@@ -801,7 +801,7 @@ export function Orders() {
                                         type="button"
                                         onClick={() => void handleSyncShipment()}
                                         disabled={syncingShipment || !selectedOrder.shipment?.tracking_number}
-                                        className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+                                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50"
                                     >
                                         <RefreshCw size={15} className={syncingShipment ? 'animate-spin' : ''} />
                                         {syncingShipment ? 'Синхронизируем...' : 'Синхронизировать'}
@@ -809,7 +809,7 @@ export function Orders() {
                                 </div>
                             </section>
 
-                            <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-3">
+                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-3">
                                 <div className="flex items-center justify-between">
                                     <div className="text-xs uppercase tracking-wider text-gray-500">Состав заказа и резерв</div>
                                     <div className="text-sm text-gray-500">{selectedOrder.items.length} позиций</div>
@@ -817,14 +817,14 @@ export function Orders() {
 
                                 <div className="space-y-3">
                                     {selectedOrder.items.map((item) => (
-                                        <div key={item.id} className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-3">
+                                        <div key={item.id} className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-3">
                                             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                                 <div className="flex items-center gap-3">
                                                     {item.product_image && (
                                                         <img
                                                             src={item.product_image}
                                                             alt={item.product_name}
-                                                            className="h-12 w-12 rounded-lg border border-gray-800 object-cover"
+                                                            className="h-12 w-12 rounded-lg border border-white/6 object-cover"
                                                         />
                                                     )}
                                                     <div>
@@ -839,7 +839,7 @@ export function Orders() {
 
                                             <div className="flex flex-wrap gap-2">
                                                 {item.assigned_items && item.assigned_items.length > 0 ? item.assigned_items.map((assignedItem) => (
-                                                    <span key={assignedItem.id} className="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-xs text-gray-300">
+                                                    <span key={assignedItem.id} className="rounded-full border border-white/10 bg-[#0f1217] px-3 py-1 text-xs text-gray-300">
                                                         {assignedItem.serial_number || assignedItem.temp_id}
                                                     </span>
                                                 )) : (
@@ -851,11 +851,11 @@ export function Orders() {
                                 </div>
                             </section>
 
-                            <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-3">
+                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-3">
                                 <div className="text-xs uppercase tracking-wider text-gray-500">Таймлайн заказа</div>
                                 <div className="space-y-3">
                                     {selectedOrder.status_events?.map((event) => (
-                                        <div key={event.id} className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
+                                        <div key={event.id} className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
                                             <div className="flex flex-wrap items-center justify-between gap-3">
                                                 <div className="text-sm text-white">{orderStatusLabels[event.to_status]}</div>
                                                 <div className="text-xs text-gray-500">{formatOrderDate(event.created_at)}</div>
@@ -864,7 +864,7 @@ export function Orders() {
                                                 {event.actor_user?.name || (event.meta?.source === 'CDEK' ? 'Система / СДЭК' : 'Система')}
                                             </div>
                                             {typeof event.meta?.cdek_status_label === 'string' && (
-                                                <div className="mt-1 text-xs text-cyan-300">{event.meta.cdek_status_label}</div>
+                                                <div className="mt-1 text-xs text-gray-300">{event.meta.cdek_status_label}</div>
                                             )}
                                         </div>
                                     )) || (
@@ -882,7 +882,7 @@ export function Orders() {
 
 function SummaryCard({ title, value }: { title: string; value: number }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+        <div className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
             <div className="text-sm text-gray-400">{title}</div>
             <div className="mt-2 text-3xl font-bold text-white">{value}</div>
         </div>
@@ -895,8 +895,8 @@ function FilterButton({ label, active, onClick }: { label: string; active: boole
             type="button"
             onClick={onClick}
             className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${active
-                ? 'bg-blue-600/20 border-blue-500/40 text-blue-200'
-                : 'bg-gray-800 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-700'
+                ? 'border-white/16 bg-white/[0.07] text-white'
+                : 'bg-[#1b1e24] border-white/10 text-gray-300 hover:text-white hover:bg-white/[0.07]'
             }`}
         >
             {label}
@@ -921,7 +921,7 @@ function Field({
 }) {
     if (readOnly) {
         return (
-            <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
+            <div className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
                 <div className="text-xs uppercase tracking-wider text-gray-500">{label}</div>
                 <div className={`mt-2 text-sm ${value ? 'text-gray-200' : 'text-gray-500'} whitespace-pre-line`}>
                     {value || placeholder}
@@ -931,14 +931,14 @@ function Field({
     }
 
     return (
-        <label className="block rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 space-y-2">
+        <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
             <span className="text-xs uppercase tracking-wider text-gray-500">{label}</span>
             {multiline ? (
                 <textarea
                     value={value}
                     onChange={(event) => onChange(event.target.value)}
                     rows={4}
-                    className="w-full resize-y rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
+                    className="w-full resize-y rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-white/20 focus:outline-none"
                     placeholder={placeholder}
                     aria-label={label}
                 />
@@ -946,7 +946,7 @@ function Field({
                 <input
                     value={value}
                     onChange={(event) => onChange(event.target.value)}
-                    className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-white/20 focus:outline-none"
                     placeholder={placeholder}
                     aria-label={label}
                 />
@@ -968,7 +968,7 @@ function ActionButton({
 }) {
     const className = variant === 'danger'
         ? 'border-red-500/40 text-red-200 hover:bg-red-500/10'
-        : 'border-gray-700 text-gray-200 hover:bg-gray-800';
+        : 'border-white/10 text-gray-200 hover:bg-[#1b1e24]';
 
     return (
         <button

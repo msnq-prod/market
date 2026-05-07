@@ -638,7 +638,7 @@ export function TelegramBots() {
             </header>
 
             <div className="overflow-hidden rounded-2xl border border-gray-800 bg-[#0f131a]">
-                <div className="flex items-end gap-1 overflow-x-auto px-3 pt-3">
+                <div className="flex items-end gap-1 overflow-x-auto px-3 pt-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {bots.map((bot) => {
                         const isActive = bot.id === activeBotId;
                         const isDirty = dirtyBotIds.has(bot.id);
@@ -924,7 +924,7 @@ export function TelegramBots() {
             )}
 
             {activeBot && (
-                <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-800 bg-[#0c0e13]/95 px-4 py-2.5 backdrop-blur">
+                <div className="sticky bottom-0 z-20 rounded-t-2xl border border-gray-800 bg-[#0c0e13]/95 px-4 py-2.5 shadow-[0_-18px_40px_rgba(0,0,0,0.25)] backdrop-blur">
                     <div className="mx-auto flex max-w-7xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-sm text-gray-300">
                             {activeBotDirty
@@ -936,7 +936,7 @@ export function TelegramBots() {
                                 type="button"
                                 onClick={() => handleDeleteBot()}
                                 disabled={deleting}
-                                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 text-sm font-medium text-red-100 transition-colors hover:bg-red-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/70 disabled:opacity-60"
+                                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 text-sm font-medium text-red-100 transition-colors hover:bg-red-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/70 disabled:opacity-60 sm:flex-none"
                             >
                                 <Trash2 size={16} aria-hidden="true" />
                                 {deleting ? 'Удаление…' : 'Удалить'}
@@ -945,7 +945,7 @@ export function TelegramBots() {
                                 type="button"
                                 onClick={handleResetActiveBot}
                                 disabled={!activeBotDirty || saving}
-                                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60"
+                                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60 sm:flex-none"
                             >
                                 <RotateCcw size={16} aria-hidden="true" />
                                 Отменить
@@ -954,7 +954,7 @@ export function TelegramBots() {
                                 type="button"
                                 onClick={() => void handleSaveBot()}
                                 disabled={!activeBotDirty || saving}
-                                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-blue-600 px-3.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/80 disabled:opacity-60"
+                                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 px-3.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/80 disabled:opacity-60 sm:flex-none"
                             >
                                 <Save size={16} aria-hidden="true" />
                                 {saving ? 'Сохранение…' : 'Сохранить изменения'}

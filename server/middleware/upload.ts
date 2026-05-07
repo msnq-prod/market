@@ -2,8 +2,10 @@ import crypto from 'crypto';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
+import { createRequire } from 'module';
 import multer from 'multer';
 import type { Request, Response } from 'express';
+import sharp from 'sharp';
 import { resolveProjectPath } from '../utils/projectPaths.ts';
 
 export type SharedUploadKind = 'photo' | 'video';
@@ -18,13 +20,31 @@ type MutableUploadedFile = Express.Multer.File & {
     safe_extension?: string;
     safe_kind?: SharedUploadKind;
     safe_mime_type?: string;
+    safe_source_extension?: string;
 };
 
+type HeicConvert = (options: {
+    buffer: Buffer;
+    format: 'JPEG' | 'PNG';
+    quality?: number;
+}) => Promise<ArrayBuffer | Buffer | Uint8Array>;
+
+const require = createRequire(import.meta.url);
+const heicConvert = require('heic-convert') as HeicConvert;
+
 const PHOTO_MIME_TO_EXTENSION = new Map<string, string>([
+    ['image/avif', '.avif'],
+    ['image/bmp', '.bmp'],
     ['image/gif', '.gif'],
+    ['image/heic', '.heic'],
+    ['image/heif', '.heif'],
     ['image/jpeg', '.jpg'],
     ['image/jpg', '.jpg'],
     ['image/png', '.png'],
+    ['image/tiff', '.tiff'],
+    ['image/x-bmp', '.bmp'],
+    ['image/x-ms-bmp', '.bmp'],
+    ['image/x-tiff', '.tiff'],
     ['image/webp', '.webp']
 ]);
 
@@ -36,16 +56,23 @@ const VIDEO_MIME_TO_EXTENSION = new Map<string, string>([
     ['video/x-m4v', '.m4v']
 ]);
 
-const PHOTO_EXTENSIONS = new Set(['.gif', '.jpeg', '.jpg', '.png', '.webp']);
+const PHOTO_EXTENSIONS = new Set(['.avif', '.bmp', '.gif', '.heic', '.heif', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp']);
+const RAW_PHOTO_EXTENSIONS = new Set(['.arw', '.cr2', '.cr3', '.dng', '.nef', '.orf', '.raf', '.rw2']);
 const VIDEO_EXTENSIONS = new Set(['.m4v', '.mov', '.mp4', '.webm']);
 const SAFE_UPLOAD_CONTENT_TYPES = new Map<string, string>([
+    ['.avif', 'image/avif'],
+    ['.bmp', 'image/bmp'],
     ['.gif', 'image/gif'],
+    ['.heic', 'image/heic'],
+    ['.heif', 'image/heif'],
     ['.jpeg', 'image/jpeg'],
     ['.jpg', 'image/jpeg'],
     ['.m4v', 'video/x-m4v'],
     ['.mov', 'video/quicktime'],
     ['.mp4', 'video/mp4'],
     ['.png', 'image/png'],
+    ['.tif', 'image/tiff'],
+    ['.tiff', 'image/tiff'],
     ['.webm', 'video/webm'],
     ['.webp', 'image/webp']
 ]);
@@ -69,6 +96,8 @@ export const VIDEO_UPLOAD_PUBLIC_URL_ROOT = '/uploads/videos';
 const createUploadValidationError = (message: string) =>
     Object.assign(new Error(message), { statusCode: 400 });
 
+const getOriginalExtension = (originalName: string) => path.extname(originalName || '').trim().toLowerCase();
+
 const getDeclaredUploadKind = (file: Express.Multer.File): SharedUploadKind | null => {
     if (PHOTO_MIME_TO_EXTENSION.has(file.mimetype)) {
         return 'photo';
@@ -78,11 +107,20 @@ const getDeclaredUploadKind = (file: Express.Multer.File): SharedUploadKind | nu
         return 'video';
     }
 
+    const extension = getOriginalExtension(file.originalname);
+    if (PHOTO_EXTENSIONS.has(extension)) {
+        return 'photo';
+    }
+
+    if (VIDEO_EXTENSIONS.has(extension)) {
+        return 'video';
+    }
+
     return null;
 };
 
 const getAllowedOriginalExtension = (kind: SharedUploadKind, originalName: string) => {
-    const extension = path.extname(originalName || '').trim().toLowerCase();
+    const extension = getOriginalExtension(originalName);
     if (kind === 'photo' && PHOTO_EXTENSIONS.has(extension)) {
         return extension === '.jpeg' ? '.jpg' : extension;
     }
@@ -95,9 +133,13 @@ const getAllowedOriginalExtension = (kind: SharedUploadKind, originalName: strin
 };
 
 const buildSafeUploadMetadata = (file: Express.Multer.File): SharedUploadMetadata => {
+    if (RAW_PHOTO_EXTENSIONS.has(getOriginalExtension(file.originalname))) {
+        throw createUploadValidationError('DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.');
+    }
+
     const kind = getDeclaredUploadKind(file);
     if (!kind) {
-        throw createUploadValidationError('Разрешены только PNG, JPEG, GIF, WebP и видео MP4, MOV, M4V, WEBM.');
+        throw createUploadValidationError('Разрешены фото JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP, HEIC/HEIF и видео MP4, MOV, M4V, WEBM.');
     }
 
     const originalExtension = getAllowedOriginalExtension(kind, file.originalname);
@@ -111,6 +153,37 @@ const buildSafeUploadMetadata = (file: Express.Multer.File): SharedUploadMetadat
         kind,
         mimeType
     };
+};
+
+const isHeicLikeExtension = (extension: string) => extension === '.heic' || extension === '.heif';
+
+const normalizePhotoToJpeg = async (filePath: string, sourceExtension: string) => {
+    const targetPath = `${filePath}.jpg`;
+
+    try {
+        await sharp(filePath, { animated: false })
+            .rotate()
+            .jpeg({ quality: 90, mozjpeg: true })
+            .toFile(targetPath);
+    } catch (sharpError) {
+        if (!isHeicLikeExtension(sourceExtension)) {
+            throw sharpError;
+        }
+
+        const sourceBuffer = await fsp.readFile(filePath);
+        const converted = await heicConvert({
+            buffer: sourceBuffer,
+            format: 'JPEG',
+            quality: 0.9
+        });
+        const convertedBuffer = converted instanceof ArrayBuffer
+            ? Buffer.from(new Uint8Array(converted))
+            : Buffer.from(converted);
+        await fsp.writeFile(targetPath, convertedBuffer);
+    }
+
+    await fsp.rm(filePath, { force: true });
+    return targetPath;
 };
 
 const readUploadSnippet = async (filePath: string) => {
@@ -237,7 +310,7 @@ export const normalizeSharedUploadedFiles = async (
         if (expectedKind && metadata.kind !== expectedKind) {
             throw createUploadValidationError(
                 expectedKind === 'photo'
-                    ? 'Разрешены только PNG, JPEG, GIF и WebP изображения.'
+                    ? 'Разрешены фото JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP и HEIC/HEIF.'
                     : 'Разрешены только MP4, MOV, M4V и WEBM видео.'
             );
         }
@@ -247,18 +320,32 @@ export const normalizeSharedUploadedFiles = async (
             throw createUploadValidationError('Файл отклонен: активный HTML/SVG/XML-контент запрещен.');
         }
 
-        const normalizedFilename = `${path.parse(file.filename).name}${metadata.extension}`;
-        const normalizedPath = path.join(path.dirname(file.path), normalizedFilename);
-        if (normalizedPath !== file.path) {
+        let normalizedFilename = `${path.parse(file.filename).name}${metadata.extension}`;
+        let normalizedPath = path.join(path.dirname(file.path), normalizedFilename);
+        if (metadata.kind === 'photo') {
+            try {
+                normalizedPath = await normalizePhotoToJpeg(file.path, metadata.extension);
+                normalizedFilename = path.basename(normalizedPath);
+            } catch {
+                throw createUploadValidationError(
+                    isHeicLikeExtension(metadata.extension)
+                        ? 'Не удалось обработать HEIC/HEIF-фото. Попробуйте экспортировать его в JPEG или PNG.'
+                        : 'Не удалось обработать изображение. Поддерживаются JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP и HEIC/HEIF.'
+                );
+            }
+        } else if (normalizedPath !== file.path) {
             await moveFileSafely(file.path, normalizedPath);
         }
 
+        const stat = await fsp.stat(normalizedPath).catch(() => null);
         file.path = normalizedPath;
         file.filename = normalizedFilename;
-        file.mimetype = metadata.mimeType;
-        file.safe_extension = metadata.extension;
+        file.size = stat?.size ?? file.size;
+        file.mimetype = metadata.kind === 'photo' ? 'image/jpeg' : metadata.mimeType;
+        file.safe_extension = metadata.kind === 'photo' ? '.jpg' : metadata.extension;
         file.safe_kind = metadata.kind;
-        file.safe_mime_type = metadata.mimeType;
+        file.safe_mime_type = metadata.kind === 'photo' ? 'image/jpeg' : metadata.mimeType;
+        file.safe_source_extension = metadata.extension;
         normalizedFiles.push(file);
     }
 

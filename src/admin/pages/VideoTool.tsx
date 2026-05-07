@@ -1859,7 +1859,7 @@ export function VideoTool() {
         : exportPhase === 'completed'
             ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100'
             : exportPhase !== 'idle' && exportPhase !== 'cancelled'
-                ? 'border-sky-400/20 bg-sky-400/10 text-sky-100'
+                ? 'border-white/12 bg-white/[0.06] text-gray-100'
                 : exportBlockedReason || exportPhase === 'cancelled'
                     ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
                     : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
@@ -1914,7 +1914,7 @@ export function VideoTool() {
         : notice?.tone === 'warning'
             ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
             : notice?.tone === 'info'
-                ? 'border-sky-400/20 bg-sky-400/10 text-sky-100'
+                ? 'border-white/12 bg-white/[0.06] text-gray-100'
                 : 'border-zinc-800 bg-zinc-950/80 text-zinc-300';
     const canCancelSession = Boolean(session && ['OPEN', 'UPLOADING', 'FAILED', 'ABANDONED'].includes(session.status));
     const helperDiagnosticReport = useMemo(() => JSON.stringify({
@@ -2241,14 +2241,14 @@ export function VideoTool() {
                                     {draft && (
                                         <div
                                             data-testid="draft-banner"
-                                            className="mt-4 rounded-2xl border border-sky-400/20 bg-sky-400/10 px-3 py-3 text-sm text-sky-100"
+                                            className="mt-4 rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-3 text-sm text-gray-100"
                                         >
                                             <p>Найден локальный draft: {draft.segments.length} фрагментов.</p>
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
                                                 onClick={handleDiscardDraft}
-                                                className="mt-2 h-auto justify-start px-0 py-0 text-sky-100 hover:bg-transparent"
+                                                className="mt-2 h-auto justify-start px-0 py-0 text-gray-100 hover:bg-transparent"
                                             >
                                                 Сбросить черновик
                                             </Button>
@@ -2330,7 +2330,7 @@ export function VideoTool() {
                                                 const badgeClass = isDeleted
                                                     ? 'bg-red-400/15 text-red-100'
                                                     : role === 'intro'
-                                                        ? 'bg-sky-300/15 text-sky-100'
+                                                        ? 'bg-white/[0.06] text-gray-100'
                                                         : isUploaded
                                                             ? 'bg-emerald-400/15 text-emerald-100'
                                                             : 'bg-zinc-800 text-zinc-400';
@@ -2358,7 +2358,7 @@ export function VideoTool() {
                                                                 : index === selectedSegmentIndex
                                                                 ? 'border-emerald-400/50 bg-emerald-400/10'
                                                                 : role === 'intro'
-                                                                    ? 'border-sky-400/30 bg-sky-400/10'
+                                                                    ? 'border-white/12 bg-white/[0.06]'
                                                                     : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-600'
                                                         }`}
                                                     >
@@ -2620,8 +2620,8 @@ export function VideoTool() {
                                                                 : index === selectedSegmentIndex
                                                                 ? 'border-emerald-300/70 bg-emerald-400/18 text-white'
                                                                 : role === 'intro'
-                                                                    ? 'border-sky-400/30 bg-sky-400/15 text-sky-100'
-                                                                    : 'border-blue-300/20 bg-blue-300/45 text-white hover:bg-blue-300/55'
+                                                                    ? 'border-white/12 bg-white/[0.06] text-gray-100'
+                                                                    : 'border-white/16 bg-white/[0.12] text-white hover:bg-white/[0.16]'
                                                         }`}
                                                         style={style}
                                                         onClick={() => {
@@ -2687,7 +2687,7 @@ export function VideoTool() {
                                         <div className="border-t border-zinc-800 bg-[#101115] px-3 py-2">
                                             <div
                                                 ref={timelineScrollbarRef}
-                                                className={`relative h-2 w-full rounded-full bg-zinc-900 ${timelineViewport.isPanning ? 'ring-1 ring-blue-400/40' : ''}`}
+                                                className={`relative h-2 w-full rounded-full bg-zinc-900 ${timelineViewport.isPanning ? 'ring-1 ring-white/20' : ''}`}
                                                 onClick={(event) => {
                                                     if (!durationMs || !visibleDurationMs) {
                                                         return;
@@ -2701,7 +2701,7 @@ export function VideoTool() {
                                             >
                                                 <button
                                                     type="button"
-                                                    className="absolute inset-y-0 rounded-full border border-blue-400/40 bg-blue-500/40 shadow-[0_0_20px_rgba(59,130,246,0.3)]"
+                                                    className="absolute inset-y-0 rounded-full border border-white/25 bg-white/25 shadow-[0_0_20px_rgba(255,255,255,0.12)]"
                                                     style={{
                                                         left: `${durationMs ? (visibleStartMs / durationMs) * 100 : 0}%`,
                                                         width: `${durationMs ? (visibleDurationMs / durationMs) * 100 : 100}%`

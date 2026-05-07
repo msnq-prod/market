@@ -25,9 +25,10 @@ const ADMIN_PASSWORD = 'admin123';
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
 const PARTNER_PASSWORD = 'partner123';
 const TINY_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9swrYccAAAAASUVORK5CYII=',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
     'base64'
 );
+const SVG_MARKUP = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
 const E2E_REQUEST_NOTE = '[e2e] admin-photo-tool';
 
 const authHeaders = (token: string) => ({
@@ -131,6 +132,36 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
     });
     expect(incompleteManifestResponse.status()).toBe(400);
 
+    const dngUploadResponse = await request.post('/api/upload/photo', {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            file: {
+                name: 'raw-phone-photo.dng',
+                mimeType: 'application/octet-stream',
+                buffer: Buffer.from('raw')
+            }
+        }
+    });
+    expect(dngUploadResponse.status()).toBe(400);
+    expect(await dngUploadResponse.json()).toMatchObject({
+        error: 'DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.'
+    });
+
+    const activeMarkupResponse = await request.post('/api/upload/photo', {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            file: {
+                name: 'active.png',
+                mimeType: 'image/png',
+                buffer: SVG_MARKUP
+            }
+        }
+    });
+    expect(activeMarkupResponse.status()).toBe(400);
+    expect(await activeMarkupResponse.json()).toMatchObject({
+        error: 'Файл отклонен: активный HTML/SVG/XML-контент запрещен.'
+    });
+
     const firstUploadResponse = await request.post('/api/upload/photo', {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
         multipart: {
@@ -143,6 +174,7 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
     });
     expect(firstUploadResponse.ok()).toBeTruthy();
     const firstUploadPayload = await firstUploadResponse.json() as { url: string };
+    expect(firstUploadPayload.url).toMatch(/\/uploads\/photos\/.+\.jpg$/);
 
     const secondUploadResponse = await request.post('/api/upload/photo', {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
@@ -232,7 +264,7 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
     });
     expect(replacementResponse.ok()).toBeTruthy();
     const replacementPayload = await replacementResponse.json() as PhotoToolPayload;
-    expect(replacementPayload.items[0]?.item_photo_url || '').toMatch(/\/uploads\/photos\/.+\.png$/);
+    expect(replacementPayload.items[0]?.item_photo_url || '').toMatch(/\/uploads\/photos\/.+\.jpg$/);
     expect(replacementPayload.items[0]?.item_photo_url || '').not.toContain('.svg');
 
     const oldPhotoCheck = await request.get(firstUploadPayload.url);

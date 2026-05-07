@@ -307,7 +307,7 @@ export function SalesInventory() {
         <div className="flex min-h-[calc(100vh-150px)] flex-col gap-4">
             <section className="admin-panel shrink-0 rounded-[24px] px-4 py-4">
                 <div className="flex flex-wrap items-center gap-2">
-                    <label className="flex h-10 min-w-[320px] flex-1 items-center gap-2 rounded-xl border border-white/8 bg-[#11141a] px-3 text-sm text-gray-200 outline-none transition focus-within:border-blue-300/50">
+                    <label className="flex h-10 min-w-0 flex-[1_1_260px] items-center gap-2 rounded-xl border border-white/8 bg-[#11141a] px-3 text-sm text-gray-200 outline-none transition focus-within:border-blue-300/50">
                         <Search size={15} className="shrink-0 text-gray-500" />
                         <input
                             aria-label="Поиск по наличию"
@@ -322,7 +322,7 @@ export function SalesInventory() {
                         aria-label="Фильтр локации"
                         value={locationFilter}
                         onChange={(event) => setLocationFilter(event.target.value)}
-                        className={`${filterSelectClassName} min-w-[180px]`}
+                        className={`${filterSelectClassName} min-w-0 flex-[1_1_160px]`}
                     >
                         <option value="ALL">Все локации</option>
                         {locationOptions.map((location) => (
@@ -335,7 +335,7 @@ export function SalesInventory() {
                         data-testid="inventory-stock-filter"
                         value={stockFilter}
                         onChange={(event) => setStockFilter(event.target.value as StockFilter)}
-                        className={`${filterSelectClassName} min-w-[160px]`}
+                        className={`${filterSelectClassName} min-w-0 flex-[1_1_150px]`}
                     >
                         {Object.entries(stockFilterLabels).map(([value, label]) => (
                             <option key={value} value={value}>{label}</option>
@@ -346,7 +346,7 @@ export function SalesInventory() {
                         aria-label="Фильтр публикации"
                         value={publicationFilter}
                         onChange={(event) => setPublicationFilter(event.target.value as PublicationFilter)}
-                        className={`${filterSelectClassName} min-w-[150px]`}
+                        className={`${filterSelectClassName} min-w-0 flex-[1_1_150px]`}
                     >
                         {Object.entries(publicationFilterLabels).map(([value, label]) => (
                             <option key={value} value={value}>{label}</option>
@@ -361,7 +361,7 @@ export function SalesInventory() {
                         value={minPrice}
                         onChange={(event) => setMinPrice(event.target.value)}
                         placeholder="Цена от"
-                        className={`${filterInputClassName} w-28`}
+                        className={`${filterInputClassName} min-w-[120px] flex-[1_1_120px] sm:w-28 sm:flex-none`}
                     />
 
                     <input
@@ -372,7 +372,7 @@ export function SalesInventory() {
                         value={maxPrice}
                         onChange={(event) => setMaxPrice(event.target.value)}
                         placeholder="Цена до"
-                        className={`${filterInputClassName} w-28`}
+                        className={`${filterInputClassName} min-w-[120px] flex-[1_1_120px] sm:w-28 sm:flex-none`}
                     />
 
                     {hasActiveFilters ? (
@@ -388,7 +388,7 @@ export function SalesInventory() {
                     <button
                         type="button"
                         onClick={() => setReloadToken((value) => value + 1)}
-                        className="ml-auto inline-flex h-10 items-center gap-2 rounded-full border border-white/8 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:bg-white/[0.07] hover:text-white"
+                        className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-full border border-white/8 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:bg-white/[0.07] hover:text-white sm:ml-auto sm:flex-none"
                     >
                         <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
                         Обновить
@@ -401,7 +401,7 @@ export function SalesInventory() {
                     <SummaryPill label="Резерв" value={summary.reserved} tone="text-amber-300" />
                     <SummaryPill label="Продано" value={summary.sold} tone="text-blue-300" />
                     <SummaryPill label="Низкий остаток" value={summary.low} tone="text-rose-300" />
-                    <span className="ml-auto text-gray-500">
+                    <span className="w-full text-gray-500 sm:ml-auto sm:w-auto">
                         Показано {rangeStart}-{rangeEnd} из {sortedRows.length}
                     </span>
                 </div>

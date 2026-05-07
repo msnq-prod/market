@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 const devServerPort = Number(process.env.VITE_PORT || '5173')
 const apiProxyTarget = process.env.VITE_API_TARGET || 'http://127.0.0.1:3001'
+const usePolling = process.env.VITE_USE_POLLING === '1'
 
 export default defineConfig({
   plugins: [react()],
@@ -28,6 +29,7 @@ export default defineConfig({
   server: {
     host: process.env.VITE_HOST || undefined,
     port: devServerPort,
+    watch: usePolling ? { usePolling: true, interval: 100 } : undefined,
     proxy: {
       '/api': apiProxyTarget,
       '/auth': apiProxyTarget,

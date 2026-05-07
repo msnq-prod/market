@@ -105,21 +105,21 @@ export function AdminLayout() {
     const isWideWorkspace = location.pathname === '/admin/inventory';
 
     return (
-        <div className="admin-shell min-h-screen text-gray-100 font-sans lg:flex">
-            <div className="flex min-h-screen w-full flex-col lg:flex-row">
+        <div className="admin-shell min-h-screen text-gray-100 font-sans lg:h-screen lg:overflow-hidden">
+            <div className="flex min-h-screen w-full flex-col lg:h-full lg:min-h-0 lg:flex-row">
                 <Sidebar />
 
-                <div className="flex min-w-0 flex-1 flex-col">
-                    <header className="border-b border-white/6 bg-black/10">
-                        <div className={`mx-auto w-full px-4 py-6 sm:px-6 ${isWideWorkspace ? 'max-w-none lg:px-4' : 'max-w-[1240px] lg:px-8'}`}>
-                            <h1 className="text-[2rem] font-semibold tracking-tight text-white">{meta.title}</h1>
+                <div className="flex min-w-0 flex-1 flex-col lg:min-h-0">
+                    <header className="shrink-0 border-b border-white/6 bg-black/10">
+                        <div className={`mx-auto w-full px-4 py-5 sm:px-6 lg:py-6 ${isWideWorkspace ? 'max-w-none lg:px-4' : 'max-w-[1240px] lg:px-8'}`}>
+                            <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[2rem]">{meta.title}</h1>
                             {meta.description ? (
                                 <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
                             ) : null}
                         </div>
                     </header>
 
-                    <main className="admin-main min-h-0 flex-1 overflow-visible lg:overflow-auto">
+                    <main className="admin-main min-h-0 flex-1 overflow-visible lg:overflow-y-auto lg:overflow-x-hidden">
                         <div className={`admin-main-inner mx-auto ${isWideWorkspace ? 'max-w-none p-2 sm:p-3 lg:p-4' : 'max-w-[1240px] p-4 sm:p-6 lg:p-8'}`}>
                             {isDev && !isStaff && (
                                 <div className="mb-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">

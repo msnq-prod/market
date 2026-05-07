@@ -1481,7 +1481,7 @@ export function QrPrint() {
     };
 
     return (
-        <div className="admin-shell qr-print-root flex h-[100svh] min-h-[100svh] flex-col overflow-hidden text-gray-100">
+        <div className="admin-shell qr-print-root flex h-[100svh] min-h-[100svh] flex-col overflow-y-auto overflow-x-hidden text-gray-100 lg:overflow-hidden">
             <style>
                 {`
                     @page {
@@ -1550,8 +1550,8 @@ export function QrPrint() {
                 `}
             </style>
 
-            <header className="qr-screen-only flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/6 bg-black/10 px-3">
-                <div className="flex min-w-0 items-center gap-2">
+            <header className="qr-screen-only flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/6 bg-black/10 px-3 py-2">
+                <div className="flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
                     <button
                         type="button"
                         onClick={() => navigate('/admin/products')}
@@ -1577,7 +1577,7 @@ export function QrPrint() {
                         className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
                     >
                         <RotateCcw size={16} />
-                        Сбросить
+                        <span className="hidden sm:inline">Сбросить</span>
                     </button>
                     <button
                         type="button"
@@ -1586,7 +1586,7 @@ export function QrPrint() {
                         className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         <Download size={16} />
-                        {pdfExporting ? 'Сохраняем PDF...' : 'Сохранить PDF'}
+                        <span className="hidden sm:inline">{pdfExporting ? 'Сохраняем PDF...' : 'Сохранить PDF'}</span>
                     </button>
                     <button
                         type="button"
@@ -1594,13 +1594,13 @@ export function QrPrint() {
                         className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
                     >
                         <X size={16} />
-                        Закрыть
+                        <span className="hidden sm:inline">Закрыть</span>
                     </button>
                 </div>
             </header>
 
             <div
-                className="grid min-h-0 w-full min-w-0 flex-1 grid-cols-1 gap-3 p-3 transition-[grid-template-columns] duration-300 lg:grid-cols-[var(--qr-workspace-columns)]"
+                className="grid min-h-0 w-full min-w-0 flex-none grid-cols-1 gap-3 p-3 transition-[grid-template-columns] duration-300 lg:flex-1 lg:grid-cols-[var(--qr-workspace-columns)]"
                 style={{
                     '--qr-workspace-columns': sourcePanelOpen
                         ? '300px minmax(0,1fr) 390px'

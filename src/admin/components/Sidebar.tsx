@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, Video, Settings2 } from 'lucide-react';
+import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, Video, Settings2, Menu, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { logoutSession } from '../../utils/session';
@@ -49,6 +49,7 @@ export function Sidebar() {
     const storageKey = `${SIDEBAR_VISIBILITY_STORAGE_PREFIX}.${role || 'unknown'}`;
     const [visibility, setVisibility] = useState<SidebarVisibility>(() => readSidebarVisibility(storageKey));
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [mobileOpen, setMobileOpen] = useState(false);
 
     const salesItems: NavConfig[] = [
         { id: 'orders', to: '/admin/orders', icon: <ShoppingCart size={18} />, label: 'Заказы' },
@@ -114,6 +115,10 @@ export function Sidebar() {
         window.localStorage.setItem(storageKey, JSON.stringify(visibility));
     }, [storageKey, visibility]);
 
+    useEffect(() => {
+        setMobileOpen(false);
+    }, [location.pathname]);
+
     const toggleItemVisibility = (itemId: string) => {
         setVisibility((current) => ({
             ...current,
@@ -126,21 +131,19 @@ export function Sidebar() {
         navigate('/admin/login', { replace: true });
     };
 
-    return (
-        <aside className="admin-sidebar border-b border-white/6 bg-[#14161b] lg:flex lg:w-[214px] lg:flex-col lg:border-b-0 lg:border-r">
-            <div className="border-b border-white/6 px-5 py-6">
-                <h2 className="text-[1.85rem] font-semibold tracking-tight text-white">
-                    {isSalesManager ? 'Продажи' : 'Админ HQ'}
-                </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                    {isSalesManager ? 'Очередь заказов Stones' : 'Центр управления Stones'}
-                </p>
-            </div>
+    const activeItem = availableSections
+        .flatMap((section) => section.items)
+        .find((item) => location.pathname === item.to);
 
-            <nav className="flex-1 overflow-x-auto px-3 py-4 lg:overflow-y-auto lg:overflow-x-visible">
-                <div className="flex gap-3 lg:block lg:space-y-4">
+    const renderSections = (mode: 'desktop' | 'mobile') => (
+        <>
+            <nav className={mode === 'desktop'
+                ? 'flex-1 overflow-y-auto overflow-x-visible px-3 py-4'
+                : 'min-h-0 flex-1 overflow-y-auto px-4 py-4'}
+            >
+                <div className={mode === 'desktop' ? 'space-y-4' : 'space-y-5'}>
                     {sections.map((section) => (
-                        <div key={section.title} className="min-w-[190px] lg:min-w-0">
+                        <div key={section.title}>
                             <div className="px-3 pb-2 text-[10px] font-medium uppercase tracking-[0.24em] text-gray-600">
                                 {section.title}
                             </div>
@@ -153,57 +156,57 @@ export function Sidebar() {
                                         label={item.label}
                                         active={location.pathname === item.to}
                                         newTab={item.newTab}
+                                        onNavigate={mode === 'mobile' ? () => setMobileOpen(false) : undefined}
                                     />
                                 ))}
                             </div>
                         </div>
                     ))}
                 </div>
-                <div className="mt-4 flex gap-3 lg:block">
-                    <div className="min-w-[260px] lg:min-w-0">
-                        <button
-                            type="button"
-                            onClick={() => setSettingsOpen((current) => !current)}
-                            aria-expanded={settingsOpen}
-                            className={`group flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 ${
-                                settingsOpen
-                                    ? 'border border-blue-400/10 bg-[#1d2434] text-blue-100'
-                                    : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
-                            }`}
-                        >
-                            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] transition duration-200 ${settingsOpen ? 'text-blue-200' : 'text-gray-500 group-hover:text-gray-200'}`}>
-                                <Settings2 size={18} />
-                            </div>
-                            <span className="min-w-0 flex-1 truncate font-medium">Настройки</span>
-                        </button>
 
-                        {settingsOpen ? (
-                            <div className="mt-3 rounded-xl border border-white/8 bg-black/15 p-3">
-                                <div className="mb-3 px-1 text-[10px] font-medium uppercase tracking-[0.2em] text-gray-600">
-                                    Видимость строк
-                                </div>
-                                <div className="space-y-3">
-                                    {availableSections.map((section) => (
-                                        <div key={section.title}>
-                                            <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-[0.18em] text-gray-600">
-                                                {section.title}
-                                            </div>
-                                            <div className="space-y-1">
-                                                {section.items.map((item) => (
-                                                    <SidebarVisibilitySwitch
-                                                        key={item.id}
-                                                        label={item.label}
-                                                        checked={visibility[item.id] !== false}
-                                                        onToggle={() => toggleItemVisibility(item.id)}
-                                                    />
-                                                ))}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
+                <div className="mt-5">
+                    <button
+                        type="button"
+                        onClick={() => setSettingsOpen((current) => !current)}
+                        aria-expanded={settingsOpen}
+                        className={`group flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 ${
+                            settingsOpen
+                                ? 'border border-blue-400/10 bg-[#1d2434] text-blue-100'
+                                : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
+                        }`}
+                    >
+                        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] transition duration-200 ${settingsOpen ? 'text-blue-200' : 'text-gray-500 group-hover:text-gray-200'}`}>
+                            <Settings2 size={18} />
+                        </div>
+                        <span className="min-w-0 flex-1 truncate font-medium">Настройки</span>
+                    </button>
+
+                    {settingsOpen ? (
+                        <div className="mt-3 rounded-xl border border-white/8 bg-black/15 p-3">
+                            <div className="mb-3 px-1 text-[10px] font-medium uppercase tracking-[0.2em] text-gray-600">
+                                Видимость строк
                             </div>
-                        ) : null}
-                    </div>
+                            <div className="space-y-3">
+                                {availableSections.map((section) => (
+                                    <div key={section.title}>
+                                        <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-[0.18em] text-gray-600">
+                                            {section.title}
+                                        </div>
+                                        <div className="space-y-1">
+                                            {section.items.map((item) => (
+                                                <SidebarVisibilitySwitch
+                                                    key={item.id}
+                                                    label={item.label}
+                                                    checked={visibility[item.id] !== false}
+                                                    onToggle={() => toggleItemVisibility(item.id)}
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
                 </div>
             </nav>
 
@@ -217,7 +220,76 @@ export function Sidebar() {
                     <span>Выйти</span>
                 </button>
             </div>
-        </aside>
+        </>
+    );
+
+    return (
+        <>
+            <div className="sticky top-0 z-40 border-b border-white/6 bg-[#14161b]/95 backdrop-blur lg:hidden">
+                <div className="flex min-h-16 items-center justify-between gap-3 px-4">
+                    <div className="min-w-0">
+                        <div className="truncate text-base font-semibold tracking-tight text-white">
+                            {isSalesManager ? 'Продажи' : 'Админ HQ'}
+                        </div>
+                        <div className="truncate text-xs text-gray-500">
+                            {activeItem?.label || (isSalesManager ? 'Очередь заказов Stones' : 'Центр управления Stones')}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setMobileOpen(true)}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-200 transition hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60"
+                        aria-label="Открыть меню админки"
+                    >
+                        <Menu size={18} />
+                    </button>
+                </div>
+            </div>
+
+            {mobileOpen ? (
+                <div className="fixed inset-0 z-50 lg:hidden">
+                    <button
+                        type="button"
+                        className="absolute inset-0 bg-black/70"
+                        aria-label="Закрыть меню админки"
+                        onClick={() => setMobileOpen(false)}
+                    />
+                    <aside className="relative flex h-full w-full max-w-[360px] flex-col border-r border-white/6 bg-[#14161b] shadow-2xl">
+                        <div className="flex items-start justify-between gap-3 border-b border-white/6 px-5 py-5">
+                            <div className="min-w-0">
+                                <h2 className="text-[1.65rem] font-semibold tracking-tight text-white">
+                                    {isSalesManager ? 'Продажи' : 'Админ HQ'}
+                                </h2>
+                                <p className="mt-1 text-xs text-gray-500">
+                                    {isSalesManager ? 'Очередь заказов Stones' : 'Центр управления Stones'}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setMobileOpen(false)}
+                                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-gray-300 transition hover:bg-white/[0.07] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60"
+                                aria-label="Закрыть меню админки"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                        {renderSections('mobile')}
+                    </aside>
+                </div>
+            ) : null}
+
+            <aside className="admin-sidebar hidden border-white/6 bg-[#14161b] lg:flex lg:w-[214px] lg:flex-col lg:border-r">
+                <div className="border-b border-white/6 px-5 py-6">
+                    <h2 className="text-[1.85rem] font-semibold tracking-tight text-white">
+                        {isSalesManager ? 'Продажи' : 'Админ HQ'}
+                    </h2>
+                    <p className="mt-1 text-xs text-gray-500">
+                        {isSalesManager ? 'Очередь заказов Stones' : 'Центр управления Stones'}
+                    </p>
+                </div>
+                {renderSections('desktop')}
+            </aside>
+        </>
     );
 }
 
@@ -264,15 +336,17 @@ function NavItem({
     icon,
     label,
     active,
-    newTab = false
+    newTab = false,
+    onNavigate
 }: {
     to: string;
     icon: ReactNode;
     label: string;
     active: boolean;
     newTab?: boolean;
+    onNavigate?: () => void;
 }) {
-    const className = `group flex min-h-10 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 lg:w-full ${active
+    const className = `group flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/60 ${active
         ? 'border border-blue-400/10 bg-[#1d2434] text-blue-100'
         : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
         }`;
@@ -288,7 +362,7 @@ function NavItem({
 
     if (newTab) {
         return (
-            <a href={to} target="_blank" rel="noreferrer noopener" className={className}>
+            <a href={to} target="_blank" rel="noreferrer noopener" className={className} onClick={onNavigate}>
                 {content}
             </a>
         );
@@ -298,6 +372,7 @@ function NavItem({
         <Link
             to={to}
             className={className}
+            onClick={onNavigate}
         >
             {content}
         </Link>

@@ -149,7 +149,7 @@ export function Clients() {
                 <button
                     type="button"
                     onClick={() => setReloadToken((value) => value + 1)}
-                    className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                    className="bg-[#1b1e24] hover:bg-white/[0.07] text-white px-4 py-2 rounded-lg flex items-center gap-2"
                 >
                     <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                     Обновить
@@ -169,10 +169,10 @@ export function Clients() {
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <aside className="rounded-2xl border border-gray-800 bg-gray-900 p-4 space-y-4">
+                <aside className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-4">
                     <label className="block space-y-2">
                         <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по клиентам</span>
-                        <div className="flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-3 py-2">
+                        <div className="flex items-center gap-3 rounded-xl border border-white/6 bg-[#0f1217] px-3 py-2">
                             <Search size={16} className="text-gray-500" />
                             <input
                                 value={query}
@@ -186,11 +186,11 @@ export function Clients() {
                     <div className="text-sm text-gray-500">{customers.length} в списке</div>
 
                     {loading ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-gray-400">
+                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
                             Загружаем клиентскую базу...
                         </div>
                     ) : customers.length === 0 ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-gray-400">
+                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
                             Клиенты по текущему фильтру не найдены.
                         </div>
                     ) : (
@@ -201,8 +201,8 @@ export function Clients() {
                                     type="button"
                                     onClick={() => setSelectedCustomerId(customer.id)}
                                     className={`w-full rounded-2xl border p-4 text-left transition-colors ${selectedCustomerId === customer.id
-                                        ? 'border-blue-500/50 bg-blue-500/10'
-                                        : 'border-gray-800 bg-gray-950 hover:bg-gray-900'
+                                        ? 'border-white/16 bg-white/[0.055]'
+                                        : 'border-white/6 bg-[#0f1217] hover:bg-[#14161b]'
                                     }`}
                                 >
                                     <div className="text-sm font-medium text-white">{customer.name}</div>
@@ -219,13 +219,13 @@ export function Clients() {
                     )}
                 </aside>
 
-                <section className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+                <section className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
                     {!selectedCustomerId ? (
-                        <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950 px-6 py-10 text-center text-gray-500">
+                        <div className="rounded-xl border border-dashed border-white/10 bg-[#0f1217] px-6 py-10 text-center text-gray-500">
                             Выберите клиента слева, чтобы открыть карточку.
                         </div>
                     ) : detailLoading || !detail ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-950 px-6 py-10 text-center text-gray-400">
+                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-6 py-10 text-center text-gray-400">
                             Загружаем карточку клиента...
                         </div>
                     ) : (
@@ -257,7 +257,7 @@ export function Clients() {
                                 <InfoCard label="Последний адрес" value={detail.delivery_address || 'Не указан'} />
                             </section>
 
-                            <section className="rounded-2xl border border-gray-800 bg-gray-950 p-4 space-y-3">
+                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-3">
                                 <div className="flex items-center justify-between">
                                     <div className="text-xs uppercase tracking-wider text-gray-500">Заказы клиента</div>
                                     <div className="text-sm text-gray-500">{detail.orders.length} шт.</div>
@@ -265,15 +265,15 @@ export function Clients() {
 
                                 <div className="space-y-3">
                                     {detail.orders.map((order) => (
-                                        <div key={order.id} className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-3">
+                                        <div key={order.id} className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
                                             <div className="flex flex-wrap items-center justify-between gap-3">
                                                 <div>
                                                     <div className="text-sm font-medium text-white">Заказ #{order.id.slice(0, 8)}</div>
                                                     <div className="mt-1 text-xs text-gray-500">{formatOrderDate(order.created_at)}</div>
                                                 </div>
                                                 <div className="flex items-center gap-3">
-                                                    <span className="rounded-full border border-gray-700 px-3 py-1 text-xs text-gray-300">{order.status}</span>
-                                                    <span className="font-mono text-sm text-blue-300">{formatRub(order.total)}</span>
+                                                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-gray-300">{order.status}</span>
+                                                    <span className="font-mono text-sm text-white">{formatRub(order.total)}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -290,7 +290,7 @@ export function Clients() {
 
 function SummaryCard({ title, value }: { title: string; value: number }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+        <div className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
             <div className="text-sm text-gray-400">{title}</div>
             <div className="mt-2 text-3xl font-bold text-white">{value}</div>
         </div>
@@ -299,7 +299,7 @@ function SummaryCard({ title, value }: { title: string; value: number }) {
 
 function MetricCard({ label, value }: { label: string; value: number | string }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-950 p-4">
+        <div className="rounded-2xl border border-white/6 bg-[#0f1217] p-4">
             <div className="text-xs uppercase tracking-wider text-gray-500">{label}</div>
             <div className="mt-2 text-lg font-semibold text-white">{value}</div>
         </div>
@@ -308,7 +308,7 @@ function MetricCard({ label, value }: { label: string; value: number | string })
 
 function InfoCard({ label, value }: { label: string; value: string }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-950 p-4">
+        <div className="rounded-2xl border border-white/6 bg-[#0f1217] p-4">
             <div className="text-xs uppercase tracking-wider text-gray-500">{label}</div>
             <div className="mt-2 text-sm text-gray-200 whitespace-pre-line">{value}</div>
         </div>

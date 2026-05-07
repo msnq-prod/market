@@ -36,7 +36,8 @@ RUN npm run typecheck \
 FROM deps AS prod-deps
 
 RUN --mount=type=cache,target=/tmp/.npm \
-    npm prune --omit=dev --omit=optional --no-audit --no-fund \
+    npm prune --omit=dev --no-audit --no-fund \
+    && npm uninstall electron electron-builder ffmpeg-static ffprobe-static --no-save --no-audit --no-fund \
     && npx prisma generate \
     && find node_modules -type f -name '*.map' -delete
 

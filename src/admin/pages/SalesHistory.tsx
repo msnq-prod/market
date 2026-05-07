@@ -89,7 +89,7 @@ export function SalesHistory() {
                 <button
                     type="button"
                     onClick={() => setReloadToken((value) => value + 1)}
-                    className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                    className="bg-[#1b1e24] hover:bg-white/[0.07] text-white px-4 py-2 rounded-lg flex items-center gap-2"
                 >
                     <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                     Обновить
@@ -105,13 +105,13 @@ export function SalesHistory() {
             <section className="grid gap-4 md:grid-cols-3">
                 <SummaryCard title="Получено" value={summary.delivered} tone="text-emerald-300" />
                 <SummaryCard title="Возвращено" value={summary.returned} tone="text-amber-300" />
-                <SummaryCard title="Выручка" value={formatRub(summary.revenue)} tone="text-blue-300" />
+                <SummaryCard title="Выручка" value={formatRub(summary.revenue)} tone="text-white" />
             </section>
 
-            <section className="rounded-2xl border border-gray-800 bg-gray-900 p-5 space-y-4">
+            <section className="rounded-2xl border border-white/6 bg-[#14161b] p-5 space-y-4">
                 <label className="block space-y-2">
                     <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по истории</span>
-                    <div className="flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-3 py-2">
+                    <div className="flex items-center gap-3 rounded-xl border border-white/6 bg-[#0f1217] px-3 py-2">
                         <Search size={16} className="text-gray-500" />
                         <input
                             value={query}
@@ -123,17 +123,17 @@ export function SalesHistory() {
                 </label>
 
                 {loading ? (
-                    <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-gray-400">
+                    <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
                         Загружаем историю продаж...
                     </div>
                 ) : orders.length === 0 ? (
-                    <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-6 text-gray-400">
+                    <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
                         История по текущему фильтру пуста.
                     </div>
                 ) : (
                     <div className="space-y-3">
                         {orders.map((order) => (
-                            <div key={order.id} className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4">
+                            <div key={order.id} className="rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-4">
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div>
                                         <div className="text-sm font-medium text-white">Заказ #{order.id.slice(0, 8)}</div>
@@ -148,7 +148,7 @@ export function SalesHistory() {
                                         }`}>
                                             {order.status === 'RECEIVED' ? 'ПОЛУЧЕН' : 'ВОЗВРАЩЁН'}
                                         </span>
-                                        <span className="font-mono text-sm text-blue-300">{formatRub(order.total)}</span>
+                                        <span className="font-mono text-sm text-white">{formatRub(order.total)}</span>
                                     </div>
                                 </div>
 
@@ -169,7 +169,7 @@ export function SalesHistory() {
 
 function SummaryCard({ title, value, tone }: { title: string; value: number | string; tone: string }) {
     return (
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+        <div className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
             <div className="text-sm text-gray-400">{title}</div>
             <div className={`mt-2 text-3xl font-bold ${tone}`}>{value}</div>
         </div>
