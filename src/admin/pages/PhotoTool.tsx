@@ -1206,8 +1206,8 @@ export function PhotoTool() {
                             </div>
 
                             <div className="min-h-0 flex-1 px-4 pb-4 xl:px-8 xl:pb-6">
-                                <div className="grid h-full min-h-[640px] grid-rows-[minmax(0,1fr)_auto] gap-4">
-                                    <section className="relative min-h-[460px] overflow-hidden rounded-[30px] bg-[#090b0f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.35)]">
+                                <div className="grid grid-rows-[auto_auto] gap-4">
+                                    <section className="relative min-h-[460px] overflow-hidden rounded-[30px] bg-[#090b0f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.35)] lg:h-[clamp(520px,calc(100svh-300px),680px)]">
                                         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.07),_transparent_52%),linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_22%,_transparent_78%,_rgba(255,255,255,0.03))]" />
                                         <div className="relative flex h-full items-center justify-center px-5 py-6 xl:px-8 xl:py-8">
                                             <div className="grid h-full w-full grid-cols-1 items-center gap-5 lg:grid-cols-[minmax(150px,0.78fr)_minmax(360px,1.85fr)_minmax(150px,0.78fr)] xl:gap-8">
@@ -1373,8 +1373,8 @@ function CarouselStageCard({
                 <div
                     data-testid={`photo-card-${slot}`}
                     className={`flex w-full flex-col items-center justify-center rounded-[28px] bg-white/[0.025] text-center text-sm text-white/30 ${active
-                        ? 'min-h-[560px]'
-                        : 'min-h-[420px] max-w-[300px]'
+                        ? 'h-full min-h-[520px] lg:min-h-0'
+                        : 'h-full min-h-[380px] max-w-[300px] lg:min-h-0'
                         }`}
                 >
                     <p className="text-[10px] uppercase tracking-[0.34em] text-white/18">{title}</p>
@@ -1394,8 +1394,8 @@ function CarouselStageCard({
                     animate={{ opacity: active ? 1 : 0.76, x: 0, scale: active ? 1 : 0.92, filter: 'blur(0px)' }}
                     exit={{ opacity: 0, x: -initialOffset || (direction * 90), scale: 0.9, filter: 'blur(10px)' }}
                     className={`relative w-full overflow-hidden rounded-[30px] ${active
-                        ? 'min-h-[560px] bg-[#141920] shadow-[0_30px_90px_rgba(0,0,0,0.45),inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                        : 'max-w-[300px] min-h-[420px] bg-[#161a20] shadow-[0_22px_60px_rgba(0,0,0,0.35)]'
+                        ? 'h-full min-h-[520px] bg-[#141920] shadow-[0_30px_90px_rgba(0,0,0,0.45),inset_0_0_0_1px_rgba(56,189,248,0.18)] lg:min-h-0'
+                        : 'h-full min-h-[380px] max-w-[300px] bg-[#161a20] shadow-[0_22px_60px_rgba(0,0,0,0.35)] lg:min-h-0'
                         }`}
                 >
                     <button type="button" onClick={() => onActivate(photo)} className="absolute inset-0">
