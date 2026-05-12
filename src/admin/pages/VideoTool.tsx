@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -375,13 +375,6 @@ const sessionStatusLabel: Record<string, string> = {
     CANCELLED: 'Отменено',
     ABANDONED: 'Зависло'
 };
-const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
-    const translation = translations.find((item) => item.language_id === 2)
-        || translations.find((item) => item.language_id === 1)
-        || translations[0];
-    const value = translation?.[field];
-    return typeof value === 'string' ? value : '';
-};
 
 const formatDuration = (durationMs: number) => {
     const seconds = Math.max(0, durationMs / 1000);
@@ -665,7 +658,6 @@ export function VideoTool() {
     const [renderProgress, setRenderProgress] = useState({ processed: 0, total: 0 });
     const [notice, setNotice] = useState<InlineNotice | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [leftRailOpen, setLeftRailOpen] = useState(true);
     const [previewPanelWidth, setPreviewPanelWidth] = useState(readStoredPreviewPanelWidth);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
@@ -675,14 +667,13 @@ export function VideoTool() {
     });
 
     const expectedOutputCount = data?.batch.expected_output_count ?? 0;
-    const productName = data?.product ? getDefaultTranslationValue(data.product.translations, 'name') : batchId;
     const durationMs = sourceFingerprint?.durationMs ?? 0;
     const visibleDurationMs = durationMs ? (timelineViewport.visibleDurationMs || durationMs) : 0;
     const visibleStartMs = durationMs ? clampVisibleStart(durationMs, timelineViewport.visibleStartMs, visibleDurationMs || durationMs) : 0;
     const visibleEndMs = visibleStartMs + visibleDurationMs;
     const clampPreviewPanelWidth = useCallback((nextWidth: number) => {
         const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
-        const leftRailWidth = leftRailOpen ? 224 : 0;
+        const leftRailWidth = 224;
         const mainWorkspaceMinWidth = 560;
         const maxWidthByViewport = Math.max(
             PREVIEW_PANEL_MIN_WIDTH,
@@ -694,7 +685,7 @@ export function VideoTool() {
             PREVIEW_PANEL_MIN_WIDTH,
             Math.min(PREVIEW_PANEL_MAX_WIDTH, maxWidthByViewport)
         );
-    }, [leftRailOpen]);
+    }, []);
     const activeSegments = useMemo(
         () => segments.filter((segment) => !segment.deleted),
         [segments]
@@ -868,6 +859,30 @@ export function VideoTool() {
         0,
         durationMs
     ), [durationMs, visibleDurationMs, visibleStartMs]);
+    const handleTimelineWheel = useCallback((event: React.WheelEvent<HTMLElement>, rect: DOMRect) => {
+        if (!durationMs || !visibleDurationMs) {
+            return;
+        }
+
+        event.preventDefault();
+
+        const dominantDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+            ? event.deltaX
+            : event.deltaY;
+
+        if (event.ctrlKey || event.metaKey) {
+            const anchorMs = timelineClientXToMs(event.clientX, rect);
+            const zoomFactor = dominantDelta > 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP;
+            zoomTimelineTo(anchorMs, visibleDurationMs * zoomFactor);
+            return;
+        }
+
+        updateTimelineViewport(
+            visibleStartMs + ((dominantDelta / rect.width) * visibleDurationMs),
+            visibleDurationMs,
+            { isPanning: true }
+        );
+    }, [durationMs, timelineClientXToMs, updateTimelineViewport, visibleDurationMs, visibleStartMs, zoomTimelineTo]);
     const seekTimelineAtClientX = useCallback((clientX: number) => {
         if (!timelineRef.current || !durationMs) {
             return;
@@ -1077,12 +1092,6 @@ export function VideoTool() {
         void loadPageData();
         void checkHelper();
     }, [batchId, checkHelper]);
-
-    useEffect(() => {
-        if (helperStatus === 'unavailable' || helperStatus === 'version_mismatch') {
-            setLeftRailOpen(true);
-        }
-    }, [helperStatus]);
 
     useEffect(() => {
         const previousBodyOverflow = document.body.style.overflow;
@@ -1832,9 +1841,8 @@ export function VideoTool() {
 
     const selectedSegmentRow = selectedSegment ? segmentRows[selectedSegmentIndex] ?? null : null;
     const totalSegments = activeProductCount;
-    const clipCounterText = `Товарных клипов: ${totalSegments} / ${expectedOutputCount}`;
+    const clipCounterText = `Нарезано: ${totalSegments} / ${expectedOutputCount}`;
     const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
-    const hasExportError = Boolean(error || session?.error_message || exportPhase === 'error');
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
     const helperSidebarStatus = helperStatus === 'checking'
             ? 'Проверяем локальный helper.'
@@ -1846,23 +1854,7 @@ export function VideoTool() {
                     : helperIssueKind === 'browser'
                     ? 'Доступ к helper заблокирован браузером.'
                     : 'Локальный helper не найден или не запущен.'
-                : 'Готово к нарезке и экспорту.';
-    const blockingStatusLabel = hasExportError
-        ? 'Ошибка экспорта'
-        : exportPhase === 'completed'
-            ? 'Экспорт завершён'
-            : exportPhase !== 'idle'
-                ? exportPhaseLabel[exportPhase]
-                : exportBlockedReason || 'Готово к экспорту';
-    const blockingStatusToneClass = hasExportError
-        ? 'border-red-500/30 bg-red-500/10 text-red-100'
-        : exportPhase === 'completed'
-            ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100'
-            : exportPhase !== 'idle' && exportPhase !== 'cancelled'
-                ? 'border-white/12 bg-white/[0.06] text-gray-100'
-                : exportBlockedReason || exportPhase === 'cancelled'
-                    ? 'border-amber-400/20 bg-amber-400/10 text-amber-100'
-                    : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100';
+                : 'Готово к работе';
     const helperProblemTitle = helperStatus === 'version_mismatch'
         ? 'Helper устарел'
         : helperIssueKind === 'safari'
@@ -1987,31 +1979,20 @@ export function VideoTool() {
     return (
         <div className="h-screen overflow-hidden bg-[#0f1013] text-zinc-100">
             <div className="flex h-full flex-col">
-                <header className="flex shrink-0 items-center gap-4 border-b border-zinc-800 bg-[#15161a] px-4 py-3">
+                <header className="flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-[#15161a] px-3 py-2">
                     <button
                         type="button"
                         onClick={() => navigate('/admin/warehouse')}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
                         aria-label="Вернуться на склад"
                     >
-                        <ArrowLeft size={16} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setLeftRailOpen((current) => !current)}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                        aria-label={leftRailOpen ? 'Свернуть левую панель' : 'Открыть левую панель'}
-                    >
-                        {leftRailOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+                        <ArrowLeft size={14} />
                     </button>
 
                     <div className="min-w-0 flex-1">
-                        <h1 data-testid="video-tool-heading" className="text-sm font-semibold text-zinc-100">
+                        <h1 data-testid="video-tool-heading" className="text-xs font-semibold text-zinc-100 sm:text-sm">
                             Монтаж видео партии
                         </h1>
-                        <p className="truncate text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                            {productName} • партия {data.batch.id} • цель: {expectedOutputCount} товарных клипов
-                        </p>
                     </div>
                 </header>
 
@@ -2077,12 +2058,9 @@ export function VideoTool() {
                 <div
                     className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[grid-template-columns] duration-300 lg:grid lg:overflow-hidden"
                     style={{
-                        gridTemplateColumns: leftRailOpen
-                            ? `minmax(196px,224px) minmax(0,1fr) ${previewPanelWidth}px`
-                            : `minmax(0,1fr) ${previewPanelWidth}px`
+                        gridTemplateColumns: `minmax(196px,224px) minmax(0,1fr) ${previewPanelWidth}px`
                     }}
                 >
-                    {leftRailOpen && (
                         <aside className="min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-3">
                             <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto pb-3 pr-1">
                                 <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
@@ -2117,9 +2095,9 @@ export function VideoTool() {
                                         <button
                                             type="button"
                                             onClick={() => void checkHelper()}
-                                            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-200 transition hover:border-zinc-500 hover:text-white"
+                                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
                                         >
-                                            <RefreshCw size={14} />
+                                            <RefreshCw size={12} />
                                             Проверить
                                         </button>
                                     </div>
@@ -2277,37 +2255,12 @@ export function VideoTool() {
                                     </div>
                                 </section>
 
-                                <div className="pt-1">
-                                    <button
-                                        type="button"
-                                        onClick={() => setLeftRailOpen(false)}
-                                        className="inline-flex h-10 w-full items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                                        aria-label="Свернуть левую панель"
-                                    >
-                                        <ChevronLeft size={16} />
-                                    </button>
-                                </div>
                             </div>
                         </aside>
-                    )}
 
                     <section className="relative min-h-0 bg-[#131418] p-3">
-                        {!leftRailOpen && (
-                            <button
-                                type="button"
-                                onClick={() => setLeftRailOpen(true)}
-                                className="absolute bottom-6 left-3 z-20 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                                aria-label="Открыть левую панель"
-                            >
-                                <ChevronRight size={16} />
-                            </button>
-                        )}
                         <div className="flex h-full min-h-0 flex-col gap-3">
                             <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-zinc-800 bg-[#17191e]">
-                                <div className="border-b border-zinc-800 px-4 py-3">
-                                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Клипы партии</p>
-                                </div>
-
                                 <div className={`min-h-0 flex-1 p-3 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                                     {segments.length === 0 ? (
                                         <div className="flex h-full min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/40 p-6 text-center text-sm text-zinc-500">
@@ -2399,8 +2352,7 @@ export function VideoTool() {
                             </section>
 
                             <section className="shrink-0 overflow-hidden rounded-[24px] border border-zinc-800 bg-[#15171c]">
-                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-2.5">
-                                        <div className="flex flex-wrap items-center gap-2">
+                                    <div className="flex items-center gap-1.5 overflow-x-auto border-b border-zinc-800 px-3 py-2 whitespace-nowrap">
                                         <Button
                                             data-testid="action-cut"
                                             aria-label="Разрезать"
@@ -2408,9 +2360,9 @@ export function VideoTool() {
                                             onClick={() => applySegmentEdit((current) => splitSegmentAt(current, playheadMs))}
                                             disabled={!sourceFile || !durationMs}
                                             variant="secondary"
-                                            className="min-h-9 rounded-xl border-zinc-700 bg-zinc-900 px-3 text-xs text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
+                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
                                         >
-                                            <Scissors size={16} />
+                                            <Scissors size={14} />
                                             Разрезать
                                         </Button>
                                         <Button
@@ -2421,10 +2373,10 @@ export function VideoTool() {
                                             onClick={() => applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex))}
                                             disabled={!selectedSegment}
                                             className={selectedSegmentIsDeleted
-                                                ? 'min-h-9 rounded-xl border border-emerald-400/40 bg-emerald-400/12 px-3 text-xs text-emerald-100 hover:bg-emerald-400/18 hover:text-emerald-50 disabled:opacity-40'
-                                                : 'min-h-9 rounded-xl px-3 text-xs shadow-none disabled:opacity-40'}
+                                                ? '!h-8 !min-h-0 rounded-lg border border-emerald-400/40 bg-emerald-400/12 px-2.5 py-0 text-[11px] text-emerald-100 hover:bg-emerald-400/18 hover:text-emerald-50 disabled:opacity-40'
+                                                : '!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40'}
                                         >
-                                            {selectedSegmentIsDeleted ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                                            {selectedSegmentIsDeleted ? <RotateCcw size={14} /> : <Trash2 size={14} />}
                                             {selectedSegmentIsDeleted ? 'Вернуть' : 'Удалить'}
                                         </Button>
                                         <Button
@@ -2434,73 +2386,58 @@ export function VideoTool() {
                                             onClick={() => void handleExport()}
                                             disabled={Boolean(exportBlockedReason) || exportPhase === 'preparing' || exportPhase === 'rendering' || exportPhase === 'uploading'}
                                             variant="primary"
-                                            className="min-h-9 rounded-xl px-3 text-xs shadow-none disabled:opacity-40"
+                                            className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40"
                                         >
-                                            <HardDriveDownload size={16} />
+                                            <HardDriveDownload size={14} />
                                             Экспорт
                                         </Button>
                                         {canCancelSession && (
                                             <Button
                                                 variant="danger"
-                                            size="sm"
-                                            onClick={() => void handleCancelSession()}
-                                            disabled={exportPhase === 'rendering' || exportPhase === 'uploading'}
-                                            className="min-h-9 rounded-xl px-3 text-xs shadow-none"
+                                                size="sm"
+                                                onClick={() => void handleCancelSession()}
+                                                disabled={exportPhase === 'rendering' || exportPhase === 'uploading'}
+                                                className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none"
                                             >
-                                                <Ban size={16} />
+                                                <Ban size={14} />
                                                 Отменить
                                             </Button>
                                         )}
-                                    </div>
-
-                                    <div className="flex flex-wrap items-center justify-end gap-2">
                                         <span
                                             data-testid="clip-counter"
-                                            className="rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-zinc-200"
+                                            className="ml-1 rounded-full border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-zinc-200"
                                         >
                                             {clipCounterText}
                                         </span>
-                                        <span
-                                            data-testid="blocking-status"
-                                            className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${blockingStatusToneClass}`}
-                                        >
-                                            {blockingStatusLabel}
-                                        </span>
-                                        <span className="text-[10px] text-zinc-500">Масштаб {timelineViewport.zoom.toFixed(1)}x</span>
+                                        <span className="ml-auto text-[9px] text-zinc-500">Масштаб {timelineViewport.zoom.toFixed(1)}x</span>
                                         <button
                                             type="button"
                                             onClick={() => zoomTimelineByFactor(TIMELINE_ZOOM_STEP)}
                                             disabled={!durationMs || visibleDurationMs >= durationMs}
-                                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                                         >
-                                            <Minus size={14} />
+                                            <Minus size={12} />
                                         </button>
                                         <button
                                             type="button"
                                             onClick={() => zoomTimelineByFactor(1 / TIMELINE_ZOOM_STEP)}
                                             disabled={!durationMs || visibleDurationMs <= getTimelineMinVisibleDuration(durationMs)}
-                                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                                         >
-                                            <Plus size={14} />
+                                            <Plus size={12} />
                                         </button>
                                         <button
                                             type="button"
                                             onClick={fitTimelineToAll}
                                             disabled={!durationMs}
-                                            className="inline-flex h-7 items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                            className="inline-flex h-6 items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                                         >
-                                            <Maximize2 size={14} />
+                                            <Maximize2 size={12} />
                                             Показать всё
                                         </button>
                                     </div>
-                                    {exportBlockedReason && exportPhase === 'idle' && (
-                                        <p className="w-full text-xs text-zinc-500 lg:text-right">
-                                            Действия ограничены: {exportBlockedReason}
-                                        </p>
-                                    )}
-                                </div>
 
-                                <div className="h-[280px] px-3 pb-3 pt-3">
+                                <div className="h-[268px] px-3 pb-3 pt-2.5">
                                     <div className="grid h-full min-h-0 grid-rows-[26px_1fr_18px] rounded-[20px] border border-zinc-800 bg-[#15171c]">
                                         <div
                                             className="relative overflow-hidden border-b border-zinc-800 bg-[#101115]"
@@ -2516,21 +2453,8 @@ export function VideoTool() {
                                                     return;
                                                 }
 
-                                                event.preventDefault();
                                                 const rect = timelineRef.current.getBoundingClientRect();
-                                                const anchorMs = timelineClientXToMs(event.clientX, rect);
-
-                                                if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-                                                    const delta = event.shiftKey ? event.deltaY : event.deltaX;
-                                                    updateTimelineViewport(
-                                                        visibleStartMs + ((delta / rect.width) * visibleDurationMs),
-                                                        visibleDurationMs
-                                                    );
-                                                    return;
-                                                }
-
-                                                const zoomFactor = event.deltaY > 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP;
-                                                zoomTimelineTo(anchorMs, visibleDurationMs * zoomFactor);
+                                                handleTimelineWheel(event, rect);
                                             }}
                                         >
                                             {rulerMarks.map((markMs) => {
@@ -2560,21 +2484,8 @@ export function VideoTool() {
                                                     return;
                                                 }
 
-                                                event.preventDefault();
                                                 const rect = event.currentTarget.getBoundingClientRect();
-                                                const anchorMs = timelineClientXToMs(event.clientX, rect);
-
-                                                if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-                                                    const delta = event.shiftKey ? event.deltaY : event.deltaX;
-                                                    updateTimelineViewport(
-                                                        visibleStartMs + ((delta / rect.width) * visibleDurationMs),
-                                                        visibleDurationMs
-                                                    );
-                                                    return;
-                                                }
-
-                                                const zoomFactor = event.deltaY > 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP;
-                                                zoomTimelineTo(anchorMs, visibleDurationMs * zoomFactor);
+                                                handleTimelineWheel(event, rect);
                                             }}
                                             onClick={(event) => {
                                                 if (event.target !== event.currentTarget) {

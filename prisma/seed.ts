@@ -6,6 +6,7 @@ const db = new PrismaClient();
 
 const ADMIN_PASSWORD_HASH = '$2b$10$rHas7QKx6Bjsb8CHfOyxqey4Ei3Ir69F5SEG9ar07eBPN0Gisn0Xy'; // admin123
 const DEFAULT_PASSWORD_HASH = '$2b$10$/vO6sqbVFEjs9IADUfQMr.xLkDVZF6FhypFOpig8hAzC0NAJWbagy'; // partner123
+const YAKUTIA_PARTNER_PASSWORD_HASH = '$2b$10$Df0jId32uLkkGKV9.sfiYukfPDLt1JR4BfXj7vvPHfsXpg/GnxeYS'; // Partner123
 
 const now = new Date();
 const daysAgo = (days: number, hour = 12) => {
@@ -394,7 +395,7 @@ async function main() {
                 id: 'usr-fr-yakutia',
                 name: 'ИП Петров / Якутия',
                 email: 'yakutia.partner@stones.com',
-                password_hash: DEFAULT_PASSWORD_HASH,
+                password_hash: YAKUTIA_PARTNER_PASSWORD_HASH,
                 role: 'FRANCHISEE',
                 balance: 167000,
                 commission_rate: 12.5,

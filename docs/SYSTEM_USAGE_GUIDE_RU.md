@@ -107,7 +107,7 @@ npm run dev:e2e
 - `admin@stones.com` / `admin123`
 - `manager@stones.com` / `partner123`
 - `sales@stones.com` / `partner123`
-- `yakutia.partner@stones.com` / `partner123`
+- `yakutia.partner@stones.com` / `Partner123`
 - `ural.partner@stones.com` / `partner123`
 - `baltic.partner@stones.com` / `partner123`
 - buyer-логины: `anna`, `maxim`, `olga`, `kirill` / `partner123`

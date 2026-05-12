@@ -46,12 +46,13 @@ npm run dev
 Пароли из `prisma/seed.ts`:
 
 - `admin123` — только для `admin@stones.com`
+- `Partner123` — только для `yakutia.partner@stones.com`
 - `partner123` — для остальных seeded-аккаунтов
 
 Важно:
 
 - эти пароли предназначены только для локального dev/e2e-контура на `localhost` / `127.0.0.1`
-- в shared/staging/prod-окружении вход с `admin123` и `partner123` блокируется сервером до смены пароля
+- в shared/staging/prod-окружении вход с `admin123`, `Partner123` и `partner123` блокируется сервером до смены пароля
 
 ### Staff и партнеры
 
@@ -60,7 +61,7 @@ npm run dev
 | `ADMIN` | `admin@stones.com` | `admin123` | `/admin/login`, полный HQ-доступ |
 | `MANAGER` | `manager@stones.com` | `partner123` | `/admin/login`, HQ без очереди заказов |
 | `SALES_MANAGER` | `sales@stones.com` | `partner123` | `/admin/login`, `/admin/orders` |
-| `FRANCHISEE` | `yakutia.partner@stones.com` | `partner123` | `/partner/login` |
+| `FRANCHISEE` | `yakutia.partner@stones.com` | `Partner123` | `/partner/login` |
 | `FRANCHISEE` | `ural.partner@stones.com` | `partner123` | `/partner/login` |
 | `FRANCHISEE` | `baltic.partner@stones.com` | `partner123` | `/partner/login` |
 

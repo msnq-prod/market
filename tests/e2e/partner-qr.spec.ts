@@ -18,7 +18,7 @@ type BatchItemSummary = {
 };
 
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
-const PARTNER_PASSWORD = 'partner123';
+const PARTNER_PASSWORD = 'Partner123';
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 const SALES_EMAIL = 'sales@stones.com';

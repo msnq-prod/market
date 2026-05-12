@@ -32,7 +32,7 @@ type RateLimitOptions = {
 };
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
-const KNOWN_WEAK_SHARED_PASSWORDS = new Set(['admin123', 'partner123']);
+const KNOWN_WEAK_SHARED_PASSWORDS = new Set(['admin123', 'partner123', 'Partner123']);
 
 const sleep = (delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs));
 

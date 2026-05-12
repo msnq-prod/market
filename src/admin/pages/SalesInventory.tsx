@@ -548,13 +548,13 @@ function SummaryPill({ label, value, tone = 'text-gray-200' }: { label: string; 
 
 function PublicationPill({ published }: { published: boolean }) {
     return (
-        <span className={`relative inline-flex h-8 w-[94px] shrink-0 items-center rounded-full border p-1 text-[11px] font-semibold ${published
+        <span className={`relative inline-flex h-8 w-[108px] shrink-0 items-center rounded-full border p-1 text-[11px] font-semibold ${published
             ? 'border-emerald-400/25 bg-emerald-500/20 text-emerald-100'
             : 'border-red-400/25 bg-red-500/15 text-red-100'
             }`}
         >
-            <span className={`h-5 w-5 rounded-full bg-current opacity-70 ${published ? 'translate-x-[60px]' : 'translate-x-0'}`} />
-            <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
+            <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-current opacity-70 ${published ? 'translate-x-[80px]' : 'translate-x-0'}`} />
+            <span className={`pointer-events-none relative z-10 flex w-full items-center whitespace-nowrap leading-none ${published ? 'justify-start pl-2 pr-7' : 'justify-end pl-7 pr-2'}`}>
                 {published ? 'На сайте' : 'Скрыт'}
             </span>
         </span>

@@ -23,7 +23,7 @@ type PhotoToolPayload = {
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
-const PARTNER_PASSWORD = 'partner123';
+const PARTNER_PASSWORD = 'Partner123';
 const TINY_PNG = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
     'base64'

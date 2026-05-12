@@ -3,8 +3,9 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
     ArrowLeft,
-    ArrowRight,
     CheckCircle2,
+    ChevronDown,
+    ChevronUp,
     FileImage,
     ImagePlus,
     LoaderCircle,
@@ -96,6 +97,13 @@ type AssignmentDraft = {
     value: string;
 };
 
+type PhotoImportProgress = {
+    stage: 'checking' | 'converting' | 'adding';
+    currentFileName: string;
+    current: number;
+    total: number;
+};
+
 const PHOTO_TOOL_DRAFT_VERSION = 1;
 const PHOTO_TOOL_DRAFT_DB = 'stones-photo-tool-drafts';
 const PHOTO_TOOL_DRAFT_STORE = 'photo-files';
@@ -129,6 +137,35 @@ const extractPhotoName = (value: string) => {
 const canPreviewPhotoInBrowser = (photo: WorkingPhoto) => (
     photo.source === 'persisted' || !PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS.has(getFileExtension(photo.name))
 );
+
+const isHeicLikePhoto = (file: File) => {
+    const extension = getFileExtension(file.name);
+    return extension === 'heic' || extension === 'heif' || file.type === 'image/heic' || file.type === 'image/heif';
+};
+
+const buildConvertedHeicName = (fileName: string) => {
+    const baseName = fileName.replace(/\.(heic|heif)$/i, '');
+    return `${baseName || 'photo'}.jpg`;
+};
+
+const convertHeicToJpegFile = async (file: File) => {
+    const { default: heic2any } = await import('heic2any');
+    const converted = await heic2any({
+        blob: file,
+        toType: 'image/jpeg',
+        quality: 0.9
+    });
+    const convertedBlob = Array.isArray(converted) ? converted[0] : converted;
+
+    return new File(
+        [convertedBlob],
+        buildConvertedHeicName(file.name),
+        {
+            type: 'image/jpeg',
+            lastModified: file.lastModified
+        }
+    );
+};
 
 const comparePhotoNames = (left: WorkingPhoto, right: WorkingPhoto) =>
     left.name.localeCompare(right.name, 'ru', { numeric: true, sensitivity: 'base' });
@@ -488,6 +525,8 @@ export function PhotoTool() {
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
+    const [sidebarControlsOpen, setSidebarControlsOpen] = useState(true);
+    const [importProgress, setImportProgress] = useState<PhotoImportProgress | null>(null);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const photosRef = useRef<WorkingPhoto[]>([]);
     const baselineSignatureRef = useRef('');
@@ -580,6 +619,7 @@ export function PhotoTool() {
     const prevPhoto = resolvedActiveIndex > 0 ? photos[resolvedActiveIndex - 1] : null;
     const activePhoto = photos[resolvedActiveIndex] ?? null;
     const nextPhoto = resolvedActiveIndex < photos.length - 1 ? photos[resolvedActiveIndex + 1] : null;
+    const isImportingPhotos = importProgress !== null;
 
     const clearAssignmentDraft = (photoId?: string) => {
         setAssignmentDraft((current) => {
@@ -663,17 +703,30 @@ export function PhotoTool() {
         setSuccessMessage('');
     };
 
-    const handleAddFiles = (fileList: FileList | null) => {
+    const handleAddFiles = async (fileList: FileList | null) => {
         if (!fileList || fileList.length === 0) {
+            return;
+        }
+
+        if (importProgress) {
             return;
         }
 
         setError('');
         setSuccessMessage('');
 
+        const sourceFiles = Array.from(fileList);
+        setImportProgress({
+            stage: 'checking',
+            currentFileName: '',
+            current: 0,
+            total: sourceFiles.length
+        });
+
         const rejectedRawFiles: string[] = [];
         const rejectedFiles: string[] = [];
-        const acceptedFiles = Array.from(fileList).filter((file) => {
+        const failedHeicFiles: string[] = [];
+        const acceptedFiles = sourceFiles.filter((file) => {
             const extension = getFileExtension(file.name);
             if (PHOTO_TOOL_RAW_EXTENSIONS.has(extension)) {
                 rejectedRawFiles.push(file.name);
@@ -693,21 +746,71 @@ export function PhotoTool() {
                 ? 'DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.'
                 : `Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`
             );
+            setImportProgress(null);
             return;
         }
 
-        if (rejectedRawFiles.length > 0 || rejectedFiles.length > 0) {
-            setError(rejectedRawFiles.length > 0
-                ? `Часть файлов пропущена: DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.`
-                : `Часть файлов пропущена. Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`
-            );
+        const preparedFiles: File[] = [];
+
+        for (const [index, file] of acceptedFiles.entries()) {
+            if (!isHeicLikePhoto(file)) {
+                preparedFiles.push(file);
+                continue;
+            }
+
+            setImportProgress({
+                stage: 'converting',
+                currentFileName: file.name,
+                current: index + 1,
+                total: acceptedFiles.length
+            });
+
+            try {
+                preparedFiles.push(await convertHeicToJpegFile(file));
+            } catch (conversionError) {
+                console.error(conversionError);
+                failedHeicFiles.push(file.name);
+            }
         }
 
-        const localPhotos = acceptedFiles.map((file) => createLocalPhoto(file));
+        if (preparedFiles.length === 0) {
+            setImportProgress(null);
+            setError(failedHeicFiles.length > 0
+                ? 'Не удалось конвертировать HEIC. Экспортируйте файл в JPEG/PNG.'
+                : `Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`
+            );
+            return;
+        }
+
+        setImportProgress({
+            stage: 'adding',
+            currentFileName: '',
+            current: preparedFiles.length,
+            total: preparedFiles.length
+        });
+
+        const statusMessages: string[] = [];
+        if (rejectedRawFiles.length > 0) {
+            statusMessages.push('DNG/RAW пропущены: экспортируйте их в HEIC/JPEG/PNG.');
+        } else if (rejectedFiles.length > 0) {
+            statusMessages.push(`Неподдерживаемые файлы пропущены. Форматы: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`);
+        }
+        if (failedHeicFiles.length > 0) {
+            statusMessages.push(`Не удалось конвертировать HEIC: ${failedHeicFiles.join(', ')}. Экспортируйте файл в JPEG/PNG.`);
+        }
+
+        const localPhotos = preparedFiles.map((file) => createLocalPhoto(file));
         const reordered = orderPhotos([...buildPhotosWithPendingDraft(photos), ...localPhotos], sortMode, sortDescending);
         const nextPhotos = fillMissingAssignments(reordered, itemSeqs, assignmentDescending);
         clearAssignmentDraft();
         applyNextPhotos(nextPhotos, localPhotos[0]?.id || activePhotoId);
+        setImportProgress(null);
+
+        if (statusMessages.length > 0) {
+            setError(`Добавлено фото: ${preparedFiles.length}. ${statusMessages.join(' ')}`);
+        } else {
+            setSuccessMessage(`Добавлено фото: ${preparedFiles.length}.`);
+        }
     };
 
     const handleRemovePhoto = (photoId: string) => {
@@ -987,10 +1090,10 @@ export function PhotoTool() {
 
     return (
         <MotionConfig transition={{ type: 'spring', stiffness: 230, damping: 28, mass: 0.9 }}>
-            <div className="min-h-screen bg-[#0b0c0f] text-[#ecebe6]">
-                <div className="flex min-h-screen flex-col">
+            <div className="h-screen overflow-hidden bg-[#0b0c0f] text-[#ecebe6]">
+                <div className="flex h-full min-h-0 flex-col">
                     <header className="border-b border-white/5 bg-[#111318]/94 backdrop-blur">
-                        <div className="flex flex-wrap items-center gap-4 px-5 py-4 xl:px-8">
+                        <div className="flex flex-wrap items-center gap-3 px-5 py-3 xl:px-8">
                             <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.34em] text-white/35">
                                     <Link to="/admin/acceptance" className="inline-flex items-center gap-2 text-white/45 transition hover:text-white">
@@ -1001,15 +1104,7 @@ export function PhotoTool() {
                                     <span>Photo Tool</span>
                                     {hasUnsavedChanges && <span className="rounded-full bg-amber-400/15 px-2 py-1 text-[9px] tracking-[0.26em] text-amber-100">Draft</span>}
                                 </div>
-
-                                <div className="mt-2 flex flex-wrap items-end gap-3">
-                                    <h1 data-testid="photo-tool-heading" className="text-xl font-semibold tracking-tight text-white xl:text-2xl">
-                                        Назначение фотографий в паспорта товаров
-                                    </h1>
-                                    <p className="pb-0.5 text-sm text-white/45">
-                                        Партия {data?.batch.id}
-                                    </p>
-                                </div>
+                                <h1 data-testid="photo-tool-heading" className="sr-only">Назначение фотографий в паспорта товаров</h1>
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2">
@@ -1018,32 +1113,25 @@ export function PhotoTool() {
                                 <StatusPill label="Лишние" value={String(extraPhotoCount)} tone="default" />
                             </div>
 
-                            <Button
+                            <button
+                                type="button"
                                 data-testid="photo-save"
                                 onClick={() => void handleSave()}
-                                disabled={!canSave || saving}
-                                className="h-10 min-w-44 rounded-xl border border-sky-400/20 bg-sky-500/90 px-4 text-sm text-white shadow-[0_16px_50px_rgba(14,165,233,0.22)] hover:bg-sky-400"
+                                disabled={!canSave || saving || isImportingPhotos}
+                                className={`inline-flex h-11 items-center justify-center gap-2 rounded-full border px-5 text-sm font-semibold transition ${canSave && !saving && !isImportingPhotos
+                                    ? 'border-sky-300/40 bg-sky-400 text-[#061018] shadow-[0_16px_44px_rgba(56,189,248,0.24)] hover:bg-sky-300'
+                                    : 'border-white/10 bg-white/[0.06] text-white/42'
+                                    }`}
                             >
                                 {saving ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
-                                {saving ? 'Сохраняем...' : 'Сохранить назначения'}
-                            </Button>
+                                {saving ? 'Сохраняем' : 'Сохранить'}
+                            </button>
                         </div>
-
-                        {(error || successMessage || missingItemSeqs.length > 0) && (
-                            <div className={`border-t px-5 py-3 text-sm xl:px-8 ${error
-                                ? 'border-red-500/15 bg-red-500/10 text-red-100'
-                                : successMessage
-                                ? 'border-emerald-500/15 bg-emerald-500/10 text-emerald-100'
-                                : 'border-amber-500/15 bg-amber-500/10 text-amber-100'
-                                }`}>
-                                {error || successMessage || `Не хватает назначений для позиций: ${missingItemSeqs.map((itemSeq) => padItemSeq(itemSeq)).join(', ')}.`}
-                            </div>
-                        )}
                     </header>
 
-                    <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="flex min-h-0 flex-col border-r border-white/5 bg-[#14171b]">
-                            <div className="border-b border-white/5 px-4 py-4">
+                            <div className="border-b border-white/5 px-4 py-3">
                                 <input
                                     ref={fileInputRef}
                                     data-testid="photo-upload-input"
@@ -1052,54 +1140,81 @@ export function PhotoTool() {
                                     accept={PHOTO_TOOL_ACCEPT}
                                     className="hidden"
                                     onChange={(event) => {
-                                        handleAddFiles(event.target.files);
-                                        event.currentTarget.value = '';
+                                        const input = event.currentTarget;
+                                        void handleAddFiles(input.files).finally(() => {
+                                            input.value = '';
+                                        });
                                     }}
                                 />
                                 <Button
                                     variant="secondary"
                                     onClick={() => fileInputRef.current?.click()}
+                                    disabled={isImportingPhotos}
                                     className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 text-sm text-white hover:bg-white/[0.1]"
                                 >
-                                    <ImagePlus size={16} />
-                                    Добавить фото
+                                    {isImportingPhotos ? <LoaderCircle size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+                                    {isImportingPhotos ? 'Обработка...' : 'Добавить фото'}
                                 </Button>
 
-                                <div className="mt-3 grid grid-cols-2 gap-2">
-                                    <WorkspaceToggle
-                                        data-testid="photo-sort-name"
-                                        active={sortMode === 'name'}
-                                        title="Имя"
-                                        description="Числовая сортировка"
-                                        onClick={() => applyFullReassignment('name', sortDescending, assignmentDescending)}
-                                    />
-                                    <WorkspaceToggle
-                                        data-testid="photo-sort-date"
-                                        active={sortMode === 'date'}
-                                        title="Дата"
-                                        description="Файловое время"
-                                        onClick={() => applyFullReassignment('date', sortDescending, assignmentDescending)}
-                                    />
-                                    <WorkspaceToggle
-                                        data-testid="photo-reverse-list"
-                                        active={sortDescending}
-                                        title="Список"
-                                        description={sortDescending ? 'Обратный' : 'Прямой'}
-                                        onClick={() => applyFullReassignment(sortMode, !sortDescending, assignmentDescending)}
-                                    />
-                                    <WorkspaceToggle
-                                        data-testid="photo-reverse-assignment"
-                                        active={assignmentDescending}
-                                        title="Назначение"
-                                        description={assignmentDescending ? 'От конца' : 'От начала'}
-                                        onClick={() => applyFullReassignment(sortMode, sortDescending, !assignmentDescending)}
-                                    />
-                                </div>
+                                {importProgress && (
+                                    <PhotoImportPanel progress={importProgress} />
+                                )}
 
-                                <div data-testid="photo-coverage" className="mt-4 flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-white/32">
-                                    <span>Покрытие {Math.min(itemSeqs.length, assignedCount)}/{itemSeqs.length}</span>
-                                    <span>{photos.length} фото</span>
-                                </div>
+                                {sidebarControlsOpen && (
+                                    <>
+                                        <div className="mt-3 grid grid-cols-2 gap-2">
+                                            <WorkspaceToggle
+                                                data-testid="photo-sort-name"
+                                                active={sortMode === 'name'}
+                                                title="Имя"
+                                                description="Числовая сортировка"
+                                                onClick={() => applyFullReassignment('name', sortDescending, assignmentDescending)}
+                                            />
+                                            <WorkspaceToggle
+                                                data-testid="photo-sort-date"
+                                                active={sortMode === 'date'}
+                                                title="Дата"
+                                                description="Файловое время"
+                                                onClick={() => applyFullReassignment('date', sortDescending, assignmentDescending)}
+                                            />
+                                            <WorkspaceToggle
+                                                data-testid="photo-reverse-list"
+                                                active={sortDescending}
+                                                title="Список"
+                                                description={sortDescending ? 'Обратный' : 'Прямой'}
+                                                onClick={() => applyFullReassignment(sortMode, !sortDescending, assignmentDescending)}
+                                            />
+                                            <WorkspaceToggle
+                                                data-testid="photo-reverse-assignment"
+                                                active={assignmentDescending}
+                                                title="Назначение"
+                                                description={assignmentDescending ? 'От конца' : 'От начала'}
+                                                onClick={() => applyFullReassignment(sortMode, sortDescending, !assignmentDescending)}
+                                            />
+                                        </div>
+
+                                        <div data-testid="photo-coverage" className="mt-4 flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-white/32">
+                                            <span>Покрытие {Math.min(itemSeqs.length, assignedCount)}/{itemSeqs.length}</span>
+                                            <span>{photos.length} фото</span>
+                                        </div>
+                                    </>
+                                )}
+
+                                {!sidebarControlsOpen && (
+                                    <div data-testid="photo-coverage" className="mt-3 flex items-center justify-between rounded-2xl bg-[#101216] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-white/32">
+                                        <span>{Math.min(itemSeqs.length, assignedCount)}/{itemSeqs.length}</span>
+                                        <span>{photos.length} фото</span>
+                                    </div>
+                                )}
+
+                                <button
+                                    type="button"
+                                    onClick={() => setSidebarControlsOpen((current) => !current)}
+                                    className="mt-3 flex h-8 w-full items-center justify-center rounded-xl border border-white/8 bg-white/[0.03] text-white/45 transition hover:bg-white/[0.07] hover:text-white"
+                                    aria-label={sidebarControlsOpen ? 'Свернуть настройки фото' : 'Развернуть настройки фото'}
+                                >
+                                    {sidebarControlsOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                                </button>
                             </div>
 
                             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -1173,41 +1288,16 @@ export function PhotoTool() {
                             </div>
                         </aside>
 
-                        <main className="flex min-h-0 flex-col bg-[#0e1014]">
-                            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 xl:px-8">
-                                <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-white/28">
-                                    <span>{sortMode === 'name' ? 'Сортировка: имя' : 'Сортировка: дата'}</span>
-                                    <span className="text-white/18">•</span>
-                                    <span>{sortDescending ? 'Список: обратный' : 'Список: прямой'}</span>
-                                    <span className="text-white/18">•</span>
-                                    <span>{assignmentDescending ? 'Назначение: от конца' : 'Назначение: от начала'}</span>
+                        <main className="flex min-h-0 flex-col overflow-y-auto bg-[#0e1014]">
+                            {(error || successMessage) && (
+                                <div className={`px-4 py-2 text-sm xl:px-8 ${error ? 'bg-red-500/10 text-red-100' : 'bg-emerald-500/10 text-emerald-100'}`}>
+                                    {error || successMessage}
                                 </div>
+                            )}
 
-                                <div className="flex items-center gap-2">
-                                    <Button
-                                        variant="ghost"
-                                        onClick={() => prevPhoto && activatePhoto(prevPhoto.id, -1)}
-                                        disabled={!prevPhoto}
-                                        className="h-10 rounded-xl px-4 text-sm text-white/65 hover:bg-white/[0.05] hover:text-white"
-                                    >
-                                        <ArrowLeft size={16} />
-                                        Назад
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        onClick={() => nextPhoto && activatePhoto(nextPhoto.id, 1)}
-                                        disabled={!nextPhoto}
-                                        className="h-10 rounded-xl px-4 text-sm text-white/65 hover:bg-white/[0.05] hover:text-white"
-                                    >
-                                        Вперед
-                                        <ArrowRight size={16} />
-                                    </Button>
-                                </div>
-                            </div>
-
-                            <div className="min-h-0 flex-1 px-4 pb-4 xl:px-8 xl:pb-6">
+                            <div className="min-h-0 flex-1 px-4 py-4 xl:px-8 xl:py-6">
                                 <div className="grid grid-rows-[auto_auto] gap-4">
-                                    <section className="relative min-h-[460px] overflow-hidden rounded-[30px] bg-[#090b0f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.35)] lg:h-[clamp(520px,calc(100svh-300px),680px)]">
+                                    <section className="relative h-[560px] max-h-[calc(100svh-260px)] min-h-[460px] overflow-hidden rounded-[30px] bg-[#090b0f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.35)]">
                                         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.07),_transparent_52%),linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_22%,_transparent_78%,_rgba(255,255,255,0.03))]" />
                                         <div className="relative flex h-full items-center justify-center px-5 py-6 xl:px-8 xl:py-8">
                                             <div className="grid h-full w-full grid-cols-1 items-center gap-5 lg:grid-cols-[minmax(150px,0.78fr)_minmax(360px,1.85fr)_minmax(150px,0.78fr)] xl:gap-8">
@@ -1297,6 +1387,38 @@ function StatusPill({ label, value, tone = 'default' }: { label: string; value: 
     );
 }
 
+function PhotoImportPanel({ progress }: { progress: PhotoImportProgress }) {
+    const stageLabel = {
+        checking: 'Проверяем файлы',
+        converting: 'Конвертируем HEIC в JPEG',
+        adding: 'Добавляем фото'
+    }[progress.stage];
+    const total = Math.max(progress.total, 1);
+    const current = Math.min(Math.max(progress.current, 0), total);
+    const percent = Math.round((current / total) * 100);
+
+    return (
+        <div className="mt-3 rounded-2xl border border-sky-400/15 bg-sky-500/10 px-3 py-3 text-sky-50 shadow-[0_14px_34px_rgba(14,165,233,0.08)]">
+            <div className="flex items-center gap-3">
+                <LoaderCircle size={16} className="shrink-0 animate-spin text-sky-200" />
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold">{stageLabel}</p>
+                    <p className="mt-1 truncate text-xs text-sky-100/58">
+                        {progress.currentFileName || `${current}/${total} файлов`}
+                    </p>
+                </div>
+                <span className="text-xs font-semibold text-sky-100/78">{current}/{total}</span>
+            </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-sky-950/80">
+                <div
+                    className="h-full rounded-full bg-sky-300 transition-[width]"
+                    style={{ width: `${percent}%` }}
+                />
+            </div>
+        </div>
+    );
+}
+
 function WorkspaceToggle({
     active,
     title,
@@ -1373,8 +1495,8 @@ function CarouselStageCard({
                 <div
                     data-testid={`photo-card-${slot}`}
                     className={`flex w-full flex-col items-center justify-center rounded-[28px] bg-white/[0.025] text-center text-sm text-white/30 ${active
-                        ? 'h-full min-h-[520px] lg:min-h-0'
-                        : 'h-full min-h-[380px] max-w-[300px] lg:min-h-0'
+                        ? 'h-full'
+                        : 'h-[68%] max-w-[300px]'
                         }`}
                 >
                     <p className="text-[10px] uppercase tracking-[0.34em] text-white/18">{title}</p>
@@ -1394,16 +1516,18 @@ function CarouselStageCard({
                     animate={{ opacity: active ? 1 : 0.76, x: 0, scale: active ? 1 : 0.92, filter: 'blur(0px)' }}
                     exit={{ opacity: 0, x: -initialOffset || (direction * 90), scale: 0.9, filter: 'blur(10px)' }}
                     className={`relative w-full overflow-hidden rounded-[30px] ${active
-                        ? 'h-full min-h-[520px] bg-[#141920] shadow-[0_30px_90px_rgba(0,0,0,0.45),inset_0_0_0_1px_rgba(56,189,248,0.18)] lg:min-h-0'
-                        : 'h-full min-h-[380px] max-w-[300px] bg-[#161a20] shadow-[0_22px_60px_rgba(0,0,0,0.35)] lg:min-h-0'
+                        ? 'h-full bg-[#141920] shadow-[0_30px_90px_rgba(0,0,0,0.45),inset_0_0_0_1px_rgba(56,189,248,0.18)]'
+                        : 'h-[68%] max-w-[300px] bg-[#161a20] shadow-[0_22px_60px_rgba(0,0,0,0.35)]'
                         }`}
                 >
                     <button type="button" onClick={() => onActivate(photo)} className="absolute inset-0">
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(255,255,255,0.06),transparent_62%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_18%,transparent_72%,rgba(255,255,255,0.03))]" />
-                        <PhotoPreview
-                            photo={photo}
-                            className={`absolute inset-0 h-full w-full object-contain px-4 py-4 ${active ? 'xl:px-6 xl:py-6' : 'opacity-90'}`}
-                        />
+                        <div className={`absolute inset-0 flex items-center justify-center px-4 py-4 ${active ? 'xl:px-6 xl:py-6' : ''}`}>
+                            <PhotoPreview
+                                photo={photo}
+                                className={`max-h-full max-w-full object-contain ${active ? '' : 'opacity-90'}`}
+                            />
+                        </div>
                     </button>
 
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-[#090b0f] via-[#090b0f]/82 to-transparent" />

@@ -53,6 +53,7 @@
     "express": "^5.2.1",
     "framer-motion": "^12.23.25",
     "heic-convert": "^2.1.0",
+    "heic2any": "^0.0.4",
     "helmet": "^8.1.0",
     "html2canvas": "^1.4.1",
     "jsonwebtoken": "^9.0.3",

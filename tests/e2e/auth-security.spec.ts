@@ -7,7 +7,7 @@ type LoginPayload = {
 };
 
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
-const PARTNER_PASSWORD = 'partner123';
+const PARTNER_PASSWORD = 'Partner123';
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:5273';
 
 const extractRefreshCookieValue = (setCookieHeader: string | undefined) => {

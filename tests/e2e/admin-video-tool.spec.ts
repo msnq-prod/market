@@ -38,7 +38,7 @@ type VideoExportSessionPayload = {
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
-const PARTNER_PASSWORD = 'partner123';
+const PARTNER_PASSWORD = 'Partner123';
 const E2E_REQUEST_NOTE = '[e2e] admin-video-tool';
 
 const randomKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
