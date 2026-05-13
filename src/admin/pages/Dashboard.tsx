@@ -29,6 +29,8 @@ const initialStats: DashboardStats = {
     stockOnlineItems: 0,
 };
 
+const PROJECT_VERSION = '1.5.13';
+
 export function Dashboard() {
     const [stats, setStats] = useState<DashboardStats>(initialStats);
     const [loading, setLoading] = useState(true);
@@ -139,6 +141,18 @@ export function Dashboard() {
                     {error}
                 </div>
             )}
+
+            <section className="admin-panel rounded-[24px] px-5 py-4">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p className="text-sm font-medium text-gray-300">Текущая версия проекта</p>
+                        <p className="text-xs text-gray-500">Версия интерфейса и серверной части, актуальная для этого релиза.</p>
+                    </div>
+                    <div className="text-lg font-semibold text-white">
+                        {PROJECT_VERSION}
+                    </div>
+                </div>
+            </section>
 
             <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((card) => (
