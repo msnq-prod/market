@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page, type Route } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { createProductFixture, disconnectTestDb, testDb } from './support/db-fixtures';
 
 type LoginPayload = {
@@ -106,6 +106,14 @@ function buildManifest(payload: VideoToolPayload) {
     };
 }
 
+function takeManifestPrefix(manifest: ReturnType<typeof buildManifest>, count: number) {
+    return {
+        ...manifest,
+        segments: manifest.segments.slice(0, count + 1),
+        outputs: manifest.outputs.slice(0, count)
+    };
+}
+
 async function createReceivedBatchWithSerials(
     request: APIRequestContext,
     admin: LoginPayload,
@@ -165,6 +173,7 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
     const { productId } = await createProductFixture({ isPublished: false });
     const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
     const manifest = buildManifest(toolPayload);
+    const partialManifest = takeManifestPrefix(manifest, 1);
 
     const partnerToolResponse = await request.get(`/api/batches/${toolPayload.batch.id}/video-tool`, {
         headers: { Authorization: `Bearer ${partner.accessToken}` }
@@ -182,7 +191,7 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
                 lastModified: 123456,
                 durationMs: 3000
             },
-            render_manifest: manifest
+            render_manifest: partialManifest
         }
     });
     expect(createSessionResponse.status()).toBe(201);
@@ -201,7 +210,7 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
                 lastModified: 123456,
                 durationMs: 3000
             },
-            render_manifest: manifest
+            render_manifest: partialManifest
         }
     });
     expect(resumedSessionResponse.status()).toBe(200);
@@ -238,7 +247,7 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
         recovered_stale: boolean;
     };
     expect(retryTailPayload.session.status).toBe('OPEN');
-    expect(retryTailPayload.pending_serials).toHaveLength(2);
+    expect(retryTailPayload.pending_serials).toHaveLength(1);
     expect(retryTailPayload.recovered_stale).toBeTruthy();
 
     const badCountResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-sessions`, {
@@ -252,7 +261,7 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
                 lastModified: 1,
                 durationMs: 2000
             },
-            render_manifest: manifest
+            render_manifest: partialManifest
         }
     });
     expect(badCountResponse.status()).toBe(400);
@@ -298,6 +307,47 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
     const duplicatePayload = await duplicateUploadResponse.json() as VideoExportSessionPayload;
     expect(duplicatePayload.duplicate).toBeTruthy();
     expect(duplicatePayload.session.uploaded_count).toBe(1);
+
+    const incompatibleManifest = {
+        ...manifest,
+        segments: manifest.segments.map((segment, index) => index === 1
+            ? { ...segment, start_ms: segment.start_ms + 250 }
+            : segment)
+    };
+    const incompatibleAppendResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-sessions`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            expected_count: toolPayload.batch.expected_output_count,
+            crossfade_ms: 200,
+            source_fingerprint: {
+                name: 'source.mp4',
+                size: 128,
+                lastModified: 123456,
+                durationMs: 3000
+            },
+            render_manifest: incompatibleManifest
+        }
+    });
+    expect(incompatibleAppendResponse.status()).toBe(409);
+
+    const appendSessionResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-sessions`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            expected_count: toolPayload.batch.expected_output_count,
+            crossfade_ms: 200,
+            source_fingerprint: {
+                name: 'source.mp4',
+                size: 128,
+                lastModified: 123456,
+                durationMs: 3000
+            },
+            render_manifest: manifest
+        }
+    });
+    expect(appendSessionResponse.ok()).toBeTruthy();
+    const appendSessionPayload = await appendSessionResponse.json() as VideoExportSessionPayload;
+    expect(appendSessionPayload.resumed).toBeTruthy();
+    expect(appendSessionPayload.session.uploaded_count).toBe(1);
 
     const secondUploadResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-sessions/${createdSession.session.session_id}/files`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
@@ -370,15 +420,16 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
     expect(cancelledToolPayload.items[0]?.item_video_url).toBeNull();
 });
 
-test('UI: admin edits fragments and retries only missing tail uploads after reload', async ({ page, request }) => {
+test('UI: admin saves intro and appends no-intro source after partial upload', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
     const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
     const batchId = toolPayload.batch.id;
-    const renderJobs: Array<{ outputsCount: number }> = [];
-    let renderStatusPoll = 0;
-    let shouldFailTailUpload = true;
+    const renderJobs: Array<{
+        outputsCount: number;
+        sources: Array<{ source_index: number; source_id: string }>;
+    }> = [];
 
     await setAdminSession(page, admin);
 
@@ -391,7 +442,7 @@ test('UI: admin edits fragments and retries only missing tail uploads after relo
                 ffmpeg: true,
                 ffprobe: true,
                 helper_version: '1.0.0',
-                protocol_version: 'stones-video-export-helper-v2',
+                protocol_version: 'stones-video-export-helper-v3',
                 storage_root: '/tmp/stones-helper',
                 free_bytes: 1024 * 1024 * 1024 * 10,
                 allowed_origins: ['http://127.0.0.1:5273'],
@@ -401,28 +452,77 @@ test('UI: admin edits fragments and retries only missing tail uploads after relo
     });
 
     await page.route('http://127.0.0.1:3012/sources', async (route) => {
+        const postData = route.request().postDataBuffer()?.toString('utf8') ?? '';
+        const isSecondSource = postData.includes('source-2.mp4');
+        const isIntroSource = postData.includes('intro.mp4');
         await route.fulfill({
             status: 201,
             contentType: 'application/json',
             body: JSON.stringify({
-                source_id: `source-${randomKey()}`,
-                duration_ms: 8000,
+                source_id: isIntroSource ? `intro-source-${randomKey()}` : isSecondSource ? `tail-source-${randomKey()}` : `source-${randomKey()}`,
+                duration_ms: isIntroSource ? 2000 : 8000,
                 has_audio: true,
                 fingerprint: {
-                    name: 'source.mp4',
+                    name: isIntroSource ? 'intro.mp4' : isSecondSource ? 'source-2.mp4' : 'source.mp4',
                     size: 10,
-                    lastModified: 123456,
-                    durationMs: 8000
+                    lastModified: isSecondSource ? 654321 : 123456,
+                    durationMs: isIntroSource ? 2000 : 8000
                 }
             })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs', async (route) => {
+        await route.fulfill({
+            status: 202,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                job_id: 'intro-job-1',
+                status: 'QUEUED',
+                processed_count: 0,
+                total_count: 1
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs/intro-job-1', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                job_id: 'intro-job-1',
+                status: 'COMPLETED',
+                processed_count: 1,
+                total_count: 1
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs/intro-job-1/file', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'video/mp4',
+            body: makeFakeMp4('intro-output')
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs/intro-job-1/cleanup', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ success: true })
         });
     });
 
     await page.route('http://127.0.0.1:3012/render-jobs', async (route) => {
         const payload = route.request().postDataJSON() as {
             outputs: unknown[];
+            sources: Array<{ source_index: number; source_id: string }>;
         };
-        renderJobs.push({ outputsCount: payload.outputs.length });
+        renderJobs.push({
+            outputsCount: payload.outputs.length,
+            sources: payload.sources
+        });
 
         await route.fulfill({
             status: 202,
@@ -437,15 +537,13 @@ test('UI: admin edits fragments and retries only missing tail uploads after relo
     });
 
     await page.route('http://127.0.0.1:3012/render-jobs/job-1', async (route) => {
-        renderStatusPoll += 1;
-        const isCompleted = renderStatusPoll > 1;
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify({
                 job_id: 'job-1',
-                status: isCompleted ? 'COMPLETED' : 'PROCESSING',
-                processed_count: isCompleted ? renderJobs.at(-1)?.outputsCount ?? 0 : 1,
+                status: 'COMPLETED',
+                processed_count: renderJobs.at(-1)?.outputsCount ?? 0,
                 total_count: renderJobs.at(-1)?.outputsCount ?? 0,
                 outputs: []
             })
@@ -468,25 +566,6 @@ test('UI: admin edits fragments and retries only missing tail uploads after relo
         });
     });
 
-    await page.route(new RegExp(`/api/batches/${batchId}/video-export-sessions/.+/files$`), async (route: Route) => {
-        const postDataBuffer = route.request().postDataBuffer() || Buffer.from('');
-        const requestBody = postDataBuffer.toString('utf8');
-        const secondSerial = toolPayload.items[1].serial_number!;
-
-        if (shouldFailTailUpload && requestBody.includes(secondSerial)) {
-            shouldFailTailUpload = false;
-            await route.fulfill({
-                status: 500,
-                contentType: 'application/json',
-                body: JSON.stringify({ error: 'Mock upload failure for tail clip.' })
-            });
-            return;
-        }
-
-        const proxied = await route.fetch();
-        await route.fulfill({ response: proxied });
-    });
-
     await page.goto(`/admin/video-tool/${batchId}`);
     await expect(page.getByTestId('video-tool-heading')).toBeVisible();
 
@@ -503,42 +582,30 @@ test('UI: admin edits fragments and retries only missing tail uploads after relo
     await page.getByTestId('action-cut').click();
     await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 1 / 2');
 
-    await seekTimelineToRatio(page, 0.625);
-    await page.getByTestId('action-cut').click();
-    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 2 / 2');
-
-    await page.getByTestId('clip-card-002').evaluate((element: HTMLElement) => element.click());
-    await page.getByTestId('action-delete').click();
-    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 1 / 2');
-
-    await page.getByTestId('action-delete').click();
-    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 2 / 2');
-
     await page.getByTestId('action-export').click();
-    await expect(page.getByText('Mock upload failure for tail clip.')).toBeVisible({ timeout: 15000 });
-    expect(renderJobs[0]?.outputsCount).toBe(2);
+    await expect(page.getByText('Частичная выгрузка готова: 1/2. Можно добавить ещё видео.')).toBeVisible({ timeout: 15000 });
+    expect(renderJobs[0]?.outputsCount).toBe(1);
 
     await page.reload();
     await expect(page.getByTestId('draft-banner')).toBeVisible();
+    await expect(page.getByTestId('source-list')).toContainText('с интро');
 
-    await page.getByTestId('source-input').setInputFiles({
-        name: 'source.mp4',
+    await page.getByTestId('append-source-input').setInputFiles({
+        name: 'source-2.mp4',
         mimeType: 'video/mp4',
-        buffer: makeFakeMp4('source'),
-        lastModified: 123456
+        buffer: makeFakeMp4('source-2'),
+        lastModified: 654321
     });
-    await expect(page.getByTestId('clip-card-000')).toBeVisible();
-    await seekTimelineToRatio(page, 0.25);
-    await page.getByTestId('action-cut').click();
-
-    await seekTimelineToRatio(page, 0.625);
-    await page.getByTestId('action-cut').click();
     await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 2 / 2');
+    await expect(page.getByTestId('source-list')).toContainText('без интро');
+    await expect(page.getByTestId('source-boundary-1')).toBeVisible();
 
-    renderStatusPoll = 0;
     await page.getByTestId('action-export').click();
     await expect(page.getByText('Экспорт завершён: все финальные ролики загружены.')).toBeVisible({ timeout: 15000 });
     expect(renderJobs[1]?.outputsCount).toBe(1);
+    expect(renderJobs[1]?.sources).toHaveLength(2);
+    expect(renderJobs[1]?.sources[0]?.source_index).toBe(0);
+    expect(renderJobs[1]?.sources[1]?.source_index).toBe(2);
 });
 
 test('UI: export works with deleted fragments that leave source timeline gaps', async ({ page, request }) => {
@@ -564,7 +631,7 @@ test('UI: export works with deleted fragments that leave source timeline gaps', 
                 ffmpeg: true,
                 ffprobe: true,
                 helper_version: '1.0.0',
-                protocol_version: 'stones-video-export-helper-v2',
+                protocol_version: 'stones-video-export-helper-v3',
                 storage_root: '/tmp/stones-helper',
                 free_bytes: 1024 * 1024 * 1024 * 10,
                 allowed_origins: ['http://127.0.0.1:5273'],
@@ -588,6 +655,48 @@ test('UI: export works with deleted fragments that leave source timeline gaps', 
                     durationMs: 8000
                 }
             })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs', async (route) => {
+        await route.fulfill({
+            status: 202,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                job_id: 'intro-gap',
+                status: 'QUEUED',
+                processed_count: 0,
+                total_count: 1
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs/intro-gap', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                job_id: 'intro-gap',
+                status: 'COMPLETED',
+                processed_count: 1,
+                total_count: 1
+            })
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs/intro-gap/file', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'video/mp4',
+            body: makeFakeMp4('intro-gap')
+        });
+    });
+
+    await page.route('http://127.0.0.1:3012/intro-jobs/intro-gap/cleanup', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ success: true })
         });
     });
 
@@ -696,7 +805,7 @@ test('UI: keyboard shortcuts stay active when focus is on tool controls', async 
                 ffmpeg: true,
                 ffprobe: true,
                 helper_version: '1.0.0',
-                protocol_version: 'stones-video-export-helper-v2',
+                protocol_version: 'stones-video-export-helper-v3',
                 storage_root: '/tmp/stones-helper',
                 free_bytes: 1024 * 1024 * 1024 * 10,
                 allowed_origins: ['http://127.0.0.1:5273'],

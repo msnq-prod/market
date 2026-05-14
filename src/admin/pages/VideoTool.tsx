@@ -7,7 +7,7 @@ import { authFetch } from '../../utils/authFetch';
 const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
 
 const VIDEO_EXPORT_HELPER_URL = normalizeHelperUrl(import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012');
-const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
+const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 const HELPER_HEALTH_TIMEOUT_MS = 2500;
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
@@ -164,8 +164,15 @@ type RetryTailPayload = {
 };
 
 type VideoExportManifest = {
+    manifest_version?: number;
+    sources?: Array<{
+        source_index: number;
+        role: 'WITH_INTRO' | 'NO_INTRO';
+        fingerprint: SourceFingerprint;
+    }>;
     segments: Array<{
         sequence: number;
+        source_index?: number;
         start_ms: number;
         end_ms: number;
     }>;
@@ -174,6 +181,7 @@ type VideoExportManifest = {
         serial_number: string;
         item_id: string;
     }>;
+    intro_asset?: VideoExportIntroAsset | null;
 };
 
 type VideoExportSessionDetails = VideoExportSessionSummary & {
@@ -209,6 +217,7 @@ type VideoToolPayload = {
 
 type Segment = {
     sequence: number;
+    sourceIndex: number;
     startMs: number;
     endMs: number;
     deleted?: boolean;
@@ -221,15 +230,38 @@ type SourceFingerprint = {
     durationMs: number;
 };
 
+type VideoExportIntroAsset = {
+    file_name: string;
+    relative_path: string;
+    public_url: string;
+    uploaded_at: string;
+};
+
+type SourceRole = 'WITH_INTRO' | 'NO_INTRO';
+
+type WorkingSource = SourceFingerprint & {
+    sourceIndex: number;
+    role: SourceRole;
+    file: File | null;
+    helperSourceId: string;
+    previewUrl: string;
+    previewUnavailable: boolean;
+};
+
 type VideoToolDraft = {
-    version: 1;
+    version: 2;
     batchId: string;
-    sourceFingerprint: SourceFingerprint;
+    sources: Array<{
+        sourceIndex: number;
+        role: SourceRole;
+        fingerprint: SourceFingerprint;
+        helperSourceId: string | null;
+    }>;
     segments: Segment[];
     sessionId: string | null;
     sessionVersion: number | null;
     pendingSerials: string[];
-    helperSourceId: string | null;
+    introHelperSourceId: string | null;
 };
 
 type ExportPhase = 'idle' | 'preparing' | 'retrying' | 'rendering' | 'uploading' | 'completed' | 'cancelled' | 'error';
@@ -266,6 +298,15 @@ type HelperSourceUploadPayload = {
     format_name?: string;
     preview_url?: string;
     fingerprint: SourceFingerprint;
+};
+
+type HelperJobPayload = {
+    job_id?: string;
+    status?: string;
+    processed_count?: number;
+    total_count?: number;
+    error?: string;
+    error_message?: string;
 };
 
 type NoticeTone = 'info' | 'warning' | 'error';
@@ -390,6 +431,7 @@ const formatDuration = (durationMs: number) => {
 const normalizeSegments = (segments: Array<Omit<Segment, 'sequence'> | Segment>) =>
     segments
         .map((segment) => ({
+            sourceIndex: Number.isFinite(segment.sourceIndex) ? Math.max(0, Math.round(segment.sourceIndex)) : 0,
             startMs: Math.round(segment.startMs),
             endMs: Math.round(segment.endMs),
             deleted: Boolean(segment.deleted)
@@ -397,15 +439,113 @@ const normalizeSegments = (segments: Array<Omit<Segment, 'sequence'> | Segment>)
         .sort((left, right) => left.startMs - right.startMs)
         .map((segment, index) => ({
             sequence: index,
+            sourceIndex: segment.sourceIndex,
             startMs: segment.startMs,
             endMs: segment.endMs,
             deleted: segment.deleted
         }));
 
-const createInitialSegments = (durationMs: number) => normalizeSegments([{
-    startMs: 0,
-    endMs: durationMs
+const createInitialSegments = (durationMs: number, sourceIndex = 0, startOffsetMs = 0) => normalizeSegments([{
+    sourceIndex,
+    startMs: startOffsetMs,
+    endMs: startOffsetMs + durationMs
 }]);
+
+const getSourceTimelineStartMs = (sources: Array<Pick<WorkingSource, 'sourceIndex' | 'durationMs'>>, sourceIndex: number) =>
+    sources
+        .filter((source) => source.sourceIndex < sourceIndex)
+        .reduce((sum, source) => sum + source.durationMs, 0);
+
+const getTotalSourceDurationMs = (sources: Array<Pick<WorkingSource, 'durationMs'>>) =>
+    sources.reduce((sum, source) => sum + source.durationMs, 0);
+
+const getSourceForGlobalMs = (sources: WorkingSource[], globalMs: number) => {
+    let offsetMs = 0;
+    for (const source of sources) {
+        const sourceEndMs = offsetMs + source.durationMs;
+        if (globalMs >= offsetMs && globalMs <= sourceEndMs) {
+            return {
+                source,
+                localMs: clamp(globalMs - offsetMs, 0, source.durationMs)
+            };
+        }
+        offsetMs = sourceEndMs;
+    }
+
+    const fallbackSource = sources.at(-1) ?? null;
+    return fallbackSource
+        ? { source: fallbackSource, localMs: fallbackSource.durationMs }
+        : null;
+};
+
+const hydrateSegmentsFromManifest = (manifest: VideoExportManifest | null, sources: WorkingSource[]) => {
+    if (!manifest) {
+        return [];
+    }
+
+    return normalizeSegments(manifest.segments.map((segment) => {
+        const sourceIndex = segment.source_index ?? 0;
+        const offsetMs = getSourceTimelineStartMs(sources, sourceIndex);
+        return {
+            sourceIndex,
+            startMs: offsetMs + segment.start_ms,
+            endMs: offsetMs + segment.end_ms
+        };
+    }));
+};
+
+const createSourceFromFingerprint = (
+    sourceIndex: number,
+    role: SourceRole,
+    fingerprint: SourceFingerprint,
+    options?: Partial<Pick<WorkingSource, 'file' | 'helperSourceId' | 'previewUrl' | 'previewUnavailable'>>
+): WorkingSource => ({
+    sourceIndex,
+    role,
+    name: fingerprint.name,
+    size: fingerprint.size,
+    lastModified: fingerprint.lastModified,
+    durationMs: fingerprint.durationMs,
+    file: options?.file ?? null,
+    helperSourceId: options?.helperSourceId ?? '',
+    previewUrl: options?.previewUrl ?? '',
+    previewUnavailable: options?.previewUnavailable ?? false
+});
+
+const createSourcesFromManifest = (manifest: VideoExportManifest | null) => {
+    if (!manifest?.sources?.length) {
+        return [];
+    }
+
+    return manifest.sources
+        .sort((left, right) => left.source_index - right.source_index)
+        .map((source) => createSourceFromFingerprint(source.source_index, source.role, source.fingerprint));
+};
+
+const appendInitialSourceSegment = (segments: Segment[], source: WorkingSource, sources: WorkingSource[]) => {
+    const startOffsetMs = getSourceTimelineStartMs(sources, source.sourceIndex);
+    return normalizeSegments([
+        ...segments,
+        {
+            sourceIndex: source.sourceIndex,
+            startMs: startOffsetMs,
+            endMs: startOffsetMs + source.durationMs
+        }
+    ]);
+};
+
+const createFirstSourceSegments = (source: WorkingSource) => createInitialSegments(source.durationMs, source.sourceIndex, 0);
+
+const getSegmentLocalBounds = (segment: Segment, sources: WorkingSource[]) => {
+    const offsetMs = getSourceTimelineStartMs(sources, segment.sourceIndex);
+    return {
+        startMs: Math.max(0, segment.startMs - offsetMs),
+        endMs: Math.max(0, segment.endMs - offsetMs)
+    };
+};
+
+const isSourceBoundaryBetween = (left: Segment | undefined, right: Segment | undefined) =>
+    Boolean(left && right && left.sourceIndex !== right.sourceIndex);
 
 const splitSegmentAt = (segments: Segment[], playheadMs: number) => {
     const targetIndex = segments.findIndex((segment) => playheadMs > segment.startMs && playheadMs < segment.endMs);
@@ -420,8 +560,8 @@ const splitSegmentAt = (segments: Segment[], playheadMs: number) => {
 
     const nextSegments = [...segments];
     nextSegments.splice(targetIndex, 1,
-        { sequence: target.sequence, startMs: target.startMs, endMs: playheadMs, deleted: target.deleted },
-        { sequence: target.sequence + 1, startMs: playheadMs, endMs: target.endMs, deleted: target.deleted }
+        { sequence: target.sequence, sourceIndex: target.sourceIndex, startMs: target.startMs, endMs: playheadMs, deleted: target.deleted },
+        { sequence: target.sequence + 1, sourceIndex: target.sourceIndex, startMs: playheadMs, endMs: target.endMs, deleted: target.deleted }
     );
 
     return normalizeSegments(nextSegments);
@@ -491,15 +631,28 @@ const moveBoundary = (segments: Segment[], boundaryIndex: number, proposedMs: nu
     return normalizeSegments(nextSegments);
 };
 
-const buildRenderManifest = (segments: Segment[], items: VideoToolItem[]): VideoExportManifest => {
+const buildRenderManifest = (segments: Segment[], sources: WorkingSource[], items: VideoToolItem[]): VideoExportManifest => {
     const activeSegments = segments.filter((segment) => !segment.deleted);
+    const outputItems = items.slice(0, Math.max(0, activeSegments.length - 1));
     return {
+        manifest_version: 2,
+        sources: sources.map((source) => ({
+            source_index: source.sourceIndex,
+            role: source.role,
+            fingerprint: {
+                name: source.name,
+                size: source.size,
+                lastModified: source.lastModified,
+                durationMs: source.durationMs
+            }
+        })),
         segments: activeSegments.map((segment, index) => ({
             sequence: index,
-            start_ms: segment.startMs,
-            end_ms: segment.endMs
+            source_index: segment.sourceIndex,
+            start_ms: getSegmentLocalBounds(segment, sources).startMs,
+            end_ms: getSegmentLocalBounds(segment, sources).endMs
         })),
-        outputs: items.map((item, index) => {
+        outputs: outputItems.map((item, index) => {
             if (!item.serial_number) {
                 throw new Error(`У Item ${item.id} отсутствует serial_number.`);
             }
@@ -521,6 +674,7 @@ const areSegmentsEqual = (left: Segment[], right: Segment[]) => (
         const compared = right[index];
         return Boolean(compared)
             && segment.sequence === compared.sequence
+            && segment.sourceIndex === compared.sourceIndex
             && segment.startMs === compared.startMs
             && segment.endMs === compared.endMs
             && Boolean(segment.deleted) === Boolean(compared.deleted);
@@ -535,28 +689,23 @@ const parseDraft = (batchId: string): VideoToolDraft | null => {
         }
 
         const parsed = JSON.parse(raw) as VideoToolDraft;
-        if (!parsed || parsed.batchId !== batchId || parsed.version !== 1 || !parsed.sourceFingerprint || !Array.isArray(parsed.segments)) {
+        if (!parsed || parsed.batchId !== batchId || parsed.version !== 2 || !Array.isArray(parsed.sources) || !Array.isArray(parsed.segments)) {
             return null;
         }
 
         return {
             ...parsed,
+            sources: parsed.sources.map((source) => ({
+                sourceIndex: source.sourceIndex,
+                role: source.role,
+                fingerprint: source.fingerprint,
+                helperSourceId: source.helperSourceId ?? null
+            })),
             segments: normalizeSegments(parsed.segments)
         };
     } catch {
         return null;
     }
-};
-
-const sameFingerprint = (left: SourceFingerprint | null, right: SourceFingerprint | null) => {
-    if (!left || !right) {
-        return false;
-    }
-
-    return left.name === right.name
-        && left.size === right.size
-        && left.lastModified === right.lastModified
-        && Math.abs(left.durationMs - right.durationMs) <= 10;
 };
 
 const helperFetch = async (helperUrl: string, input: string, init?: RequestInit, options?: HelperFetchOptions) => {
@@ -629,7 +778,7 @@ export function VideoTool() {
     const panViewportRef = useRef<{ source: 'timeline' | 'scrollbar'; startClientX: number; startVisibleStartMs: number } | null>(null);
     const previewResizeRef = useRef<{ startClientX: number; startWidth: number } | null>(null);
     const segmentHistoryRef = useRef<Segment[][]>([]);
-    const sourceObjectUrlRef = useRef<string | null>(null);
+    const sourceObjectUrlsRef = useRef<Set<string>>(new Set());
 
     const [data, setData] = useState<VideoToolPayload | null>(null);
     const [loading, setLoading] = useState(true);
@@ -641,17 +790,15 @@ export function VideoTool() {
     const [helperBaseUrl, setHelperBaseUrl] = useState(VIDEO_EXPORT_HELPER_URL);
     const [helperDiagnostics, setHelperDiagnostics] = useState<HelperDiagnosticEntry[]>([]);
     const [helperDiagnosticCopied, setHelperDiagnosticCopied] = useState(false);
-    const [sourceFile, setSourceFile] = useState<File | null>(null);
-    const [sourceUrl, setSourceUrl] = useState('');
-    const [sourceFingerprint, setSourceFingerprint] = useState<SourceFingerprint | null>(null);
-    const [sourcePreviewUnavailable, setSourcePreviewUnavailable] = useState(false);
+    const [sources, setSources] = useState<WorkingSource[]>([]);
+    const [activeSourceIndex, setActiveSourceIndex] = useState(0);
+    const [introHelperSourceId, setIntroHelperSourceId] = useState('');
     const [segments, setSegments] = useState<Segment[]>([]);
     const [selectedSegmentIndex, setSelectedSegmentIndex] = useState(0);
     const [playheadMs, setPlayheadMs] = useState(0);
     const [draft, setDraft] = useState<VideoToolDraft | null>(null);
     const [session, setSession] = useState<VideoExportSessionDetails | null>(null);
     const [pendingSerials, setPendingSerials] = useState<string[]>([]);
-    const [helperSourceId, setHelperSourceId] = useState('');
     const [_renderJobId, setRenderJobId] = useState('');
     const [exportPhase, setExportPhase] = useState<ExportPhase>('idle');
     const [exportMessage, setExportMessage] = useState('');
@@ -667,7 +814,10 @@ export function VideoTool() {
     });
 
     const expectedOutputCount = data?.batch.expected_output_count ?? 0;
-    const durationMs = sourceFingerprint?.durationMs ?? 0;
+    const durationMs = getTotalSourceDurationMs(sources);
+    const activeSource = sources.find((source) => source.sourceIndex === activeSourceIndex) ?? sources[0] ?? null;
+    const sourceUrl = activeSource?.previewUrl ?? '';
+    const sourcePreviewUnavailable = Boolean(activeSource?.previewUnavailable);
     const visibleDurationMs = durationMs ? (timelineViewport.visibleDurationMs || durationMs) : 0;
     const visibleStartMs = durationMs ? clampVisibleStart(durationMs, timelineViewport.visibleStartMs, visibleDurationMs || durationMs) : 0;
     const visibleEndMs = visibleStartMs + visibleDurationMs;
@@ -691,7 +841,6 @@ export function VideoTool() {
         [segments]
     );
     const activeProductCount = Math.max(0, activeSegments.length - 1);
-    const itemDelta = activeProductCount - expectedOutputCount;
     const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
     const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
     const helperIssueKind = helperStatus === 'version_mismatch'
@@ -719,13 +868,15 @@ export function VideoTool() {
             ? helperBlockReason
             : helperStatus !== 'ready'
                 ? 'Проверяем ZAGARAMI Video Helper.'
-        : !sourceFile || !durationMs
+        : sources.length === 0 || !durationMs
             ? 'Загрузите исходник.'
-        : itemDelta < 0
-                ? `Не хватает ${Math.abs(itemDelta)} товарных фрагментов.`
-                    : itemDelta > 0
-                    ? `Лишних товарных фрагментов: ${itemDelta}.`
-                    : '';
+        : activeProductCount <= 0
+            ? 'Нужен минимум один товарный фрагмент.'
+        : activeProductCount > expectedOutputCount
+            ? `Лишних товарных фрагментов: ${activeProductCount - expectedOutputCount}.`
+        : session && activeProductCount < session.uploaded_count
+            ? 'Нельзя удалить уже загруженные товарные фрагменты.'
+            : '';
     const selectedSegment = segments[selectedSegmentIndex] ?? null;
     const sessionUploadedSerials = useMemo(
         () => new Set(session?.uploaded_manifest.map((entry) => entry.serial_number) ?? []),
@@ -859,6 +1010,20 @@ export function VideoTool() {
         0,
         durationMs
     ), [durationMs, visibleDurationMs, visibleStartMs]);
+    const syncVideoTime = useCallback((nextMs: number) => {
+        const sourceHit = getSourceForGlobalMs(sources, nextMs);
+        if (sourceHit && sourceHit.source.sourceIndex !== activeSourceIndex) {
+            setActiveSourceIndex(sourceHit.source.sourceIndex);
+        }
+
+        if (!videoRef.current) {
+            setPlayheadMs(nextMs);
+            return;
+        }
+
+        videoRef.current.currentTime = Math.max(0, (sourceHit?.localMs ?? nextMs) / 1000);
+        setPlayheadMs(nextMs);
+    }, [activeSourceIndex, sources]);
     const handleTimelineWheel = useCallback((event: React.WheelEvent<HTMLElement>, rect: DOMRect) => {
         if (!durationMs || !visibleDurationMs) {
             return;
@@ -890,7 +1055,7 @@ export function VideoTool() {
 
         const rect = timelineRef.current.getBoundingClientRect();
         syncVideoTime(timelineClientXToMs(clientX, rect));
-    }, [durationMs, timelineClientXToMs]);
+    }, [durationMs, syncVideoTime, timelineClientXToMs]);
     const togglePlayback = useCallback(async () => {
         if (!videoRef.current || !sourceUrl || sourcePreviewUnavailable) {
             return;
@@ -940,11 +1105,25 @@ export function VideoTool() {
                 if (sessionResponse.ok) {
                     const sessionPayload = await sessionResponse.json() as { session: VideoExportSessionDetails };
                     setSession(sessionPayload.session);
+                    const manifestSources = createSourcesFromManifest(sessionPayload.session.render_manifest);
+                    if (manifestSources.length > 0) {
+                        setSources(manifestSources);
+                        setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);
+                        const manifestSegments = hydrateSegmentsFromManifest(sessionPayload.session.render_manifest, manifestSources);
+                        if (manifestSegments.length > 0) {
+                            setSegments(manifestSegments);
+                            setSelectedSegmentIndex(0);
+                            setPlayheadMs(0);
+                        }
+                    }
                     const manifestOutputs = sessionPayload.session.render_manifest?.outputs ?? [];
                     const uploadedSerialSet = new Set(sessionPayload.session.uploaded_manifest.map((entry) => entry.serial_number));
                     setPendingSerials(manifestOutputs
                         .map((output) => output.serial_number)
                         .filter((serialNumber) => !uploadedSerialSet.has(serialNumber)));
+                    if (sessionPayload.session.render_manifest?.intro_asset) {
+                        setIntroHelperSourceId('');
+                    }
 
                     if (sessionPayload.session.status === 'ABANDONED') {
                         setNotice({
@@ -958,6 +1137,18 @@ export function VideoTool() {
                         });
                     }
                 }
+            } else if (existingDraft?.sources.length) {
+                const draftSources = existingDraft.sources.map((source) => createSourceFromFingerprint(
+                    source.sourceIndex,
+                    source.role,
+                    source.fingerprint,
+                    { helperSourceId: source.helperSourceId || '' }
+                ));
+                setSources(draftSources);
+                setActiveSourceIndex(draftSources[0]?.sourceIndex ?? 0);
+                setSegments(normalizeSegments(existingDraft.segments));
+                setPendingSerials(existingDraft.pendingSerials);
+                setIntroHelperSourceId(existingDraft.introHelperSourceId || '');
             }
         } catch (loadError) {
             console.error(loadError);
@@ -1107,8 +1298,8 @@ export function VideoTool() {
 
     useEffect(() => {
         return () => {
-            revokeObjectUrl(sourceObjectUrlRef.current);
-            sourceObjectUrlRef.current = null;
+            sourceObjectUrlsRef.current.forEach((objectUrl) => revokeObjectUrl(objectUrl));
+            sourceObjectUrlsRef.current.clear();
         };
     }, []);
 
@@ -1127,23 +1318,33 @@ export function VideoTool() {
     }, [durationMs, updateTimelineViewport]);
 
     useEffect(() => {
-        if (!batchId || !sourceFingerprint || segments.length === 0) {
+        if (!batchId || sources.length === 0 || segments.length === 0) {
             return;
         }
 
         const nextDraft: VideoToolDraft = {
-            version: 1,
+            version: 2,
             batchId,
-            sourceFingerprint,
+            sources: sources.map((source) => ({
+                sourceIndex: source.sourceIndex,
+                role: source.role,
+                fingerprint: {
+                    name: source.name,
+                    size: source.size,
+                    lastModified: source.lastModified,
+                    durationMs: source.durationMs
+                },
+                helperSourceId: source.helperSourceId || null
+            })),
             segments,
             sessionId: session?.session_id || null,
             sessionVersion: session?.version || null,
             pendingSerials,
-            helperSourceId: helperSourceId || null
+            introHelperSourceId: introHelperSourceId || null
         };
         localStorage.setItem(draftKeyFor(batchId), JSON.stringify(nextDraft));
         setDraft(nextDraft);
-    }, [batchId, helperSourceId, pendingSerials, segments, session?.session_id, session?.version, sourceFingerprint]);
+    }, [batchId, introHelperSourceId, pendingSerials, segments, session?.session_id, session?.version, sources]);
 
     useEffect(() => {
         setPreviewPanelWidth((current) => clampPreviewPanelWidth(current));
@@ -1180,6 +1381,10 @@ export function VideoTool() {
 
             const boundaryIndex = dragBoundaryIndexRef.current;
             if (boundaryIndex != null && timelineRef.current && durationMs && visibleDurationMs) {
+                if (isSourceBoundaryBetween(segments[boundaryIndex], segments[boundaryIndex + 1])) {
+                    return;
+                }
+
                 const rect = timelineRef.current.getBoundingClientRect();
                 const nextMs = timelineClientXToMs(event.clientX, rect);
                 setSegments((current) => moveBoundary(current, boundaryIndex, nextMs));
@@ -1223,22 +1428,12 @@ export function VideoTool() {
             window.removeEventListener('pointermove', handlePointerMove);
             window.removeEventListener('pointerup', handlePointerUp);
         };
-    }, [clampPreviewPanelWidth, durationMs, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
+    }, [clampPreviewPanelWidth, durationMs, segments, syncVideoTime, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
 
     const timelineCuts = useMemo(
         () => segments.slice(1).map((segment) => segment.startMs),
         [segments]
     );
-
-    const syncVideoTime = (nextMs: number) => {
-        if (!videoRef.current) {
-            setPlayheadMs(nextMs);
-            return;
-        }
-
-        videoRef.current.currentTime = Math.max(0, nextMs / 1000);
-        setPlayheadMs(nextMs);
-    };
 
     const seekToNearestCut = (direction: 'prev' | 'next') => {
         if (timelineCuts.length === 0) {
@@ -1320,7 +1515,7 @@ export function VideoTool() {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [applySegmentEdit, durationMs, hardDeleteSelectedSegment, playheadMs, restorePreviousSegments, selectedSegmentIndex, segments.length, timelineCuts, togglePlayback, zoomTimelineByFactor]);
+    }, [applySegmentEdit, durationMs, hardDeleteSelectedSegment, playheadMs, restorePreviousSegments, selectedSegmentIndex, segments.length, syncVideoTime, timelineCuts, togglePlayback, zoomTimelineByFactor]);
 
     useEffect(() => {
         if (!durationMs || !visibleDurationMs) {
@@ -1347,108 +1542,57 @@ export function VideoTool() {
         }
     }, [durationMs, playheadMs, segments, selectedSegmentIndex]);
 
-    const handleSourcePicked = (file: File | null) => {
+    const handleSourcePicked = (file: File | null, mode: 'first' | 'append' = 'first') => {
         if (!file) {
             return;
         }
 
+        const sourceIndex = mode === 'first' ? 0 : sources.length;
+        const role: SourceRole = sourceIndex === 0 ? 'WITH_INTRO' : 'NO_INTRO';
+        const nextObjectUrl = URL.createObjectURL(file);
+        sourceObjectUrlsRef.current.add(nextObjectUrl);
+
         setError('');
         setExportPhase('idle');
         setExportMessage('');
-        setHelperSourceId('');
         setRenderJobId('');
         setRenderProgress({ processed: 0, total: 0 });
-        setSourcePreviewUnavailable(false);
-        setSourceFingerprint(null);
-        setSegments([]);
-        segmentHistoryRef.current = [];
-        setPendingSerials([]);
         setIsPlaying(false);
-        setSourceFile(file);
 
-        revokeObjectUrl(sourceObjectUrlRef.current);
-        const nextObjectUrl = URL.createObjectURL(file);
-        sourceObjectUrlRef.current = nextObjectUrl;
-        setSourceUrl(nextObjectUrl);
-        void importSourceIntoHelper(file);
-    };
-
-    const applyLoadedSourceFingerprint = (
-        nextFingerprint: SourceFingerprint,
-        options?: {
-            nextHelperSourceId?: string;
-            preserveExistingNotice?: boolean;
-        }
-    ) => {
-        setSourceFingerprint(nextFingerprint);
-
-        if (options?.nextHelperSourceId) {
-            setHelperSourceId(options.nextHelperSourceId);
-        }
-
-        if (draft && sameFingerprint(draft.sourceFingerprint, nextFingerprint)) {
-            setSegments(normalizeSegments(draft.segments));
-            segmentHistoryRef.current = [];
-            setSelectedSegmentIndex(0);
-            setPlayheadMs(clamp(playheadMs, 0, nextFingerprint.durationMs));
-            setHelperSourceId(options?.nextHelperSourceId || draft.helperSourceId || '');
-            setTimelineViewport({
-                zoom: 1,
-                visibleStartMs: 0,
-                visibleDurationMs: nextFingerprint.durationMs,
-                isPanning: false
+        if (mode === 'first') {
+            sourceObjectUrlsRef.current.forEach((objectUrl) => {
+                if (objectUrl !== nextObjectUrl) {
+                    revokeObjectUrl(objectUrl);
+                }
             });
-            if (session?.render_manifest) {
-                const uploadedSerialSet = new Set(session.uploaded_manifest.map((entry) => entry.serial_number));
-                setPendingSerials(session.render_manifest.outputs
-                    .map((output) => output.serial_number)
-                    .filter((serialNumber) => !uploadedSerialSet.has(serialNumber)));
-            } else {
-                setPendingSerials(draft.pendingSerials);
-            }
-            return;
+            sourceObjectUrlsRef.current = new Set([nextObjectUrl]);
+            setSources([]);
+            setSegments([]);
+            setPendingSerials([]);
+            setIntroHelperSourceId('');
+            segmentHistoryRef.current = [];
         }
 
-        setSegments(createInitialSegments(nextFingerprint.durationMs));
-        segmentHistoryRef.current = [];
-        setSelectedSegmentIndex(0);
-        setPlayheadMs(0);
-        setPendingSerials([]);
-        setTimelineViewport({
-            zoom: 1,
-            visibleStartMs: 0,
-            visibleDurationMs: nextFingerprint.durationMs,
-            isPanning: false
-        });
-        if (!options?.preserveExistingNotice) {
-            setNotice(null);
-        }
+        setActiveSourceIndex(sourceIndex);
+        void importSourceIntoHelper(file, sourceIndex, role, nextObjectUrl);
     };
 
     const handleLoadedMetadata = () => {
-        if (!sourceFile || !videoRef.current || !Number.isFinite(videoRef.current.duration) || videoRef.current.duration <= 0) {
+        if (!activeSource || !videoRef.current || !Number.isFinite(videoRef.current.duration) || videoRef.current.duration <= 0) {
             return;
         }
 
-        if (sourceFingerprint
-            && sourceFingerprint.name === sourceFile.name
-            && sourceFingerprint.size === sourceFile.size
-            && sourceFingerprint.lastModified === sourceFile.lastModified) {
-            setSourcePreviewUnavailable(false);
-            return;
-        }
-
-        const nextFingerprint: SourceFingerprint = {
-            name: sourceFile.name,
-            size: sourceFile.size,
-            lastModified: sourceFile.lastModified,
-            durationMs: Math.max(1, Math.round(videoRef.current.duration * 1000))
-        };
-        applyLoadedSourceFingerprint(nextFingerprint, { preserveExistingNotice: true });
-        setSourcePreviewUnavailable(false);
+        setSources((current) => current.map((source) => source.sourceIndex === activeSource.sourceIndex
+            ? { ...source, previewUnavailable: false }
+            : source));
     };
 
-    const importSourceIntoHelper = async (file: File) => {
+    const importSourceIntoHelper = async (
+        file: File,
+        sourceIndex: number,
+        role: SourceRole,
+        fallbackPreviewUrl = ''
+    ) => {
         try {
             const form = new FormData();
             form.append('file', file);
@@ -1469,24 +1613,44 @@ export function VideoTool() {
                 lastModified: payload.fingerprint.lastModified,
                 durationMs: payload.fingerprint.durationMs
             };
-            applyLoadedSourceFingerprint(nextFingerprint, {
-                nextHelperSourceId: payload.source_id,
-                preserveExistingNotice: true
-            });
+            let previewUrl = fallbackPreviewUrl;
 
             const codec = (payload.video_codec || '').toLowerCase();
             const formatName = (payload.format_name || '').toLowerCase();
             const isHevcMov = (codec === 'hevc' || codec === 'h265') && formatName.includes('mov');
             if (payload.preview_url) {
-                revokeObjectUrl(sourceObjectUrlRef.current);
-                sourceObjectUrlRef.current = null;
                 try {
-                    setSourceUrl(`${helperBaseUrl}${new URL(payload.preview_url).pathname}`);
+                    previewUrl = `${helperBaseUrl}${new URL(payload.preview_url).pathname}`;
                 } catch {
-                    setSourceUrl(payload.preview_url);
+                    previewUrl = payload.preview_url;
                 }
-                setSourcePreviewUnavailable(false);
             }
+
+            const nextSource = createSourceFromFingerprint(sourceIndex, role, nextFingerprint, {
+                file,
+                helperSourceId: payload.source_id,
+                previewUrl,
+                previewUnavailable: false
+            });
+
+            const baseSources = sourceIndex === 0
+                ? []
+                : sources.filter((source) => source.sourceIndex !== sourceIndex);
+            const nextSources = [...baseSources, nextSource].sort((left, right) => left.sourceIndex - right.sourceIndex);
+            setSources(nextSources);
+            setSegments((currentSegments) => (
+                sourceIndex === 0
+                    ? createFirstSourceSegments(nextSource)
+                    : appendInitialSourceSegment(currentSegments, nextSource, nextSources)
+            ));
+            setTimelineViewport({
+                zoom: 1,
+                visibleStartMs: 0,
+                visibleDurationMs: getTotalSourceDurationMs(nextSources),
+                isPanning: false
+            });
+            setSelectedSegmentIndex(0);
+            setPlayheadMs(0);
 
             if (isHevcMov) {
                 setNotice({
@@ -1500,9 +1664,6 @@ export function VideoTool() {
             return payload.source_id;
         } catch (sourceError) {
             console.error(sourceError);
-            setHelperSourceId('');
-            setSourceFingerprint(null);
-            setSegments([]);
             setError(sourceError instanceof Error ? sourceError.message : 'Не удалось импортировать исходник в helper.');
             throw sourceError;
         }
@@ -1514,38 +1675,45 @@ export function VideoTool() {
         setSession(null);
         setNotice(null);
         setPendingSerials([]);
-        setHelperSourceId('');
+        setIntroHelperSourceId('');
         setExportPhase('idle');
         setExportMessage('');
         segmentHistoryRef.current = [];
         setIsPlaying(false);
-        if (sourceFingerprint) {
-            setSegments(createInitialSegments(sourceFingerprint.durationMs));
+        if (sources[0]) {
+            setSources([sources[0]]);
+            setActiveSourceIndex(sources[0].sourceIndex);
+            setSegments(createFirstSourceSegments(sources[0]));
             setSelectedSegmentIndex(0);
             setPlayheadMs(0);
             setTimelineViewport({
                 zoom: 1,
                 visibleStartMs: 0,
-                visibleDurationMs: sourceFingerprint.durationMs,
+                visibleDurationMs: sources[0].durationMs,
                 isPanning: false
             });
         }
     };
 
-    const ensureHelperSource = async () => {
-        if (!sourceFile) {
-            throw new Error('Исходное видео не выбрано.');
+    const ensureHelperSource = async (sourceIndex: number) => {
+        const source = sources.find((entry) => entry.sourceIndex === sourceIndex);
+        if (!source) {
+            throw new Error(`Source ${sourceIndex} не найден.`);
         }
 
-        if (helperSourceId) {
-            return helperSourceId;
+        if (source.helperSourceId) {
+            return source.helperSourceId;
         }
 
-        return importSourceIntoHelper(sourceFile);
+        if (!source.file) {
+            throw new Error(`Source ${sourceIndex} не загружен в helper. Добавьте исходник заново.`);
+        }
+
+        return importSourceIntoHelper(source.file, source.sourceIndex, source.role, source.previewUrl);
     };
 
     const createOrResumeServerSession = async (manifest: VideoExportManifest) => {
-        if (!data || !sourceFingerprint) {
+        if (!data || sources.length === 0) {
             throw new Error('Невозможно создать export-session без данных партии и source fingerprint.');
         }
 
@@ -1555,7 +1723,12 @@ export function VideoTool() {
             body: JSON.stringify({
                 expected_count: data.batch.expected_output_count,
                 crossfade_ms: CROSSFADE_MS,
-                source_fingerprint: sourceFingerprint,
+                source_fingerprint: {
+                    name: sources[0].name,
+                    size: sources[0].size,
+                    lastModified: sources[0].lastModified,
+                    durationMs: sources[0].durationMs
+                },
                 render_manifest: manifest
             })
         });
@@ -1612,8 +1785,9 @@ export function VideoTool() {
         const canRetryTail = session
             && session.session_id
             && ['OPEN', 'UPLOADING', 'FAILED', 'ABANDONED'].includes(session.status);
+        const isAppendingCurrentSession = manifest.outputs.length > (session?.render_manifest?.outputs.length ?? 0);
 
-        if (canRetryTail) {
+        if (canRetryTail && !isAppendingCurrentSession) {
             setExportPhase('retrying');
             setExportMessage('Подготовка retry-tail для отсутствующих роликов...');
             return retryTailSession();
@@ -1622,18 +1796,162 @@ export function VideoTool() {
         return createOrResumeServerSession(manifest);
     };
 
-    const createRenderJobInHelper = async (manifest: VideoExportManifest, pending: string[]) => {
+    const waitForHelperJobCompletion = async (jobId: string, endpointPrefix: '/render-jobs' | '/intro-jobs') => {
+        while (true) {
+            const response = await helperFetch(helperBaseUrl, `${endpointPrefix}/${jobId}`);
+            const payload = await response.json().catch(() => ({ error: 'Не удалось получить статус helper job.' })) as HelperJobPayload;
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось получить статус helper job.');
+            }
+
+            const safeProcessed = typeof payload.processed_count === 'number' ? payload.processed_count : 0;
+            const safeTotal = typeof payload.total_count === 'number' ? payload.total_count : 0;
+            setRenderProgress({ processed: safeProcessed, total: safeTotal });
+
+            if (payload.status === 'FAILED') {
+                throw new Error(payload.error_message || 'Helper завершил job с ошибкой.');
+            }
+
+            if (payload.status === 'COMPLETED') {
+                return;
+            }
+
+            await sleep(1200);
+        }
+    };
+
+    const createIntroJobInHelper = async (manifest: VideoExportManifest) => {
+        const introSegment = manifest.segments[0];
+        if (!introSegment) {
+            throw new Error('В манифесте нет intro-сегмента.');
+        }
+
+        const introSourceIndex = introSegment.source_index ?? 0;
+        const sourceId = await ensureHelperSource(introSourceIndex);
+        const response = await helperFetch(helperBaseUrl, '/intro-jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sources: [{ source_index: introSourceIndex, source_id: sourceId }],
+                segment: introSegment
+            })
+        });
+        const payload = await response.json().catch(() => ({ error: 'Не удалось создать intro job в helper.' })) as HelperJobPayload;
+        if (!response.ok || !payload.job_id) {
+            throw new Error(payload.error || 'Не удалось создать intro job в helper.');
+        }
+
+        return payload.job_id;
+    };
+
+    const uploadIntroAsset = async (jobId: string, sessionId: string) => {
+        if (!data) {
+            throw new Error('Данные партии не загружены.');
+        }
+
+        const fileResponse = await helperFetch(helperBaseUrl, `/intro-jobs/${jobId}/file`);
+        if (!fileResponse.ok) {
+            const payload = await fileResponse.json().catch(() => ({ error: 'Не удалось получить intro-файл из helper.' }));
+            throw new Error(payload.error || 'Не удалось получить intro-файл из helper.');
+        }
+
+        const fileBlob = await fileResponse.blob();
+        const form = new FormData();
+        form.append('file', fileBlob, 'intro.mp4');
+
+        const uploadResponse = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${sessionId}/intro-file`, {
+            method: 'POST',
+            body: form
+        });
+        const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось сохранить intro на сервере.' }));
+        if (!uploadResponse.ok || !uploadPayload.session) {
+            throw new Error(uploadPayload.error || 'Не удалось сохранить intro на сервере.');
+        }
+
+        const updatedSession = uploadPayload.session as VideoExportSessionDetails;
+        setSession(updatedSession);
+        return updatedSession;
+    };
+
+    const ensureIntroAsset = async (currentSession: VideoExportSessionDetails, manifest: VideoExportManifest) => {
+        if (currentSession.render_manifest?.intro_asset) {
+            return currentSession;
+        }
+
+        setExportPhase('rendering');
+        setExportMessage('Helper сохраняет intro для будущих догрузок...');
+        const introJobId = await createIntroJobInHelper(manifest);
+        await waitForHelperJobCompletion(introJobId, '/intro-jobs');
+        const updatedSession = await uploadIntroAsset(introJobId, currentSession.session_id);
+        return updatedSession;
+    };
+
+    const ensureIntroHelperSource = async (introAsset: VideoExportIntroAsset) => {
+        if (introHelperSourceId) {
+            return introHelperSourceId;
+        }
+
+        const response = await fetch(introAsset.public_url);
+        if (!response.ok) {
+            throw new Error('Не удалось загрузить сохранённое intro с сервера.');
+        }
+
+        const blob = await response.blob();
+        const form = new FormData();
+        form.append('file', blob, introAsset.file_name || 'intro.mp4');
+        form.append('lastModified', String(Date.parse(introAsset.uploaded_at) || Date.now()));
+
+        const helperResponse = await helperFetch(helperBaseUrl, '/sources', {
+            method: 'POST',
+            body: form
+        });
+        const payload = await helperResponse.json().catch(() => ({ error: 'Не удалось импортировать intro в helper.' })) as Partial<HelperSourceUploadPayload> & { error?: string };
+        if (!helperResponse.ok || !payload.source_id) {
+            throw new Error(payload.error || 'Не удалось импортировать intro в helper.');
+        }
+
+        setIntroHelperSourceId(payload.source_id);
+        return payload.source_id;
+    };
+
+    const createRenderJobInHelper = async (manifest: VideoExportManifest, pending: string[], introAsset: VideoExportIntroAsset) => {
         const renderOutputs = manifest.outputs.filter((output) => pending.includes(output.serial_number));
-        let sourceId = await ensureHelperSource();
+        const pendingSegmentSeqs = new Set(renderOutputs.map((output) => output.segment_seq));
+        const pendingTailSegments = manifest.segments.filter((segment) => pendingSegmentSeqs.has(segment.sequence));
+        const introSourceId = await ensureIntroHelperSource(introAsset);
+        const requiredTailSourceIndexes = Array.from(new Set(pendingTailSegments.map((segment) => segment.source_index ?? 0)));
+        const tailRenderSources = await Promise.all(requiredTailSourceIndexes.map(async (sourceIndex) => ({
+            source_index: sourceIndex + 1,
+            source_id: await ensureHelperSource(sourceIndex)
+        })));
+        const renderSources = [
+            { source_index: 0, source_id: introSourceId },
+            ...tailRenderSources
+        ];
+        const introSegment = manifest.segments[0];
+        const introDurationMs = introSegment ? introSegment.end_ms - introSegment.start_ms : 0;
+        const helperSegments = manifest.segments.map((segment) => (
+            segment.sequence === 0
+                ? {
+                    ...segment,
+                    source_index: 0,
+                    start_ms: 0,
+                    end_ms: introDurationMs
+                }
+                : {
+                    ...segment,
+                    source_index: (segment.source_index ?? 0) + 1
+                }
+        ));
 
         for (let attempt = 0; attempt < 2; attempt += 1) {
             const renderResponse = await helperFetch(helperBaseUrl, '/render-jobs', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    source_id: sourceId,
+                    sources: renderSources,
                     crossfade_ms: CROSSFADE_MS,
-                    segments: manifest.segments,
+                    segments: helperSegments,
                     outputs: renderOutputs
                 })
             });
@@ -1648,8 +1966,10 @@ export function VideoTool() {
 
             const message = renderPayload.error || 'Не удалось создать render job в helper.';
             if (attempt === 0 && /исходный файл.*не найден/i.test(message)) {
-                setHelperSourceId('');
-                sourceId = await ensureHelperSource();
+                setSources((current) => current.map((source) => requiredTailSourceIndexes.includes(source.sourceIndex)
+                    ? { ...source, helperSourceId: '' }
+                    : source));
+                setIntroHelperSourceId('');
                 continue;
             }
 
@@ -1660,27 +1980,7 @@ export function VideoTool() {
     };
 
     const waitForRenderCompletion = async (jobId: string) => {
-        while (true) {
-            const response = await helperFetch(helperBaseUrl, `/render-jobs/${jobId}`);
-            const payload = await response.json().catch(() => ({ error: 'Не удалось получить статус render job.' }));
-            if (!response.ok) {
-                throw new Error(payload.error || 'Не удалось получить статус render job.');
-            }
-
-            const safeProcessed = typeof payload.processed_count === 'number' ? payload.processed_count : 0;
-            const safeTotal = typeof payload.total_count === 'number' ? payload.total_count : 0;
-            setRenderProgress({ processed: safeProcessed, total: safeTotal });
-
-            if (payload.status === 'FAILED') {
-                throw new Error(payload.error_message || 'Helper завершил render job с ошибкой.');
-            }
-
-            if (payload.status === 'COMPLETED') {
-                return;
-            }
-
-            await sleep(1200);
-        }
+        return waitForHelperJobCompletion(jobId, '/render-jobs');
     };
 
     const uploadPendingFiles = async (jobId: string, sessionId: string, serials: string[]) => {
@@ -1766,16 +2066,22 @@ export function VideoTool() {
             setExportMessage('Подготовка исходника и export-session...');
             setRenderProgress({ processed: 0, total: 0 });
 
-            const manifest = buildRenderManifest(segments, data.items);
-            const { session: nextSession, pending } = await prepareServerSession(manifest);
+            const manifest = buildRenderManifest(segments, sources, data.items);
+            const { session: preparedSession, pending } = await prepareServerSession(manifest);
 
             if (pending.length === 0) {
                 setExportPhase('completed');
                 setExportMessage('Все финальные ролики уже загружены для этой сессии.');
-                if (nextSession.status === 'COMPLETED') {
+                if (preparedSession.status === 'COMPLETED') {
                     localStorage.removeItem(draftKeyFor(batchId));
                 }
                 return;
+            }
+
+            const nextSession = await ensureIntroAsset(preparedSession, manifest);
+            const introAsset = nextSession.render_manifest?.intro_asset;
+            if (!introAsset) {
+                throw new Error('Intro сохранён некорректно: в session отсутствует intro_asset.');
             }
 
             if (pending.length !== manifest.outputs.length) {
@@ -1783,7 +2089,7 @@ export function VideoTool() {
                 setExportMessage(`Дозагрузка хвоста: осталось ${pending.length} из ${manifest.outputs.length} роликов.`);
             }
 
-            const renderJob = await createRenderJobInHelper(manifest, pending);
+            const renderJob = await createRenderJobInHelper(manifest, pending, introAsset);
             setRenderJobId(renderJob.jobId);
             setExportPhase('rendering');
             setExportMessage('Helper рендерит финальные MP4...');
@@ -1807,7 +2113,9 @@ export function VideoTool() {
 
             setRenderJobId('');
             setExportPhase('completed');
-            setExportMessage('Экспорт завершён: все финальные ролики загружены.');
+            setExportMessage(manifest.outputs.length === expectedOutputCount
+                ? 'Экспорт завершён: все финальные ролики загружены.'
+                : `Частичная выгрузка готова: ${manifest.outputs.length}/${expectedOutputCount}. Можно добавить ещё видео.`);
 
             const latestSessionResponse = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${nextSession.session_id}`);
         if (latestSessionResponse.ok) {
@@ -1841,8 +2149,12 @@ export function VideoTool() {
 
     const selectedSegmentRow = selectedSegment ? segmentRows[selectedSegmentIndex] ?? null : null;
     const totalSegments = activeProductCount;
-    const clipCounterText = `Нарезано: ${totalSegments} / ${expectedOutputCount}`;
+    const clipCounterText = `Товарных клипов: ${totalSegments} / ${expectedOutputCount}`;
     const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
+    const selectedSegmentLocked = Boolean(
+        selectedSegmentRow?.isUploaded
+        || (selectedSegmentRow?.role === 'intro' && session?.render_manifest?.intro_asset)
+    );
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
     const helperSidebarStatus = helperStatus === 'checking'
             ? 'Проверяем локальный helper.'
@@ -2065,11 +2377,39 @@ export function VideoTool() {
                             <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto pb-3 pr-1">
                                 <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
                                     <div className="min-w-0">
-                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Исходник</p>
-                                        <p className="mt-1 truncate text-sm font-medium text-zinc-200">
-                                            {sourceFile?.name || draft?.sourceFingerprint.name || 'Видео не выбрано'}
+                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Исходники</p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-200">
+                                            {sources.length > 0 ? `${sources.length} видео` : 'Видео не выбрано'}
                                         </p>
                                     </div>
+
+                                    {sources.length > 0 && (
+                                        <div data-testid="source-list" className="mt-3 grid gap-2">
+                                            {sources.map((source) => (
+                                                <button
+                                                    key={`source-${source.sourceIndex}`}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setActiveSourceIndex(source.sourceIndex);
+                                                        syncVideoTime(getSourceTimelineStartMs(sources, source.sourceIndex));
+                                                    }}
+                                                    className={`rounded-xl border px-3 py-2 text-left transition ${
+                                                        activeSourceIndex === source.sourceIndex
+                                                            ? 'border-emerald-400/45 bg-emerald-400/10'
+                                                            : 'border-zinc-800 bg-zinc-950/70 hover:border-zinc-600'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="min-w-0 truncate text-xs font-medium text-zinc-100">{source.name}</span>
+                                                        <span className="shrink-0 rounded-full border border-zinc-700 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-zinc-400">
+                                                            {source.role === 'WITH_INTRO' ? 'с интро' : 'без интро'}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-1 text-[11px] text-zinc-500">{formatDuration(source.durationMs)}</p>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
 
                                     <label className="mt-4 inline-flex cursor-pointer items-center rounded-xl border border-emerald-700/60 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/15">
                                         <Upload size={14} />
@@ -2081,11 +2421,29 @@ export function VideoTool() {
                                             accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
                                             className="hidden"
                                             onChange={(event) => {
-                                                handleSourcePicked(event.target.files?.[0] || null);
+                                                handleSourcePicked(event.target.files?.[0] || null, 'first');
                                                 event.currentTarget.value = '';
                                             }}
                                         />
                                     </label>
+
+                                    {sources.length > 0 && (
+                                        <label className="mt-2 inline-flex cursor-pointer items-center rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500">
+                                            <Plus size={14} />
+                                            <span className="ml-2">Добавить ещё видео</span>
+                                            <input
+                                                data-testid="append-source-input"
+                                                aria-label="Добавить ещё видео без интро"
+                                                type="file"
+                                                accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
+                                                className="hidden"
+                                                onChange={(event) => {
+                                                    handleSourcePicked(event.target.files?.[0] || null, 'append');
+                                                    event.currentTarget.value = '';
+                                                }}
+                                            />
+                                        </label>
+                                    )}
 
                                 </section>
 
@@ -2104,6 +2462,9 @@ export function VideoTool() {
 
                                     <p className={`mt-4 rounded-2xl border px-3 py-3 text-sm leading-6 ${statusMessageToneClass}`}>
                                         {normalizedStatusMessage}
+                                    </p>
+                                    <p data-testid="blocking-status" className="mt-2 text-xs text-zinc-500">
+                                        {exportBlockedReason || 'Готово к экспорту'}
                                     </p>
 
                                     {helperNeedsAttention && (
@@ -2358,7 +2719,7 @@ export function VideoTool() {
                                             aria-label="Разрезать"
                                             size="sm"
                                             onClick={() => applySegmentEdit((current) => splitSegmentAt(current, playheadMs))}
-                                            disabled={!sourceFile || !durationMs}
+                                            disabled={sources.length === 0 || !durationMs}
                                             variant="secondary"
                                             className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
                                         >
@@ -2371,7 +2732,7 @@ export function VideoTool() {
                                             variant={selectedSegmentIsDeleted ? 'ghost' : 'danger'}
                                             size="sm"
                                             onClick={() => applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex))}
-                                            disabled={!selectedSegment}
+                                            disabled={!selectedSegment || selectedSegmentLocked}
                                             className={selectedSegmentIsDeleted
                                                 ? '!h-8 !min-h-0 rounded-lg border border-emerald-400/40 bg-emerald-400/12 px-2.5 py-0 text-[11px] text-emerald-100 hover:bg-emerald-400/18 hover:text-emerald-50 disabled:opacity-40'
                                                 : '!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40'}
@@ -2559,6 +2920,17 @@ export function VideoTool() {
                                                     return null;
                                                 }
 
+                                                if (isSourceBoundaryBetween(segment, segments[index + 1])) {
+                                                    return (
+                                                        <div
+                                                            key={`source-boundary-${segment.sequence}`}
+                                                            data-testid={`source-boundary-${segment.sequence}`}
+                                                            className="pointer-events-none absolute inset-y-4 z-20 w-1 -translate-x-1/2 bg-amber-200/80 shadow-[0_0_14px_rgba(253,230,138,0.35)]"
+                                                            style={{ left: `${((segment.endMs - visibleStartMs) / visibleDurationMs) * 100}%` }}
+                                                        />
+                                                    );
+                                                }
+
                                                 return (
                                                     <button
                                                         key={`boundary-${segment.sequence}`}
@@ -2686,11 +3058,20 @@ export function VideoTool() {
                                             onLoadedMetadata={handleLoadedMetadata}
                                             onPlay={() => setIsPlaying(true)}
                                             onPause={() => setIsPlaying(false)}
-                                            onTimeUpdate={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
+                                            onTimeUpdate={(event) => {
+                                                const offsetMs = activeSource
+                                                    ? getSourceTimelineStartMs(sources, activeSource.sourceIndex)
+                                                    : 0;
+                                                setPlayheadMs(offsetMs + Math.round(event.currentTarget.currentTime * 1000));
+                                            }}
                                             onError={() => {
-                                                setSourcePreviewUnavailable(true);
+                                                if (activeSource) {
+                                                    setSources((current) => current.map((source) => source.sourceIndex === activeSource.sourceIndex
+                                                        ? { ...source, previewUnavailable: true }
+                                                        : source));
+                                                }
                                                 setIsPlaying(false);
-                                                if (sourceFingerprint) {
+                                                if (activeSource) {
                                                     setNotice({
                                                         tone: 'warning',
                                                         message: 'Браузер не смог показать превью. Таймлайн и экспорт остаются доступны через helper.'

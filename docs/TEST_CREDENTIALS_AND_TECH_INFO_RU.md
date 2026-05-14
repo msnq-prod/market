@@ -177,11 +177,12 @@ npm run dev
 - `POST /api/batches/:id/video-jobs`
 - `POST /api/batches/:id/video-export-sessions`
 - `GET /api/batches/:id/video-export-sessions/:sessionId`
+- `POST /api/batches/:id/video-export-sessions/:sessionId/intro-file`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/files`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
 
-`video-tool` использует локальный helper с `protocol_version = stones-video-export-helper-v2` и позволяет продолжать незавершенную загрузку только для недостающих роликов.
+`video-tool` использует локальный helper с `protocol_version = stones-video-export-helper-v3`, сохраняет intro первой выгрузки через `intro-file` и позволяет append-only догрузку исходников без intro только для недостающих роликов.
 
 ### Фото
 
@@ -257,6 +258,7 @@ Seed создает:
 2. Открыть `/admin/video-tool/:batchId`.
 3. Проверить, что helper доступен и tool видит текущую export-session.
 4. Для незавершенной session проверить сценарий retry-tail только по отсутствующим роликам.
+5. Для частично выгруженной партии проверить `Добавить ещё видео`: второй source должен быть без intro, а уже загруженные `serial_number` не должны пересобираться.
 
 ### Проверка публичного паспорта
 

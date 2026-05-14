@@ -11,7 +11,7 @@ import multer from 'multer';
 
 const execFileAsync = promisify(execFile);
 
-export const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v2';
+export const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 export const DEFAULT_PORT = 3012;
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_ADDITIONAL_HOSTS = ['::1'];
@@ -254,6 +254,62 @@ const normalizeOutputs = (outputs) => {
     }).sort((left, right) => left.segment_seq - right.segment_seq);
 };
 
+const normalizeIntroSegment = (entry) => {
+    if (!isRecord(entry)) {
+        throw new Error('intro segment содержит некорректные данные.');
+    }
+
+    const sequence = typeof entry.sequence === 'number' ? entry.sequence : Number(entry.sequence);
+    const sourceIndex = typeof entry.source_index === 'number' ? entry.source_index : Number(entry.source_index);
+    const startMs = typeof entry.start_ms === 'number' ? entry.start_ms : Number(entry.start_ms);
+    const endMs = typeof entry.end_ms === 'number' ? entry.end_ms : Number(entry.end_ms);
+
+    if (!Number.isFinite(sequence) || sequence !== 0 || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) {
+        throw new Error('intro segment должен иметь sequence 0 и корректные границы.');
+    }
+
+    return {
+        sequence,
+        ...(Number.isFinite(sourceIndex) ? { source_index: sourceIndex } : {}),
+        start_ms: startMs,
+        end_ms: endMs
+    };
+};
+
+const normalizeRenderSources = (sourceEntries, fallbackSourceId, sources) => {
+    if (!Array.isArray(sourceEntries) || sourceEntries.length === 0) {
+        if (!fallbackSourceId) {
+            throw new Error('Не передан source_id для render job.');
+        }
+
+        return new Map([[0, sources.get(fallbackSourceId)]]);
+    }
+
+    const seenSourceIndexes = new Set();
+    const sourceMap = new Map();
+    for (const entry of sourceEntries) {
+        if (!isRecord(entry)) {
+            throw new Error('sources содержит некорректные данные.');
+        }
+
+        const sourceIndex = typeof entry.source_index === 'number' ? entry.source_index : Number(entry.source_index);
+        const sourceId = typeof entry.source_id === 'string' ? entry.source_id : '';
+        const source = sources.get(sourceId);
+        if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || !source) {
+            throw new Error('Один из sources ссылается на отсутствующий исходник.');
+        }
+
+        if (seenSourceIndexes.has(sourceIndex)) {
+            throw new Error('sources содержит повторяющийся source_index.');
+        }
+
+        seenSourceIndexes.add(sourceIndex);
+        sourceMap.set(sourceIndex, source);
+    }
+
+    return sourceMap;
+};
+
 const readHelperConfig = async (storageRoot, explicitAllowedOrigins) => {
     const fromOptions = Array.isArray(explicitAllowedOrigins) ? explicitAllowedOrigins : null;
     if (fromOptions && fromOptions.length > 0) {
@@ -359,9 +415,58 @@ const renderPreviewFile = async (ffmpegPath, source, outputPath) => {
     await runBinary(ffmpegPath, args);
 };
 
-const renderOutputFile = async (
+const renderIntroFile = async (
     ffmpegPath,
     source,
+    introSegment,
+    outputPath
+) => {
+    const introDurationMs = introSegment.end_ms - introSegment.start_ms;
+    const args = [
+        '-y',
+        '-i', source.file_path
+    ];
+    const videoFilter = buildVideoFilter('v', 0, introSegment.start_ms, introSegment.end_ms);
+    let filterComplex = videoFilter;
+    let audioMapLabel = '';
+
+    if (source.has_audio) {
+        filterComplex += ';'
+            + `[0:a]atrim=start=${secondsFromMs(introSegment.start_ms)}:end=${secondsFromMs(introSegment.end_ms)},asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a]`;
+        audioMapLabel = '[a]';
+    } else {
+        args.push(
+            '-f', 'lavfi',
+            '-t', (introDurationMs / 1000).toFixed(3),
+            '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000'
+        );
+        audioMapLabel = '1:a:0';
+    }
+
+    args.push(
+        '-filter_complex', filterComplex,
+        '-map', '[v]',
+        '-map', audioMapLabel,
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-r', '24',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-ar', '48000',
+        '-ac', '2',
+        '-movflags', '+faststart',
+        outputPath
+    );
+
+    await runBinary(ffmpegPath, args);
+};
+
+const renderOutputFile = async (
+    ffmpegPath,
+    introSource,
+    tailSource,
     introSegment,
     tailSegment,
     outputPath,
@@ -384,14 +489,14 @@ const renderOutputFile = async (
 
     const args = [
         '-y',
-        '-i', source.file_path,
-        '-i', source.file_path
+        '-i', introSource.file_path,
+        '-i', tailSource.file_path
     ];
 
     let filterComplex = videoFilters.join(';');
     let audioMapLabel = '';
 
-    if (source.has_audio) {
+    if (introSource.has_audio && tailSource.has_audio) {
         const crossfadeSeconds = (effectiveCrossfadeMs / 1000).toFixed(3);
         const introFadeStartSeconds = Math.max(0, (introDurationMs - effectiveCrossfadeMs) / 1000).toFixed(3);
         filterComplex += ';'
@@ -489,6 +594,14 @@ export async function startVideoExportHelperServer(options = {}) {
         sources.delete(source.id);
     };
 
+    const getJobSourceIds = (job) => {
+        if (Array.isArray(job.source_ids)) {
+            return job.source_ids.filter((sourceId) => typeof sourceId === 'string');
+        }
+
+        return typeof job.source_id === 'string' ? [job.source_id] : [];
+    };
+
     const removeJobArtifacts = async (jobId) => {
         const job = jobs.get(jobId);
         if (!job) {
@@ -499,11 +612,13 @@ export async function startVideoExportHelperServer(options = {}) {
         const jobDirectory = path.dirname(job.outputs[0]?.file_path || path.join(jobRoot, job.id));
         await fsp.rm(jobDirectory, { recursive: true, force: true }).catch(() => undefined);
 
-        const sourceStillUsed = Array.from(jobs.values()).some((candidate) => candidate.source_id === job.source_id);
-        if (!sourceStillUsed) {
-            const source = sources.get(job.source_id);
-            if (source) {
-                await removeSourceArtifacts(source);
+        for (const sourceId of getJobSourceIds(job)) {
+            const sourceStillUsed = Array.from(jobs.values()).some((candidate) => getJobSourceIds(candidate).includes(sourceId));
+            if (!sourceStillUsed) {
+                const source = sources.get(sourceId);
+                if (source) {
+                    await removeSourceArtifacts(source);
+                }
             }
         }
 
@@ -522,22 +637,24 @@ export async function startVideoExportHelperServer(options = {}) {
                 continue;
             }
 
-            const sourceId = job.source_id;
+            const sourceIds = getJobSourceIds(job);
             jobs.delete(job.id);
             removedJobs += 1;
             await fsp.rm(path.dirname(job.outputs[0]?.file_path || path.join(jobRoot, job.id)), { recursive: true, force: true }).catch(() => undefined);
 
-            const sourceStillUsed = Array.from(jobs.values()).some((candidate) => candidate.source_id === sourceId);
-            if (!sourceStillUsed) {
-                const source = sources.get(sourceId);
-                if (source) {
-                    await removeSourceArtifacts(source);
-                    removedSources += 1;
+            for (const sourceId of sourceIds) {
+                const sourceStillUsed = Array.from(jobs.values()).some((candidate) => getJobSourceIds(candidate).includes(sourceId));
+                if (!sourceStillUsed) {
+                    const source = sources.get(sourceId);
+                    if (source) {
+                        await removeSourceArtifacts(source);
+                        removedSources += 1;
+                    }
                 }
             }
         }
 
-        const referencedSourceIds = new Set(Array.from(jobs.values()).map((job) => job.source_id));
+        const referencedSourceIds = new Set(Array.from(jobs.values()).flatMap(getJobSourceIds));
         for (const source of Array.from(sources.values())) {
             const createdAt = Date.parse(source.created_at);
             if (referencedSourceIds.has(source.id) || !Number.isFinite(createdAt) || createdAt >= threshold) {
@@ -600,7 +717,52 @@ export async function startVideoExportHelperServer(options = {}) {
         await persistState();
     };
 
-    const processRenderJob = async (jobId, source, segments) => {
+    const processIntroJob = async (jobId, sourceMap, introSegment) => {
+        const job = jobs.get(jobId);
+        if (!job) {
+            return;
+        }
+
+        const introSource = sourceMap.get(introSegment.source_index ?? 0);
+        if (!introSource) {
+            await updateJob(jobId, { status: 'FAILED', error_message: 'Не найден source для intro.' });
+            return;
+        }
+
+        await updateJob(jobId, { status: 'PROCESSING', error_message: null });
+        const outputState = job.outputs[0];
+        if (!outputState) {
+            await updateJob(jobId, { status: 'FAILED', error_message: 'В intro job отсутствует output.' });
+            return;
+        }
+
+        try {
+            outputState.status = 'PROCESSING';
+            await updateJob(jobId, { outputs: [...job.outputs] });
+
+            await renderIntroFile(ffmpegPath, introSource, introSegment, outputState.file_path);
+
+            outputState.status = 'COMPLETED';
+            outputState.error_message = null;
+            await updateJob(jobId, {
+                status: 'COMPLETED',
+                outputs: [...job.outputs],
+                processed_count: 1,
+                error_message: null
+            });
+        } catch (error) {
+            outputState.status = 'FAILED';
+            outputState.error_message = error instanceof Error ? error.message : 'Не удалось отрендерить intro.';
+            await updateJob(jobId, {
+                status: 'FAILED',
+                outputs: [...job.outputs],
+                processed_count: 0,
+                error_message: outputState.error_message
+            });
+        }
+    };
+
+    const processRenderJob = async (jobId, sourceMap, segments) => {
         const job = jobs.get(jobId);
         if (!job) {
             return;
@@ -609,6 +771,11 @@ export async function startVideoExportHelperServer(options = {}) {
         const introSegment = segments[0];
         if (!introSegment) {
             await updateJob(jobId, { status: 'FAILED', error_message: 'В render job отсутствует сегмент 000.' });
+            return;
+        }
+        const introSource = sourceMap.get(introSegment.source_index ?? 0);
+        if (!introSource) {
+            await updateJob(jobId, { status: 'FAILED', error_message: 'Не найден source для intro.' });
             return;
         }
 
@@ -621,11 +788,15 @@ export async function startVideoExportHelperServer(options = {}) {
                 if (!tailSegment) {
                     throw new Error(`Не найден товарный сегмент ${String(outputState.segment_seq).padStart(3, '0')}.`);
                 }
+                const tailSource = sourceMap.get(tailSegment.source_index ?? 0);
+                if (!tailSource) {
+                    throw new Error(`Не найден source для товарного сегмента ${String(outputState.segment_seq).padStart(3, '0')}.`);
+                }
 
                 outputState.status = 'PROCESSING';
                 await updateJob(jobId, { outputs: [...job.outputs] });
 
-                await renderOutputFile(ffmpegPath, source, introSegment, tailSegment, outputState.file_path, job.crossfade_ms);
+                await renderOutputFile(ffmpegPath, introSource, tailSource, introSegment, tailSegment, outputState.file_path, job.crossfade_ms);
 
                 outputState.status = 'COMPLETED';
                 outputState.error_message = null;
@@ -679,7 +850,12 @@ export async function startVideoExportHelperServer(options = {}) {
         }
 
         for (const job of loadedJobs) {
-            if (!isRecord(job) || typeof job.id !== 'string' || typeof job.source_id !== 'string' || !Array.isArray(job.outputs)) {
+            if (!isRecord(job) || typeof job.id !== 'string' || !Array.isArray(job.outputs)) {
+                continue;
+            }
+
+            const jobSourceIds = getJobSourceIds(job);
+            if (jobSourceIds.length === 0 || jobSourceIds.some((sourceId) => !sources.has(sourceId))) {
                 continue;
             }
 
@@ -700,7 +876,7 @@ export async function startVideoExportHelperServer(options = {}) {
                 return output;
             }).filter(Boolean);
 
-            if (!sources.has(job.source_id) || nextOutputs.length === 0) {
+            if (nextOutputs.length === 0) {
                 continue;
             }
 
@@ -918,11 +1094,112 @@ export async function startVideoExportHelperServer(options = {}) {
         res.sendFile(source.preview_path);
     });
 
+    app.post('/intro-jobs', async (req, res) => {
+        try {
+            const sourceId = typeof req.body.source_id === 'string' ? req.body.source_id : '';
+            const sourceMap = normalizeRenderSources(req.body.sources, sourceId, sources);
+            if (Array.from(sourceMap.values()).some((source) => !source)) {
+                return res.status(404).json({ error: 'Исходный файл для intro не найден в helper.' });
+            }
+
+            const introSegment = normalizeIntroSegment(req.body.segment);
+            const introSource = sourceMap.get(introSegment.source_index ?? 0);
+            if (!introSource) {
+                return res.status(400).json({ error: 'segment.source_index ссылается на отсутствующий source.' });
+            }
+
+            await ensureEnoughDiskSpace(estimateRenderBytes(introSource, 1));
+
+            const jobId = crypto.randomUUID();
+            const jobDir = path.join(jobRoot, jobId);
+            await ensureDirectory(jobDir);
+
+            const job = {
+                id: jobId,
+                kind: 'INTRO',
+                source_id: introSource.id,
+                source_ids: Array.from(sourceMap.values()).map((source) => source.id),
+                status: 'QUEUED',
+                crossfade_ms: 0,
+                processed_count: 0,
+                total_count: 1,
+                error_message: null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                outputs: [{
+                    serial_number: 'INTRO',
+                    segment_seq: 0,
+                    status: 'QUEUED',
+                    file_name: 'intro.mp4',
+                    file_path: path.join(jobDir, 'intro.mp4'),
+                    error_message: null
+                }]
+            };
+
+            jobs.set(jobId, job);
+            await persistState();
+            void processIntroJob(jobId, sourceMap, introSegment);
+
+            res.status(202).json({
+                job_id: job.id,
+                status: job.status,
+                processed_count: job.processed_count,
+                total_count: job.total_count
+            });
+        } catch (error) {
+            res.status(400).json({
+                error: error instanceof Error ? error.message : 'Не удалось создать intro job.'
+            });
+        }
+    });
+
+    app.get('/intro-jobs/:id', (req, res) => {
+        const job = jobs.get(req.params.id);
+        if (!job || job.kind !== 'INTRO') {
+            return res.status(404).json({ error: 'Intro job не найден.' });
+        }
+
+        res.json({
+            job_id: job.id,
+            status: job.status,
+            processed_count: job.processed_count,
+            total_count: job.total_count,
+            error_message: job.error_message,
+            created_at: job.created_at,
+            updated_at: job.updated_at
+        });
+    });
+
+    app.get('/intro-jobs/:id/file', async (req, res) => {
+        const job = jobs.get(req.params.id);
+        if (!job || job.kind !== 'INTRO') {
+            return res.status(404).json({ error: 'Intro job не найден.' });
+        }
+
+        const output = job.outputs[0];
+        if (!output || output.status !== 'COMPLETED') {
+            return res.status(409).json({ error: 'Intro-файл ещё не готов к скачиванию.' });
+        }
+
+        res.setHeader('Content-Type', 'video/mp4');
+        res.sendFile(output.file_path);
+    });
+
+    app.post('/intro-jobs/:id/cleanup', async (req, res) => {
+        const job = jobs.get(req.params.id);
+        if (!job || job.kind !== 'INTRO') {
+            return res.status(404).json({ error: 'Intro job не найден.' });
+        }
+
+        await removeJobArtifacts(job.id);
+        res.json({ success: true });
+    });
+
     app.post('/render-jobs', async (req, res) => {
         try {
             const sourceId = typeof req.body.source_id === 'string' ? req.body.source_id : '';
-            const source = sources.get(sourceId);
-            if (!source) {
+            const sourceMap = normalizeRenderSources(req.body.sources, sourceId, sources);
+            if (Array.from(sourceMap.values()).some((source) => !source)) {
                 return res.status(404).json({ error: 'Исходный файл для рендера не найден в helper.' });
             }
 
@@ -940,7 +1217,8 @@ export async function startVideoExportHelperServer(options = {}) {
                 return res.status(400).json({ error: 'Один из outputs ссылается на отсутствующий товарный сегмент.' });
             }
 
-            await ensureEnoughDiskSpace(estimateRenderBytes(source, outputs.length));
+            const firstSource = Array.from(sourceMap.values())[0];
+            await ensureEnoughDiskSpace(estimateRenderBytes(firstSource, outputs.length));
 
             const jobId = crypto.randomUUID();
             const jobDir = path.join(jobRoot, jobId);
@@ -948,7 +1226,8 @@ export async function startVideoExportHelperServer(options = {}) {
 
             const job = {
                 id: jobId,
-                source_id: source.id,
+                source_id: sourceId || Array.from(sourceMap.values())[0]?.id,
+                source_ids: Array.from(sourceMap.values()).map((source) => source.id),
                 status: 'QUEUED',
                 crossfade_ms: crossfadeMs,
                 processed_count: 0,
@@ -968,7 +1247,7 @@ export async function startVideoExportHelperServer(options = {}) {
 
             jobs.set(jobId, job);
             await persistState();
-            void processRenderJob(jobId, source, segments);
+            void processRenderJob(jobId, sourceMap, segments);
 
             res.status(202).json({
                 job_id: job.id,

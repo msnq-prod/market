@@ -212,9 +212,11 @@ ZAGARAMI состоит из четырех основных частей:
 
 - HQ открывает `/admin/video-tool/:batchId`
 - браузер проверяет локальный helper и его `protocol_version`
-- создается `BatchVideoExportSession`
-- локальный helper рендерит ролики по item
-- незавершенная session может быть продолжена через retry-tail для отсутствующих файлов
+- создается или расширяется `BatchVideoExportSession`
+- `render_manifest` хранит v2-манифест: ordered sources, source-aware segments, prefix outputs и server-side `intro_asset`
+- локальный helper v3 рендерит ролики по item из сохраненного intro и текущих source без intro
+- незавершенная session может быть продолжена через append-only dogruzka или retry-tail для отсутствующих файлов
+- частичная загрузка не обновляет `item_video_url`; ссылки проставляются только после полного набора `expected_count`
 - готовые `.mp4` дозагружаются обратно в backend
 
 ## 8. Публичный цифровой паспорт

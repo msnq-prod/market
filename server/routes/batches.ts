@@ -29,10 +29,10 @@ import {
     parseVideoExportSourceFingerprint,
     VIDEO_EXPORT_ABANDONED_MESSAGE,
     VIDEO_EXPORT_CANCELLED_MESSAGE,
-    sameVideoExportManifest,
     serializeBatchVideoExportSession,
     VIDEO_EXPORT_STALE_AFTER_MS,
     type UploadedVideoExportManifestEntry,
+    type VideoExportIntroAsset,
     type VideoExportManifest
 } from '../services/videoExport.ts';
 import {
@@ -50,6 +50,7 @@ const router = express.Router();
 const prisma = new PrismaClient();
 const ACTIVE_VIDEO_JOB_STATUSES: Array<'QUEUED' | 'PROCESSING'> = ['QUEUED', 'PROCESSING'];
 const VIDEO_EXPORT_LOCK_TIMEOUT_SECONDS = 15;
+const VIDEO_EXPORT_INTRO_FILENAME = 'intro.mp4';
 const PHOTO_TOOL_PUBLIC_OUTPUT_ROOT = resolveProjectPath('public', 'uploads', 'photos');
 const PHOTO_TOOL_PUBLIC_URL_ROOT = '/uploads/photos';
 
@@ -550,6 +551,10 @@ const normalizeVideoExportManifest = (
         throw createHttpError('Для экспорта нужен минимум фрагмент 000 и один товарный фрагмент.', 400);
     }
 
+    if (parsed.outputs.length < 1 || parsed.outputs.length > batchItems.length) {
+        throw createHttpError(`Количество товарных фрагментов должно быть от 1 до ${batchItems.length}.`, 400);
+    }
+
     const batchItemsWithSerial = batchItems.filter((item) => item.serial_number);
     if (batchItemsWithSerial.length !== batchItems.length) {
         throw createHttpError('У некоторых Item отсутствует serial_number, экспорт невозможен.', 400);
@@ -565,34 +570,83 @@ const normalizeVideoExportManifest = (
             throw createHttpError('Некорректные границы сегментов в render_manifest.', 400);
         }
 
-        if (index > 0) {
-            const previous = sortedSegments[index - 1];
-            if ((previous.end_ms - segment.start_ms) > 1) {
-                throw createHttpError('Сегменты render_manifest не должны пересекаться.', 400);
-            }
+        const sourceIndex = typeof segment.source_index === 'number' ? segment.source_index : 0;
+        if (sourceIndex < 0 || !Number.isInteger(sourceIndex)) {
+            throw createHttpError('Некорректный source_index в render_manifest.', 400);
         }
     });
 
-    if (parsed.outputs.length !== batchItems.length || sortedSegments.length !== batchItems.length + 1) {
-        throw createHttpError(`Количество товарных фрагментов должно совпадать с Item партии: ожидается ${batchItems.length}.`, 400);
+    if (sortedSegments.length !== parsed.outputs.length + 1) {
+        throw createHttpError('Количество сегментов должно равняться intro + количеству outputs.', 400);
+    }
+
+    if (parsed.sources) {
+        if (parsed.sources.length === 0) {
+            throw createHttpError('sources не должен быть пустым.', 400);
+        }
+
+        const sortedSources = [...parsed.sources].sort((left, right) => left.source_index - right.source_index);
+        sortedSources.forEach((source, index) => {
+            if (source.source_index !== index) {
+                throw createHttpError('sources должны идти непрерывно от source_index 0.', 400);
+            }
+
+            if (index === 0 && source.role !== 'WITH_INTRO') {
+                throw createHttpError('Первый source должен содержать intro.', 400);
+            }
+
+            if (index > 0 && source.role !== 'NO_INTRO') {
+                throw createHttpError('Дополнительные source должны быть без intro.', 400);
+            }
+        });
+
+        const sourceIndexSet = new Set(sortedSources.map((source) => source.source_index));
+        const segmentWithMissingSource = sortedSegments.find((segment) => !sourceIndexSet.has(segment.source_index ?? 0));
+        if (segmentWithMissingSource) {
+            throw createHttpError('Сегмент ссылается на отсутствующий source_index.', 400);
+        }
+    }
+
+    const segmentsBySource = new Map<number, VideoExportManifest['segments']>();
+    for (const segment of sortedSegments) {
+        const sourceIndex = segment.source_index ?? 0;
+        const sourceSegments = segmentsBySource.get(sourceIndex) ?? [];
+        sourceSegments.push(segment);
+        segmentsBySource.set(sourceIndex, sourceSegments);
+    }
+    for (const sourceSegments of segmentsBySource.values()) {
+        const sortedSourceSegments = [...sourceSegments].sort((left, right) => left.start_ms - right.start_ms);
+        for (let index = 1; index < sortedSourceSegments.length; index += 1) {
+            const previous = sortedSourceSegments[index - 1];
+            const current = sortedSourceSegments[index];
+            if ((previous.end_ms - current.start_ms) > 1) {
+                throw createHttpError('Сегменты одного source не должны пересекаться.', 400);
+            }
+        }
     }
 
     const batchItemsById = new Map(batchItemsWithSerial.map((item) => [item.id, item]));
     const seenSegmentSeq = new Set<number>();
     const seenItemIds = new Set<string>();
     const seenSerials = new Set<string>();
-    const outputs = parsed.outputs.map((output) => {
+    const sortedParsedOutputs = [...parsed.outputs].sort((left, right) => left.segment_seq - right.segment_seq);
+    const outputs = sortedParsedOutputs.map((output, outputIndex) => {
+        const expectedBatchItem = batchItems[outputIndex];
         const batchItem = batchItemsById.get(output.item_id);
         if (!batchItem || !batchItem.serial_number) {
             throw createHttpError('render_manifest содержит item_id вне выбранной партии.', 400);
+        }
+
+        if (!expectedBatchItem || output.item_id !== expectedBatchItem.id) {
+            throw createHttpError('render_manifest должен описывать префикс Item партии без пропусков.', 400);
         }
 
         if (output.serial_number !== batchItem.serial_number) {
             throw createHttpError('render_manifest.serial_number не совпадает с Item.serial_number.', 400);
         }
 
-        if (output.segment_seq < 1 || output.segment_seq > batchItems.length) {
-            throw createHttpError('render_manifest.segment_seq должен ссылаться на товарный фрагмент 001..NNN.', 400);
+        if (output.segment_seq !== outputIndex + 1) {
+            throw createHttpError('render_manifest.segment_seq должен идти последовательностью 001..NNN без пропусков.', 400);
         }
 
         if (seenSegmentSeq.has(output.segment_seq) || seenItemIds.has(output.item_id) || seenSerials.has(output.serial_number)) {
@@ -607,9 +661,35 @@ const normalizeVideoExportManifest = (
     }).sort((left, right) => left.segment_seq - right.segment_seq);
 
     return {
+        ...(parsed.manifest_version ? { manifest_version: parsed.manifest_version } : {}),
+        ...(parsed.sources ? { sources: [...parsed.sources].sort((left, right) => left.source_index - right.source_index) } : {}),
         segments: sortedSegments,
-        outputs
+        outputs,
+        ...(parsed.intro_asset ? { intro_asset: parsed.intro_asset } : {})
     };
+};
+
+const manifestsAreAppendCompatible = (
+    existingManifest: VideoExportManifest | null,
+    nextManifest: VideoExportManifest
+) => {
+    if (!existingManifest || existingManifest.outputs.length > nextManifest.outputs.length || existingManifest.segments.length > nextManifest.segments.length) {
+        return false;
+    }
+
+    const existingWithoutIntroAsset = {
+        ...existingManifest,
+        intro_asset: null
+    };
+    const nextPrefixWithoutIntroAsset = {
+        ...nextManifest,
+        sources: nextManifest.sources?.slice(0, existingManifest.sources?.length ?? nextManifest.sources?.length),
+        segments: nextManifest.segments.slice(0, existingManifest.segments.length),
+        outputs: nextManifest.outputs.slice(0, existingManifest.outputs.length),
+        intro_asset: null
+    };
+
+    return JSON.stringify(existingWithoutIntroAsset) === JSON.stringify(nextPrefixWithoutIntroAsset);
 };
 
 const normalizeVideoExportSourceFingerprintInput = (value: unknown) => {
@@ -1270,15 +1350,26 @@ router.post('/:id/video-export-sessions', authenticateToken, async (req: AuthReq
 
             if (latestReusable) {
                 const existingManifest = parseVideoExportManifest(latestReusable.render_manifest);
-                const sameManifestConfig = sameVideoExportManifest(existingManifest, normalizedManifest)
+                const sameManifestConfig = manifestsAreAppendCompatible(existingManifest, normalizedManifest)
+                    && existingManifest?.segments.length === normalizedManifest.segments.length
+                    && existingManifest?.outputs.length === normalizedManifest.outputs.length
+                    && (existingManifest.sources?.length ?? 0) === (normalizedManifest.sources?.length ?? 0)
                     && latestReusable.crossfade_ms === safeCrossfadeMs
                     && latestReusable.expected_count === batch.items.length;
+                const appendCompatible = manifestsAreAppendCompatible(existingManifest, normalizedManifest);
 
-                if (latestReusable.uploaded_count > 0 && !sameManifestConfig) {
-                    throw createHttpError('Для незавершённой сессии уже загружены файлы. Продолжайте текущую сессию без изменения нарезки.', 409);
+                if (latestReusable.uploaded_count > 0 && !appendCompatible) {
+                    throw createHttpError('Для незавершённой сессии уже загружены файлы. Можно только добавить новые source и клипы в конец текущей нарезки.', 409);
                 }
 
-                const updatedSession = latestReusable.uploaded_count === 0 || latestReusable.status !== 'OPEN'
+                const manifestForUpdate = existingManifest?.intro_asset && !normalizedManifest.intro_asset
+                    ? {
+                        ...normalizedManifest,
+                        intro_asset: existingManifest.intro_asset
+                    }
+                    : normalizedManifest;
+
+                const updatedSession = latestReusable.uploaded_count === 0 || latestReusable.status !== 'OPEN' || !sameManifestConfig
                     ? await tx.batchVideoExportSession.update({
                         where: { id: latestReusable.id },
                         data: {
@@ -1286,7 +1377,7 @@ router.post('/:id/video-export-sessions', authenticateToken, async (req: AuthReq
                             expected_count: batch.items.length,
                             crossfade_ms: safeCrossfadeMs,
                             source_fingerprint: normalizedFingerprint as Prisma.InputJsonValue,
-                            render_manifest: normalizedManifest as Prisma.InputJsonValue,
+                            render_manifest: manifestForUpdate as Prisma.InputJsonValue,
                             error_message: null,
                             started_at: latestReusable.started_at ?? new Date(),
                             finished_at: null
@@ -1365,6 +1456,99 @@ router.get('/:id/video-export-sessions/:sessionId', authenticateToken, async (re
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Не удалось загрузить сессию экспорта.' });
+    }
+});
+
+router.post('/:id/video-export-sessions/:sessionId/intro-file', authenticateToken, async (req: AuthRequest, res) => {
+    let uploadedFile: Express.Multer.File | undefined;
+
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
+
+        await runVideoExportUpload(req, res);
+        uploadedFile = req.file as Express.Multer.File | undefined;
+
+        if (!uploadedFile) {
+            throw createHttpError('Не передан MP4-файл intro.', 400);
+        }
+
+        const result = await withVideoExportBatchLock(req.params.id, async (tx) => {
+            await markStaleVideoExportSessions(tx, req.params.id);
+
+            const loadedSession = await loadVideoExportSession(tx, req.params.id, req.params.sessionId);
+            if (!loadedSession) {
+                throw createHttpError('Сессия экспорта не найдена.', 404);
+            }
+
+            if (loadedSession.batch.status !== 'RECEIVED') {
+                throw createHttpError('Сохранение intro доступно только для партии в статусе RECEIVED.', 400);
+            }
+
+            if (loadedSession.status === 'CANCELLED') {
+                throw createHttpError('Сессия экспорта отменена и больше не принимает intro.', 409);
+            }
+
+            const manifest = parseVideoExportManifest(loadedSession.render_manifest);
+            if (!manifest) {
+                throw createHttpError('В сессии отсутствует render_manifest.', 400);
+            }
+
+            if (manifest.intro_asset) {
+                return {
+                    duplicate: true,
+                    session: serializeVideoExportSessionDetails(loadedSession)
+                };
+            }
+
+            const outputDir = buildVideoExportPublicOutputDir(loadedSession.batch_id, loadedSession.version);
+            await fs.mkdir(outputDir, { recursive: true });
+
+            const targetPath = path.join(outputDir, VIDEO_EXPORT_INTRO_FILENAME);
+            await fs.rm(targetPath, { force: true });
+            await moveFileSafely(uploadedFile!.path, targetPath);
+            uploadedFile = undefined;
+
+            const introAsset: VideoExportIntroAsset = {
+                file_name: VIDEO_EXPORT_INTRO_FILENAME,
+                relative_path: buildVideoExportPublicRelativePath(loadedSession.batch_id, loadedSession.version, VIDEO_EXPORT_INTRO_FILENAME),
+                public_url: buildVideoExportPublicUrl(loadedSession.batch_id, loadedSession.version, VIDEO_EXPORT_INTRO_FILENAME),
+                uploaded_at: new Date().toISOString()
+            };
+
+            const updatedSession = await tx.batchVideoExportSession.update({
+                where: { id: loadedSession.id },
+                data: {
+                    render_manifest: {
+                        ...manifest,
+                        intro_asset: introAsset
+                    } as Prisma.InputJsonValue,
+                    error_message: null,
+                    started_at: loadedSession.started_at ?? new Date()
+                },
+                include: buildVideoExportSessionInclude
+            });
+
+            return {
+                duplicate: false,
+                session: serializeVideoExportSessionDetails(updatedSession)
+            };
+        });
+
+        res.json(result);
+    } catch (error) {
+        console.error(error);
+
+        const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+        const message = error instanceof Error && error.message
+            ? error.message
+            : 'Не удалось сохранить intro-файл.';
+
+        res.status(statusCode).json({ error: message });
+    } finally {
+        await removeStagedVideoFile(uploadedFile);
     }
 });
 

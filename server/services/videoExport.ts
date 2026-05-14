@@ -24,8 +24,15 @@ export type VideoExportSourceFingerprint = {
 
 export type VideoExportSegment = {
     sequence: number;
+    source_index?: number;
     start_ms: number;
     end_ms: number;
+};
+
+export type VideoExportSource = {
+    source_index: number;
+    role: 'WITH_INTRO' | 'NO_INTRO';
+    fingerprint: VideoExportSourceFingerprint;
 };
 
 export type VideoExportOutput = {
@@ -34,9 +41,19 @@ export type VideoExportOutput = {
     item_id: string;
 };
 
+export type VideoExportIntroAsset = {
+    file_name: string;
+    relative_path: string;
+    public_url: string;
+    uploaded_at: string;
+};
+
 export type VideoExportManifest = {
+    manifest_version?: number;
+    sources?: VideoExportSource[];
     segments: VideoExportSegment[];
     outputs: VideoExportOutput[];
+    intro_asset?: VideoExportIntroAsset | null;
 };
 
 export type UploadedVideoExportManifestEntry = {
@@ -137,10 +154,15 @@ export const parseVideoExportManifest = (value: Prisma.JsonValue | null | undefi
         return null;
     }
 
+    const manifestVersion = typeof value.manifest_version === 'number'
+        ? value.manifest_version
+        : Number(value.manifest_version);
+
     const segments = value.segments.flatMap((entry) => {
         if (!isRecord(entry)) return [];
 
         const sequence = typeof entry.sequence === 'number' ? entry.sequence : Number(entry.sequence);
+        const sourceIndex = typeof entry.source_index === 'number' ? entry.source_index : Number(entry.source_index);
         const startMs = typeof entry.start_ms === 'number' ? entry.start_ms : Number(entry.start_ms);
         const endMs = typeof entry.end_ms === 'number' ? entry.end_ms : Number(entry.end_ms);
 
@@ -150,6 +172,7 @@ export const parseVideoExportManifest = (value: Prisma.JsonValue | null | undefi
 
         return [{
             sequence,
+            ...(Number.isFinite(sourceIndex) ? { source_index: sourceIndex } : {}),
             start_ms: startMs,
             end_ms: endMs
         }];
@@ -173,7 +196,52 @@ export const parseVideoExportManifest = (value: Prisma.JsonValue | null | undefi
         }];
     });
 
-    return { segments, outputs };
+    const sources = Array.isArray(value.sources)
+        ? value.sources.flatMap((entry) => {
+            if (!isRecord(entry)) return [];
+
+            const sourceIndex = typeof entry.source_index === 'number' ? entry.source_index : Number(entry.source_index);
+            const role: VideoExportSource['role'] | null = entry.role === 'WITH_INTRO' || entry.role === 'NO_INTRO'
+                ? entry.role
+                : null;
+            const fingerprint = parseVideoExportSourceFingerprint((entry.fingerprint ?? null) as Prisma.JsonValue | null);
+
+            if (!Number.isFinite(sourceIndex) || !role || !fingerprint) {
+                return [];
+            }
+
+            return [{
+                source_index: sourceIndex,
+                role,
+                fingerprint
+            }];
+        })
+        : undefined;
+
+    let introAsset: VideoExportIntroAsset | null | undefined;
+    if (isRecord(value.intro_asset)) {
+        const fileName = typeof value.intro_asset.file_name === 'string' ? value.intro_asset.file_name : '';
+        const relativePath = typeof value.intro_asset.relative_path === 'string' ? value.intro_asset.relative_path : '';
+        const publicUrl = typeof value.intro_asset.public_url === 'string' ? value.intro_asset.public_url : '';
+        const uploadedAt = typeof value.intro_asset.uploaded_at === 'string' ? value.intro_asset.uploaded_at : '';
+
+        introAsset = fileName && relativePath && publicUrl && uploadedAt
+            ? {
+                file_name: fileName,
+                relative_path: relativePath,
+                public_url: publicUrl,
+                uploaded_at: uploadedAt
+            }
+            : null;
+    }
+
+    return {
+        ...(Number.isFinite(manifestVersion) ? { manifest_version: manifestVersion } : {}),
+        ...(sources ? { sources } : {}),
+        segments,
+        outputs,
+        ...(introAsset !== undefined ? { intro_asset: introAsset } : {})
+    };
 };
 
 export const parseUploadedVideoExportManifest = (
