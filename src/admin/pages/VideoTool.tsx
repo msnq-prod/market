@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -806,6 +806,7 @@ export function VideoTool() {
     const [notice, setNotice] = useState<InlineNotice | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [previewPanelWidth, setPreviewPanelWidth] = useState(readStoredPreviewPanelWidth);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
         visibleStartMs: 0,
@@ -2306,6 +2307,17 @@ export function VideoTool() {
                             Монтаж видео партии
                         </h1>
                     </div>
+
+                    <button
+                        type="button"
+                        onClick={() => setSidebarOpen((current) => !current)}
+                        className="inline-flex h-8 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                        aria-label={sidebarOpen ? 'Скрыть сайдбар' : 'Показать сайдбар'}
+                        title={sidebarOpen ? 'Скрыть сайдбар' : 'Показать сайдбар'}
+                    >
+                        {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+                        <span className="hidden sm:inline">{sidebarOpen ? 'Скрыть' : 'Показать'}</span>
+                    </button>
                 </header>
 
                 {helperNeedsAttention && (
@@ -2370,21 +2382,21 @@ export function VideoTool() {
                 <div
                     className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[grid-template-columns] duration-300 lg:grid lg:overflow-hidden"
                     style={{
-                        gridTemplateColumns: `minmax(196px,224px) minmax(0,1fr) ${previewPanelWidth}px`
+                        gridTemplateColumns: `${sidebarOpen ? 'minmax(188px,212px)' : '0px'} minmax(0,1fr) ${previewPanelWidth}px`
                     }}
                 >
-                        <aside className="min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-3">
-                            <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto pb-3 pr-1">
-                                <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
+                        <aside className={`${sidebarOpen ? 'min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-2.5' : 'pointer-events-none min-h-0 overflow-hidden border-r-0 p-0 opacity-0'}`}>
+                            <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-y-auto pb-2 pr-1">
+                                <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
                                     <div className="min-w-0">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Исходники</p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-200">
+                                        <p className="mt-0.5 text-xs font-medium text-zinc-200">
                                             {sources.length > 0 ? `${sources.length} видео` : 'Видео не выбрано'}
                                         </p>
                                     </div>
 
                                     {sources.length > 0 && (
-                                        <div data-testid="source-list" className="mt-3 grid gap-2">
+                                        <div data-testid="source-list" className="mt-2 grid gap-1.5">
                                             {sources.map((source) => (
                                                 <button
                                                     key={`source-${source.sourceIndex}`}
@@ -2393,44 +2405,46 @@ export function VideoTool() {
                                                         setActiveSourceIndex(source.sourceIndex);
                                                         syncVideoTime(getSourceTimelineStartMs(sources, source.sourceIndex));
                                                     }}
-                                                    className={`rounded-xl border px-3 py-2 text-left transition ${
+                                                    className={`w-full min-w-0 overflow-hidden rounded-lg px-2 py-1.5 text-left transition ${
                                                         activeSourceIndex === source.sourceIndex
-                                                            ? 'border-emerald-400/45 bg-emerald-400/10'
-                                                            : 'border-zinc-800 bg-zinc-950/70 hover:border-zinc-600'
+                                                            ? 'bg-emerald-400/12 ring-1 ring-emerald-400/45'
+                                                            : 'bg-zinc-950/70 hover:bg-zinc-900'
                                                     }`}
                                                 >
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span className="min-w-0 truncate text-xs font-medium text-zinc-100">{source.name}</span>
-                                                        <span className="shrink-0 rounded-full border border-zinc-700 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-zinc-400">
+                                                        <span className="shrink-0 rounded-full bg-zinc-800/80 px-1.5 py-0.5 text-[8px] uppercase tracking-[0.1em] text-zinc-400">
                                                             {source.role === 'WITH_INTRO' ? 'с интро' : 'без интро'}
                                                         </span>
                                                     </div>
-                                                    <p className="mt-1 text-[11px] text-zinc-500">{formatDuration(source.durationMs)}</p>
+                                                    <p className="mt-0.5 text-[10px] text-zinc-500">{formatDuration(source.durationMs)}</p>
                                                 </button>
                                             ))}
                                         </div>
                                     )}
 
-                                    <label className="mt-4 inline-flex cursor-pointer items-center rounded-xl border border-emerald-700/60 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/15">
-                                        <Upload size={14} />
-                                        <span className="ml-2">Открыть видео</span>
-                                        <input
-                                            data-testid="source-input"
-                                            aria-label="Исходное видео"
-                                            type="file"
-                                            accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
-                                            className="hidden"
-                                            onChange={(event) => {
-                                                handleSourcePicked(event.target.files?.[0] || null, 'first');
-                                                event.currentTarget.value = '';
-                                            }}
-                                        />
-                                    </label>
+                                    {sources.length === 0 && (
+                                        <label className="mt-3 inline-flex cursor-pointer items-center rounded-lg border border-emerald-700/60 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-100 transition hover:bg-emerald-500/15">
+                                            <Upload size={13} />
+                                            <span className="ml-1.5">Открыть видео</span>
+                                            <input
+                                                data-testid="source-input"
+                                                aria-label="Исходное видео"
+                                                type="file"
+                                                accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
+                                                className="hidden"
+                                                onChange={(event) => {
+                                                    handleSourcePicked(event.target.files?.[0] || null, 'first');
+                                                    event.currentTarget.value = '';
+                                                }}
+                                            />
+                                        </label>
+                                    )}
 
                                     {sources.length > 0 && (
-                                        <label className="mt-2 inline-flex cursor-pointer items-center rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500">
-                                            <Plus size={14} />
-                                            <span className="ml-2">Добавить ещё видео</span>
+                                        <label className="mt-2 inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-medium text-zinc-100 transition hover:border-zinc-500">
+                                            <Plus size={13} />
+                                            <span className="ml-1.5">Добавить ещё видео</span>
                                             <input
                                                 data-testid="append-source-input"
                                                 aria-label="Добавить ещё видео без интро"
@@ -2447,23 +2461,23 @@ export function VideoTool() {
 
                                 </section>
 
-                                <section className="rounded-[20px] border border-zinc-800 bg-[#101115] p-4">
+                                <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Статус</p>
                                         <button
                                             type="button"
                                             onClick={() => void checkHelper()}
-                                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
+                                            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
                                         >
                                             <RefreshCw size={12} />
                                             Проверить
                                         </button>
                                     </div>
 
-                                    <p className={`mt-4 rounded-2xl border px-3 py-3 text-sm leading-6 ${statusMessageToneClass}`}>
+                                    <p className={`mt-2 rounded-lg border px-2 py-1.5 text-[11px] leading-4 ${statusMessageToneClass}`}>
                                         {normalizedStatusMessage}
                                     </p>
-                                    <p data-testid="blocking-status" className="mt-2 text-xs text-zinc-500">
+                                    <p data-testid="blocking-status" className="mt-1.5 text-[10px] text-zinc-500">
                                         {exportBlockedReason || 'Готово к экспорту'}
                                     </p>
 
@@ -2580,36 +2594,36 @@ export function VideoTool() {
                                     {draft && (
                                         <div
                                             data-testid="draft-banner"
-                                            className="mt-4 rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-3 text-sm text-gray-100"
+                                            className="mt-2 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1.5 text-[11px] leading-4 text-gray-100"
                                         >
                                             <p>Найден локальный draft: {draft.segments.length} фрагментов.</p>
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
                                                 onClick={handleDiscardDraft}
-                                                className="mt-2 h-auto justify-start px-0 py-0 text-gray-100 hover:bg-transparent"
+                                                className="mt-1 h-auto justify-start px-0 py-0 text-[11px] text-gray-300 hover:bg-transparent hover:text-white"
                                             >
                                                 Сбросить черновик
                                             </Button>
                                         </div>
                                     )}
 
-                                    <div className="mt-4 grid gap-2 text-xs text-zinc-300">
-                                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                    <div className="mt-2 grid gap-1.5 text-[10px] text-zinc-300">
+                                        <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                             Загружено: {session ? `${session.uploaded_count}/${session.expected_count}` : `0/${expectedOutputCount}`}
                                         </div>
                                         {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading') && (
-                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                                 {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
                                             </div>
                                         )}
                                         {session && (
-                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                                 Сессия: {sessionStatusLabel[session.status] || session.status}
                                             </div>
                                         )}
                                         {helperHealth?.helper_version && (
-                                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                                 Версия helper: {helperHealth.helper_version}
                                             </div>
                                         )}
@@ -2619,12 +2633,12 @@ export function VideoTool() {
                             </div>
                         </aside>
 
-                    <section className="relative min-h-0 bg-[#131418] p-3">
-                        <div className="flex h-full min-h-0 flex-col gap-3">
-                            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-zinc-800 bg-[#17191e]">
-                                <div className={`min-h-0 flex-1 p-3 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+                    <section className="relative min-h-0 bg-[#131418] p-2.5">
+                        <div className="flex h-full min-h-0 flex-col gap-2.5">
+                            <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                                <div className={`min-h-0 flex-1 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto pr-1'}`}>
                                     {segments.length === 0 ? (
-                                        <div className="flex h-full min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/40 p-6 text-center text-sm text-zinc-500">
+                                        <div className="flex h-full min-h-[220px] items-center justify-center bg-zinc-950/20 p-6 text-center text-sm text-zinc-500">
                                             <div className="max-w-xl">
                                                 <p className="text-base font-medium text-zinc-200">Рабочая область появится после исходника</p>
                                                 <p className="mt-2 leading-6">
@@ -2712,7 +2726,7 @@ export function VideoTool() {
                                 </div>
                             </section>
 
-                            <section className="shrink-0 overflow-hidden rounded-[24px] border border-zinc-800 bg-[#15171c]">
+                            <section className="shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-[#15171c]">
                                     <div className="flex items-center gap-1.5 overflow-x-auto border-b border-zinc-800 px-3 py-2 whitespace-nowrap">
                                         <Button
                                             data-testid="action-cut"
@@ -3024,7 +3038,7 @@ export function VideoTool() {
                         >
                             <span className="pointer-events-none absolute left-1/2 top-1/2 h-16 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current" />
                         </button>
-                        <div className="relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-[28px] border border-zinc-800 bg-[#090a0d]">
+                        <div className="relative flex h-full min-h-0 flex-col items-center overflow-hidden rounded-[28px] border border-zinc-800 bg-[#090a0d]">
                             <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/65 via-black/25 to-transparent px-4 py-4 text-[11px] uppercase tracking-[0.18em] text-zinc-300">
                                 <span>Просмотр</span>
                                 <span className="inline-flex items-center gap-2">
@@ -3046,7 +3060,7 @@ export function VideoTool() {
                                 <span>{durationMs ? formatDuration(durationMs) : '—'}</span>
                             </div>
 
-                            <div className="flex h-full w-full items-center justify-center p-4">
+                            <div className="flex min-h-0 w-full flex-1 items-center justify-center p-4 pb-3">
                                 <div className="relative aspect-[9/16] w-full max-w-[360px] max-h-full overflow-hidden rounded-[28px] border border-zinc-900 bg-black shadow-[0_18px_80px_rgba(0,0,0,0.55)] 2xl:max-w-[400px]">
                                     {sourceUrl && !sourcePreviewUnavailable ? (
                                         <video
@@ -3112,46 +3126,44 @@ export function VideoTool() {
                                     )}
 
                                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
+                                </div>
+                            </div>
 
-                                    <div className="absolute inset-x-0 bottom-0 z-20 px-4 pb-4">
-                                        <div className="rounded-2xl border border-white/10 bg-black/35 p-3 backdrop-blur-sm">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        data-testid="preview-prev-cut"
-                                                        type="button"
-                                                        onClick={() => seekToNearestCut('prev')}
-                                                        disabled={!sourceUrl}
-                                                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                                                    >
-                                                        <ArrowLeft size={18} />
-                                                    </button>
-                                                    <button
-                                                        data-testid="preview-play-toggle"
-                                                        type="button"
-                                                        onClick={() => void togglePlayback()}
-                                                        disabled={!sourceUrl || sourcePreviewUnavailable}
-                                                        className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white text-black transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-                                                    >
-                                                        {isPlaying ? <Pause size={20} /> : <Play size={20} className="ml-0.5" />}
-                                                    </button>
-                                                    <button
-                                                        data-testid="preview-next-cut"
-                                                        type="button"
-                                                        onClick={() => seekToNearestCut('next')}
-                                                        disabled={!sourceUrl}
-                                                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                                                    >
-                                                        <ArrowRight size={18} />
-                                                    </button>
-                                                </div>
+                            <div className="w-full shrink-0 px-4 pb-4">
+                                <div className="mx-auto flex max-w-[360px] items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 backdrop-blur-sm 2xl:max-w-[400px]">
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            data-testid="preview-prev-cut"
+                                            type="button"
+                                            onClick={() => seekToNearestCut('prev')}
+                                            disabled={!sourceUrl}
+                                            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                            <ArrowLeft size={17} />
+                                        </button>
+                                        <button
+                                            data-testid="preview-play-toggle"
+                                            type="button"
+                                            onClick={() => void togglePlayback()}
+                                            disabled={!sourceUrl || sourcePreviewUnavailable}
+                                            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white text-black transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                            {isPlaying ? <Pause size={19} /> : <Play size={19} className="ml-0.5" />}
+                                        </button>
+                                        <button
+                                            data-testid="preview-next-cut"
+                                            type="button"
+                                            onClick={() => seekToNearestCut('next')}
+                                            disabled={!sourceUrl}
+                                            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                            <ArrowRight size={17} />
+                                        </button>
+                                    </div>
 
-                                                <div className="text-right">
-                                                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-400">Пробел</p>
-                                                    <p className="mt-1 text-sm text-zinc-100">{isPlaying ? 'Пауза' : 'Пуск'}</p>
-                                                </div>
-                                            </div>
-                                        </div>
+                                    <div className="text-right">
+                                        <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">Пробел</p>
+                                        <p className="mt-0.5 text-sm text-zinc-100">{isPlaying ? 'Пауза' : 'Пуск'}</p>
                                     </div>
                                 </div>
                             </div>
