@@ -5,6 +5,9 @@ import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
     COLLECTION_STATUSES,
+    HQ_IMMEDIATE_BATCH_OWNER_EMAIL,
+    HQ_IMMEDIATE_BATCH_OWNER_MARKER,
+    HQ_IMMEDIATE_BATCH_OWNER_NAME,
     buildSerialNumber,
     formatBatchTempId,
     getDefaultProductTranslation,
@@ -98,6 +101,30 @@ const buildRequestTitle = (product: ProductSummary): string => {
 
     return `${defaultTranslation.name} • ${product.country_code}${product.location_code}${product.item_code}`;
 };
+
+const getImmediateBatchOwner = async (tx: Prisma.TransactionClient) => tx.user.upsert({
+    where: { email: HQ_IMMEDIATE_BATCH_OWNER_EMAIL },
+    update: {
+        name: HQ_IMMEDIATE_BATCH_OWNER_NAME,
+        role: 'MANAGER',
+        password_hash: null,
+        details: {
+            kind: HQ_IMMEDIATE_BATCH_OWNER_MARKER,
+            hidden_from_user_lists: true
+        }
+    },
+    create: {
+        name: HQ_IMMEDIATE_BATCH_OWNER_NAME,
+        email: HQ_IMMEDIATE_BATCH_OWNER_EMAIL,
+        password_hash: null,
+        role: 'MANAGER',
+        details: {
+            kind: HQ_IMMEDIATE_BATCH_OWNER_MARKER,
+            hidden_from_user_lists: true
+        }
+    },
+    select: { id: true }
+});
 
 const withMetrics = async (request: RequestRecord) => {
     const productId = request.product_id || undefined;
@@ -210,15 +237,19 @@ router.post('/', async (req: AuthRequest, res) => {
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const { product_id, requested_qty, target_user_id, note } = req.body as {
+        const { product_id, requested_qty, target_user_id, note, accept_immediately, collected_date, collected_time } = req.body as {
             product_id?: string;
             requested_qty?: number;
             target_user_id?: string | null;
             note?: string | null;
+            accept_immediately?: boolean;
+            collected_date?: string;
+            collected_time?: string;
         };
 
         const safeProductId = typeof product_id === 'string' ? product_id.trim() : '';
         const qty = toInt(requested_qty);
+        const shouldAcceptImmediately = accept_immediately === true;
 
         if (!safeProductId) {
             return res.status(400).json({ error: 'Не выбран товар-шаблон.' });
@@ -251,7 +282,7 @@ router.post('/', async (req: AuthRequest, res) => {
         }
 
         let safeTargetUserId: string | null = null;
-        if (typeof target_user_id === 'string' && target_user_id.trim()) {
+        if (!shouldAcceptImmediately && typeof target_user_id === 'string' && target_user_id.trim()) {
             const targetUser = await prisma.user.findUnique({
                 where: { id: target_user_id.trim() },
                 select: { id: true, role: true }
@@ -262,6 +293,95 @@ router.post('/', async (req: AuthRequest, res) => {
             }
 
             safeTargetUserId = targetUser.id;
+        }
+
+        if (shouldAcceptImmediately) {
+            const safeCollectedDate = typeof collected_date === 'string' ? toCollectionDate(collected_date) : null;
+            const safeCollectedTime = typeof collected_time === 'string' ? normalizeTimeValue(collected_time) : null;
+
+            if (!safeCollectedDate) {
+                return res.status(400).json({ error: 'Укажите корректную дату сбора.' });
+            }
+
+            if (!safeCollectedTime) {
+                return res.status(400).json({ error: 'Укажите корректное время сбора в формате HH:MM.' });
+            }
+
+            const sameDayBatches = await prisma.batch.count({
+                where: {
+                    product_id: product.id,
+                    deleted_at: null,
+                    collected_date: safeCollectedDate,
+                    status: { not: 'ERROR' }
+                }
+            });
+            const dailyBatchSeq = sameDayBatches + 1;
+            const batchId = crypto.randomUUID();
+            const itemCreates: Prisma.ItemCreateWithoutBatchInput[] = [];
+
+            for (let index = 1; index <= qty; index += 1) {
+                const serialNumber = buildSerialNumber(product, safeCollectedDate, index, dailyBatchSeq);
+                itemCreates.push({
+                    product: { connect: { id: product.id } },
+                    temp_id: formatBatchTempId(index),
+                    serial_number: serialNumber,
+                    item_seq: index,
+                    status: 'NEW',
+                    collected_date: safeCollectedDate,
+                    collected_time: safeCollectedTime
+                });
+            }
+
+            const created = await prisma.$transaction(async (tx) => {
+                const immediateOwner = await getImmediateBatchOwner(tx);
+                const request = await tx.collectionRequest.create({
+                    data: {
+                        created_by: req.user!.id,
+                        target_user_id: null,
+                        accepted_by: null,
+                        accepted_at: null,
+                        product_id: product.id,
+                        title: buildRequestTitle({
+                            ...product,
+                            collection_requests: [],
+                            batches: [],
+                            items: [],
+                            order_items: []
+                        } as ProductSummary),
+                        note: typeof note === 'string' && note.trim() ? note.trim() : null,
+                        requested_qty: qty,
+                        status: 'RECEIVED'
+                    },
+                    select: { id: true }
+                });
+
+                await tx.batch.create({
+                    data: {
+                        id: batchId,
+                        owner_id: immediateOwner.id,
+                        product_id: product.id,
+                        collection_request_id: request.id,
+                        video_url: null,
+                        gps_lat: null,
+                        gps_lng: null,
+                        collected_date: safeCollectedDate,
+                        collected_time: safeCollectedTime,
+                        daily_batch_seq: dailyBatchSeq,
+                        status: 'RECEIVED',
+                        items: {
+                            create: itemCreates
+                        }
+                    }
+                });
+
+                return tx.collectionRequest.findUniqueOrThrow({
+                    where: { id: request.id },
+                    include: REQUEST_INCLUDE
+                });
+            });
+
+            res.status(201).json(await withMetrics(created));
+            return;
         }
 
         const created = await prisma.collectionRequest.create({

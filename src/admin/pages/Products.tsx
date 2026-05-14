@@ -168,6 +168,8 @@ type CollectionOrderForm = {
     productName: string;
     requested_qty: string;
     target_user_id: string;
+    collected_date: string;
+    collected_time: string;
     note: string;
 };
 
@@ -238,6 +240,7 @@ type LocationForm = {
 };
 
 const BASE_LANGUAGE_ID = 2;
+const ACCEPT_IMMEDIATELY_OPTION = '__accept_immediately__';
 
 const emptyProductForm: ProductForm = {
     name: '',
@@ -260,6 +263,8 @@ const emptyOrderForm: CollectionOrderForm = {
     productName: '',
     requested_qty: '',
     target_user_id: '',
+    collected_date: '',
+    collected_time: '',
     note: ''
 };
 
@@ -799,6 +804,8 @@ export function Products() {
             productName: getDefaultTranslationValue(product.translations, 'name') || `Товар ${product.id}`,
             requested_qty: '',
             target_user_id: '',
+            collected_date: '',
+            collected_time: '',
             note: ''
         });
         setIsOrderModalOpen(true);
@@ -818,6 +825,12 @@ export function Products() {
             return;
         }
 
+        const acceptImmediately = orderForm.target_user_id === ACCEPT_IMMEDIATELY_OPTION;
+        if (acceptImmediately && (!orderForm.collected_date || !orderForm.collected_time)) {
+            alert('Для сценария «Принять сразу» укажите дату и время сбора.');
+            return;
+        }
+
         setCreatingOrder(true);
         try {
             const response = await authFetch('/api/collection-requests', {
@@ -826,7 +839,10 @@ export function Products() {
                 body: JSON.stringify({
                     product_id: orderForm.productId,
                     requested_qty: qty,
-                    target_user_id: orderForm.target_user_id || null,
+                    target_user_id: acceptImmediately ? null : orderForm.target_user_id || null,
+                    accept_immediately: acceptImmediately,
+                    collected_date: acceptImmediately ? orderForm.collected_date : undefined,
+                    collected_time: acceptImmediately ? orderForm.collected_time : undefined,
                     note: orderForm.note.trim() || null
                 })
             });
@@ -837,7 +853,7 @@ export function Products() {
             }
 
             closeOrderModal();
-            alert('Заказ на сбор создан.');
+            alert(acceptImmediately ? 'Партия создана и принята.' : 'Заказ на сбор создан.');
         } catch (error) {
             console.error(error);
             alert(error instanceof Error ? error.message : 'Не удалось создать заказ на сбор.');
@@ -1409,6 +1425,7 @@ export function Products() {
                             className="w-full rounded-lg border border-gray-700 bg-gray-900 px-4 py-2.5 text-white"
                         >
                             <option value="">Общий пул для всех партнеров</option>
+                            <option value={ACCEPT_IMMEDIATELY_OPTION}>Принять сразу</option>
                             {franchisees.map((user) => (
                                 <option key={user.id} value={user.id}>
                                     {user.name} ({user.email})
@@ -1416,6 +1433,25 @@ export function Products() {
                             ))}
                         </select>
                     </div>
+
+                    {orderForm.target_user_id === ACCEPT_IMMEDIATELY_OPTION && (
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <Input
+                                label="Дата сбора"
+                                type="date"
+                                value={orderForm.collected_date}
+                                onChange={(event) => setOrderForm((prev) => ({ ...prev, collected_date: event.target.value }))}
+                                required
+                            />
+                            <Input
+                                label="Время сбора"
+                                type="time"
+                                value={orderForm.collected_time}
+                                onChange={(event) => setOrderForm((prev) => ({ ...prev, collected_time: event.target.value }))}
+                                required
+                            />
+                        </div>
+                    )}
 
                     <Textarea
                         label="Комментарий"

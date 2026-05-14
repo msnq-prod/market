@@ -123,6 +123,8 @@ cp .env.production.example .env.production
 - `TELEGRAM_WORKER_RETRY_BASE_MS`
 - `TELEGRAM_WORKER_MAX_ATTEMPTS`
 - `STONES_HELPER_ALLOWED_ORIGIN`
+- `STONES_HELPER_VERSION` — опциональная версия production helper; если не задана, build-helper использует UTC-дату `YYYY.M.D`
+- `STONES_HELPER_UPDATE_BASE_URL` — опциональный base URL для update manifest и DMG, по умолчанию `${STONES_HELPER_ALLOWED_ORIGIN}/uploads/downloads`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, если нужен внешний URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` — опционально, если нужен отдельный arm64 URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
 
@@ -133,6 +135,7 @@ cp .env.production.example .env.production
 - `DATABASE_URL` должен указывать на `db:3306`
 - `TELEGRAM_TOKEN_ENCRYPTION_KEY` обязателен и для `app`, и для `telegram-worker`
 - если `VITE_VIDEO_HELPER_DOWNLOAD_URL` и `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` не заданы, UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg` и `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
+- desktop helper проверяет обновления по `/uploads/downloads/ZAGARAMI-Video-Helper-update.json`; вместе с DMG нужно публиковать и этот manifest
 
 ## 5. Production deploy через scripts/ops
 

@@ -2,6 +2,11 @@ const statusLine = document.getElementById('status-line');
 const runtimeMeta = document.getElementById('runtime-meta');
 const storageMeta = document.getElementById('storage-meta');
 const originsMeta = document.getElementById('origins-meta');
+const updateStatusLine = document.getElementById('update-status-line');
+const updateMeta = document.getElementById('update-meta');
+const downloadUpdateButton = document.getElementById('download-update-button');
+
+let latestUpdate = null;
 
 const formatBytes = (value) => {
     if (!Number.isFinite(value) || value <= 0) {
@@ -26,6 +31,73 @@ const renderRows = (container, rows) => {
             <span>${value}</span>
         </div>
     `).join('');
+};
+
+const renderUpdate = (update) => {
+    latestUpdate = update;
+    downloadUpdateButton.disabled = !update.update_available;
+
+    renderRows(updateMeta, [
+        ['Текущая версия', update.current_version || '0.0.0'],
+        ['Доступная версия', update.version || '0.0.0'],
+        ['Архитектура', update.arch || 'unknown'],
+        ['Размер', update.size ? formatBytes(update.size) : 'Не указан']
+    ]);
+
+    if (update.update_available) {
+        updateStatusLine.textContent = 'Доступна новая версия helper.';
+        updateStatusLine.className = 'small status-ready';
+        return;
+    }
+
+    updateStatusLine.textContent = 'Установлена актуальная версия helper.';
+    updateStatusLine.className = 'small';
+};
+
+const checkUpdate = async () => {
+    updateStatusLine.textContent = 'Проверка обновлений...';
+    updateStatusLine.className = 'small';
+    downloadUpdateButton.disabled = true;
+
+    try {
+        const update = await window.helperDesktop.checkUpdate();
+        renderUpdate(update);
+    } catch (error) {
+        latestUpdate = null;
+        updateStatusLine.textContent = error instanceof Error ? error.message : 'Не удалось проверить обновления.';
+        updateStatusLine.className = 'small status-error';
+        updateMeta.innerHTML = '';
+    }
+};
+
+const downloadUpdate = async () => {
+    if (!latestUpdate?.update_available) {
+        return;
+    }
+
+    updateStatusLine.textContent = 'Скачивание обновления...';
+    updateStatusLine.className = 'small';
+    downloadUpdateButton.disabled = true;
+
+    try {
+        const result = await window.helperDesktop.downloadUpdate();
+        if (!result.downloaded) {
+            renderUpdate(result);
+            return;
+        }
+
+        updateStatusLine.textContent = 'DMG обновления скачан и открыт. Перетащите ZAGARAMI Video Helper в Applications и перезапустите helper.';
+        updateStatusLine.className = 'small status-ready';
+        renderRows(updateMeta, [
+            ['Скачано', formatBytes(result.downloaded_bytes)],
+            ['Файл', `<code>${result.path}</code>`],
+            ['Версия', result.version]
+        ]);
+    } catch (error) {
+        updateStatusLine.textContent = error instanceof Error ? error.message : 'Не удалось скачать обновление.';
+        updateStatusLine.className = 'small status-error';
+        downloadUpdateButton.disabled = !latestUpdate?.update_available;
+    }
 };
 
 const loadStatus = async () => {
@@ -87,6 +159,18 @@ document.getElementById('restart-button').addEventListener('click', () => {
 
 document.getElementById('open-storage-button').addEventListener('click', () => {
     void window.helperDesktop.showStorage();
+});
+
+document.getElementById('check-update-button').addEventListener('click', () => {
+    void checkUpdate();
+});
+
+downloadUpdateButton.addEventListener('click', () => {
+    void downloadUpdate();
+});
+
+window.helperDesktop.onUpdateCheckRequested(() => {
+    void checkUpdate();
 });
 
 void loadStatus();

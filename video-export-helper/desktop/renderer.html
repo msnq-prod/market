@@ -100,6 +100,11 @@
             border: 1px solid var(--border);
         }
 
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.45;
+        }
+
         .status-ready {
             color: var(--accent);
         }
@@ -138,6 +143,16 @@
         <section class="panel">
             <h2>Runtime</h2>
             <div class="meta" id="runtime-meta"></div>
+        </section>
+
+        <section class="panel">
+            <h2>Обновления</h2>
+            <p class="small" id="update-status-line">Проверка обновлений не выполнялась.</p>
+            <div class="meta" id="update-meta"></div>
+            <div class="actions">
+                <button id="check-update-button" class="secondary">Проверить</button>
+                <button id="download-update-button" disabled>Скачать и открыть DMG</button>
+            </div>
         </section>
 
         <section class="panel">

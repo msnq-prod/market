@@ -2,6 +2,9 @@ import type { Product, ProductTranslation } from '@prisma/client';
 
 export const STAFF_ROLES = new Set(['ADMIN', 'MANAGER']);
 export const SALES_STAFF_ROLES = new Set(['ADMIN', 'SALES_MANAGER']);
+export const HQ_IMMEDIATE_BATCH_OWNER_EMAIL = 'hq-immediate-batch-owner@stones.local';
+export const HQ_IMMEDIATE_BATCH_OWNER_NAME = 'HQ immediate intake';
+export const HQ_IMMEDIATE_BATCH_OWNER_MARKER = 'hq_immediate_batch_owner';
 export const COLLECTION_STATUSES = new Set([
     'OPEN',
     'IN_PROGRESS',

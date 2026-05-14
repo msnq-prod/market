@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -35,6 +36,36 @@ const parseAllowedOrigin = (rawValue) => {
     return parsedUrl.origin;
 };
 
+const normalizeVersion = (rawValue) => (typeof rawValue === 'string' ? rawValue.trim() : '');
+
+const getDefaultHelperVersion = () => {
+    const now = new Date();
+    return `${now.getUTCFullYear()}.${now.getUTCMonth() + 1}.${now.getUTCDate()}`;
+};
+
+const resolveHelperVersion = (baseConfig) => {
+    const envVersion = normalizeVersion(process.env.STONES_HELPER_VERSION);
+    if (envVersion) {
+        return envVersion;
+    }
+
+    const configVersion = normalizeVersion(baseConfig?.extraMetadata?.version);
+    if (configVersion && configVersion !== '0.0.0') {
+        return configVersion;
+    }
+
+    return getDefaultHelperVersion();
+};
+
+const getUpdateBaseUrl = (allowedOrigin) => {
+    const rawValue = normalizeVersion(process.env.STONES_HELPER_UPDATE_BASE_URL);
+    if (rawValue) {
+        return rawValue.replace(/\/+$/, '');
+    }
+
+    return `${allowedOrigin}/uploads/downloads`;
+};
+
 const syncStableDmgArtifacts = async (outputDir) => {
     const stableArtifactNames = new Map([
         ['x64', 'ZAGARAMI-Video-Helper.dmg'],
@@ -60,9 +91,57 @@ const syncStableDmgArtifacts = async (outputDir) => {
     }
 };
 
+const getFileMetadata = async (filePath) => {
+    const [stats, fileBuffer] = await Promise.all([
+        fs.stat(filePath),
+        fs.readFile(filePath)
+    ]);
+
+    return {
+        size: stats.size,
+        sha256: crypto.createHash('sha256').update(fileBuffer).digest('hex')
+    };
+};
+
+const writeUpdateManifest = async ({ outputDir, helperVersion, updateBaseUrl }) => {
+    const stableFiles = {
+        x64: 'ZAGARAMI-Video-Helper.dmg',
+        arm64: 'ZAGARAMI-Video-Helper-arm64.dmg'
+    };
+    const files = {};
+
+    for (const [arch, fileName] of Object.entries(stableFiles)) {
+        const filePath = path.join(outputDir, fileName);
+        const metadata = await getFileMetadata(filePath);
+        files[arch] = {
+            file_name: fileName,
+            url: `${updateBaseUrl}/${fileName}`,
+            ...metadata
+        };
+    }
+
+    const manifest = {
+        manifest_version: 1,
+        app_id: 'com.stones.videohelper',
+        product_name: 'ZAGARAMI Video Helper',
+        version: helperVersion,
+        protocol_version: 'stones-video-export-helper-v3',
+        generated_at: new Date().toISOString(),
+        files
+    };
+
+    await fs.writeFile(
+        path.join(outputDir, 'ZAGARAMI-Video-Helper-update.json'),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        'utf8'
+    );
+};
+
 const main = async () => {
     const allowedOrigin = parseAllowedOrigin(process.env.STONES_HELPER_ALLOWED_ORIGIN || '');
     const baseConfig = JSON.parse(await fs.readFile(builderConfigPath, 'utf8'));
+    const helperVersion = resolveHelperVersion(baseConfig);
+    const updateBaseUrl = getUpdateBaseUrl(allowedOrigin);
     const outputDir = path.join(
         projectRoot,
         typeof baseConfig?.directories?.output === 'string' ? baseConfig.directories.output : 'dist-electron'
@@ -75,8 +154,10 @@ const main = async () => {
             ...baseConfig,
             extraMetadata: {
                 ...(baseConfig.extraMetadata || {}),
+                version: helperVersion,
                 stonesVideoHelper: {
-                    allowedOrigin
+                    allowedOrigin,
+                    updateBaseUrl
                 }
             }
         };
@@ -102,6 +183,7 @@ const main = async () => {
         });
 
         await syncStableDmgArtifacts(outputDir);
+        await writeUpdateManifest({ outputDir, helperVersion, updateBaseUrl });
     } finally {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }

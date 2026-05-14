@@ -1,7 +1,5 @@
 const fsp = require('fs/promises');
-const crypto = require('crypto');
 const http = require('http');
-const https = require('https');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
@@ -16,7 +14,6 @@ const DESKTOP_STATE_FILE = 'desktop-state.json';
 const PLACEHOLDER_HELPER_VERSION = '0.0.0';
 const HELPER_PORT = 3012;
 const PRODUCTION_ORIGIN = 'https://zagarami.com';
-const UPDATE_MANIFEST_FILE = 'ZAGARAMI-Video-Helper-update.json';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -170,23 +167,6 @@ const readBundledAllowedOrigins = async () => {
     }
 };
 
-const readBundledHelperMetadata = async () => {
-    if (!app.isPackaged) {
-        return {};
-    }
-
-    try {
-        const packageJsonPath = path.join(app.getAppPath(), 'package.json');
-        const raw = await fsp.readFile(packageJsonPath, 'utf8');
-        const parsed = JSON.parse(raw);
-        return parsed?.stonesVideoHelper && typeof parsed.stonesVideoHelper === 'object'
-            ? parsed.stonesVideoHelper
-            : {};
-    } catch {
-        return {};
-    }
-};
-
 const showMainWindow = async () => {
     const window = await createWindow();
     if (window.isMinimized()) {
@@ -195,224 +175,6 @@ const showMainWindow = async () => {
 
     window.show();
     window.focus();
-};
-
-const resolveUpdateBaseUrl = async () => {
-    const metadata = await readBundledHelperMetadata();
-    const bundledUpdateBaseUrl = typeof metadata.updateBaseUrl === 'string'
-        ? metadata.updateBaseUrl.trim()
-        : '';
-    if (bundledUpdateBaseUrl) {
-        return bundledUpdateBaseUrl.replace(/\/+$/, '');
-    }
-
-    const bundledAllowedOrigin = typeof metadata.allowedOrigin === 'string'
-        ? metadata.allowedOrigin.trim()
-        : '';
-    const origin = bundledAllowedOrigin || PRODUCTION_ORIGIN;
-    return `${origin.replace(/\/+$/, '')}/uploads/downloads`;
-};
-
-const getUpdateManifestUrl = async () => `${await resolveUpdateBaseUrl()}/${UPDATE_MANIFEST_FILE}`;
-
-const requestJson = (url) => new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const client = parsedUrl.protocol === 'http:' ? http : https;
-    const request = client.get(parsedUrl, {
-        timeout: 10000,
-        headers: {
-            accept: 'application/json'
-        }
-    }, (response) => {
-        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-            response.resume();
-            resolve(requestJson(new URL(response.headers.location, parsedUrl).toString()));
-            return;
-        }
-
-        if (response.statusCode !== 200) {
-            response.resume();
-            reject(new Error(`Update manifest недоступен: HTTP ${response.statusCode || 'unknown'}.`));
-            return;
-        }
-
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-            body += chunk;
-        });
-        response.on('end', () => {
-            try {
-                resolve(JSON.parse(body));
-            } catch {
-                reject(new Error('Update manifest поврежден или не является JSON.'));
-            }
-        });
-    });
-
-    request.on('timeout', () => {
-        request.destroy(new Error('Проверка обновлений превысила timeout.'));
-    });
-    request.on('error', reject);
-});
-
-const normalizeComparableVersion = (value) => {
-    if (typeof value !== 'string') {
-        return [];
-    }
-
-    return value
-        .trim()
-        .split(/[.+-]/)
-        .map((part) => Number.parseInt(part, 10))
-        .map((part) => (Number.isFinite(part) ? part : 0));
-};
-
-const compareVersions = (leftValue, rightValue) => {
-    const left = normalizeComparableVersion(leftValue);
-    const right = normalizeComparableVersion(rightValue);
-    const length = Math.max(left.length, right.length, 3);
-
-    for (let index = 0; index < length; index += 1) {
-        const leftPart = left[index] || 0;
-        const rightPart = right[index] || 0;
-        if (leftPart > rightPart) {
-            return 1;
-        }
-        if (leftPart < rightPart) {
-            return -1;
-        }
-    }
-
-    return 0;
-};
-
-const getUpdateArch = () => (process.arch === 'arm64' ? 'arm64' : 'x64');
-
-const normalizeUpdateManifest = (manifest, manifestUrl) => {
-    const version = typeof manifest?.version === 'string' ? manifest.version.trim() : '';
-    const arch = getUpdateArch();
-    const file = manifest?.files?.[arch];
-    const url = typeof file?.url === 'string' ? file.url.trim() : '';
-    const fileName = typeof file?.file_name === 'string' && file.file_name.trim()
-        ? file.file_name.trim()
-        : `ZAGARAMI-Video-Helper-${arch}.dmg`;
-
-    if (!version || !url) {
-        throw new Error(`Update manifest не содержит версию или файл для ${arch}.`);
-    }
-
-    return {
-        manifest_url: manifestUrl,
-        version,
-        current_version: resolveDesktopHelperVersion(),
-        protocol_version: typeof manifest.protocol_version === 'string' ? manifest.protocol_version : '',
-        generated_at: typeof manifest.generated_at === 'string' ? manifest.generated_at : '',
-        arch,
-        file_name: fileName,
-        url,
-        size: Number.isFinite(file?.size) ? file.size : null,
-        sha256: typeof file?.sha256 === 'string' ? file.sha256 : null
-    };
-};
-
-const checkForHelperUpdate = async () => {
-    const manifestUrl = await getUpdateManifestUrl();
-    const manifest = await requestJson(manifestUrl);
-    const update = normalizeUpdateManifest(manifest, manifestUrl);
-
-    return {
-        ...update,
-        update_available: compareVersions(update.version, update.current_version) > 0
-    };
-};
-
-const ensureUpdateDirectory = async () => {
-    const directoryPath = path.join(getStorageRoot(), 'updates');
-    await fsp.mkdir(directoryPath, { recursive: true });
-    return directoryPath;
-};
-
-const downloadFile = (url, destinationPath, expectedSha256) => new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const client = parsedUrl.protocol === 'http:' ? http : https;
-    const file = require('fs').createWriteStream(destinationPath);
-    const hash = crypto.createHash('sha256');
-    let downloadedBytes = 0;
-
-    const request = client.get(parsedUrl, { timeout: 30000 }, (response) => {
-        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-            response.resume();
-            file.close(() => {
-                void fsp.rm(destinationPath, { force: true }).finally(() => {
-                    resolve(downloadFile(new URL(response.headers.location, parsedUrl).toString(), destinationPath, expectedSha256));
-                });
-            });
-            return;
-        }
-
-        if (response.statusCode !== 200) {
-            response.resume();
-            reject(new Error(`DMG обновления недоступен: HTTP ${response.statusCode || 'unknown'}.`));
-            return;
-        }
-
-        response.on('data', (chunk) => {
-            downloadedBytes += chunk.length;
-            hash.update(chunk);
-        });
-        response.pipe(file);
-    });
-
-    file.on('finish', () => {
-        file.close(() => {
-            const sha256 = hash.digest('hex');
-            if (expectedSha256 && sha256 !== expectedSha256) {
-                reject(new Error('Контрольная сумма обновления не совпала. Файл не будет открыт.'));
-                return;
-            }
-
-            resolve({ path: destinationPath, downloaded_bytes: downloadedBytes, sha256 });
-        });
-    });
-    file.on('error', (error) => {
-        request.destroy();
-        void fsp.rm(destinationPath, { force: true }).finally(() => reject(error));
-    });
-    request.on('timeout', () => {
-        request.destroy(new Error('Скачивание обновления превысило timeout.'));
-    });
-    request.on('error', (error) => {
-        file.close(() => {
-            void fsp.rm(destinationPath, { force: true }).finally(() => reject(error));
-        });
-    });
-});
-
-const downloadHelperUpdate = async () => {
-    const update = await checkForHelperUpdate();
-    if (!update.update_available) {
-        return {
-            ...update,
-            downloaded: false,
-            opened: false
-        };
-    }
-
-    const updateDirectory = await ensureUpdateDirectory();
-    const destinationPath = path.join(updateDirectory, update.file_name);
-    const downloadResult = await downloadFile(update.url, destinationPath, update.sha256);
-    const openError = await shell.openPath(destinationPath);
-    if (openError) {
-        throw new Error(`Обновление скачано, но DMG не удалось открыть: ${openError}`);
-    }
-
-    return {
-        ...update,
-        ...downloadResult,
-        downloaded: true,
-        opened: true
-    };
 };
 
 const refreshTrayMenu = () => {
@@ -438,12 +200,6 @@ const refreshTrayMenu = () => {
             enabled: Boolean(helperController),
             click: () => {
                 void helperController?.cleanupOldAssets();
-            }
-        },
-        {
-            label: 'Проверить обновления',
-            click: () => {
-                void showMainWindow().then(() => mainWindow?.webContents.send('helper:update-check-requested'));
             }
         },
         {
@@ -553,10 +309,6 @@ ipcMain.handle('helper:show-storage', async () => {
     await shell.openPath(getStorageRoot());
     return { success: true };
 });
-
-ipcMain.handle('helper:check-update', async () => checkForHelperUpdate());
-
-ipcMain.handle('helper:download-update', async () => downloadHelperUpdate());
 
 if (hasSingleInstanceLock) {
     app.whenReady().then(async () => {

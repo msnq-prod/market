@@ -21,7 +21,7 @@ import salesRoutes from './routes/sales.ts';
 import telegramRoutes from './routes/telegram.ts';
 import qrPrintPresetRoutes from './routes/qrPrintPresets.ts';
 import { setUploadedMediaResponseHeaders } from './middleware/upload.ts';
-import { isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
+import { HQ_IMMEDIATE_BATCH_OWNER_EMAIL, isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
 import { softDeleteLocation, softDeleteProduct } from './utils/softDelete.ts';
 import {
@@ -402,6 +402,9 @@ app.get('/api/users', authenticateToken, async (req: AuthRequest, res) => {
 
     try {
         const users = await prisma.user.findMany({
+            where: {
+                email: { not: HQ_IMMEDIATE_BATCH_OWNER_EMAIL }
+            },
             select: {
                 id: true,
                 name: true,
