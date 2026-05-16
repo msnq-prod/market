@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -18,8 +18,8 @@ const MIN_SEGMENT_DURATION_MS = 200;
 const CROSSFADE_MS = 200;
 const TIMELINE_ZOOM_STEP = 1.2;
 const PREVIEW_PANEL_WIDTH_STORAGE_KEY = 'video-tool-preview-panel-width';
-const PREVIEW_PANEL_MIN_WIDTH = 280;
-const PREVIEW_PANEL_DEFAULT_WIDTH = 390;
+const PREVIEW_PANEL_MIN_WIDTH = 264;
+const PREVIEW_PANEL_DEFAULT_WIDTH = 352;
 const PREVIEW_PANEL_MAX_WIDTH = 760;
 const TIMELINE_RULER_STEPS_MS = [
     500,
@@ -807,6 +807,7 @@ export function VideoTool() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [previewPanelWidth, setPreviewPanelWidth] = useState(readStoredPreviewPanelWidth);
     const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [previewOpen, setPreviewOpen] = useState(true);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
         visibleStartMs: 0,
@@ -2318,6 +2319,17 @@ export function VideoTool() {
                         {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
                         <span className="hidden sm:inline">{sidebarOpen ? 'Скрыть' : 'Показать'}</span>
                     </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setPreviewOpen((current) => !current)}
+                        className="inline-flex h-8 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                        aria-label={previewOpen ? 'Скрыть просмотр' : 'Показать просмотр'}
+                        title={previewOpen ? 'Скрыть просмотр' : 'Показать просмотр'}
+                    >
+                        {previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+                        <span className="hidden sm:inline">{previewOpen ? 'Скрыть просмотр' : 'Показать просмотр'}</span>
+                    </button>
                 </header>
 
                 {helperNeedsAttention && (
@@ -2382,7 +2394,7 @@ export function VideoTool() {
                 <div
                     className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[grid-template-columns] duration-300 lg:grid lg:overflow-hidden"
                     style={{
-                        gridTemplateColumns: `${sidebarOpen ? 'minmax(188px,212px)' : '0px'} minmax(0,1fr) ${previewPanelWidth}px`
+                        gridTemplateColumns: `${sidebarOpen ? 'minmax(176px,196px)' : '0px'} minmax(0,1fr) ${previewOpen ? `${previewPanelWidth}px` : '0px'}`
                     }}
                 >
                         <aside className={`${sidebarOpen ? 'min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-2.5' : 'pointer-events-none min-h-0 overflow-hidden border-r-0 p-0 opacity-0'}`}>
@@ -2634,8 +2646,8 @@ export function VideoTool() {
                         </aside>
 
                     <section className="relative min-h-0 bg-[#131418] p-2.5">
-                        <div className="flex h-full min-h-0 flex-col gap-2.5">
-                            <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                        <div className={`grid h-full min-h-0 gap-2.5 ${segments.length === 0 ? 'grid-rows-[minmax(0,1fr)_minmax(250px,0.6fr)]' : 'grid-rows-[auto_minmax(280px,1fr)]'}`}>
+                            <section className={`flex min-h-0 flex-col overflow-hidden ${segments.length > 0 ? 'max-h-[40vh]' : ''}`}>
                                 <div className={`min-h-0 flex-1 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto pr-1'}`}>
                                     {segments.length === 0 ? (
                                         <div className="flex h-full min-h-[220px] items-center justify-center bg-zinc-950/20 p-6 text-center text-sm text-zinc-500">
@@ -2647,7 +2659,7 @@ export function VideoTool() {
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                                        <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-2 2xl:grid-cols-3">
                                             {segmentRows.map((row) => {
                                                 const { index, segment, item, isDeleted, isUploaded, role, displaySequence } = row;
                                                 const cardTitle = isDeleted
@@ -2680,7 +2692,7 @@ export function VideoTool() {
                                                             setSelectedSegmentIndex(index);
                                                             syncVideoTime(segment.startMs);
                                                         }}
-                                                        className={`flex min-h-[104px] w-full flex-col items-start gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+                                                        className={`flex min-h-[96px] w-full flex-col items-start gap-2.5 rounded-2xl border px-3.5 py-3 text-left transition ${
                                                             isDeleted
                                                                 ? 'border-red-400/35 bg-red-500/10 hover:border-red-300/50'
                                                                 : index === selectedSegmentIndex
@@ -2692,7 +2704,7 @@ export function VideoTool() {
                                                     >
                                                         <div className="flex w-full items-start justify-between gap-3">
                                                             <div className="min-w-0">
-                                                                <p className="text-lg font-semibold text-zinc-100">{displaySequence || '×××'}</p>
+                                                                <p className="text-base font-semibold text-zinc-100">{displaySequence || '×××'}</p>
                                                                 <p className="mt-1 text-[11px] text-zinc-500">{formatDuration(segment.endMs - segment.startMs)}</p>
                                                             </div>
                                                             <span className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${badgeClass}`}>
@@ -2726,7 +2738,7 @@ export function VideoTool() {
                                 </div>
                             </section>
 
-                            <section className="shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-[#15171c]">
+                            <section className="min-h-0 overflow-hidden rounded-2xl border border-zinc-800 bg-[#15171c]">
                                     <div className="flex items-center gap-1.5 overflow-x-auto border-b border-zinc-800 px-3 py-2 whitespace-nowrap">
                                         <Button
                                             data-testid="action-cut"
@@ -2812,7 +2824,7 @@ export function VideoTool() {
                                         </button>
                                     </div>
 
-                                <div className="h-[268px] px-3 pb-3 pt-2.5">
+                                <div className="h-full min-h-[280px] px-3 pb-3 pt-2.5">
                                     <div className="grid h-full min-h-0 grid-rows-[26px_1fr_18px] rounded-[20px] border border-zinc-800 bg-[#15171c]">
                                         <div
                                             className="relative overflow-hidden border-b border-zinc-800 bg-[#101115]"
@@ -3022,7 +3034,7 @@ export function VideoTool() {
                         </div>
                     </section>
 
-                    <section className="relative min-h-0 border-l border-zinc-800 bg-[#121317] p-3">
+                    <section className={`${previewOpen ? 'relative min-h-0 border-l border-zinc-800 bg-[#121317] p-3' : 'pointer-events-none relative min-h-0 border-l-0 bg-[#121317] p-0 opacity-0'}`}>
                         <button
                             type="button"
                             className="absolute bottom-0 left-0 top-0 z-30 w-2 -translate-x-1/2 cursor-col-resize touch-none border-l border-transparent text-zinc-700 transition hover:border-emerald-300/70 hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70"

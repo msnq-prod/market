@@ -29,7 +29,7 @@ const initialStats: DashboardStats = {
     stockOnlineItems: 0,
 };
 
-const PROJECT_VERSION = '1.5.13';
+const PROJECT_VERSION = '1.5.15';
 
 export function Dashboard() {
     const [stats, setStats] = useState<DashboardStats>(initialStats);
