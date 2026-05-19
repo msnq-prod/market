@@ -1,3 +1,5 @@
+import { syncDesktopAuthToken } from './desktop';
+
 type AuthFetchInput = Parameters<typeof fetch>[0];
 type AuthFetchInit = Parameters<typeof fetch>[1];
 
@@ -27,6 +29,7 @@ const tryRefreshToken = async (): Promise<string | null> => {
         if (!data.accessToken) return null;
 
         localStorage.setItem('accessToken', data.accessToken);
+        void syncDesktopAuthToken(data.accessToken);
         return data.accessToken;
     } catch {
         return null;

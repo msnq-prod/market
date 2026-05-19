@@ -1,3 +1,5 @@
+import { syncDesktopAuthToken } from './desktop';
+
 type SessionPayload = {
     accessToken: string;
     role: string;
@@ -8,12 +10,14 @@ export const persistAuthSession = (payload: SessionPayload) => {
     localStorage.setItem('accessToken', payload.accessToken);
     localStorage.setItem('userRole', payload.role);
     localStorage.setItem('userName', payload.name);
+    void syncDesktopAuthToken(payload.accessToken);
 };
 
 export const clearAuthSession = () => {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('userRole');
     localStorage.removeItem('userName');
+    void syncDesktopAuthToken(null);
 };
 
 export const logoutSession = () => {

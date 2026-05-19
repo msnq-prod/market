@@ -26,6 +26,7 @@ ops/backups/mysql/*
 node_modules
 dist
 dist-electron
+dist-electron-hq
 dist-ssr
 playwright-report
 test-results

@@ -2,11 +2,14 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } fro
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { Button } from '../components/ui';
+import { DesktopStatusCenter } from '../components/DesktopStatusCenter';
 import { authFetch } from '../../utils/authFetch';
+import { getStonesDesktop, isStonesDesktop, waitForMediaQueueJob } from '../../utils/desktop';
 
 const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
 
 const VIDEO_EXPORT_HELPER_URL = normalizeHelperUrl(import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012');
+const DESKTOP_VIDEO_HELPER_URL = '/desktop-helper';
 const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 const HELPER_HEALTH_TIMEOUT_MS = 2500;
 const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
@@ -264,7 +267,7 @@ type VideoToolDraft = {
     introHelperSourceId: string | null;
 };
 
-type ExportPhase = 'idle' | 'preparing' | 'retrying' | 'rendering' | 'uploading' | 'completed' | 'cancelled' | 'error';
+type ExportPhase = 'idle' | 'preparing' | 'retrying' | 'rendering' | 'uploading' | 'background_uploading' | 'completed' | 'cancelled' | 'error';
 type HelperStatus = 'checking' | 'ready' | 'unavailable' | 'version_mismatch';
 
 type HelperHealthPayload = {
@@ -404,6 +407,7 @@ const exportPhaseLabel: Record<ExportPhase, string> = {
     retrying: 'Дозагрузка',
     rendering: 'Рендер',
     uploading: 'Загрузка',
+    background_uploading: 'Фоновая загрузка',
     completed: 'Готово',
     cancelled: 'Отменено',
     error: 'Ошибка'
@@ -787,7 +791,9 @@ export function VideoTool() {
     const [helperHealth, setHelperHealth] = useState<HelperHealthPayload | null>(null);
     const [helperIssueMessage, setHelperIssueMessage] = useState('');
     const [helperAccessRequesting, setHelperAccessRequesting] = useState(false);
-    const [helperBaseUrl, setHelperBaseUrl] = useState(VIDEO_EXPORT_HELPER_URL);
+    const [helperBaseUrl, setHelperBaseUrl] = useState(() => (
+        isStonesDesktop() ? DESKTOP_VIDEO_HELPER_URL : VIDEO_EXPORT_HELPER_URL
+    ));
     const [helperDiagnostics, setHelperDiagnostics] = useState<HelperDiagnosticEntry[]>([]);
     const [helperDiagnosticCopied, setHelperDiagnosticCopied] = useState(false);
     const [sources, setSources] = useState<WorkingSource[]>([]);
@@ -843,33 +849,34 @@ export function VideoTool() {
         [segments]
     );
     const activeProductCount = Math.max(0, activeSegments.length - 1);
+    const isDesktopApp = isStonesDesktop();
     const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
     const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
     const helperIssueKind = helperStatus === 'version_mismatch'
         ? 'version'
-        : helperIssueMessage.includes('Safari блокирует')
+        : !isDesktopApp && helperIssueMessage.includes('Safari блокирует')
             ? 'safari'
-        : helperIssueMessage.includes('заблокировал доступ') || helperIssueMessage.includes('доступ к localhost')
+        : !isDesktopApp && (helperIssueMessage.includes('заблокировал доступ') || helperIssueMessage.includes('доступ к localhost'))
             ? 'browser'
             : helperIssueMessage.includes('старый Stones Video Helper') || helperIssueMessage.includes('собран не для')
                 ? 'old'
                 : 'missing';
-    const helperNeedsDownload = !['browser', 'safari'].includes(helperIssueKind);
+    const helperNeedsDownload = !isDesktopApp && !['browser', 'safari'].includes(helperIssueKind);
     const helperBlockReason = helperStatus === 'unavailable'
         ? helperIssueKind === 'safari'
             ? 'Откройте страницу в Chrome или Яндекс Браузере.'
             : helperIssueKind === 'browser'
             ? 'Разрешите доступ к localhost.'
-            : 'Запустите ZAGARAMI Video Helper.'
+            : isDesktopApp ? 'Перезапустите ZAGARAMI admin.' : 'Запустите ZAGARAMI Video Helper.'
         : helperStatus === 'version_mismatch'
-            ? 'Обновите ZAGARAMI Video Helper.'
+            ? isDesktopApp ? 'Обновите ZAGARAMI admin.' : 'Обновите ZAGARAMI Video Helper.'
             : '';
     const exportBlockedReason = helperStatus === 'unavailable'
         ? helperBlockReason
         : helperStatus === 'version_mismatch'
             ? helperBlockReason
             : helperStatus !== 'ready'
-                ? 'Проверяем ZAGARAMI Video Helper.'
+                ? isDesktopApp ? 'Проверяем встроенный helper.' : 'Проверяем ZAGARAMI Video Helper.'
         : sources.length === 0 || !durationMs
             ? 'Загрузите исходник.'
         : activeProductCount <= 0
@@ -1160,10 +1167,16 @@ export function VideoTool() {
         }
     });
 
-    const helperUrlCandidates = useMemo(() => Array.from(new Set([
-        helperBaseUrl,
-        ...VIDEO_EXPORT_HELPER_URL_CANDIDATES
-    ])), [helperBaseUrl]);
+    const helperUrlCandidates = useMemo(() => {
+        if (isDesktopApp) {
+            return [DESKTOP_VIDEO_HELPER_URL];
+        }
+
+        return Array.from(new Set([
+            helperBaseUrl,
+            ...VIDEO_EXPORT_HELPER_URL_CANDIDATES
+        ]));
+    }, [helperBaseUrl, isDesktopApp]);
 
     const fetchHelperHealth = useCallback(async (init?: RequestInit) => {
         let lastError: unknown = null;
@@ -1227,7 +1240,9 @@ export function VideoTool() {
             setHelperBaseUrl(helperUrl);
             setHelperHealth(payload);
             if (payload.protocol_version !== VIDEO_EXPORT_HELPER_PROTOCOL_VERSION) {
-                setHelperIssueMessage('Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
+                setHelperIssueMessage(isDesktopApp
+                    ? 'Встроенный helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
+                    : 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
                 setHelperStatus('version_mismatch');
                 return;
             }
@@ -1240,7 +1255,7 @@ export function VideoTool() {
             setHelperStatus('unavailable');
             console.error(helperError);
         }
-    }, [fetchHelperHealth]);
+    }, [fetchHelperHealth, isDesktopApp]);
     const requestHelperBrowserAccess = async () => {
         setHelperAccessRequesting(true);
         setHelperStatus('checking');
@@ -1256,7 +1271,9 @@ export function VideoTool() {
             setHelperStatus(payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION ? 'ready' : 'version_mismatch');
             setHelperIssueMessage(payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
                 ? ''
-                : 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
+                : isDesktopApp
+                    ? 'Встроенный helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
+                    : 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
         } catch (helperError) {
             setHelperHealth(null);
             setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : ''));
@@ -1279,6 +1296,9 @@ export function VideoTool() {
         }
 
         window.open(VIDEO_HELPER_DOWNLOAD_URL_ARM64, '_blank', 'noopener,noreferrer');
+    };
+    const openDesktopStatusCenter = () => {
+        window.dispatchEvent(new Event('stones:open-status-center'));
     };
 
     useEffect(() => {
@@ -1851,6 +1871,29 @@ export function VideoTool() {
             throw new Error('Данные партии не загружены.');
         }
 
+        if (isDesktopApp) {
+            const desktop = getStonesDesktop();
+            if (!desktop) {
+                throw new Error('Desktop queue недоступна.');
+            }
+
+            const queuedJob = await desktop.enqueueVideoIntroUpload({
+                batchId: data.batch.id,
+                sessionId,
+                helperBaseUrl,
+                helperJobId: jobId
+            });
+            setExportMessage(`Intro поставлен в локальную очередь: ${queuedJob.id.slice(0, 8)}.`);
+            const completedJob = await waitForMediaQueueJob(queuedJob.id);
+            const result = completedJob.result as { session?: VideoExportSessionDetails } | undefined;
+            if (!result?.session) {
+                throw new Error('Очередь не вернула обновленную export-session после intro upload.');
+            }
+
+            setSession(result.session);
+            return result.session;
+        }
+
         const fileResponse = await helperFetch(helperBaseUrl, `/intro-jobs/${jobId}/file`);
         if (!fileResponse.ok) {
             const payload = await fileResponse.json().catch(() => ({ error: 'Не удалось получить intro-файл из helper.' }));
@@ -1990,6 +2033,41 @@ export function VideoTool() {
             throw new Error('Данные партии не загружены.');
         }
 
+        if (isDesktopApp) {
+            const desktop = getStonesDesktop();
+            if (!desktop) {
+                throw new Error('Desktop queue недоступна.');
+            }
+
+            const groupId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `${sessionId}:${jobId}:${Date.now()}`;
+            const groupTitle = `Видео партии ${data.batch.daily_batch_seq ? `#${data.batch.daily_batch_seq}` : data.batch.id.slice(0, 8)}`;
+            for (let index = 0; index < serials.length; index += 1) {
+                const serialNumber = serials[index];
+                setExportMessage(`Постановка в фоновую очередь ${index + 1}/${serials.length}: ${serialNumber}.mp4`);
+                await desktop.enqueueVideoRenderUpload({
+                    batchId: data.batch.id,
+                    sessionId,
+                    helperBaseUrl,
+                    helperJobId: jobId,
+                    serialNumber,
+                    groupId,
+                    groupTitle,
+                    groupKind: 'VIDEO_EXPORT_UPLOAD',
+                    groupTotal: serials.length,
+                    notifyOnComplete: true,
+                    cleanupHelperJob: true
+                });
+            }
+
+            return {
+                backgroundQueued: true,
+                groupId,
+                total: serials.length
+            };
+        }
+
         let nextPending = [...serials];
         for (let index = 0; index < serials.length; index += 1) {
             const serialNumber = serials[index];
@@ -2103,8 +2181,20 @@ export function VideoTool() {
             await waitForRenderCompletion(renderJob.jobId);
 
             setExportPhase('uploading');
-            setExportMessage('Загрузка готовых роликов на сервер...');
-            await uploadPendingFiles(renderJob.jobId, nextSession.session_id, pending);
+            setExportMessage(isDesktopApp ? 'Ставим готовые ролики в фоновую очередь...' : 'Загрузка готовых роликов на сервер...');
+            const uploadResult = await uploadPendingFiles(renderJob.jobId, nextSession.session_id, pending);
+
+            if (uploadResult?.backgroundQueued) {
+                setExportPhase('background_uploading');
+                setExportMessage(`Загрузка продолжается в фоне: ${uploadResult.total} MP4 в очереди. Можно перейти в другие разделы, прогресс виден в Status Center.`);
+                setNotice({
+                    tone: 'info',
+                    message: 'Фоновая загрузка видео запущена. Приложение уведомит о завершении, а детали доступны в Status Center.'
+                });
+                setRenderJobId('');
+                openDesktopStatusCenter();
+                return;
+            }
 
             const cleanupResponse = await helperFetch(helperBaseUrl, `/render-jobs/${renderJob.jobId}/cleanup`, {
                 method: 'POST'
@@ -2158,52 +2248,72 @@ export function VideoTool() {
         || (selectedSegmentRow?.role === 'intro' && session?.render_manifest?.intro_asset)
     );
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
-    const helperSidebarStatus = helperStatus === 'checking'
+    const helperSidebarStatus = isDesktopApp
+        ? helperStatus === 'checking'
+            ? 'Проверяем встроенный helper.'
+            : helperStatus === 'version_mismatch'
+                ? 'Встроенный helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
+                : helperStatus === 'unavailable'
+                    ? 'Встроенный helper не запущен.'
+                    : 'Встроенный helper готов'
+        : helperStatus === 'checking'
             ? 'Проверяем локальный helper.'
+            : helperStatus === 'version_mismatch'
+                ? 'Локальный helper устарел. Обновите приложение и перепроверьте статус.'
+                : helperStatus === 'unavailable'
+                    ? helperIssueKind === 'safari'
+                        ? 'Safari не поддерживает текущий доступ к helper.'
+                        : helperIssueKind === 'browser'
+                            ? 'Доступ к helper заблокирован браузером.'
+                            : 'Локальный helper не найден или не запущен.'
+                    : 'Готово к работе';
+    const helperProblemTitle = isDesktopApp
+        ? helperStatus === 'version_mismatch' ? 'Обновите ZAGARAMI admin' : 'Встроенный helper требует внимания'
         : helperStatus === 'version_mismatch'
-            ? 'Локальный helper устарел. Обновите приложение и перепроверьте статус.'
-        : helperStatus === 'unavailable'
-                ? helperIssueKind === 'safari'
-                    ? 'Safari не поддерживает текущий доступ к helper.'
-                    : helperIssueKind === 'browser'
-                    ? 'Доступ к helper заблокирован браузером.'
-                    : 'Локальный helper не найден или не запущен.'
-                : 'Готово к работе';
-    const helperProblemTitle = helperStatus === 'version_mismatch'
-        ? 'Helper устарел'
+            ? 'Helper устарел'
+            : helperIssueKind === 'safari'
+                ? 'Safari не подходит для helper'
+                : helperIssueKind === 'browser'
+                    ? 'Доступ к helper заблокирован'
+                    : helperIssueKind === 'old'
+                        ? 'Запущен старый helper'
+                        : 'Helper не запущен';
+    const helperProblemDescription = isDesktopApp
+        ? helperStatus === 'version_mismatch'
+            ? 'Установите актуальную версию ZAGARAMI admin и перепроверьте статус.'
+            : 'Перезапустите ZAGARAMI admin. Встроенный helper запускается вместе с приложением. Если проблема повторится, откройте Status Center и скопируйте диагностику.'
+        : helperStatus === 'version_mismatch'
+            ? 'Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
+            : helperIssueKind === 'safari'
+                ? 'Safari блокирует локальный HTTP helper с production HTTPS-страницы. Для текущей версии инструмента используйте Chrome или Яндекс Браузер.'
+                : helperIssueKind === 'browser'
+                    ? 'Нажмите «Разрешить доступ», подтвердите запрос браузера к локальной сети или localhost, затем перепроверьте статус.'
+                    : helperIssueKind === 'old'
+                        ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
+                        : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
+    const helperSteps = isDesktopApp
+        ? ['Перезапустите ZAGARAMI admin', 'Нажмите «Проверить снова»', 'Откройте Status Center при повторной ошибке']
         : helperIssueKind === 'safari'
-            ? 'Safari не подходит для helper'
-        : helperIssueKind === 'browser'
-            ? 'Доступ к helper заблокирован'
-            : helperIssueKind === 'old'
-                ? 'Запущен старый helper'
-                : 'Helper не запущен';
-    const helperProblemDescription = helperStatus === 'version_mismatch'
-        ? 'Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
+            ? ['Откройте эту страницу в Chrome или Яндекс Браузере', 'Убедитесь, что ZAGARAMI Video Helper запущен', 'Нажмите «Проверить снова»']
+            : helperIssueKind === 'browser'
+                ? ['Нажмите «Разрешить доступ»', 'Подтвердите запрос браузера', 'Нажмите «Проверить снова»']
+                : ['Откройте ZAGARAMI Video Helper', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник'];
+    const helperQuickActionTitle = isDesktopApp
+        ? helperStatus === 'version_mismatch' ? 'Обновите ZAGARAMI admin' : 'Встроенный helper требует внимания'
+        : helperStatus === 'version_mismatch'
+            ? 'Обновите desktop helper'
+            : helperIssueKind === 'safari'
+                ? 'Safari блокирует helper'
+                : helperIssueKind === 'browser'
+                    ? 'Helper не отвечает в браузере'
+                    : 'Нужен ZAGARAMI Video Helper';
+    const helperQuickActionDescription = isDesktopApp
+        ? helperProblemDescription
         : helperIssueKind === 'safari'
-            ? 'Safari блокирует локальный HTTP helper с production HTTPS-страницы. Для текущей версии инструмента используйте Chrome или Яндекс Браузер.'
-        : helperIssueKind === 'browser'
-            ? 'Нажмите «Разрешить доступ», подтвердите запрос браузера к локальной сети или localhost, затем перепроверьте статус.'
-            : helperIssueKind === 'old'
-                ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
-                : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
-    const helperSteps = helperIssueKind === 'safari'
-        ? ['Откройте эту страницу в Chrome или Яндекс Браузере', 'Убедитесь, что ZAGARAMI Video Helper запущен', 'Нажмите «Проверить снова»']
-        : helperIssueKind === 'browser'
-        ? ['Нажмите «Разрешить доступ»', 'Подтвердите запрос браузера', 'Нажмите «Проверить снова»']
-        : ['Откройте ZAGARAMI Video Helper', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник'];
-    const helperQuickActionTitle = helperStatus === 'version_mismatch'
-        ? 'Обновите desktop helper'
-        : helperIssueKind === 'safari'
-            ? 'Safari блокирует helper'
-        : helperIssueKind === 'browser'
-            ? 'Helper не отвечает в браузере'
-            : 'Нужен ZAGARAMI Video Helper';
-    const helperQuickActionDescription = helperIssueKind === 'safari'
-        ? 'Chrome уже поддерживает этот сценарий после последнего исправления. В Safari текущая HTTP-связка с локальным helper остаётся заблокированной.'
-        : helperIssueKind === 'browser'
-        ? 'Сайт может вызвать запрос доступа только по клику. Если браузер не покажет окно, разрешение уже заблокировано в настройках браузера или macOS.'
-        : helperProblemDescription;
+            ? 'Chrome уже поддерживает этот сценарий после последнего исправления. В Safari текущая HTTP-связка с локальным helper остаётся заблокированной.'
+            : helperIssueKind === 'browser'
+                ? 'Сайт может вызвать запрос доступа только по клику. Если браузер не покажет окно, разрешение уже заблокировано в настройках браузера или macOS.'
+                : helperProblemDescription;
     const statusMessage = error
         || session?.error_message
         || exportMessage
@@ -2309,6 +2419,8 @@ export function VideoTool() {
                         </h1>
                     </div>
 
+                    {isDesktopApp && <DesktopStatusCenter />}
+
                     <button
                         type="button"
                         onClick={() => setSidebarOpen((current) => !current)}
@@ -2366,19 +2478,30 @@ export function VideoTool() {
                                         Скачать Apple Silicon
                                     </button>
                                 )}
-                                {helperNeedsDownload && helperDownloadConfigured && (
-                                    <button
-                                        type="button"
+	                                {helperNeedsDownload && helperDownloadConfigured && (
+	                                    <button
+	                                        type="button"
                                         data-testid="helper-download-top"
                                         onClick={openHelperDownload}
                                         className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-50 transition hover:bg-amber-200/15"
                                     >
                                         <HardDriveDownload size={14} />
-                                        Скачать Intel
-                                    </button>
-                                )}
-                                <button
-                                    type="button"
+	                                        Скачать Intel
+	                                    </button>
+	                                )}
+	                                {isDesktopApp && (
+	                                    <button
+	                                        type="button"
+	                                        data-testid="helper-open-status-center-top"
+	                                        onClick={openDesktopStatusCenter}
+	                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
+	                                    >
+	                                        <Clipboard size={14} />
+	                                        Открыть диагностику
+	                                    </button>
+	                                )}
+	                                <button
+	                                    type="button"
                                     data-testid="helper-recheck-top"
                                     onClick={() => void checkHelper()}
                                     className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-600 bg-zinc-950/70 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:border-zinc-400"
@@ -2534,18 +2657,29 @@ export function VideoTool() {
                                                         Скачать для Intel
                                                     </button>
                                                 )}
-                                                {helperNeedsDownload && helperDownloadArm64Configured && (
-                                                    <button
+	                                                {helperNeedsDownload && helperDownloadArm64Configured && (
+	                                                    <button
                                                         type="button"
                                                         data-testid="helper-download-arm64"
                                                         onClick={openHelperDownloadArm64}
                                                         className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
                                                     >
                                                         <HardDriveDownload size={14} />
-                                                        Скачать для Apple Silicon
-                                                    </button>
-                                                )}
-                                                <button
+	                                                        Скачать для Apple Silicon
+	                                                    </button>
+	                                                )}
+	                                                {isDesktopApp && (
+	                                                    <button
+	                                                        type="button"
+	                                                        data-testid="helper-open-status-center"
+	                                                        onClick={openDesktopStatusCenter}
+	                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
+	                                                    >
+	                                                        <Clipboard size={14} />
+	                                                        Открыть Status Center
+	                                                    </button>
+	                                                )}
+	                                                <button
                                                     type="button"
                                                     data-testid="helper-recheck"
                                                     onClick={() => void checkHelper()}
@@ -2555,7 +2689,7 @@ export function VideoTool() {
                                                     Проверить снова
                                                 </button>
                                             </div>
-                                            {helperDiagnostics.length > 0 && (
+	                                            {!isDesktopApp && helperDiagnostics.length > 0 && (
                                                 <div
                                                     data-testid="helper-diagnostics"
                                                     className="mt-3 rounded-2xl border border-zinc-700/70 bg-zinc-950/70 p-3"
@@ -2624,7 +2758,7 @@ export function VideoTool() {
                                         <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                             Загружено: {session ? `${session.uploaded_count}/${session.expected_count}` : `0/${expectedOutputCount}`}
                                         </div>
-                                        {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading') && (
+                                        {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading' || exportPhase === 'background_uploading') && (
                                             <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                                 {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
                                             </div>

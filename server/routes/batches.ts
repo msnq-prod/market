@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import nodeFs from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
 import express from 'express';
@@ -188,6 +189,9 @@ type PhotoToolApplyManifestEntry = {
     source: 'existing' | 'upload';
     existing_url?: string;
     file_index?: number;
+    queue_job_id?: string;
+    queue_file_id?: string;
+    checksum_sha256?: string;
 };
 
 type PhotoToolBatchRecord = Prisma.BatchGetPayload<{
@@ -278,6 +282,45 @@ const buildPhotoToolFilename = (batchId: string, itemSeq: number, originalName: 
         : '.jpg';
 
     return `batch-${safeBatchId}-item-${formatItemSeq(itemSeq)}-${safeBaseName}-${Date.now()}${normalizedExtension}`;
+};
+
+const buildQueuedPhotoToolFilename = (batchId: string, itemSeq: number, originalName: string, queueJobId: string, queueFileId: string, safeExtension?: string) => {
+    const parsed = path.parse(originalName || '');
+    const safeBaseName = sanitizePhotoToolFilenamePart(parsed.name || 'photo');
+    const safeBatchId = sanitizePhotoToolFilenamePart(batchId);
+    const safeQueueJobId = sanitizePhotoToolFilenamePart(queueJobId);
+    const safeQueueFileId = sanitizePhotoToolFilenamePart(queueFileId);
+    const normalizedExtension = typeof safeExtension === 'string' && /^[.][a-z0-9]{1,10}$/.test(safeExtension)
+        ? safeExtension.toLowerCase()
+        : '.jpg';
+
+    return `batch-${safeBatchId}-item-${formatItemSeq(itemSeq)}-${safeBaseName}-queue-${safeQueueJobId}-${safeQueueFileId}${normalizedExtension}`;
+};
+
+const sha256File = async (filePath: string) => new Promise<string>((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = nodeFs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+});
+
+const parseQueueToken = (value: unknown) => {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    return /^[a-zA-Z0-9_-]{1,80}$/.test(trimmed) ? trimmed : undefined;
+};
+
+const parseChecksumSha256 = (value: unknown) => {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const trimmed = value.trim().toLowerCase();
+    return /^[a-f0-9]{64}$/.test(trimmed) ? trimmed : undefined;
 };
 
 const buildPhotoToolStateToken = (batch: PhotoToolBatchRecord) =>
@@ -496,7 +539,10 @@ const parsePhotoToolApplyManifest = (value: unknown, batch: PhotoToolBatchRecord
                 item_id: itemId,
                 item_seq: itemSeq,
                 source,
-                file_index: fileIndex
+                file_index: fileIndex,
+                queue_job_id: parseQueueToken(typedEntry.queue_job_id),
+                queue_file_id: parseQueueToken(typedEntry.queue_file_id),
+                checksum_sha256: parseChecksumSha256(typedEntry.checksum_sha256)
             };
         }
 
@@ -925,11 +971,46 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         const batch = ensurePhotoToolBatchReady(await getPhotoToolBatch(req.params.id));
         const currentPhotoStateToken = buildPhotoToolStateToken(batch);
         const basePhotoStateToken = parsePhotoToolBaseStateToken(req.body?.base_photo_state_token);
+        const manifest = parsePhotoToolApplyManifest(req.body?.manifest, batch);
         if (basePhotoStateToken !== currentPhotoStateToken) {
+            const currentPhotoUrlByItemId = new Map(batch.items.map((item) => [item.id, item.item_photo_url || null]));
+            const hasQueuedUpload = manifest.some((entry) =>
+                entry.source === 'upload' && Boolean(entry.queue_job_id) && Boolean(entry.queue_file_id)
+            );
+            const isQueuedDuplicate = hasQueuedUpload && manifest.every((entry) => {
+                if (entry.source === 'existing') {
+                    return currentPhotoUrlByItemId.get(entry.item_id) === entry.existing_url;
+                }
+
+                if (!entry.queue_job_id || !entry.queue_file_id) {
+                    return false;
+                }
+
+                const uploadedFile = uploadedFiles?.[entry.file_index as number];
+                if (!uploadedFile) {
+                    return false;
+                }
+
+                const targetFilename = buildQueuedPhotoToolFilename(
+                    batch.id,
+                    entry.item_seq,
+                    uploadedFile.originalname,
+                    entry.queue_job_id,
+                    entry.queue_file_id,
+                    path.extname(uploadedFile.filename).toLowerCase()
+                );
+                return currentPhotoUrlByItemId.get(entry.item_id) === `${PHOTO_TOOL_PUBLIC_URL_ROOT}/${targetFilename}`;
+            });
+
+            if (isQueuedDuplicate) {
+                await removeStagedFiles(uploadedFiles);
+                uploadedFiles = undefined;
+                return res.json(serializePhotoToolPayload(batch));
+            }
+
             throw createHttpError('Данные photo-tool изменились после открытия страницы. Обновите инструмент и повторите сохранение.', 409);
         }
 
-        const manifest = parsePhotoToolApplyManifest(req.body?.manifest, batch);
         const usedFileIndexes = manifest
             .filter((entry) => entry.source === 'upload')
             .map((entry) => entry.file_index as number)
@@ -958,12 +1039,29 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
                 throw createHttpError('manifest photo-tool ссылается на отсутствующий файл.', 400);
             }
 
-            const targetFilename = buildPhotoToolFilename(
-                batch.id,
-                entry.item_seq,
-                uploadedFile.originalname,
-                path.extname(uploadedFile.filename).toLowerCase()
-            );
+            if (entry.checksum_sha256) {
+                const actualChecksum = await sha256File(uploadedFile.path);
+                if (actualChecksum !== entry.checksum_sha256) {
+                    throw createHttpError('Контрольная сумма фото не совпадает с queued upload.', 400);
+                }
+            }
+
+            const safeExtension = path.extname(uploadedFile.filename).toLowerCase();
+            const targetFilename = entry.queue_job_id && entry.queue_file_id
+                ? buildQueuedPhotoToolFilename(
+                    batch.id,
+                    entry.item_seq,
+                    uploadedFile.originalname,
+                    entry.queue_job_id,
+                    entry.queue_file_id,
+                    safeExtension
+                )
+                : buildPhotoToolFilename(
+                    batch.id,
+                    entry.item_seq,
+                    uploadedFile.originalname,
+                    safeExtension
+                );
             const targetPath = path.join(PHOTO_TOOL_PUBLIC_OUTPUT_ROOT, targetFilename);
             await moveFileSafely(uploadedFile.path, targetPath);
             createdPaths.push(targetPath);
@@ -1473,6 +1571,14 @@ router.post('/:id/video-export-sessions/:sessionId/intro-file', authenticateToke
             throw createHttpError('Не передан MP4-файл intro.', 400);
         }
 
+        const introChecksum = parseChecksumSha256(req.body?.checksum_sha256);
+        if (introChecksum) {
+            const actualChecksum = await sha256File(uploadedFile.path);
+            if (actualChecksum !== introChecksum) {
+                throw createHttpError('Контрольная сумма intro-файла не совпадает с queued upload.', 400);
+            }
+        }
+
         const result = await withVideoExportBatchLock(req.params.id, async (tx) => {
             await markStaleVideoExportSessions(tx, req.params.id);
 
@@ -1566,6 +1672,14 @@ router.post('/:id/video-export-sessions/:sessionId/files', authenticateToken, as
 
         if (!uploadedFile) {
             throw createHttpError('Не передан финальный MP4-файл.', 400);
+        }
+
+        const uploadChecksum = parseChecksumSha256(req.body?.checksum_sha256);
+        if (uploadChecksum) {
+            const actualChecksum = await sha256File(uploadedFile.path);
+            if (actualChecksum !== uploadChecksum) {
+                throw createHttpError('Контрольная сумма финального ролика не совпадает с queued upload.', 400);
+            }
         }
 
         const serialNumber = typeof req.body.serial_number === 'string'

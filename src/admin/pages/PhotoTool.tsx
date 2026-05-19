@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes } from 'react';
-import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
     ArrowLeft,
@@ -15,6 +15,7 @@ import {
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
+import { getStonesDesktop, isStonesDesktop, stageFileForMediaQueue } from '../../utils/desktop';
 
 type PhotoToolBatch = {
     id: string;
@@ -45,6 +46,7 @@ type PersistedPhoto = {
     source: 'persisted';
     name: string;
     preview_url: string;
+    thumbnail_url: string;
     assigned_item_seq: number | null;
     existing_url: string;
     last_modified: number | null;
@@ -55,11 +57,13 @@ type LocalPhoto = {
     source: 'local';
     name: string;
     preview_url: string;
+    thumbnail_url: string;
     assigned_item_seq: number | null;
     existing_url: null;
     last_modified: number | null;
     file: File;
     object_url: string;
+    thumbnail_object_url: string | null;
 };
 
 type WorkingPhoto = PersistedPhoto | LocalPhoto;
@@ -112,6 +116,7 @@ const PHOTO_TOOL_ALLOWED_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'heic', 'he
 const PHOTO_TOOL_RAW_EXTENSIONS = new Set(['arw', 'cr2', 'cr3', 'dng', 'nef', 'orf', 'raf', 'rw2']);
 const PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS = new Set(['heic', 'heif']);
 const PHOTO_TOOL_ALLOWED_FORMAT_LABEL = 'JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP, HEIC/HEIF';
+const PHOTO_TOOL_THUMBNAIL_MAX_SIZE = 160;
 
 const padItemSeq = (value: number | null) => value == null ? '' : String(value).padStart(3, '0');
 const draftKeyFor = (batchId: string) => `photo-tool-draft:${batchId}`;
@@ -138,34 +143,77 @@ const canPreviewPhotoInBrowser = (photo: WorkingPhoto) => (
     photo.source === 'persisted' || !PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS.has(getFileExtension(photo.name))
 );
 
-const isHeicLikePhoto = (file: File) => {
-    const extension = getFileExtension(file.name);
-    return extension === 'heic' || extension === 'heif' || file.type === 'image/heic' || file.type === 'image/heif';
+const isHeicLikeFile = (file: File) => PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS.has(getFileExtension(file.name));
+
+const buildJpegFileName = (fileName: string) => {
+    const dotIndex = fileName.lastIndexOf('.');
+    const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName || 'photo';
+
+    return `${baseName}.jpg`;
 };
 
-const buildConvertedHeicName = (fileName: string) => {
-    const baseName = fileName.replace(/\.(heic|heif)$/i, '');
-    return `${baseName || 'photo'}.jpg`;
-};
-
-const convertHeicToJpegFile = async (file: File) => {
+const convertHeicFileToJpeg = async (file: File) => {
     const { default: heic2any } = await import('heic2any');
     const converted = await heic2any({
         blob: file,
         toType: 'image/jpeg',
-        quality: 0.9
+        quality: 0.92
     });
-    const convertedBlob = Array.isArray(converted) ? converted[0] : converted;
+    const blob = Array.isArray(converted) ? converted[0] : converted;
 
-    return new File(
-        [convertedBlob],
-        buildConvertedHeicName(file.name),
-        {
-            type: 'image/jpeg',
-            lastModified: file.lastModified
-        }
-    );
+    if (!(blob instanceof Blob)) {
+        throw new Error('HEIC conversion returned an empty result.');
+    }
+
+    return new File([blob], buildJpegFileName(file.name), {
+        type: 'image/jpeg',
+        lastModified: Number.isFinite(file.lastModified) ? file.lastModified : Date.now()
+    });
 };
+
+const createThumbnailObjectUrl = async (file: File) => {
+    if (typeof createImageBitmap === 'undefined' || !file.type.startsWith('image/')) {
+        return null;
+    }
+
+    let bitmap: ImageBitmap | null = null;
+
+    try {
+        bitmap = await createImageBitmap(file);
+        const longestSide = Math.max(bitmap.width, bitmap.height);
+        if (longestSide <= 0) {
+            return null;
+        }
+
+        const scale = Math.min(1, PHOTO_TOOL_THUMBNAIL_MAX_SIZE / longestSide);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) {
+            return null;
+        }
+
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob(resolve, 'image/jpeg', 0.72);
+        });
+
+        return blob ? URL.createObjectURL(blob) : null;
+    } catch {
+        return null;
+    } finally {
+        bitmap?.close();
+    }
+};
+
+const revokeLocalPhotoUrls = (photo: LocalPhoto) => {
+    URL.revokeObjectURL(photo.object_url);
+    if (photo.thumbnail_object_url && photo.thumbnail_object_url !== photo.object_url) {
+        URL.revokeObjectURL(photo.thumbnail_object_url);
+    }
+};
+
 
 const comparePhotoNames = (left: WorkingPhoto, right: WorkingPhoto) =>
     left.name.localeCompare(right.name, 'ru', { numeric: true, sensitivity: 'base' });
@@ -247,6 +295,7 @@ const buildPersistedPhoto = (item: PhotoToolItem): PersistedPhoto => ({
     source: 'persisted',
     name: extractPhotoName(item.item_photo_url || ''),
     preview_url: item.item_photo_url || '',
+    thumbnail_url: item.item_photo_url || '',
     assigned_item_seq: item.item_seq,
     existing_url: item.item_photo_url || '',
     last_modified: null
@@ -257,40 +306,47 @@ const createPersistedPhotoFromDraft = (meta: DraftPhotoMeta): PersistedPhoto => 
     source: 'persisted',
     name: meta.name,
     preview_url: meta.existing_url || '',
+    thumbnail_url: meta.existing_url || '',
     assigned_item_seq: meta.assigned_item_seq,
     existing_url: meta.existing_url || '',
     last_modified: meta.last_modified
 });
 
-const createLocalPhoto = (file: File): LocalPhoto => {
+const createLocalPhoto = async (file: File): Promise<LocalPhoto> => {
     const objectUrl = URL.createObjectURL(file);
+    const thumbnailObjectUrl = await createThumbnailObjectUrl(file);
 
     return {
         id: `local:${crypto.randomUUID()}`,
         source: 'local',
         name: file.name,
         preview_url: objectUrl,
+        thumbnail_url: thumbnailObjectUrl || objectUrl,
         assigned_item_seq: null,
         existing_url: null,
         last_modified: Number.isFinite(file.lastModified) ? file.lastModified : null,
         file,
-        object_url: objectUrl
+        object_url: objectUrl,
+        thumbnail_object_url: thumbnailObjectUrl
     };
 };
 
-const createLocalPhotoFromDraft = (id: string, file: File, assignedItemSeq: number | null): LocalPhoto => {
+const createLocalPhotoFromDraft = async (id: string, file: File, assignedItemSeq: number | null): Promise<LocalPhoto> => {
     const objectUrl = URL.createObjectURL(file);
+    const thumbnailObjectUrl = await createThumbnailObjectUrl(file);
 
     return {
         id,
         source: 'local',
         name: file.name,
         preview_url: objectUrl,
+        thumbnail_url: thumbnailObjectUrl || objectUrl,
         assigned_item_seq: assignedItemSeq,
         existing_url: null,
         last_modified: Number.isFinite(file.lastModified) ? file.lastModified : null,
         file,
-        object_url: objectUrl
+        object_url: objectUrl,
+        thumbnail_object_url: thumbnailObjectUrl
     };
 };
 
@@ -318,6 +374,11 @@ const buildBaselineSignature = (payload: PhotoToolPayload) => JSON.stringify({
             last_modified: null
         }))
 });
+
+const buildDraftFileSignature = (photos: WorkingPhoto[]) => photos
+    .filter((photo): photo is LocalPhoto => photo.source === 'local')
+    .map((photo) => `${photo.id}:${photo.file.name}:${photo.file.size}:${photo.file.lastModified}`)
+    .join('|');
 
 const buildCurrentSignature = (
     photos: WorkingPhoto[],
@@ -394,9 +455,11 @@ const deleteDraftFilesForBatch = async (batchId: string, keepKeys?: Set<string>)
     }
 };
 
-const persistDraftStorage = async (batchId: string, draft: PhotoToolDraft, photos: WorkingPhoto[]) => {
+const persistDraftMetadata = (batchId: string, draft: PhotoToolDraft) => {
     localStorage.setItem(draftKeyFor(batchId), JSON.stringify(draft));
+};
 
+const syncDraftFilesForPhotos = async (batchId: string, photos: WorkingPhoto[]) => {
     const localPhotos = photos.filter((photo): photo is LocalPhoto => photo.source === 'local');
     const keepKeys = new Set(localPhotos.map((photo) => draftFileKey(batchId, photo.id)));
     const database = await openDraftDb();
@@ -404,15 +467,38 @@ const persistDraftStorage = async (batchId: string, draft: PhotoToolDraft, photo
     try {
         const transaction = database.transaction(PHOTO_TOOL_DRAFT_STORE, 'readwrite');
         const store = transaction.objectStore(PHOTO_TOOL_DRAFT_STORE);
-        localPhotos.forEach((photo) => {
-            store.put(photo.file, draftFileKey(batchId, photo.id));
+        const existingKeys = new Set<string>();
+        await new Promise<void>((resolve, reject) => {
+            const request = store.openCursor();
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) {
+                    for (const photo of localPhotos) {
+                        const key = draftFileKey(batchId, photo.id);
+                        if (!existingKeys.has(key)) {
+                            store.put(photo.file, key);
+                        }
+                    }
+                    resolve();
+                    return;
+                }
+
+                const key = String(cursor.key);
+                if (key.startsWith(`${batchId}:`)) {
+                    if (keepKeys.has(key)) {
+                        existingKeys.add(key);
+                    } else {
+                        cursor.delete();
+                    }
+                }
+                cursor.continue();
+            };
+            request.onerror = () => reject(request.error || new Error('Failed to sync draft files.'));
         });
         await transactionDone(transaction);
     } finally {
         database.close();
     }
-
-    await deleteDraftFilesForBatch(batchId, keepKeys);
 };
 
 const clearDraftStorage = async (batchId: string) => {
@@ -493,7 +579,7 @@ const restoreDraftState = async (batchId: string, payload: PhotoToolPayload): Pr
                     type: file.type || 'image/jpeg',
                     lastModified: meta.last_modified ?? Date.now()
                 });
-            restoredPhotos.push(createLocalPhotoFromDraft(meta.id, restoredFile, meta.assigned_item_seq));
+            restoredPhotos.push(await createLocalPhotoFromDraft(meta.id, restoredFile, meta.assigned_item_seq));
         }
 
         return {
@@ -529,16 +615,28 @@ export function PhotoTool() {
     const [importProgress, setImportProgress] = useState<PhotoImportProgress | null>(null);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const photosRef = useRef<WorkingPhoto[]>([]);
+    const activePhotoIdRef = useRef('');
+    const assignmentDraftRef = useRef<AssignmentDraft | null>(null);
+    const itemSeqsRef = useRef<number[]>([]);
     const baselineSignatureRef = useRef('');
+    const draftFileSignatureRef = useRef('');
 
     useEffect(() => {
         photosRef.current = photos;
     }, [photos]);
 
+    useEffect(() => {
+        activePhotoIdRef.current = activePhotoId;
+    }, [activePhotoId]);
+
+    useEffect(() => {
+        assignmentDraftRef.current = assignmentDraft;
+    }, [assignmentDraft]);
+
     useEffect(() => () => {
         photosRef.current.forEach((photo) => {
             if (photo.source === 'local') {
-                URL.revokeObjectURL(photo.object_url);
+                revokeLocalPhotoUrls(photo);
             }
         });
     }, []);
@@ -572,10 +670,11 @@ export function PhotoTool() {
 
                 photosRef.current.forEach((photo) => {
                     if (photo.source === 'local') {
-                        URL.revokeObjectURL(photo.object_url);
+                        revokeLocalPhotoUrls(photo);
                     }
                 });
                 baselineSignatureRef.current = buildBaselineSignature(typedPayload);
+                draftFileSignatureRef.current = restoredDraft?.photos.length ? buildDraftFileSignature(nextPhotos) : '';
                 setData(typedPayload);
                 setPhotos(nextPhotos);
                 setCarouselDirection(0);
@@ -606,19 +705,41 @@ export function PhotoTool() {
         };
     }, [batchId]);
 
-    const itemSeqs = data?.items.map((item) => item.item_seq) ?? [];
-    const coveredItemSeqs = new Set(photos.flatMap((photo) => photo.assigned_item_seq == null ? [] : [photo.assigned_item_seq]));
-    const missingItemSeqs = itemSeqs.filter((itemSeq) => !coveredItemSeqs.has(itemSeq));
-    const assignedCount = photos.filter((photo) => photo.assigned_item_seq != null).length;
-    const unassignedCount = photos.length - assignedCount;
-    const extraPhotoCount = Math.max(0, photos.length - itemSeqs.length);
+    const itemSeqs = useMemo(() => data?.items.map((item) => item.item_seq) ?? [], [data]);
+    useEffect(() => {
+        itemSeqsRef.current = itemSeqs;
+    }, [itemSeqs]);
+    const photoMetrics = useMemo(() => {
+        const coveredItemSeqs = new Set(photos.flatMap((photo) => photo.assigned_item_seq == null ? [] : [photo.assigned_item_seq]));
+        const missingItemSeqs = itemSeqs.filter((itemSeq) => !coveredItemSeqs.has(itemSeq));
+        const assignedCount = photos.filter((photo) => photo.assigned_item_seq != null).length;
+
+        return {
+            missingItemSeqs,
+            assignedCount,
+            unassignedCount: photos.length - assignedCount,
+            extraPhotoCount: Math.max(0, photos.length - itemSeqs.length)
+        };
+    }, [itemSeqs, photos]);
+    const { missingItemSeqs, assignedCount, unassignedCount, extraPhotoCount } = photoMetrics;
     const canSave = Boolean(data) && missingItemSeqs.length === 0 && itemSeqs.length > 0;
-    const hasUnsavedChanges = Boolean(data) && buildCurrentSignature(photos, sortMode, sortDescending, assignmentDescending) !== baselineSignatureRef.current;
-    const activeIndex = photos.findIndex((photo) => photo.id === activePhotoId);
-    const resolvedActiveIndex = activeIndex >= 0 ? activeIndex : 0;
-    const prevPhoto = resolvedActiveIndex > 0 ? photos[resolvedActiveIndex - 1] : null;
-    const activePhoto = photos[resolvedActiveIndex] ?? null;
-    const nextPhoto = resolvedActiveIndex < photos.length - 1 ? photos[resolvedActiveIndex + 1] : null;
+    const currentSignature = useMemo(
+        () => buildCurrentSignature(photos, sortMode, sortDescending, assignmentDescending),
+        [assignmentDescending, photos, sortDescending, sortMode]
+    );
+    const hasUnsavedChanges = Boolean(data) && currentSignature !== baselineSignatureRef.current;
+    const activePhotoState = useMemo(() => {
+        const activeIndex = photos.findIndex((photo) => photo.id === activePhotoId);
+        const resolvedActiveIndex = activeIndex >= 0 ? activeIndex : 0;
+
+        return {
+            resolvedActiveIndex,
+            prevPhoto: resolvedActiveIndex > 0 ? photos[resolvedActiveIndex - 1] : null,
+            activePhoto: photos[resolvedActiveIndex] ?? null,
+            nextPhoto: resolvedActiveIndex < photos.length - 1 ? photos[resolvedActiveIndex + 1] : null
+        };
+    }, [activePhotoId, photos]);
+    const { resolvedActiveIndex, prevPhoto, activePhoto, nextPhoto } = activePhotoState;
     const isImportingPhotos = importProgress !== null;
 
     const clearAssignmentDraft = (photoId?: string) => {
@@ -631,6 +752,7 @@ export function PhotoTool() {
                 return current;
             }
 
+            assignmentDraftRef.current = null;
             return null;
         });
     };
@@ -657,23 +779,36 @@ export function PhotoTool() {
         setSuccessMessage('');
     };
 
-    const activatePhoto = (nextPhotoId: string, direction = 0) => {
-        if (assignmentDraft?.photoId === activePhotoId && activePhotoId && activePhotoId !== nextPhotoId) {
-            const nextPhotos = applyAssignmentToPhotoList(photos, itemSeqs, activePhotoId, assignmentDraft.value);
-            clearAssignmentDraft(activePhotoId);
+    const activatePhoto = useCallback((nextPhotoId: string, direction = 0) => {
+        const currentActivePhotoId = activePhotoIdRef.current;
+        const currentAssignmentDraft = assignmentDraftRef.current;
+
+        if (currentAssignmentDraft?.photoId === currentActivePhotoId && currentActivePhotoId && currentActivePhotoId !== nextPhotoId) {
+            const nextPhotos = applyAssignmentToPhotoList(
+                photosRef.current,
+                itemSeqsRef.current,
+                currentActivePhotoId,
+                currentAssignmentDraft.value
+            );
+            assignmentDraftRef.current = null;
+            photosRef.current = nextPhotos;
+            setAssignmentDraft(null);
             setPhotos(nextPhotos);
             setError('');
             setSuccessMessage('');
         }
 
+        activePhotoIdRef.current = nextPhotoId;
         setCarouselDirection(direction);
         setActivePhotoId(nextPhotoId);
-    };
+    }, []);
 
     const applyNextPhotos = (nextPhotos: WorkingPhoto[], preferredActiveId?: string | null) => {
+        photosRef.current = nextPhotos;
         setPhotos(nextPhotos);
 
         if (nextPhotos.length === 0) {
+            activePhotoIdRef.current = '';
             setCarouselDirection(0);
             setActivePhotoId('');
             return;
@@ -681,8 +816,8 @@ export function PhotoTool() {
 
         const activeId = preferredActiveId && nextPhotos.some((photo) => photo.id === preferredActiveId)
             ? preferredActiveId
-            : nextPhotos.some((photo) => photo.id === activePhotoId)
-            ? activePhotoId
+            : nextPhotos.some((photo) => photo.id === activePhotoIdRef.current)
+            ? activePhotoIdRef.current
             : nextPhotos[0].id;
 
         activatePhoto(activeId, 0);
@@ -725,7 +860,6 @@ export function PhotoTool() {
 
         const rejectedRawFiles: string[] = [];
         const rejectedFiles: string[] = [];
-        const failedHeicFiles: string[] = [];
         const acceptedFiles = sourceFiles.filter((file) => {
             const extension = getFileExtension(file.name);
             if (PHOTO_TOOL_RAW_EXTENSIONS.has(extension)) {
@@ -750,11 +884,27 @@ export function PhotoTool() {
             return;
         }
 
-        const preparedFiles: File[] = [];
+        setImportProgress({
+            stage: 'adding',
+            currentFileName: '',
+            current: acceptedFiles.length,
+            total: acceptedFiles.length
+        });
+
+        const statusMessages: string[] = [];
+        if (rejectedRawFiles.length > 0) {
+            statusMessages.push('DNG/RAW пропущены: экспортируйте их в HEIC/JPEG/PNG.');
+        } else if (rejectedFiles.length > 0) {
+            statusMessages.push(`Неподдерживаемые файлы пропущены. Форматы: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`);
+        }
+
+        const normalizedFiles: File[] = [];
+        let convertedHeicCount = 0;
+        let failedHeicCount = 0;
 
         for (const [index, file] of acceptedFiles.entries()) {
-            if (!isHeicLikePhoto(file)) {
-                preparedFiles.push(file);
+            if (!isHeicLikeFile(file)) {
+                normalizedFiles.push(file);
                 continue;
             }
 
@@ -766,40 +916,39 @@ export function PhotoTool() {
             });
 
             try {
-                preparedFiles.push(await convertHeicToJpegFile(file));
-            } catch (conversionError) {
-                console.error(conversionError);
-                failedHeicFiles.push(file.name);
+                normalizedFiles.push(await convertHeicFileToJpeg(file));
+                convertedHeicCount += 1;
+            } catch {
+                normalizedFiles.push(file);
+                failedHeicCount += 1;
             }
         }
 
-        if (preparedFiles.length === 0) {
-            setImportProgress(null);
-            setError(failedHeicFiles.length > 0
-                ? 'Не удалось конвертировать HEIC. Экспортируйте файл в JPEG/PNG.'
-                : `Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`
-            );
-            return;
+        if (convertedHeicCount > 0) {
+            statusMessages.push(`HEIC/HEIF конвертированы в JPEG: ${convertedHeicCount}.`);
+        }
+
+        if (failedHeicCount > 0) {
+            statusMessages.push(`Для HEIC/HEIF без превью серверная конвертация выполнится при сохранении: ${failedHeicCount}.`);
         }
 
         setImportProgress({
             stage: 'adding',
             currentFileName: '',
-            current: preparedFiles.length,
-            total: preparedFiles.length
+            current: normalizedFiles.length,
+            total: normalizedFiles.length
         });
 
-        const statusMessages: string[] = [];
-        if (rejectedRawFiles.length > 0) {
-            statusMessages.push('DNG/RAW пропущены: экспортируйте их в HEIC/JPEG/PNG.');
-        } else if (rejectedFiles.length > 0) {
-            statusMessages.push(`Неподдерживаемые файлы пропущены. Форматы: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`);
+        const localPhotos: LocalPhoto[] = [];
+        for (const [index, file] of normalizedFiles.entries()) {
+            setImportProgress({
+                stage: 'adding',
+                currentFileName: file.name,
+                current: index + 1,
+                total: normalizedFiles.length
+            });
+            localPhotos.push(await createLocalPhoto(file));
         }
-        if (failedHeicFiles.length > 0) {
-            statusMessages.push(`Не удалось конвертировать HEIC: ${failedHeicFiles.join(', ')}. Экспортируйте файл в JPEG/PNG.`);
-        }
-
-        const localPhotos = preparedFiles.map((file) => createLocalPhoto(file));
         const reordered = orderPhotos([...buildPhotosWithPendingDraft(photos), ...localPhotos], sortMode, sortDescending);
         const nextPhotos = fillMissingAssignments(reordered, itemSeqs, assignmentDescending);
         clearAssignmentDraft();
@@ -807,30 +956,52 @@ export function PhotoTool() {
         setImportProgress(null);
 
         if (statusMessages.length > 0) {
-            setError(`Добавлено фото: ${preparedFiles.length}. ${statusMessages.join(' ')}`);
+            setError(`Добавлено фото: ${acceptedFiles.length}. ${statusMessages.join(' ')}`);
         } else {
-            setSuccessMessage(`Добавлено фото: ${preparedFiles.length}.`);
+            setSuccessMessage(`Добавлено фото: ${acceptedFiles.length}.`);
         }
     };
 
-    const handleRemovePhoto = (photoId: string) => {
-        const currentIndex = photos.findIndex((photo) => photo.id === photoId);
+    const handleRemovePhoto = useCallback((photoId: string) => {
+        const currentPhotos = photosRef.current;
+        const currentIndex = currentPhotos.findIndex((photo) => photo.id === photoId);
         if (currentIndex === -1) {
             return;
         }
 
-        const photoToRemove = photos[currentIndex];
+        const photoToRemove = currentPhotos[currentIndex];
         if (photoToRemove.source === 'local') {
-            URL.revokeObjectURL(photoToRemove.object_url);
+            revokeLocalPhotoUrls(photoToRemove);
         }
 
-        const nextPhotos = photos.filter((photo) => photo.id !== photoId);
+        const nextPhotos = currentPhotos.filter((photo) => photo.id !== photoId);
         const fallbackActiveId = nextPhotos[currentIndex]?.id || nextPhotos[currentIndex - 1]?.id || null;
-        clearAssignmentDraft(photoId);
-        applyNextPhotos(nextPhotos, fallbackActiveId);
+        photosRef.current = nextPhotos;
+        setAssignmentDraft((current) => {
+            if (!current || current.photoId !== photoId) {
+                return current;
+            }
+
+            assignmentDraftRef.current = null;
+            return null;
+        });
+
+        setPhotos(nextPhotos);
+        if (nextPhotos.length === 0) {
+            activePhotoIdRef.current = '';
+            setCarouselDirection(0);
+            setActivePhotoId('');
+        } else {
+            const activeId = fallbackActiveId && nextPhotos.some((photo) => photo.id === fallbackActiveId)
+                ? fallbackActiveId
+                : nextPhotos.some((photo) => photo.id === activePhotoIdRef.current)
+                ? activePhotoIdRef.current
+                : nextPhotos[0].id;
+            activatePhoto(activeId, 0);
+        }
         setError('');
         setSuccessMessage('');
-    };
+    }, [activatePhoto]);
 
     const handleAssignmentInputChange = (photoId: string, nextValue: string) => {
         const normalized = normalizeAssignmentInput(nextValue);
@@ -840,6 +1011,7 @@ export function PhotoTool() {
         if (normalized === committedValue) {
             clearAssignmentDraft(photoId);
         } else {
+            assignmentDraftRef.current = { photoId, value: normalized };
             setAssignmentDraft({ photoId, value: normalized });
         }
 
@@ -879,6 +1051,7 @@ export function PhotoTool() {
             );
             const manifest: Array<Record<string, string | number>> = [];
             const formData = new FormData();
+            const localPhotosForQueue: Array<{ fileIndex: number; photo: LocalPhoto }> = [];
             let fileIndex = 0;
 
             for (const item of data.items) {
@@ -903,8 +1076,42 @@ export function PhotoTool() {
                     source: 'upload',
                     file_index: fileIndex
                 });
+                localPhotosForQueue.push({ fileIndex, photo });
                 formData.append('files', photo.file, photo.file.name);
                 fileIndex += 1;
+            }
+
+            if (isStonesDesktop() && localPhotosForQueue.length > 0) {
+                const desktop = getStonesDesktop();
+                if (!desktop) {
+                    throw new Error('Desktop queue недоступна.');
+                }
+
+                const stagedFiles = [];
+                const queuedManifest = [...manifest];
+                for (const entry of localPhotosForQueue) {
+                    const staged = await stageFileForMediaQueue(entry.photo.file);
+                    stagedFiles.push({
+                        ...staged,
+                        fileIndex: entry.fileIndex
+                    });
+                    const manifestIndex = queuedManifest.findIndex((item) => item.source === 'upload' && item.file_index === entry.fileIndex);
+                    if (manifestIndex >= 0) {
+                        queuedManifest[manifestIndex] = {
+                            ...queuedManifest[manifestIndex],
+                            queue_file_id: staged.fileId
+                        };
+                    }
+                }
+
+                const job = await desktop.enqueuePhotoToolApply({
+                    batchId,
+                    manifest: queuedManifest,
+                    basePhotoStateToken: data.batch.photo_state_token,
+                    files: stagedFiles
+                });
+                setSuccessMessage(`Сохранение поставлено в локальную очередь: ${job.id.slice(0, 8)}.`);
+                return;
             }
 
             formData.append('manifest', JSON.stringify(manifest));
@@ -936,7 +1143,7 @@ export function PhotoTool() {
                 }
 
                 if (photo.source === 'local') {
-                    URL.revokeObjectURL(photo.object_url);
+                    revokeLocalPhotoUrls(photo);
                 }
 
                 return {
@@ -944,6 +1151,7 @@ export function PhotoTool() {
                     source: 'persisted' as const,
                     name: extractPhotoName(nextUrl),
                     preview_url: nextUrl,
+                    thumbnail_url: nextUrl,
                     assigned_item_seq: photo.assigned_item_seq,
                     existing_url: nextUrl,
                     last_modified: null
@@ -954,6 +1162,7 @@ export function PhotoTool() {
                 : activePhotoId;
 
             baselineSignatureRef.current = buildCurrentSignature(nextPhotos, sortMode, sortDescending, assignmentDescending);
+            draftFileSignatureRef.current = '';
             setData(typedPayload);
             applyNextPhotos(nextPhotos, preferredActiveId);
             await clearDraftStorage(batchId);
@@ -988,13 +1197,27 @@ export function PhotoTool() {
         };
 
         const timeoutId = window.setTimeout(() => {
-            void persistDraftStorage(batchId, draft, photos).catch(() => undefined);
+            persistDraftMetadata(batchId, draft);
         }, 250);
 
         return () => {
             window.clearTimeout(timeoutId);
         };
     }, [activePhotoId, assignmentDescending, batchId, data, hasUnsavedChanges, photos, sortDescending, sortMode]);
+
+    useEffect(() => {
+        if (!data || !hasUnsavedChanges) {
+            return;
+        }
+
+        const nextFileSignature = buildDraftFileSignature(photos);
+        if (nextFileSignature === draftFileSignatureRef.current) {
+            return;
+        }
+
+        draftFileSignatureRef.current = nextFileSignature;
+        void syncDraftFilesForPhotos(batchId, photos).catch(() => undefined);
+    }, [batchId, data, hasUnsavedChanges, photos]);
 
     useEffect(() => {
         if (!hasUnsavedChanges) {
@@ -1068,6 +1291,14 @@ export function PhotoTool() {
         }
     });
 
+    const handleListItemActivate = useCallback((photoId: string, index: number) => {
+        activatePhoto(photoId, index > resolvedActiveIndex ? 1 : index < resolvedActiveIndex ? -1 : 0);
+    }, [resolvedActiveIndex, activatePhoto]);
+
+    const handleListItemRemove = useCallback((photoId: string) => {
+        handleRemovePhoto(photoId);
+    }, [handleRemovePhoto]);
+
     useEffect(() => {
         window.addEventListener('keydown', handleHotkey);
         return () => {
@@ -1089,7 +1320,7 @@ export function PhotoTool() {
     }
 
     return (
-        <MotionConfig transition={{ type: 'spring', stiffness: 230, damping: 28, mass: 0.9 }}>
+        <MotionConfig transition={{ duration: 0.16, ease: 'easeOut' }}>
             <div className="h-screen overflow-hidden bg-[#0b0c0f] text-[#ecebe6]">
                 <div className="flex h-full min-h-0 flex-col">
                     <header className="border-b border-white/5 bg-[#111318]/94 backdrop-blur">
@@ -1229,59 +1460,14 @@ export function PhotoTool() {
                                 ) : (
                                     <div className="space-y-2">
                                         {photos.map((photo, index) => (
-                                            <div
+                                            <PhotoListItem
                                                 key={photo.id}
-                                                className={`group rounded-[20px] px-2 py-2 transition ${photo.id === activePhotoId
-                                                    ? 'bg-[#1a2028] shadow-[inset_0_0_0_1px_rgba(56,189,248,0.35)]'
-                                                    : 'bg-transparent hover:bg-white/[0.03]'
-                                                    }`}
-                                            >
-                                                <div className="flex items-center gap-3">
-                                                    <button
-                                                        type="button"
-                                                        data-testid={`photo-list-item-${index}`}
-                                                        onClick={() => activatePhoto(
-                                                            photo.id,
-                                                            index > resolvedActiveIndex ? 1 : index < resolvedActiveIndex ? -1 : 0
-                                                        )}
-                                                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                                                    >
-                                                        <div className="relative h-16 w-16 overflow-hidden rounded-2xl bg-black/50 shadow-[0_10px_22px_rgba(0,0,0,0.28)]">
-                                                            <PhotoPreview photo={photo} className="h-full w-full object-cover" compact />
-                                                            {photo.assigned_item_seq == null && (
-                                                                <div data-testid={`photo-unassigned-overlay-${index}`} className="absolute inset-0 bg-red-500/35" />
-                                                            )}
-                                                            <div className="absolute left-1.5 top-1.5 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white/70">
-                                                                {String(index + 1).padStart(2, '0')}
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="min-w-0 flex-1">
-                                                            <p className="truncate text-sm font-medium text-white/90">{photo.name}</p>
-                                                            <p data-testid={`photo-list-status-${index}`} className="mt-1 text-xs text-white/48">
-                                                                {photo.assigned_item_seq == null
-                                                                    ? 'Без назначения'
-                                                                    : `Позиция ${padItemSeq(photo.assigned_item_seq)}`}
-                                                            </p>
-                                                            <p className="mt-1 text-[10px] uppercase tracking-[0.28em] text-white/24">
-                                                                {photo.source === 'local' ? 'Local' : 'Saved'}
-                                                            </p>
-                                                        </div>
-                                                    </button>
-
-                                                    <button
-                                                        type="button"
-                                                        onClick={(event) => {
-                                                            event.stopPropagation();
-                                                            handleRemovePhoto(photo.id);
-                                                        }}
-                                                        className="rounded-xl p-2 text-white/25 transition hover:bg-red-500/10 hover:text-red-200"
-                                                        aria-label={`Удалить ${photo.name}`}
-                                                    >
-                                                        <Trash2 size={15} />
-                                                    </button>
-                                                </div>
-                                            </div>
+                                                photo={photo}
+                                                index={index}
+                                                isActive={photo.id === activePhotoId}
+                                                onActivate={handleListItemActivate}
+                                                onRemove={handleListItemRemove}
+                                            />
                                         ))}
                                     </div>
                                 )}
@@ -1464,7 +1650,85 @@ function PhotoPreview({ photo, className, compact = false }: { photo: WorkingPho
     );
 }
 
-function CarouselStageCard({
+function PhotoThumbnail({ photo, className }: { photo: WorkingPhoto; className: string }) {
+    if (canPreviewPhotoInBrowser(photo)) {
+        return <img src={photo.thumbnail_url} alt={photo.name} className={className} loading="lazy" decoding="async" />;
+    }
+
+    return (
+        <div className={`${className} flex items-center justify-center bg-[#0d1117]`}>
+            <FileImage size={18} className="text-white/25" />
+        </div>
+    );
+}
+
+const PhotoListItem = memo(function PhotoListItem({
+    photo,
+    index,
+    isActive,
+    onActivate,
+    onRemove
+}: {
+    photo: WorkingPhoto;
+    index: number;
+    isActive: boolean;
+    onActivate: (photoId: string, index: number) => void;
+    onRemove: (photoId: string) => void;
+}) {
+    return (
+        <div
+            className={`group rounded-[20px] px-2 py-2 transition-colors ${isActive
+                ? 'bg-[#1a2028] shadow-[inset_0_0_0_1px_rgba(56,189,248,0.35)]'
+                : 'bg-transparent hover:bg-white/[0.03]'
+                }`}
+        >
+            <div className="flex items-center gap-3">
+                <button
+                    type="button"
+                    data-testid={`photo-list-item-${index}`}
+                    onClick={() => onActivate(photo.id, index)}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                >
+                    <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-black/50 shadow-[0_10px_22px_rgba(0,0,0,0.28)]">
+                        <PhotoThumbnail photo={photo} className="h-full w-full object-cover" />
+                        {photo.assigned_item_seq == null && (
+                            <div data-testid={`photo-unassigned-overlay-${index}`} className="absolute inset-0 bg-red-500/35" />
+                        )}
+                        <div className="absolute left-1.5 top-1.5 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white/70">
+                            {String(index + 1).padStart(2, '0')}
+                        </div>
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-white/90">{photo.name}</p>
+                        <p data-testid={`photo-list-status-${index}`} className="mt-1 text-xs text-white/48">
+                            {photo.assigned_item_seq == null
+                                ? 'Без назначения'
+                                : `Позиция ${padItemSeq(photo.assigned_item_seq)}`}
+                        </p>
+                        <p className="mt-1 text-[10px] uppercase tracking-[0.28em] text-white/24">
+                            {photo.source === 'local' ? 'Local' : 'Saved'}
+                        </p>
+                    </div>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onRemove(photo.id);
+                    }}
+                    className="rounded-xl p-2 text-white/25 transition-colors hover:bg-red-500/10 hover:text-red-200"
+                    aria-label={`Удалить ${photo.name}`}
+                >
+                    <Trash2 size={15} />
+                </button>
+            </div>
+        </div>
+    );
+});
+
+const CarouselStageCard = memo(function CarouselStageCard({
     title,
     photo,
     slot,
@@ -1508,17 +1772,18 @@ function CarouselStageCard({
 
     return (
         <div className={`flex h-full ${active ? '' : 'items-center'} justify-center`}>
-            <AnimatePresence initial={false} mode="popLayout">
+            <AnimatePresence initial={false}>
                 <motion.div
                     key={`${slot}:${photo.id}`}
                     data-testid={`photo-card-${slot}`}
-                    initial={{ opacity: 0, x: initialOffset, scale: active ? 0.96 : 0.9, filter: 'blur(10px)' }}
-                    animate={{ opacity: active ? 1 : 0.76, x: 0, scale: active ? 1 : 0.92, filter: 'blur(0px)' }}
-                    exit={{ opacity: 0, x: -initialOffset || (direction * 90), scale: 0.9, filter: 'blur(10px)' }}
+                    initial={{ opacity: 0, x: initialOffset, scale: active ? 0.98 : 0.92 }}
+                    animate={{ opacity: active ? 1 : 0.76, x: 0, scale: active ? 1 : 0.92 }}
+                    exit={{ opacity: 0, x: -initialOffset || (direction * 90), scale: 0.92 }}
                     className={`relative w-full overflow-hidden rounded-[30px] ${active
                         ? 'h-full bg-[#141920] shadow-[0_30px_90px_rgba(0,0,0,0.45),inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                         : 'h-[68%] max-w-[300px] bg-[#161a20] shadow-[0_22px_60px_rgba(0,0,0,0.35)]'
                         }`}
+                    style={{ willChange: 'transform, opacity' }}
                 >
                     <button type="button" onClick={() => onActivate(photo)} className="absolute inset-0">
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(255,255,255,0.06),transparent_62%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_18%,transparent_72%,rgba(255,255,255,0.03))]" />
@@ -1567,7 +1832,7 @@ function CarouselStageCard({
             </AnimatePresence>
         </div>
     );
-}
+});
 
 function WorkspaceStat({
     label,

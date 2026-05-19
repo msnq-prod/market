@@ -40,6 +40,25 @@ export type VideoResultManifestEntry = {
     public_url: string;
 };
 
+export type VideoProcessorRuntimeConfig = {
+    pollIntervalMs: number;
+    workerCount: number;
+    jobConcurrency: number;
+    ffmpegThreads: number;
+};
+
+const parsePositiveInteger = (value: string | undefined, fallback: number) => {
+    const numericValue = Number.parseInt(value || '', 10);
+    return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : fallback;
+};
+
+export const getVideoProcessorRuntimeConfig = (): VideoProcessorRuntimeConfig => ({
+    pollIntervalMs: parsePositiveInteger(process.env.VIDEO_PROCESSOR_POLL_MS, 3000),
+    workerCount: parsePositiveInteger(process.env.VIDEO_PROCESSOR_WORKERS, 1),
+    jobConcurrency: parsePositiveInteger(process.env.VIDEO_JOB_CONCURRENCY, 2),
+    ffmpegThreads: parsePositiveInteger(process.env.VIDEO_JOB_FFMPEG_THREADS, 1)
+});
+
 export const ensureVideoProcessingDirectories = () => {
     [VIDEO_JOB_STORAGE_ROOT, VIDEO_JOB_STAGING_ROOT, VIDEO_JOB_PUBLIC_OUTPUT_ROOT].forEach((dir) => {
         if (!fs.existsSync(dir)) {

@@ -34,6 +34,7 @@ docker compose up -d --build
 - uploads и video storage вынесены в docker volumes
 - `CLIENT_URL` внутри local docker stack — `http://localhost:3001`
 - сиды не выполняются автоматически
+- throughput server-side video jobs управляется env-переменными `VIDEO_PROCESSOR_WORKERS`, `VIDEO_JOB_CONCURRENCY`, `VIDEO_JOB_FFMPEG_THREADS`
 - runtime image использует системный `ffmpeg` из Alpine; desktop helper-зависимости `ffmpeg-static` и `ffprobe-static` в compose-сборку не устанавливаются
 
 ## 2.1 Dev stack для редактирования UI без пересборки контейнера
@@ -119,6 +120,9 @@ cp .env.production.example .env.production
 - `REFRESH_TOKEN_SECRET`
 - `TELEGRAM_TOKEN_ENCRYPTION_KEY`
 - `VIDEO_PROCESSOR_POLL_MS`
+- `VIDEO_PROCESSOR_WORKERS` — сколько polling loop запускает один процесс `video-processor` (по умолчанию `1`)
+- `VIDEO_JOB_CONCURRENCY` — сколько tail clips одного video job собираются параллельно (по умолчанию `2`)
+- `VIDEO_JOB_FFMPEG_THREADS` — сколько `ffmpeg` threads выделять на encode/re-encode одной операции (по умолчанию `1`)
 - `TELEGRAM_WORKER_POLL_MS`
 - `TELEGRAM_WORKER_RETRY_BASE_MS`
 - `TELEGRAM_WORKER_MAX_ATTEMPTS`

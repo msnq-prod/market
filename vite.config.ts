@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 const devServerPort = Number(process.env.VITE_PORT || '5173')
 const apiProxyTarget = process.env.VITE_API_TARGET || 'http://127.0.0.1:3001'
+const videoHelperProxyTarget = process.env.VITE_VIDEO_HELPER_PROXY_TARGET || 'http://127.0.0.1:3012'
 const usePolling = process.env.VITE_USE_POLLING === '1'
 
 export default defineConfig({
@@ -34,7 +35,11 @@ export default defineConfig({
       '/api': apiProxyTarget,
       '/auth': apiProxyTarget,
       '/healthz': apiProxyTarget,
-      '/uploads': apiProxyTarget
+      '/uploads': apiProxyTarget,
+      '/desktop-helper': {
+        target: videoHelperProxyTarget,
+        rewrite: (path) => path.replace(/^\/desktop-helper/, '') || '/'
+      }
     }
   }
 })

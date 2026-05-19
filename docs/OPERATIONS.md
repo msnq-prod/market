@@ -99,7 +99,54 @@ STONES_HELPER_ALLOWED_ORIGIN=https://zagarami.com STONES_HELPER_VERSION=2026.5.1
 
 Desktop helper проверяет обновления из `ZAGARAMI-Video-Helper-update.json`, скачивает подходящий DMG в локальный cache и открывает его. Автоматическая замена `.app` не выполняется: оператору нужно перетащить новую версию в Applications и перезапустить helper. Для нестандартного update URL используйте `STONES_HELPER_UPDATE_BASE_URL=https://.../downloads` при сборке helper.
 
+При локальной эксплуатации packaged helper можно дополнительно ограничить render-нагрузку через `~/Library/Application Support/ZAGARAMI Video Helper/config.json` с ключами `video_render_concurrency` и `video_render_ffmpeg_threads`. Те же значения можно переопределить env-переменными `VIDEO_RENDER_CONCURRENCY` и `VIDEO_RENDER_FFMPEG_THREADS`.
+
 При первом обращении `https://zagarami.com` к локальному `http://127.0.0.1:3012` браузер может запросить доступ к localhost или локальной сети. Этот доступ нужно разрешить, иначе Video Tool будет считать helper недоступным.
+
+## 1.3 Desktop HQ для zagarami.com
+
+`ZAGARAMI HQ` — отдельное Electron-приложение для HQ-админки. В production оно раздает собранный `dist/` через локальный loopback-server и проксирует `/api`, `/auth`, `/uploads`, `/healthz` на backend origin из `STONES_HQ_API_ORIGIN`.
+
+Базовая сборка для production backend:
+
+```bash
+STONES_HQ_API_ORIGIN=https://zagarami.com npm run admin:desktop:dist
+```
+
+Для локальной приемки можно собрать против локального API:
+
+```bash
+STONES_HQ_API_ORIGIN=http://127.0.0.1:3001 npm run admin:desktop:dist
+```
+
+После сборки артефакты лежат в `dist-electron-hq/`. Эти файлы не коммитятся в репозиторий.
+
+Для обновлений нужно опубликовать файлы:
+
+- `/uploads/downloads/ZAGARAMI-HQ.dmg`
+- `/uploads/downloads/ZAGARAMI-HQ-arm64.dmg`
+- `/uploads/downloads/ZAGARAMI-HQ-update.json`
+
+`ZAGARAMI-HQ-update.json` содержит версию, URL, размер и `sha256` для каждой macOS-архитектуры. Приложение проверяет manifest из same-origin backend, скачивает подходящий DMG в локальный cache, проверяет контрольную сумму и открывает установщик. Автоматическая замена `.app` не выполняется: оператору нужно перетащить новую версию в Applications и перезапустить `ZAGARAMI HQ`.
+
+Особенности desktop HQ:
+
+- dev-запуск: `npm run dev`, затем `npm run admin:desktop`;
+- web-HQ пока остается emergency fallback и не отключается этим релизом;
+- встроенный helper использует `ffmpeg`/`ffprobe` из packaged app;
+- desktop media queue хранит state и временные файлы в `app.getPath('userData')/media-upload-queue`;
+- скачанные обновления хранятся в `app.getPath('userData')/updates`;
+- при проблемах с загрузками оператор должен сначала открыть индикатор очереди в HQ, повторить failed-задачи или отменить явно ненужные pending-задачи;
+- ручная очистка cache допустима только при закрытом приложении и только если нет активных/pending задач, иначе можно потерять неподтвержденные загрузки.
+
+Минимальная приемка перед выдачей операторам:
+
+1. Открыть packaged `ZAGARAMI HQ`.
+2. Войти под seeded/admin production-аккаунтом.
+3. Проверить Dashboard, Acceptance, Photo Tool и Video Tool.
+4. Проверить refresh/deep link для `/admin/login`, `/admin/photo-tool/:batchId`, `/admin/video-tool/:batchId`.
+5. Проверить, что Photo Tool и Video Tool показывают состояние desktop media queue при временно недоступном backend.
+6. Открыть панель обновлений HQ, проверить manifest, скачать DMG при наличии новой версии и убедиться, что checksum проходит.
 
 ## 2. Backup базы данных
 

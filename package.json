@@ -29,6 +29,11 @@
     "video-export-helper:desktop": "electron video-export-helper/desktop/main.cjs",
     "video-export-helper:desktop:dist": "node video-export-helper/build-desktop.mjs",
     "video-export-helper:desktop:dist:raw": "electron-builder --config video-export-helper/electron-builder.json",
+    "admin:desktop": "electron electron/hq/main.cjs",
+    "admin:desktop:dev": "node scripts/dev-admin-desktop.mjs",
+    "admin:desktop:prod-like": "node scripts/dev-admin-desktop.mjs --dist",
+    "admin:desktop:dist": "node scripts/build-admin-desktop.mjs",
+    "admin:desktop:dist:raw": "electron-builder --config electron/hq/electron-builder.json",
     "db:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "db:seed:languages": "npm run prisma:generate && tsx prisma/seed_languages.ts",
@@ -102,5 +107,10 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.0",
     "vite": "^7.2.4"
+  },
+  "main": "electron/hq/main.cjs",
+  "stonesHq": {
+    "apiOrigin": "https://zagarami.com",
+    "updateBaseUrl": "https://zagarami.com/uploads/downloads"
   }
 }

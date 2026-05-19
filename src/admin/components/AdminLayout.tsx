@@ -1,5 +1,6 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
+import { DesktopStatusCenter } from './DesktopStatusCenter';
 
 const pageMeta: Record<string, { title: string; description: string }> = {
     '/admin': {
@@ -112,10 +113,17 @@ export function AdminLayout() {
                 <div className="flex min-w-0 flex-1 flex-col lg:min-h-0">
                     <header className="shrink-0 border-b border-white/6 bg-black/10">
                         <div className={`mx-auto w-full px-4 py-5 sm:px-6 lg:py-6 ${isWideWorkspace ? 'max-w-none lg:px-4' : 'max-w-[1240px] lg:px-8'}`}>
-                            <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[2rem]">{meta.title}</h1>
-                            {meta.description ? (
-                                <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
-                            ) : null}
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[2rem]">{meta.title}</h1>
+                                    {meta.description ? (
+                                        <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
+                                    ) : null}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <DesktopStatusCenter />
+                                </div>
+                            </div>
                         </div>
                     </header>
 
