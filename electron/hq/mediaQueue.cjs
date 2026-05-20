@@ -12,6 +12,9 @@ const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 8;
 const BASE_RETRY_DELAY_MS = 2_000;
 const MAX_RETRY_DELAY_MS = 5 * 60_000;
+const STATE_VERSION = 2;
+const EVENT_BUFFER_SIZE = 10;
+const QUEUE_STUCK_MS = 5 * 60_000;
 
 const nowIso = () => new Date().toISOString();
 const createId = () => crypto.randomUUID();
@@ -23,6 +26,48 @@ const safeFileName = (value) => String(value || 'file')
     .slice(0, 160) || 'file';
 
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const appendEvent = (entry, type, detail) => {
+    const event = {
+        type,
+        at: nowIso(),
+        ...(detail ? { detail } : {})
+    };
+    entry.recentEvents = [...(Array.isArray(entry.recentEvents) ? entry.recentEvents : []), event].slice(-EVENT_BUFFER_SIZE);
+};
+
+const normalizeSummary = (summary, fallback = {}) => ({
+    ...(isRecord(summary) ? summary : {}),
+    ...fallback
+});
+
+const getBlockingReason = (job) => {
+    if (job.status === 'auth_required') {
+        return job.blockingReason || 'auth_required';
+    }
+    if (job.status === 'retrying') {
+        return job.blockingReason || 'retry_scheduled';
+    }
+    return job.blockingReason || null;
+};
+
+const isStuckJob = (job) => {
+    if (!['uploading', 'retrying'].includes(job.status)) {
+        return false;
+    }
+
+    const updatedAt = Date.parse(job.updatedAt || '');
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt > QUEUE_STUCK_MS;
+};
+
+const getErrorCode = (error) => {
+    if (typeof error?.code === 'string') {
+        return error.code;
+    }
+    if (isRecord(error?.payload) && typeof error.payload.code === 'string') {
+        return error.payload.code;
+    }
+    return '';
+};
 
 const ensureDir = async (dir) => {
     await fsp.mkdir(dir, { recursive: true });
@@ -107,14 +152,28 @@ class MediaUploadQueue extends EventEmitter {
         try {
             const raw = await fsp.readFile(this.statePath, 'utf8');
             const parsed = JSON.parse(raw);
-            this.jobs = Array.isArray(parsed?.jobs) ? parsed.jobs.filter(isRecord) : [];
+            this.jobs = Array.isArray(parsed?.jobs) ? parsed.jobs.filter(isRecord).map((job) => this.normalizeLoadedJob(job)) : [];
         } catch {
             this.jobs = [];
         }
     }
 
+    normalizeLoadedJob(job) {
+        const isLegacyPhotoToolStale = job.type === 'PHOTO_TOOL_APPLY'
+            && job.status === 'failed'
+            && /Данные photo-tool изменились|Фото партии уже обновились/i.test(String(job.lastError || ''));
+        return {
+            ...job,
+            blockingReason: typeof job.blockingReason === 'string'
+                ? job.blockingReason
+                : isLegacyPhotoToolStale ? 'photo_tool_state_stale' : null,
+            recentEvents: Array.isArray(job.recentEvents) ? job.recentEvents.slice(-EVENT_BUFFER_SIZE) : [],
+            summary: normalizeSummary(job.summary)
+        };
+    }
+
     async persist() {
-        const payload = JSON.stringify({ version: 1, jobs: this.jobs }, null, 2);
+        const payload = JSON.stringify({ version: STATE_VERSION, jobs: this.jobs }, null, 2);
         this.persistPromise = this.persistPromise
             .catch(() => undefined)
             .then(() => fsp.writeFile(this.statePath, `${payload}\n`, 'utf8'));
@@ -133,6 +192,9 @@ class MediaUploadQueue extends EventEmitter {
             updatedAt: job.updatedAt,
             doneAt: job.doneAt ?? null,
             result: job.result ?? null,
+            blockingReason: getBlockingReason(job),
+            recentEvents: Array.isArray(job.recentEvents) ? job.recentEvents : [],
+            stuck: isStuckJob(job),
             summary: job.summary ?? null
         }));
         const counts = jobs.reduce((acc, job) => {
@@ -235,8 +297,14 @@ class MediaUploadQueue extends EventEmitter {
             updatedAt: nowIso(),
             payload,
             files,
-            summary
+            blockingReason: null,
+            recentEvents: [],
+            summary: normalizeSummary(summary, {
+                fileName: files?.[0]?.originalName,
+                tool: type.startsWith('VIDEO') ? 'Video Tool' : 'Photo Tool'
+            })
         };
+        appendEvent(job, 'created');
 
         this.jobs.unshift(job);
         await this.persist();
@@ -257,6 +325,8 @@ class MediaUploadQueue extends EventEmitter {
         }, files, {
             title: 'Photo Tool',
             batchId: payload.batchId,
+            batchLabel: payload.batchLabel,
+            subtitle: payload.subtitle,
             total: files.length
         });
     }
@@ -270,6 +340,8 @@ class MediaUploadQueue extends EventEmitter {
         }, [], {
             title: 'Video intro',
             batchId: payload.batchId,
+            batchLabel: payload.batchLabel,
+            subtitle: payload.subtitle,
             sessionId: payload.sessionId
         });
     }
@@ -289,6 +361,9 @@ class MediaUploadQueue extends EventEmitter {
         }, [], {
             title: `${payload.serialNumber}.mp4`,
             batchId: payload.batchId,
+            batchLabel: payload.batchLabel,
+            subtitle: payload.subtitle,
+            fileName: `${payload.serialNumber}.mp4`,
             sessionId: payload.sessionId,
             serialNumber: payload.serialNumber,
             helperJobId: payload.helperJobId,
@@ -314,7 +389,9 @@ class MediaUploadQueue extends EventEmitter {
         job.status = 'queued';
         job.nextAttemptAt = Date.now();
         job.lastError = null;
+        job.blockingReason = null;
         job.updatedAt = nowIso();
+        appendEvent(job, 'retry_scheduled');
         await this.persist();
         this.emitChange();
         this.schedule(0);
@@ -329,6 +406,8 @@ class MediaUploadQueue extends EventEmitter {
 
         job.status = 'cancelled';
         job.updatedAt = nowIso();
+        job.blockingReason = null;
+        appendEvent(job, 'cancelled');
         await this.cleanupJobFiles(job);
         await this.persist();
         this.emitChange();
@@ -336,9 +415,9 @@ class MediaUploadQueue extends EventEmitter {
     }
 
     async clearCompleted() {
-        const completed = this.jobs.filter((job) => job.status === 'done');
+        const completed = this.jobs.filter((job) => ['done', 'cancelled'].includes(job.status));
         await Promise.all(completed.map((job) => this.cleanupJobFiles(job)));
-        this.jobs = this.jobs.filter((job) => job.status !== 'done');
+        this.jobs = this.jobs.filter((job) => !['done', 'cancelled'].includes(job.status));
         await this.persist();
         this.emitChange();
         return this.getSnapshot();
@@ -395,7 +474,9 @@ class MediaUploadQueue extends EventEmitter {
         if (!token) {
             job.status = 'auth_required';
             job.lastError = 'Нужно войти в HQ заново.';
+            job.blockingReason = 'auth_required';
             job.updatedAt = nowIso();
+            appendEvent(job, 'blocked_auth');
             await this.persist();
             this.emitChange();
             return;
@@ -403,7 +484,9 @@ class MediaUploadQueue extends EventEmitter {
 
         job.status = 'uploading';
         job.attempts = Number(job.attempts || 0) + 1;
+        job.blockingReason = null;
         job.updatedAt = nowIso();
+        appendEvent(job, 'started');
         await this.persist();
         this.emitChange();
 
@@ -412,24 +495,39 @@ class MediaUploadQueue extends EventEmitter {
             job.status = 'done';
             job.result = result;
             job.lastError = null;
+            job.blockingReason = null;
             job.doneAt = nowIso();
             job.updatedAt = nowIso();
+            appendEvent(job, 'completed');
             await this.cleanupJobFiles(job);
             await this.persist();
             this.emitChange();
         } catch (error) {
             const statusCode = Number(error?.statusCode || 0);
+            const errorCode = getErrorCode(error);
             job.lastError = error instanceof Error ? error.message : 'Загрузка не выполнена.';
             job.updatedAt = nowIso();
 
             if (statusCode === 401 || statusCode === 403) {
                 job.status = 'auth_required';
+                job.blockingReason = 'auth_required';
+                appendEvent(job, 'blocked_auth');
+            } else if (errorCode === 'PHOTO_TOOL_STATE_STALE') {
+                job.status = 'failed';
+                job.blockingReason = 'photo_tool_state_stale';
+                job.nextAttemptAt = 0;
+                appendEvent(job, 'failed', { code: errorCode });
             } else if (job.attempts < MAX_ATTEMPTS && (statusCode === 0 || RETRYABLE_STATUS_CODES.has(statusCode))) {
                 const delay = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * (2 ** Math.max(0, job.attempts - 1)));
                 job.status = 'retrying';
                 job.nextAttemptAt = Date.now() + delay;
+                job.blockingReason = 'retry_scheduled';
+                appendEvent(job, 'retry_scheduled');
             } else {
                 job.status = 'failed';
+                job.blockingReason = null;
+                job.nextAttemptAt = 0;
+                appendEvent(job, 'failed');
             }
 
             await this.persist();

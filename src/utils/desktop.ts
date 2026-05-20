@@ -21,7 +21,14 @@ export type StonesDesktopDiagnostics = {
     queue: {
         counts: Record<string, number>;
         activeJobs: number;
+        running?: number;
+        retrying?: number;
+        blockedAuth?: number;
         failedJobs: number;
+        failed?: number;
+        done?: number;
+        cancelled?: number;
+        stuck?: number;
         groups?: Array<{
             id: string;
             title: string;
@@ -29,11 +36,25 @@ export type StonesDesktopDiagnostics = {
             done: number;
             active: number;
             failed: number;
+            blockedAuth?: number;
         }>;
+    };
+    workflows?: {
+        counts: Record<string, number>;
+        active: number;
+        running?: number;
+        blockedAuth?: number;
+        blockedOffline?: number;
+        failed: number;
+        completed?: number;
+        cancelled?: number;
+        stuck?: number;
+        offline: number;
+        authRequired: number;
     };
     update?: {
         checked: boolean;
-        status?: 'ok' | 'not_configured';
+        status?: 'ok' | 'not_configured' | 'manifest_missing' | 'manifest_invalid' | 'check_failed' | 'download_failed';
         updateAvailable?: boolean;
         version?: string;
         currentVersion?: string;
@@ -44,7 +65,7 @@ export type StonesDesktopDiagnostics = {
 };
 
 export type StonesHqUpdateInfo = {
-    status?: 'ok' | 'not_configured';
+    status?: 'ok' | 'not_configured' | 'manifest_missing' | 'manifest_invalid' | 'check_failed' | 'download_failed';
     manifestUrl: string;
     version: string;
     currentVersion: string;
@@ -79,8 +100,15 @@ export type StonesMediaQueueJob = {
     updatedAt: string;
     doneAt?: string | null;
     result?: unknown;
+    blockingReason?: string | null;
+    recentEvents?: Array<{ type: string; at: string; detail?: unknown }>;
+    stuck?: boolean;
     summary?: {
         title?: string;
+        subtitle?: string;
+        batchLabel?: string;
+        fileName?: string;
+        tool?: string;
         batchId?: string;
         sessionId?: string;
         serialNumber?: string;
@@ -98,6 +126,61 @@ export type StonesMediaQueueJob = {
 export type StonesMediaQueueSnapshot = {
     jobs: StonesMediaQueueJob[];
     counts: Partial<Record<StonesMediaQueueJobStatus, number>>;
+};
+
+export type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW' | 'VIDEO_EXPORT_WORKFLOW';
+export type StonesMediaWorkflowPhase =
+    | 'queued'
+    | 'converting'
+    | 'uploading'
+    | 'verifying'
+    | 'preparing_session'
+    | 'importing_sources'
+    | 'rendering_intro'
+    | 'rendering_outputs'
+    | 'queueing_uploads'
+    | 'verifying_uploads'
+    | 'paused_offline'
+    | 'auth_required'
+    | 'failed'
+    | 'completed'
+    | 'cancelled';
+
+export type StonesMediaWorkflow = {
+    id: string;
+    kind: StonesMediaWorkflowKind;
+    batchId: string;
+    phase: StonesMediaWorkflowPhase;
+    createdAt: string;
+    updatedAt: string;
+    lastError: string | null;
+    nextAttemptAt?: number | null;
+    blockingReason?: string | null;
+    recentEvents?: Array<{ type: string; at: string; detail?: unknown }>;
+    stuck?: boolean;
+    summary?: {
+        title?: string;
+        subtitle?: string;
+        batchLabel?: string;
+        currentSerial?: string;
+    };
+    routePath: string;
+    sessionId: string | null;
+    sessionVersion: number | null;
+    progress: {
+        completed: number;
+        total: number;
+    };
+    uploadState: {
+        pendingSerials: string[];
+        confirmedSerials: string[];
+        failedSerials: string[];
+    } | null;
+};
+
+export type StonesMediaWorkflowSnapshot = {
+    workflows: StonesMediaWorkflow[];
+    counts: Partial<Record<StonesMediaWorkflowPhase, number>>;
 };
 
 export type StonesDesktopVideoHelperStatus = {
@@ -151,15 +234,21 @@ export type StonesDesktopApi = {
     cleanupVideoHelper: () => Promise<StonesDesktopVideoHelperCleanupResult>;
     showVideoHelperStorage: () => Promise<{ success: true }>;
     selectBatchDiagnosticsMediaFolder: () => Promise<StonesBatchDiagnosticsMediaFolder>;
-    exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string }>;
+    exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string; jsonPath?: string }>;
     stageMediaQueueFileStart: (fileMeta: { fileId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
     stageMediaQueueFileChunk: (fileId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
     stageMediaQueueFileFinish: (fileId: string) => Promise<{ fileId: string; size: number; checksumSha256: string }>;
     getMediaQueueSnapshot: () => Promise<StonesMediaQueueSnapshot>;
+    getMediaWorkflowSnapshot: () => Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue: (callback: (snapshot: StonesMediaQueueSnapshot) => void) => () => void;
+    subscribeMediaWorkflows: (callback: (snapshot: StonesMediaWorkflowSnapshot) => void) => () => void;
     enqueuePhotoToolApply: (payload: unknown) => Promise<StonesMediaQueueJob>;
     enqueueVideoIntroUpload: (payload: unknown) => Promise<StonesMediaQueueJob>;
     enqueueVideoRenderUpload: (payload: unknown) => Promise<StonesMediaQueueJob>;
+    startPhotoApplyWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
+    startVideoExportWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
+    retryMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
+    cancelMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs: () => Promise<StonesMediaQueueSnapshot>;
@@ -173,7 +262,7 @@ export const isStonesDesktop = () => Boolean(window.stonesDesktop?.isDesktop);
 export const syncDesktopAuthToken = (accessToken: string | null) =>
     window.stonesDesktop?.syncAuthToken(accessToken).catch(() => undefined);
 
-export const stageFileForMediaQueue = async (file: File) => {
+export const stageDesktopFile = async (file: File) => {
     const desktop = window.stonesDesktop;
     if (!desktop) {
         throw new Error('Desktop queue недоступна.');
@@ -209,6 +298,8 @@ export const stageFileForMediaQueue = async (file: File) => {
         checksumSha256: staged.checksumSha256
     };
 };
+
+export const stageFileForMediaQueue = stageDesktopFile;
 
 export const waitForMediaQueueJob = (jobId: string) => new Promise<StonesMediaQueueJob>((resolve, reject) => {
     const desktop = window.stonesDesktop;

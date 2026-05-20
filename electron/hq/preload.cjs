@@ -18,9 +18,14 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     stageMediaQueueFileChunk: (fileId, chunk) => ipcRenderer.invoke('stones:media-stage-file-chunk', fileId, chunk),
     stageMediaQueueFileFinish: (fileId) => ipcRenderer.invoke('stones:media-stage-file-finish', fileId),
     getMediaQueueSnapshot: () => ipcRenderer.invoke('stones:get-media-queue-snapshot'),
+    getMediaWorkflowSnapshot: () => ipcRenderer.invoke('stones:get-media-workflow-snapshot'),
     enqueuePhotoToolApply: (payload) => ipcRenderer.invoke('stones:enqueue-photo-tool-apply', payload),
     enqueueVideoIntroUpload: (payload) => ipcRenderer.invoke('stones:enqueue-video-intro-upload', payload),
     enqueueVideoRenderUpload: (payload) => ipcRenderer.invoke('stones:enqueue-video-render-upload', payload),
+    startPhotoApplyWorkflow: (payload) => ipcRenderer.invoke('stones:start-photo-apply-workflow', payload),
+    startVideoExportWorkflow: (payload) => ipcRenderer.invoke('stones:start-video-export-workflow', payload),
+    retryMediaWorkflow: (workflowId) => ipcRenderer.invoke('stones:retry-media-workflow', workflowId),
+    cancelMediaWorkflow: (workflowId) => ipcRenderer.invoke('stones:cancel-media-workflow', workflowId),
     retryMediaQueueJob: (jobId) => ipcRenderer.invoke('stones:retry-media-queue-job', jobId),
     cancelMediaQueueJob: (jobId) => ipcRenderer.invoke('stones:cancel-media-queue-job', jobId),
     clearCompletedMediaQueueJobs: () => ipcRenderer.invoke('stones:clear-completed-media-queue-jobs'),
@@ -28,6 +33,11 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
         const listener = (_event, snapshot) => callback(snapshot);
         ipcRenderer.on('stones:media-queue-updated', listener);
         return () => ipcRenderer.removeListener('stones:media-queue-updated', listener);
+    },
+    subscribeMediaWorkflows: (callback) => {
+        const listener = (_event, snapshot) => callback(snapshot);
+        ipcRenderer.on('stones:media-workflows-updated', listener);
+        return () => ipcRenderer.removeListener('stones:media-workflows-updated', listener);
     },
     openExternal: (url) => ipcRenderer.invoke('stones:open-external', url)
 });

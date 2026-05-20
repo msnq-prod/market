@@ -236,6 +236,9 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
         }
     });
     expect(staleApplyResponse.status()).toBe(409);
+    await expect(staleApplyResponse.json()).resolves.toMatchObject({
+        code: 'PHOTO_TOOL_STATE_STALE'
+    });
 
     const replacementResponse = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
@@ -455,7 +458,7 @@ test('UI: restores photo draft after reload and rejects stale save after externa
     ]);
     await page.getByTestId('photo-reverse-assignment').click();
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('002');
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(2000);
 
     await page.reload();
     await expect(page.getByText('Восстановлен несохраненный черновик photo-tool.')).toBeVisible();

@@ -7,8 +7,6 @@ const VIDEO_EXPORT_HELPER_URL = (import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL ||
 const CROSSFADE_MS = 200;
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
-const PARTNER_EMAIL = 'yakutia.partner@stones.com';
-const PARTNER_PASSWORD_CANDIDATES = ['Partner123', 'partner123'];
 
 export type BatchDiagnosticsStepStatus = 'running' | 'ok' | 'failed';
 
@@ -47,6 +45,10 @@ type ProductPayload = {
 
 type CollectionRequestPayload = {
     id: string;
+    batch?: {
+        id: string;
+        status: string;
+    } | null;
 };
 
 type BatchItem = {
@@ -311,9 +313,6 @@ export async function runBatchCreationDiagnostics(
             return loginWithPasswordCandidates(ADMIN_EMAIL, [ADMIN_PASSWORD]);
         }, (result) => ({ role: result.role }));
 
-        const partner = await runStep('partner-login', 'Вход партнера', () =>
-            loginWithPasswordCandidates(PARTNER_EMAIL, PARTNER_PASSWORD_CANDIDATES), (result) => ({ role: result.role }));
-
         const catalog = await runStep('catalog', 'Создание локации Луна и шаблона', async () => {
             const categoriesResponse = await fetch('/api/categories');
             const categories = await readJson<Array<{ id: string }>>(categoriesResponse, 'Не удалось загрузить категории.');
@@ -363,50 +362,26 @@ export async function runBatchCreationDiagnostics(
             return { locationId: location.id, productId: product.id };
         }, (result) => result);
 
-        const requestPayload = await runStep('collection-request', 'Создание заказа на 10 камней', async () => {
+        const requestPayload = await runStep('collection-request', 'Создание партии с автоприёмкой', async () => {
             const response = await fetch('/api/collection-requests', {
                 method: 'POST',
                 headers: authHeaders(admin.accessToken),
                 body: JSON.stringify({
                     product_id: catalog.productId,
                     requested_qty: PHOTO_COUNT,
-                    note: '[e2e] batch diagnostics'
-                })
-            });
-            return readJson<CollectionRequestPayload>(response, 'Не удалось создать заказ на сбор.');
-        }, (result) => ({ requestId: result.id }));
-
-        await runStep('ack-request', 'Партнер принимает заказ', async () => {
-            const response = await fetch(`/api/collection-requests/${requestPayload.id}/ack`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${partner.accessToken}` }
-            });
-            return readJson<unknown>(response, 'Не удалось принять заказ партнером.');
-        });
-
-        const batchId = await runStep('complete-request', 'Партнер создает партию', async () => {
-            const response = await fetch(`/api/collection-requests/${requestPayload.id}/complete`, {
-                method: 'POST',
-                headers: authHeaders(partner.accessToken),
-                body: JSON.stringify({
-                    gps_lat: 0.674,
-                    gps_lng: 23.473,
+                    note: '[e2e] batch diagnostics',
+                    accept_immediately: true,
                     collected_date: '2026-05-20',
                     collected_time: '12:00'
                 })
             });
-            const payload = await readJson<{ batch: { id: string; status: string } }>(response, 'Не удалось создать партию.');
-            return payload.batch.id;
-        }, (result) => ({ batchId: result }));
+            return readJson<CollectionRequestPayload>(response, 'Не удалось создать заказ на сбор.');
+        }, (result) => ({ requestId: result.id, batchId: result.batch?.id || null, status: result.batch?.status || null }));
+        const batchId = requestPayload.batch?.id || '';
+        if (!batchId) {
+            throw new Error('Автоприёмка не вернула batch id.');
+        }
         emit({ batchId });
-
-        await runStep('receive-batch', 'HQ принимает партию', async () => {
-            const response = await fetch(`/api/batches/${batchId}/receive`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${admin.accessToken}` }
-            });
-            return readJson<unknown>(response, 'Не удалось принять партию HQ.');
-        });
 
         const photoTool = await runStep('photo-tool-load', 'Загрузка Photo Tool', async () => {
             const response = await fetch(`/api/batches/${batchId}/photo-tool`, {

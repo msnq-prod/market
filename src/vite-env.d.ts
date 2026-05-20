@@ -11,7 +11,7 @@ interface ImportMeta {
 
 type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
 type StonesHqUpdateInfo = {
-    status?: 'ok' | 'not_configured';
+    status?: 'ok' | 'not_configured' | 'manifest_missing' | 'manifest_invalid' | 'check_failed' | 'download_failed';
     manifestUrl: string;
     version: string;
     currentVersion: string;
@@ -87,7 +87,7 @@ interface StonesDesktopApi {
     };
         update?: {
             checked: boolean;
-            status?: 'ok' | 'not_configured';
+            status?: 'ok' | 'not_configured' | 'manifest_missing' | 'manifest_invalid' | 'check_failed' | 'download_failed';
             updateAvailable?: boolean;
             version?: string;
             currentVersion?: string;
@@ -121,7 +121,7 @@ interface StonesDesktopApi {
         health?: unknown;
     }>;
     showVideoHelperStorage(): Promise<{ success: true }>;
-    exportDiagnosticsMarkdown(payload: unknown): Promise<{ success: true; path: string }>;
+    exportDiagnosticsMarkdown(payload: unknown): Promise<{ success: true; path: string; jsonPath?: string }>;
     selectBatchDiagnosticsMediaFolder(): Promise<{
         cancelled: boolean;
         directoryPath?: string;
@@ -148,10 +148,16 @@ interface StonesDesktopApi {
         checksumSha256: string;
     }>;
     getMediaQueueSnapshot(): Promise<StonesMediaQueueSnapshot>;
+    getMediaWorkflowSnapshot(): Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue(callback: (snapshot: StonesMediaQueueSnapshot) => void): () => void;
+    subscribeMediaWorkflows(callback: (snapshot: StonesMediaWorkflowSnapshot) => void): () => void;
     enqueuePhotoToolApply(payload: unknown): Promise<StonesMediaQueueJob>;
     enqueueVideoIntroUpload(payload: unknown): Promise<StonesMediaQueueJob>;
     enqueueVideoRenderUpload(payload: unknown): Promise<StonesMediaQueueJob>;
+    startPhotoApplyWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
+    startVideoExportWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
+    retryMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
+    cancelMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs(): Promise<StonesMediaQueueSnapshot>;
@@ -176,8 +182,15 @@ type StonesMediaQueueJob = {
     updatedAt: string;
     doneAt?: string | null;
     result?: unknown;
+    blockingReason?: string | null;
+    recentEvents?: Array<{ type: string; at: string; detail?: unknown }>;
+    stuck?: boolean;
     summary?: {
         title?: string;
+        subtitle?: string;
+        batchLabel?: string;
+        fileName?: string;
+        tool?: string;
         batchId?: string;
         sessionId?: string;
         serialNumber?: string;
@@ -195,4 +208,59 @@ type StonesMediaQueueJob = {
 type StonesMediaQueueSnapshot = {
     jobs: StonesMediaQueueJob[];
     counts: Partial<Record<StonesMediaQueueJobStatus, number>>;
+};
+
+type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW' | 'VIDEO_EXPORT_WORKFLOW';
+type StonesMediaWorkflowPhase =
+    | 'queued'
+    | 'converting'
+    | 'uploading'
+    | 'verifying'
+    | 'preparing_session'
+    | 'importing_sources'
+    | 'rendering_intro'
+    | 'rendering_outputs'
+    | 'queueing_uploads'
+    | 'verifying_uploads'
+    | 'paused_offline'
+    | 'auth_required'
+    | 'failed'
+    | 'completed'
+    | 'cancelled';
+
+type StonesMediaWorkflow = {
+    id: string;
+    kind: StonesMediaWorkflowKind;
+    batchId: string;
+    phase: StonesMediaWorkflowPhase;
+    createdAt: string;
+    updatedAt: string;
+    lastError: string | null;
+    nextAttemptAt?: number | null;
+    blockingReason?: string | null;
+    recentEvents?: Array<{ type: string; at: string; detail?: unknown }>;
+    stuck?: boolean;
+    summary?: {
+        title?: string;
+        subtitle?: string;
+        batchLabel?: string;
+        currentSerial?: string;
+    };
+    routePath: string;
+    sessionId: string | null;
+    sessionVersion: number | null;
+    progress: {
+        completed: number;
+        total: number;
+    };
+    uploadState: {
+        pendingSerials: string[];
+        confirmedSerials: string[];
+        failedSerials: string[];
+    } | null;
+};
+
+type StonesMediaWorkflowSnapshot = {
+    workflows: StonesMediaWorkflow[];
+    counts: Partial<Record<StonesMediaWorkflowPhase, number>>;
 };

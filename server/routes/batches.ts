@@ -183,6 +183,9 @@ const getSerialFromFilename = (filename: string): string => {
 const createHttpError = (message: string, statusCode: number) =>
     Object.assign(new Error(message), { statusCode });
 
+const createCodedHttpError = (message: string, statusCode: number, code: string) =>
+    Object.assign(new Error(message), { statusCode, code });
+
 type PhotoToolApplyManifestEntry = {
     item_id: string;
     item_seq: number;
@@ -1008,7 +1011,7 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
                 return res.json(serializePhotoToolPayload(batch));
             }
 
-            throw createHttpError('Фото партии уже обновились в другом окне или фоновой загрузкой. Обновите Photo Tool, чтобы не перезаписать чужие изменения.', 409);
+            throw createCodedHttpError('Фото партии уже обновились в другом окне или фоновой загрузкой. Обновите Photo Tool, чтобы не перезаписать чужие изменения.', 409, 'PHOTO_TOOL_STATE_STALE');
         }
 
         const usedFileIndexes = manifest
@@ -1100,7 +1103,11 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
             ? error.message
             : 'Не удалось применить назначения photo-tool.';
 
-        res.status(statusCode).json({ error: message });
+        const code = typeof (error as { code?: unknown })?.code === 'string'
+            ? String((error as { code: string }).code)
+            : undefined;
+
+        res.status(statusCode).json(code ? { error: message, code } : { error: message });
     }
 });
 

@@ -55,8 +55,8 @@ const setAdminSession = async (page: Page, loginPayload: LoginPayload) => {
     }, loginPayload);
 };
 
-const waitForHelper = async () => {
-    const deadline = Date.now() + 60_000;
+const waitForHelper = async (timeoutMs = 60_000) => {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         try {
             const response = await fetch(`${HELPER_URL}/health`);
@@ -75,7 +75,7 @@ const waitForHelper = async () => {
 };
 
 const ensureHelper = async (storageRoot: string): Promise<ChildProcess | null> => {
-    if (await waitForHelper()) {
+    if (await waitForHelper(3_000)) {
         return null;
     }
 
@@ -151,7 +151,9 @@ const prepareMediaFolder = async (): Promise<PreparedMedia> => {
 const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
     await page.addInitScript((media) => {
         const emptyQueue = { jobs: [], counts: {} };
+        const emptyWorkflows = { workflows: [], counts: {} };
         const listeners = new Set<(snapshot: typeof emptyQueue) => void>();
+        const workflowListeners = new Set<(snapshot: typeof emptyWorkflows) => void>();
         window.stonesDesktop = {
             isDesktop: true,
             getAppInfo: async () => ({
@@ -240,9 +242,14 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
             stageMediaQueueFileChunk: async () => ({ ok: true }),
             stageMediaQueueFileFinish: async () => ({ fileId: 'e2e-file', size: 1, checksumSha256: 'e2e' }),
             getMediaQueueSnapshot: async () => emptyQueue,
+            getMediaWorkflowSnapshot: async () => emptyWorkflows,
             subscribeMediaQueue: (callback) => {
                 listeners.add(callback);
                 return () => listeners.delete(callback);
+            },
+            subscribeMediaWorkflows: (callback) => {
+                workflowListeners.add(callback);
+                return () => workflowListeners.delete(callback);
             },
             enqueuePhotoToolApply: async () => {
                 throw new Error('not used');
@@ -253,6 +260,14 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
             enqueueVideoRenderUpload: async () => {
                 throw new Error('not used');
             },
+            startPhotoApplyWorkflow: async () => {
+                throw new Error('not used');
+            },
+            startVideoExportWorkflow: async () => {
+                throw new Error('not used');
+            },
+            retryMediaWorkflow: async () => emptyWorkflows,
+            cancelMediaWorkflow: async () => emptyWorkflows,
             retryMediaQueueJob: async () => emptyQueue,
             cancelMediaQueueJob: async () => emptyQueue,
             clearCompletedMediaQueueJobs: async () => emptyQueue,

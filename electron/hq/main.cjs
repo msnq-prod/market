@@ -7,6 +7,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { app, BrowserWindow, Notification, dialog, ipcMain, shell } = require('electron');
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
+const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
 
 let mainWindow = null;
 let localServer = null;
@@ -16,6 +17,7 @@ let helperStartupError = '';
 let isQuitting = false;
 let accessToken = null;
 let mediaQueue = null;
+let mediaWorkflowManager = null;
 let lastUpdateStatus = { checked: false };
 const mediaQueueGroupStates = new Map();
 
@@ -33,7 +35,7 @@ const UPDATE_MANIFEST_FILE = 'ZAGARAMI-HQ-update.json';
 const PROXY_PREFIXES = ['/api', '/auth', '/uploads', '/healthz'];
 const DESKTOP_HELPER_PREFIX = '/desktop-helper';
 const TEXT_EXTENSIONS = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt', '.map']);
-const DIAGNOSTIC_PHOTO_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const DIAGNOSTIC_PHOTO_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 const DIAGNOSTIC_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 class UpdateManifestNotConfiguredError extends Error {
@@ -43,6 +45,14 @@ class UpdateManifestNotConfiguredError extends Error {
         this.code = 'UPDATE_MANIFEST_NOT_CONFIGURED';
         this.statusCode = 404;
         this.manifestUrl = manifestUrl;
+    }
+}
+
+class UpdateManifestInvalidError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'UpdateManifestInvalidError';
+        this.code = 'UPDATE_MANIFEST_INVALID';
     }
 }
 
@@ -120,6 +130,7 @@ const getDistRoot = () => {
 
 const getHelperStorageRoot = () => path.join(app.getPath('userData'), 'video-helper');
 const getMediaQueueRoot = () => path.join(app.getPath('userData'), 'media-upload-queue');
+const getMediaWorkflowRoot = () => path.join(app.getPath('userData'), 'media-workflows');
 const getUpdateStorageRoot = () => path.join(app.getPath('userData'), 'updates');
 
 const getMimeType = (filePath) => {
@@ -142,6 +153,10 @@ const getMimeType = (filePath) => {
             return 'image/jpeg';
         case '.webp':
             return 'image/webp';
+        case '.heic':
+            return 'image/heic';
+        case '.heif':
+            return 'image/heif';
         case '.ico':
             return 'image/x-icon';
         case '.woff':
@@ -247,6 +262,7 @@ const buildDiagnosticsMarkdown = (payload) => {
     const diagnostics = payload?.diagnostics || {};
     const queue = payload?.queue || {};
     const queueJobs = Array.isArray(payload?.queueJobs) ? payload.queueJobs : [];
+    const workflows = Array.isArray(payload?.workflows?.workflows) ? payload.workflows.workflows : [];
     const batchSteps = Array.isArray(batchLog.steps) ? batchLog.steps : [];
 
     return [
@@ -261,8 +277,14 @@ const buildDiagnosticsMarkdown = (payload) => {
         renderMarkdownSection('Очередь', {
             activeJobs: diagnostics.queue?.activeJobs ?? queue.activeJobs,
             failedJobs: diagnostics.queue?.failedJobs ?? queue.failedJobs,
+            running: diagnostics.queue?.running,
+            retrying: diagnostics.queue?.retrying,
+            blockedAuth: diagnostics.queue?.blockedAuth,
+            done: diagnostics.queue?.done,
+            cancelled: diagnostics.queue?.cancelled,
             counts: diagnostics.queue?.counts ?? queue.counts
         }),
+        renderMarkdownSection('Workflows', diagnostics.workflows || {}),
         '## Проверка создания партии',
         '',
         `- status: ${batchLog.status || 'не запускалась'}`,
@@ -281,11 +303,17 @@ const buildDiagnosticsMarkdown = (payload) => {
             ].filter(Boolean).join('\n')).join('\n')
             : 'Нет шагов.',
         '',
-        '## Последние задачи очереди',
+        '## Задачи очереди',
         '',
         queueJobs.length
-            ? queueJobs.slice(0, 20).map((job) => `- ${job.type || 'job'} ${job.id || ''}: ${job.status || 'unknown'}${job.lastError ? ` (${job.lastError})` : ''}`).join('\n')
+            ? queueJobs.map((job) => `- ${job.type || 'job'} ${job.id || ''}: ${job.status || 'unknown'}${job.blockingReason ? ` [${job.blockingReason}]` : ''}${job.stuck ? ' [stuck]' : ''}${job.lastError ? ` (${job.lastError})` : ''}`).join('\n')
             : 'Нет задач.',
+        '',
+        '## Workflow',
+        '',
+        workflows.length
+            ? workflows.map((workflow) => `- ${workflow.kind || 'workflow'} ${workflow.id || ''}: ${workflow.phase || 'unknown'}${workflow.blockingReason ? ` [${workflow.blockingReason}]` : ''}${workflow.stuck ? ' [stuck]' : ''}${workflow.lastError ? ` (${workflow.lastError})` : ''}`).join('\n')
+            : 'Нет workflow.',
         '',
         '## Raw JSON',
         '',
@@ -588,6 +616,22 @@ const createWindow = async () => {
         await mediaQueue.init();
     }
 
+    if (!mediaWorkflowManager) {
+        mediaWorkflowManager = new MediaWorkflowManager({
+            rootDir: getMediaWorkflowRoot(),
+            stagedFilesDir: path.join(getMediaQueueRoot(), 'files'),
+            mediaQueue,
+            getApiOrigin: () => apiOrigin,
+            getAccessToken: () => accessToken
+        });
+        mediaWorkflowManager.on('change', (snapshot) => {
+            BrowserWindow.getAllWindows().forEach((window) => {
+                window.webContents.send('stones:media-workflows-updated', snapshot);
+            });
+        });
+        await mediaWorkflowManager.init();
+    }
+
     try {
         await startHelper(appOrigin);
     } catch (error) {
@@ -757,7 +801,7 @@ const requestJson = (url) => new Promise((resolve, reject) => {
             try {
                 resolve(JSON.parse(body));
             } catch {
-                reject(new Error('Update manifest поврежден или не является JSON.'));
+                reject(new UpdateManifestInvalidError('Update manifest поврежден или не является JSON.'));
             }
         });
     });
@@ -832,7 +876,7 @@ const normalizeHqUpdateManifest = (manifest, manifestUrl) => {
         : arch === 'arm64' ? 'ZAGARAMI-HQ-arm64.dmg' : 'ZAGARAMI-HQ.dmg';
 
     if (!version || !url) {
-        throw new Error(`Update manifest не содержит версию или файл для ${arch}.`);
+        throw new UpdateManifestInvalidError(`Update manifest не содержит версию или файл для ${arch}.`);
     }
 
     const currentVersion = app.getVersion();
@@ -861,7 +905,7 @@ const checkForHqUpdate = async () => {
     } catch (error) {
         if (error instanceof UpdateManifestNotConfiguredError) {
             return {
-                status: 'not_configured',
+                status: 'manifest_missing',
                 manifestUrl,
                 version: '',
                 currentVersion: app.getVersion(),
@@ -1124,16 +1168,23 @@ const getDesktopDiagnostics = async () => {
     const queueSnapshot = mediaQueue ? mediaQueue.getSnapshot() : { jobs: [], counts: {} };
     const activeJobs = (queueSnapshot.counts.queued || 0)
         + (queueSnapshot.counts.uploading || 0)
-        + (queueSnapshot.counts.retrying || 0)
-        + (queueSnapshot.counts.auth_required || 0);
+        + (queueSnapshot.counts.retrying || 0);
     const queueGroups = getVideoUploadGroups(queueSnapshot).map((group) => ({
         id: group.id,
         title: group.title,
         total: Math.max(group.total, group.jobs.length),
         done: group.jobs.filter((job) => job.status === 'done').length,
-        active: group.jobs.filter((job) => ['queued', 'uploading', 'retrying', 'auth_required'].includes(job.status)).length,
-        failed: group.jobs.filter((job) => job.status === 'failed' || job.status === 'auth_required').length
+        active: group.jobs.filter((job) => ['queued', 'uploading', 'retrying'].includes(job.status)).length,
+        failed: group.jobs.filter((job) => job.status === 'failed').length,
+        blockedAuth: group.jobs.filter((job) => job.status === 'auth_required').length
     }));
+    const workflowSnapshot = mediaWorkflowManager ? mediaWorkflowManager.getSnapshot() : { workflows: [], counts: {} };
+    const activeWorkflows = workflowSnapshot.workflows.filter((workflow) =>
+        !['completed', 'cancelled', 'failed'].includes(workflow.phase)
+    );
+    const workflowFailed = workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'failed').length;
+    const workflowOffline = workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'paused_offline').length;
+    const workflowAuth = workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'auth_required').length;
 
     return {
         app: appInfo,
@@ -1142,8 +1193,28 @@ const getDesktopDiagnostics = async () => {
         queue: {
             counts: queueSnapshot.counts,
             activeJobs,
+            running: (queueSnapshot.counts.queued || 0) + (queueSnapshot.counts.uploading || 0),
+            retrying: queueSnapshot.counts.retrying || 0,
+            blockedAuth: queueSnapshot.counts.auth_required || 0,
             failedJobs: queueSnapshot.counts.failed || 0,
+            failed: queueSnapshot.counts.failed || 0,
+            done: queueSnapshot.counts.done || 0,
+            cancelled: queueSnapshot.counts.cancelled || 0,
+            stuck: (queueSnapshot.jobs || []).filter((job) => job.stuck).length,
             groups: queueGroups
+        },
+        workflows: {
+            counts: workflowSnapshot.counts,
+            active: activeWorkflows.length,
+            running: activeWorkflows.filter((workflow) => !['auth_required', 'paused_offline'].includes(workflow.phase)).length,
+            blockedAuth: workflowAuth,
+            blockedOffline: workflowOffline,
+            failed: workflowFailed,
+            completed: workflowSnapshot.counts.completed || 0,
+            cancelled: workflowSnapshot.counts.cancelled || 0,
+            stuck: (workflowSnapshot.workflows || []).filter((workflow) => workflow.stuck).length,
+            offline: workflowOffline,
+            authRequired: workflowAuth
         },
         update: lastUpdateStatus
     };
@@ -1171,6 +1242,7 @@ ipcMain.handle('stones:check-hq-update', async () => {
     } catch (error) {
         lastUpdateStatus = {
             checked: true,
+            status: error instanceof UpdateManifestInvalidError ? 'manifest_invalid' : 'check_failed',
             error: error instanceof Error ? error.message : 'Не удалось проверить обновление.'
         };
         throw error;
@@ -1178,14 +1250,24 @@ ipcMain.handle('stones:check-hq-update', async () => {
 });
 
 ipcMain.handle('stones:download-hq-update', async () => {
-    const result = await downloadHqUpdate();
-    lastUpdateStatus = {
-        checked: true,
-        updateAvailable: result.updateAvailable,
-        version: result.version,
-        currentVersion: result.currentVersion
-    };
-    return result;
+    try {
+        const result = await downloadHqUpdate();
+        lastUpdateStatus = {
+            checked: true,
+            status: result.status || 'ok',
+            updateAvailable: result.updateAvailable,
+            version: result.version,
+            currentVersion: result.currentVersion
+        };
+        return result;
+    } catch (error) {
+        lastUpdateStatus = {
+            checked: true,
+            status: 'download_failed',
+            error: error instanceof Error ? error.message : 'Не удалось скачать обновление.'
+        };
+        throw error;
+    }
 });
 
 ipcMain.handle('stones:export-diagnostics-markdown', async (_event, payload) => {
@@ -1193,12 +1275,17 @@ ipcMain.handle('stones:export-diagnostics-markdown', async (_event, payload) => 
     await fsp.mkdir(downloadsPath, { recursive: true });
     const batchId = payload?.batchDiagnosticsLog?.batchId || 'status-center';
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `${sanitizeDownloadFilenamePart(`ZAGARAMI-${batchId}-${timestamp}`)}.md`;
-    const filePath = path.join(downloadsPath, fileName);
-    await fsp.writeFile(filePath, buildDiagnosticsMarkdown(payload), 'utf8');
+    const baseName = sanitizeDownloadFilenamePart(`ZAGARAMI-${batchId}-${timestamp}`);
+    const filePath = path.join(downloadsPath, `${baseName}.md`);
+    const jsonPath = path.join(downloadsPath, `${baseName}.json`);
+    await Promise.all([
+        fsp.writeFile(filePath, buildDiagnosticsMarkdown(payload), 'utf8'),
+        fsp.writeFile(jsonPath, `${JSON.stringify(payload || {}, null, 2)}\n`, 'utf8')
+    ]);
     return {
         success: true,
-        path: filePath
+        path: filePath,
+        jsonPath
     };
 });
 
@@ -1209,6 +1296,9 @@ ipcMain.handle('stones:sync-auth-token', async (_event, token) => {
     if (accessToken && mediaQueue) {
         await mediaQueue.getSnapshot();
         mediaQueue.schedule(0);
+    }
+    if (mediaWorkflowManager) {
+        mediaWorkflowManager.schedule(0);
     }
     return { ok: true };
 });
@@ -1277,6 +1367,14 @@ ipcMain.handle('stones:get-media-queue-snapshot', async () => {
     return mediaQueue.getSnapshot();
 });
 
+ipcMain.handle('stones:get-media-workflow-snapshot', async () => {
+    if (!mediaWorkflowManager) {
+        return { workflows: [], counts: {} };
+    }
+
+    return mediaWorkflowManager.getSnapshot();
+});
+
 ipcMain.handle('stones:enqueue-photo-tool-apply', async (_event, payload) => {
     if (!mediaQueue) {
         throw new Error('Media queue ещё не запущена.');
@@ -1299,6 +1397,38 @@ ipcMain.handle('stones:enqueue-video-render-upload', async (_event, payload) => 
     }
 
     return mediaQueue.enqueueVideoRenderUpload(payload);
+});
+
+ipcMain.handle('stones:start-photo-apply-workflow', async (_event, payload) => {
+    if (!mediaWorkflowManager) {
+        throw new Error('Media workflow manager ещё не запущен.');
+    }
+
+    return mediaWorkflowManager.startPhotoApplyWorkflow(payload);
+});
+
+ipcMain.handle('stones:start-video-export-workflow', async (_event, payload) => {
+    if (!mediaWorkflowManager) {
+        throw new Error('Media workflow manager ещё не запущен.');
+    }
+
+    return mediaWorkflowManager.startVideoExportWorkflow(payload);
+});
+
+ipcMain.handle('stones:retry-media-workflow', async (_event, workflowId) => {
+    if (!mediaWorkflowManager) {
+        return { workflows: [], counts: {} };
+    }
+
+    return mediaWorkflowManager.retryWorkflow(workflowId);
+});
+
+ipcMain.handle('stones:cancel-media-workflow', async (_event, workflowId) => {
+    if (!mediaWorkflowManager) {
+        return { workflows: [], counts: {} };
+    }
+
+    return mediaWorkflowManager.cancelWorkflow(workflowId);
 });
 
 ipcMain.handle('stones:retry-media-queue-job', async (_event, jobId) => {

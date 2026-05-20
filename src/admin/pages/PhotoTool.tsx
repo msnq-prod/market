@@ -15,7 +15,7 @@ import {
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { Button } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
-import { getStonesDesktop, isStonesDesktop, stageFileForMediaQueue } from '../../utils/desktop';
+import { getStonesDesktop, isStonesDesktop, stageDesktopFile } from '../../utils/desktop';
 
 type PhotoToolBatch = {
     id: string;
@@ -1053,6 +1053,7 @@ export function PhotoTool() {
                 photos.flatMap((photo) => photo.assigned_item_seq == null ? [] : [[photo.assigned_item_seq, photo] as const])
             );
             const manifest: Array<Record<string, string | number>> = [];
+            const workflowItems: Array<Record<string, string | number>> = [];
             const formData = new FormData();
             const localPhotosForQueue: Array<{ fileIndex: number; photo: LocalPhoto }> = [];
             let fileIndex = 0;
@@ -1070,6 +1071,12 @@ export function PhotoTool() {
                         source: 'existing',
                         existing_url: photo.existing_url
                     });
+                    workflowItems.push({
+                        itemId: item.id,
+                        itemSeq: item.item_seq,
+                        source: 'existing',
+                        existingUrl: photo.existing_url
+                    });
                     continue;
                 }
 
@@ -1078,6 +1085,12 @@ export function PhotoTool() {
                     item_seq: item.item_seq,
                     source: 'upload',
                     file_index: fileIndex
+                });
+                workflowItems.push({
+                    itemId: item.id,
+                    itemSeq: item.item_seq,
+                    source: 'upload',
+                    fileId: photo.id
                 });
                 localPhotosForQueue.push({ fileIndex, photo });
                 formData.append('files', photo.file, photo.file.name);
@@ -1093,7 +1106,7 @@ export function PhotoTool() {
                 const stagedFiles = [];
                 const queuedManifest = [...manifest];
                 for (const entry of localPhotosForQueue) {
-                    const staged = await stageFileForMediaQueue(entry.photo.file);
+                    const staged = await stageDesktopFile(entry.photo.file);
                     stagedFiles.push({
                         ...staged,
                         fileIndex: entry.fileIndex
@@ -1105,15 +1118,28 @@ export function PhotoTool() {
                             queue_file_id: staged.fileId
                         };
                     }
+                    const workflowItemIndex = workflowItems.findIndex((item) => item.source === 'upload' && item.fileId === entry.photo.id);
+                    if (workflowItemIndex >= 0) {
+                        workflowItems[workflowItemIndex] = {
+                            ...workflowItems[workflowItemIndex],
+                            fileId: staged.fileId
+                        };
+                    }
                 }
 
-                const job = await desktop.enqueuePhotoToolApply({
+                const workflow = await desktop.startPhotoApplyWorkflow({
                     batchId,
+                    batchLabel: data.batch.id,
+                    subtitle: `${localPhotosForQueue.length} фото`,
+                    items: workflowItems,
                     manifest: queuedManifest,
                     basePhotoStateToken: data.batch.photo_state_token,
                     files: stagedFiles
                 });
-                setSuccessMessage(`Сохранение поставлено в локальную очередь: ${job.id.slice(0, 8)}.`);
+                window.dispatchEvent(new CustomEvent('stones:open-status-center', {
+                    detail: { tab: 'queue', focus: { type: 'workflow', id: workflow.id } }
+                }));
+                setSuccessMessage(`Сохранение передано в фон: ${workflow.id.slice(0, 8)}.`);
                 return;
             }
 
@@ -1126,7 +1152,9 @@ export function PhotoTool() {
             });
             const payload = await response.json().catch(() => ({ error: 'Не удалось сохранить назначения photo-tool.' }));
             if (!response.ok) {
-                throw new Error(payload.error || 'Не удалось сохранить назначения photo-tool.');
+                throw Object.assign(new Error(payload.error || 'Не удалось сохранить назначения photo-tool.'), {
+                    code: typeof payload.code === 'string' ? payload.code : undefined
+                });
             }
 
             const typedPayload = payload as PhotoToolPayload;
@@ -1172,8 +1200,16 @@ export function PhotoTool() {
             setSuccessMessage('Назначения фото сохранены.');
         } catch (saveError) {
             console.error(saveError);
-            const message = saveError instanceof Error ? saveError.message : 'Не удалось сохранить назначения photo-tool.';
-            setPhotoConflictError(message.includes('Фото партии уже обновились'));
+            const code = typeof (saveError as { code?: unknown })?.code === 'string'
+                ? (saveError as { code: string }).code
+                : '';
+            let message = saveError instanceof Error ? saveError.message : 'Не удалось сохранить назначения photo-tool.';
+            if (code === 'PHOTO_TOOL_STATE_STALE') {
+                setPhotoConflictError(true);
+                message = 'Photo Tool устарел: партия изменена в другом окне или фоновой загрузкой. Локальный черновик сохранен, обновите инструмент и проверьте назначения.';
+            } else {
+                setPhotoConflictError(false);
+            }
             setError(message);
         } finally {
             setSaving(false);
@@ -1489,7 +1525,7 @@ export function PhotoTool() {
                                             onClick={() => window.location.reload()}
                                             className="rounded-lg border border-red-200/20 px-3 py-1 text-xs font-semibold text-red-50 transition hover:bg-red-500/10"
                                         >
-                                            Обновить данные
+                                            Обновить Photo Tool
                                         </button>
                                     ) : null}
                                 </div>

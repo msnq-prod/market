@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause
 import { Button } from '../components/ui';
 import { DesktopStatusCenter } from '../components/DesktopStatusCenter';
 import { authFetch } from '../../utils/authFetch';
-import { getStonesDesktop, isStonesDesktop, waitForMediaQueueJob } from '../../utils/desktop';
+import { getStonesDesktop, isStonesDesktop, stageDesktopFile, waitForMediaQueueJob } from '../../utils/desktop';
 
 const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
 
@@ -1298,7 +1298,9 @@ export function VideoTool() {
         window.open(VIDEO_HELPER_DOWNLOAD_URL_ARM64, '_blank', 'noopener,noreferrer');
     };
     const openDesktopStatusCenter = () => {
-        window.dispatchEvent(new Event('stones:open-status-center'));
+        window.dispatchEvent(new CustomEvent('stones:open-status-center', {
+            detail: { tab: 'queue' }
+        }));
     };
 
     useEffect(() => {
@@ -2129,6 +2131,62 @@ export function VideoTool() {
         }
     };
 
+    const startDesktopExportWorkflow = async (manifest: VideoExportManifest) => {
+        const desktop = getStonesDesktop();
+        const batchData = data;
+        if (!desktop) {
+            throw new Error('Desktop workflow недоступен.');
+        }
+        if (!batchData) {
+            throw new Error('Данные партии не загружены.');
+        }
+
+        const stagedSources = [];
+        for (const source of sources) {
+            if (!source.file) {
+                throw new Error(`Source ${source.sourceIndex + 1} не привязан к локальному файлу. Добавьте исходник заново.`);
+            }
+
+            const staged = await stageDesktopFile(source.file);
+            stagedSources.push({
+                ...staged,
+                sourceIndex: source.sourceIndex,
+                role: source.role,
+                helperSourceId: source.helperSourceId || '',
+                lastModified: source.lastModified,
+                fingerprint: {
+                    name: source.name,
+                    size: source.size,
+                    lastModified: source.lastModified,
+                    durationMs: source.durationMs
+                }
+            });
+        }
+
+        const workflow = await desktop.startVideoExportWorkflow({
+            batchId: batchData.batch.id,
+            batchLabel: batchData.batch.id,
+            subtitle: `${manifest.outputs?.length || 0} роликов`,
+            helperBaseUrl,
+            sessionId: session?.session_id || draft?.sessionId || '',
+            sessionVersion: session?.version || draft?.sessionVersion || null,
+            introHelperSourceId,
+            sourceFingerprint: manifest.sources?.[0]?.fingerprint || null,
+            renderManifest: manifest,
+            sources: stagedSources
+        });
+
+        setExportPhase('background_uploading');
+        setExportMessage(`Экспорт передан в фон: ${workflow.id.slice(0, 8)}. Прогресс и восстановление доступны в Status Center.`);
+        setNotice({
+            tone: 'info',
+            message: 'Desktop workflow сохранён локально и продолжит render/upload после перезапуска HQ или восстановления сети.'
+        });
+        window.dispatchEvent(new CustomEvent('stones:open-status-center', {
+            detail: { tab: 'queue', focus: { type: 'workflow', id: workflow.id } }
+        }));
+    };
+
     const handleExport = async () => {
         if (!data) {
             return;
@@ -2147,6 +2205,11 @@ export function VideoTool() {
             setRenderProgress({ processed: 0, total: 0 });
 
             const manifest = buildRenderManifest(segments, sources, data.items);
+            if (isDesktopApp) {
+                await startDesktopExportWorkflow(manifest);
+                return;
+            }
+
             const { session: preparedSession, pending } = await prepareServerSession(manifest);
 
             if (pending.length === 0) {
