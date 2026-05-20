@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Camera, Download, PackageCheck, QrCode, Search, Video } from 'lucide-react';
-import { Button } from '../components/ui';
+import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
 type BatchItem = {
@@ -187,6 +187,8 @@ export function Acceptance() {
     const [selectedQrItemIds, setSelectedQrItemIds] = useState<string[]>([]);
     const [batchQuery, setBatchQuery] = useState('');
     const [updatingBatchId, setUpdatingBatchId] = useState('');
+    const [receivingBatchId, setReceivingBatchId] = useState('');
+    const [receivedCount, setReceivedCount] = useState('');
 
     const loadBatches = async (showSpinner = true) => {
         if (showSpinner) {
@@ -529,7 +531,7 @@ export function Acceptance() {
                                         <div className="flex flex-wrap gap-2 lg:justify-end">
                                             {selectedBatch.status === 'TRANSIT' && (
                                                 <Button
-                                                    onClick={() => void handleReceiveBatch(selectedBatch.id)}
+                                                    onClick={() => setReceivingBatchId(selectedBatch.id)}
                                                     disabled={updatingBatchId === selectedBatch.id}
                                                 >
                                                     Принять партию
@@ -721,6 +723,43 @@ export function Acceptance() {
                     )}
                 </section>
             </div>
+
+            <Modal
+                isOpen={Boolean(receivingBatchId)}
+                onClose={() => { setReceivingBatchId(''); setReceivedCount(''); }}
+                title="Подтверждение приемки"
+            >
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-300">
+                        Пожалуйста, пересчитайте физически приехавшие позиции и введите их количество для сверки с системой.
+                    </p>
+                    <input
+                        type="number"
+                        value={receivedCount}
+                        onChange={(e) => setReceivedCount(e.target.value)}
+                        placeholder={`Ожидается: ${selectedBatch?.items.length} шт.`}
+                        className="w-full rounded-xl border border-white/10 bg-[#0f1217] px-4 py-3 text-white focus:border-blue-500/50 focus:outline-none"
+                    />
+                    <div className="mt-4 flex justify-end gap-3 border-t border-white/10 pt-4">
+                        <Button variant="ghost" onClick={() => { setReceivingBatchId(''); setReceivedCount(''); }}>Отмена</Button>
+                        <Button 
+                            onClick={() => {
+                                if (Number(receivedCount) === selectedBatch?.items.length) {
+                                    void handleReceiveBatch(receivingBatchId);
+                                    setReceivingBatchId('');
+                                    setReceivedCount('');
+                                } else {
+                                    setError(`Ошибка приемки: Введенное количество (${receivedCount}) не совпадает с ожидаемым в партии (${selectedBatch?.items.length}).`);
+                                    setReceivingBatchId('');
+                                    setReceivedCount('');
+                                }
+                            }}
+                        >
+                            Подтвердить
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 }

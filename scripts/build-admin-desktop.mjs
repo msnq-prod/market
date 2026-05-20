@@ -20,7 +20,7 @@ const electronBuilderBin = path.join(
 );
 
 const normalizeApiOrigin = (rawValue) => {
-    const fallback = 'http://127.0.0.1:3001';
+    const fallback = 'https://zagarami.com';
     const value = typeof rawValue === 'string' && rawValue.trim() ? rawValue.trim() : fallback;
 
     try {
@@ -67,60 +67,49 @@ const getMacAppPath = async (outputDir, arch) => {
     throw new Error(`Не найден собранный ${appDisplayName}.app для ${arch}.`);
 };
 
-const createStableMacDmg = async ({ outputDir, appVersion, arch, fileName }) => {
-    const appPath = await getMacAppPath(outputDir, arch);
-    const stablePath = path.join(outputDir, fileName);
-    const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), `stones-hq-${arch}-dmg-`));
+const createDmg = async ({ appPath, dmgPath, volumeName }) => {
+    const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stones-hq-dmg-'));
 
     try {
         await run('ditto', [appPath, path.join(stagingDir, `${appDisplayName}.app`)]);
         await fs.symlink('/Applications', path.join(stagingDir, 'Applications')).catch(() => undefined);
-        await fs.rm(stablePath, { force: true });
+        await fs.rm(dmgPath, { force: true });
         await run('hdiutil', [
             'create',
             '-volname',
-            `${appDisplayName} ${appVersion}-${arch}`,
+            volumeName,
             '-srcfolder',
             stagingDir,
             '-ov',
             '-format',
             'UDZO',
-            stablePath
+            dmgPath
         ]);
     } finally {
         await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
     }
 };
 
-const syncStableDmgArtifacts = async ({ outputDir, appVersion }) => {
-    const artifacts = {
-        x64: {
-            source: `ZAGARAMI-HQ-${appVersion}-x64.dmg`,
-            stable: 'ZAGARAMI-HQ.dmg'
-        },
-        arm64: {
-            source: `ZAGARAMI-HQ-${appVersion}-arm64.dmg`,
-            stable: 'ZAGARAMI-HQ-arm64.dmg'
-        }
-    };
+const buildDmgArtifacts = async ({ outputDir, appVersion }) => {
+    const targets = [
+        { arch: 'arm64', versioned: `ZAGARAMI-HQ-${appVersion}-arm64.dmg`, stable: 'ZAGARAMI-HQ-arm64.dmg' },
+        { arch: 'x64', versioned: `ZAGARAMI-HQ-${appVersion}-x64.dmg`, stable: 'ZAGARAMI-HQ.dmg' }
+    ];
 
-    if (process.platform === 'darwin') {
-        for (const [arch, artifact] of Object.entries(artifacts)) {
-            await createStableMacDmg({
-                outputDir,
-                appVersion,
-                arch,
-                fileName: artifact.stable
-            });
-        }
-        return;
-    }
+    for (const target of targets) {
+        const appPath = await getMacAppPath(outputDir, target.arch);
+        const versionedDmgPath = path.join(outputDir, target.versioned);
+        const stableDmgPath = path.join(outputDir, target.stable);
 
-    for (const artifact of Object.values(artifacts)) {
-        await fs.copyFile(
-            path.join(outputDir, artifact.source),
-            path.join(outputDir, artifact.stable)
-        );
+        console.log(`[admin:desktop:dist] creating DMG for ${target.arch}...`);
+        await createDmg({
+            appPath,
+            dmgPath: stableDmgPath,
+            volumeName: `${appDisplayName} ${appVersion}-${target.arch}`
+        });
+
+        await fs.copyFile(stableDmgPath, versionedDmgPath);
+        console.log(`[admin:desktop:dist] ✓ ${target.stable}`);
     }
 };
 
@@ -223,8 +212,11 @@ const main = async () => {
 
         await fs.writeFile(tempConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, 'utf8');
         await run(electronBuilderBin, ['--config', tempConfigPath]);
-        await syncStableDmgArtifacts({ outputDir, appVersion });
-        await writeUpdateManifest({ outputDir, appVersion, updateBaseUrl });
+
+        if (process.platform === 'darwin') {
+            await buildDmgArtifacts({ outputDir, appVersion });
+            await writeUpdateManifest({ outputDir, appVersion, updateBaseUrl });
+        }
     } finally {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }

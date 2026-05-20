@@ -517,13 +517,11 @@ export function Orders() {
                     ) : (
                         <div className="space-y-3">
                             {filteredOrders.map((order) => (
-                                <button
+                                <div
                                     key={order.id}
-                                    type="button"
-                                    onClick={() => handleSelectOrder(order)}
                                     className={`w-full rounded-2xl border p-4 text-left transition-colors ${selectedOrder?.id === order.id
                                         ? 'border-white/16 bg-white/[0.055]'
-                                        : 'border-white/6 bg-[#0f1217] hover:bg-[#14161b]'
+                                        : 'border-white/6 bg-[#0f1217]'
                                     }`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
@@ -542,8 +540,17 @@ export function Orders() {
                                     {order.shipment?.tracking_number && (
                                         <div className="mt-2 text-xs font-mono text-gray-300">{order.shipment.tracking_number}</div>
                                     )}
-                                    <div className="mt-3 font-mono text-sm text-white">{formatRub(order.total)}</div>
-                                </button>
+                                    <div className="mt-3 flex items-center justify-between">
+                                        <span className="font-mono text-sm text-white">{formatRub(order.total)}</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSelectOrder(order)}
+                                            className="rounded-lg border border-white/10 bg-[#1b1e24] px-3 py-1.5 text-xs font-medium text-white hover:bg-white/[0.07]"
+                                        >
+                                            Открыть
+                                        </button>
+                                    </div>
+                                </div>
                             ))}
                         </div>
                     )}
@@ -851,24 +858,26 @@ export function Orders() {
                                 </div>
                             </section>
 
-                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-3">
+                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
                                 <div className="text-xs uppercase tracking-wider text-gray-500">Таймлайн заказа</div>
-                                <div className="space-y-3">
+                                <div className="relative border-l border-white/10 ml-3 space-y-6">
                                     {selectedOrder.status_events?.map((event) => (
-                                        <div key={event.id} className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
+                                        <div key={event.id} className="relative pl-6">
+                                            <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-blue-500 ring-4 ring-[#0f1217]" />
                                             <div className="flex flex-wrap items-center justify-between gap-3">
-                                                <div className="text-sm text-white">{orderStatusLabels[event.to_status]}</div>
+                                                <div className="text-sm font-medium text-white">{orderStatusLabels[event.to_status]}</div>
                                                 <div className="text-xs text-gray-500">{formatOrderDate(event.created_at)}</div>
                                             </div>
-                                            <div className="mt-2 text-xs text-gray-500">
+                                            <div className="mt-1 text-xs text-gray-500">
                                                 {event.actor_user?.name || (event.meta?.source === 'CDEK' ? 'Система / СДЭК' : 'Система')}
                                             </div>
                                             {typeof event.meta?.cdek_status_label === 'string' && (
                                                 <div className="mt-1 text-xs text-gray-300">{event.meta.cdek_status_label}</div>
                                             )}
                                         </div>
-                                    )) || (
-                                        <div className="text-sm text-gray-500">История переходов пока пуста.</div>
+                                    ))}
+                                    {(!selectedOrder.status_events || selectedOrder.status_events.length === 0) && (
+                                        <div className="pl-6 text-sm text-gray-500">История переходов пока пуста.</div>
                                     )}
                                 </div>
                             </section>

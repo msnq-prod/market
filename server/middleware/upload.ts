@@ -1,7 +1,10 @@
 import crypto from 'crypto';
+import { execFile } from 'child_process';
 import fs from 'fs';
 import fsp from 'fs/promises';
+import os from 'os';
 import path from 'path';
+import { promisify } from 'util';
 import { createRequire } from 'module';
 import multer from 'multer';
 import type { Request, Response } from 'express';
@@ -102,7 +105,14 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
     return parsed;
 };
 
+const execFileAsync = promisify(execFile);
+const APPLE_SILICON_HEIC_FAST_PATH = process.platform === 'darwin' && process.arch === 'arm64';
+const DEFAULT_HEIC_APPLE_SILICON_CONCURRENCY = Math.min(Math.max(os.availableParallelism() - 1, 2), 8);
 const PHOTO_CONCURRENCY = parsePositiveIntegerEnv('PHOTO_CONCURRENCY', 2);
+const HEIC_APPLE_SILICON_CONCURRENCY = parsePositiveIntegerEnv(
+    'HEIC_APPLE_SILICON_CONCURRENCY',
+    DEFAULT_HEIC_APPLE_SILICON_CONCURRENCY
+);
 const VIDEO_PIPELINE_DIAGNOSTICS = parseBooleanEnv(process.env.VIDEO_PIPELINE_DIAGNOSTICS);
 let activePhotoConversionTasks = 0;
 
@@ -269,6 +279,25 @@ const buildSafeUploadMetadata = (file: Express.Multer.File): SharedUploadMetadat
 };
 
 const isHeicLikeExtension = (extension: string) => extension === '.heic' || extension === '.heif';
+const shouldUseAppleSiliconHeicFastPath = (sourceExtension: string) =>
+    APPLE_SILICON_HEIC_FAST_PATH && isHeicLikeExtension(sourceExtension);
+
+const normalizeHeicToJpegWithSips = async (filePath: string) => {
+    const targetPath = `${filePath}.jpg`;
+
+    try {
+        await execFileAsync('/usr/bin/sips', ['-s', 'format', 'jpeg', filePath, '--out', targetPath]);
+    } catch (error) {
+        const stat = await fsp.stat(targetPath).catch(() => null);
+        if (!stat || stat.size <= 0) {
+            throw error;
+        }
+    }
+
+    await fsp.rm(filePath, { force: true });
+
+    return targetPath;
+};
 
 const normalizePhotoToJpeg = async (filePath: string, sourceExtension: string) => {
     const targetPath = `${filePath}.jpg`;
@@ -375,32 +404,50 @@ const finalizeNormalizedUpload = async (
 const normalizeSingleUploadedPhoto = async (file: MutableUploadedFile, metadata: SharedUploadMetadata) => {
     activePhotoConversionTasks += 1;
     let usedFastPath = false;
+    let converter = 'sharp';
     try {
         const normalizedFile = await runDiagnosticStage(
             'photo_convert',
             {
                 source_ext: metadata.extension,
                 size_bytes: file.size,
-                active_tasks: activePhotoConversionTasks
+                active_tasks: activePhotoConversionTasks,
+                converter: shouldUseAppleSiliconHeicFastPath(metadata.extension) ? 'sips' : 'sharp',
+                heic_concurrency: shouldUseAppleSiliconHeicFastPath(metadata.extension) ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                platform: process.platform,
+                arch: process.arch
             },
             async () => {
                 const normalizedPath = `${file.path}.jpg`;
                 usedFastPath = await canUseJpegFastPath(file.path, metadata.extension);
                 if (usedFastPath) {
+                    converter = 'rename';
                     await moveFileSafely(file.path, normalizedPath);
                     return finalizeNormalizedUpload(file, metadata, normalizedPath);
                 }
 
+                if (shouldUseAppleSiliconHeicFastPath(metadata.extension)) {
+                    try {
+                        converter = 'sips';
+                        return finalizeNormalizedUpload(file, metadata, await normalizeHeicToJpegWithSips(file.path));
+                    } catch {
+                        converter = 'heic-convert';
+                    }
+                }
+
+                converter = isHeicLikeExtension(metadata.extension) ? 'heic-convert' : 'sharp';
                 return finalizeNormalizedUpload(file, metadata, await normalizePhotoToJpeg(file.path, metadata.extension));
             },
             (result) => ({
                 used_fast_path: usedFastPath,
                 size_bytes: result.size,
-                active_tasks: activePhotoConversionTasks
+                active_tasks: activePhotoConversionTasks,
+                converter
             }),
             () => ({
                 used_fast_path: usedFastPath,
-                active_tasks: activePhotoConversionTasks
+                active_tasks: activePhotoConversionTasks,
+                converter
             })
         );
 
@@ -573,27 +620,46 @@ export const normalizeSharedUploadedFiles = async (
     }
 
     if (preparedFiles.every(({ metadata }) => metadata.kind === 'photo')) {
+        const hasOnlyAppleSiliconHeicFiles = preparedFiles.every(({ metadata }) =>
+            shouldUseAppleSiliconHeicFastPath(metadata.extension)
+        );
+        const photoBatchConcurrency = hasOnlyAppleSiliconHeicFiles
+            ? HEIC_APPLE_SILICON_CONCURRENCY
+            : PHOTO_CONCURRENCY;
+
         return runDiagnosticStage(
             'photo_batch',
             {
                 event: 'summary',
                 file_count: preparedFiles.length,
-                photo_concurrency: PHOTO_CONCURRENCY
+                photo_concurrency: PHOTO_CONCURRENCY,
+                heic_concurrency: hasOnlyAppleSiliconHeicFiles ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                converter: hasOnlyAppleSiliconHeicFiles ? 'sips' : 'mixed',
+                platform: process.platform,
+                arch: process.arch
             },
             () => mapWithConcurrency(
                 preparedFiles,
-                PHOTO_CONCURRENCY,
+                photoBatchConcurrency,
                 async ({ file, metadata }) => normalizeSingleUploadedPhoto(file, metadata)
             ),
             () => ({
                 event: 'summary',
                 file_count: preparedFiles.length,
-                photo_concurrency: PHOTO_CONCURRENCY
+                photo_concurrency: PHOTO_CONCURRENCY,
+                heic_concurrency: hasOnlyAppleSiliconHeicFiles ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                converter: hasOnlyAppleSiliconHeicFiles ? 'sips' : 'mixed',
+                platform: process.platform,
+                arch: process.arch
             }),
             () => ({
                 event: 'summary',
                 file_count: preparedFiles.length,
-                photo_concurrency: PHOTO_CONCURRENCY
+                photo_concurrency: PHOTO_CONCURRENCY,
+                heic_concurrency: hasOnlyAppleSiliconHeicFiles ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                converter: hasOnlyAppleSiliconHeicFiles ? 'sips' : 'mixed',
+                platform: process.platform,
+                arch: process.arch
             })
         );
     }

@@ -1737,7 +1737,7 @@ function PublishSwitch({
         >
             <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-current opacity-70 transition-transform ${checked ? 'translate-x-[80px]' : 'translate-x-0'}`} />
             <span className={`pointer-events-none relative z-10 flex w-full items-center leading-none ${checked ? 'justify-start pl-2 pr-7' : 'justify-end pl-7 pr-2'}`}>
-                {checked ? 'На сайте' : 'Скрыт'}
+                {disabled ? 'Ожидание...' : checked ? 'На сайте' : 'Скрыт'}
             </span>
         </button>
     );

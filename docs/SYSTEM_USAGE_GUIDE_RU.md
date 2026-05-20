@@ -560,9 +560,10 @@ Endpoint:
 Заметка по безопасности:
 - `POST /api/upload/photo` принимает только raster-изображения (`png/jpg/gif/webp`), canonicalizes extension и блокирует HTML/SVG/XML payload.
 - Для batch-нормализации shared photo upload backend использует ограниченную параллельность; `PHOTO_CONCURRENCY` управляет числом одновременно обрабатываемых фото.
+- На `macOS arm64` HEIC/HEIF по умолчанию конвертируются через системный `sips`; `HEIC_APPLE_SILICON_CONCURRENCY` управляет отдельным лимитом параллельности для этого fast-path.
 - `POST /api/upload/video` принимает только `mp4/mov/m4v/webm`; uploaded files под `/uploads/*` отдаются с `X-Content-Type-Options: nosniff`.
 
-Для baseline-замеров включите `VIDEO_PIPELINE_DIAGNOSTICS=1` и сравнивайте логи по полям `stage`, `duration_ms`, `active_jobs`, `active_tasks`, `active_renders`, `processed_count`, `total_count`, `size_bytes`, `job_concurrency`, `render_concurrency`, `ffmpeg_threads`.
+Для baseline-замеров включите `VIDEO_PIPELINE_DIAGNOSTICS=1` и сравнивайте логи по полям `stage`, `duration_ms`, `active_jobs`, `active_tasks`, `active_renders`, `processed_count`, `total_count`, `size_bytes`, `job_concurrency`, `render_concurrency`, `ffmpeg_threads`, `converter`, `heic_concurrency`, `platform`, `arch`.
 Ключевые stage: `probe`, `normalize`, `preview_render`, `final_render`, `final_concat`, `photo_convert`, `photo_batch`, `job`.
 
 ## 14. Частые проблемы
