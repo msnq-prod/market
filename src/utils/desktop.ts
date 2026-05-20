@@ -33,14 +33,18 @@ export type StonesDesktopDiagnostics = {
     };
     update?: {
         checked: boolean;
+        status?: 'ok' | 'not_configured';
         updateAvailable?: boolean;
         version?: string;
         currentVersion?: string;
+        message?: string;
+        manifestUrl?: string;
         error?: string;
     };
 };
 
 export type StonesHqUpdateInfo = {
+    status?: 'ok' | 'not_configured';
     manifestUrl: string;
     version: string;
     currentVersion: string;
@@ -51,6 +55,7 @@ export type StonesHqUpdateInfo = {
     sha256: string | null;
     generatedAt: string;
     updateAvailable: boolean;
+    message?: string;
 };
 
 export type StonesHqUpdateDownloadResult = StonesHqUpdateInfo & {
@@ -117,6 +122,22 @@ export type StonesDesktopVideoHelperCleanupResult = {
     health?: unknown;
 };
 
+export type StonesBatchDiagnosticsMediaFile = {
+    name: string;
+    mimeType: string;
+    size: number;
+    lastModified: number;
+    kind: 'photo' | 'video';
+    data: ArrayBuffer | Uint8Array;
+};
+
+export type StonesBatchDiagnosticsMediaFolder = {
+    cancelled: boolean;
+    directoryPath?: string;
+    files: StonesBatchDiagnosticsMediaFile[];
+    diagnostics: string[];
+};
+
 export type StonesDesktopApi = {
     isDesktop: true;
     getAppInfo: () => Promise<StonesDesktopAppInfo>;
@@ -129,6 +150,8 @@ export type StonesDesktopApi = {
     getVideoHelperStatus: () => Promise<StonesDesktopVideoHelperStatus>;
     cleanupVideoHelper: () => Promise<StonesDesktopVideoHelperCleanupResult>;
     showVideoHelperStorage: () => Promise<{ success: true }>;
+    selectBatchDiagnosticsMediaFolder: () => Promise<StonesBatchDiagnosticsMediaFolder>;
+    exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string }>;
     stageMediaQueueFileStart: (fileMeta: { fileId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
     stageMediaQueueFileChunk: (fileId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
     stageMediaQueueFileFinish: (fileId: string) => Promise<{ fileId: string; size: number; checksumSha256: string }>;

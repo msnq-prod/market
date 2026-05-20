@@ -1008,7 +1008,7 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
                 return res.json(serializePhotoToolPayload(batch));
             }
 
-            throw createHttpError('Данные photo-tool изменились после открытия страницы. Обновите инструмент и повторите сохранение.', 409);
+            throw createHttpError('Фото партии уже обновились в другом окне или фоновой загрузкой. Обновите Photo Tool, чтобы не перезаписать чужие изменения.', 409);
         }
 
         const usedFileIndexes = manifest

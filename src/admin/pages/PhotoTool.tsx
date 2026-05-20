@@ -610,6 +610,7 @@ export function PhotoTool() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
+    const [photoConflictError, setPhotoConflictError] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
     const [sidebarControlsOpen, setSidebarControlsOpen] = useState(true);
     const [importProgress, setImportProgress] = useState<PhotoImportProgress | null>(null);
@@ -647,6 +648,7 @@ export function PhotoTool() {
         const load = async () => {
             setLoading(true);
             setError('');
+            setPhotoConflictError(false);
             setSuccessMessage('');
 
             try {
@@ -1043,6 +1045,7 @@ export function PhotoTool() {
 
         setSaving(true);
         setError('');
+        setPhotoConflictError(false);
         setSuccessMessage('');
 
         try {
@@ -1169,7 +1172,9 @@ export function PhotoTool() {
             setSuccessMessage('Назначения фото сохранены.');
         } catch (saveError) {
             console.error(saveError);
-            setError(saveError instanceof Error ? saveError.message : 'Не удалось сохранить назначения photo-tool.');
+            const message = saveError instanceof Error ? saveError.message : 'Не удалось сохранить назначения photo-tool.';
+            setPhotoConflictError(message.includes('Фото партии уже обновились'));
+            setError(message);
         } finally {
             setSaving(false);
         }
@@ -1476,8 +1481,17 @@ export function PhotoTool() {
 
                         <main className="flex min-h-0 flex-col overflow-y-auto bg-[#0e1014]">
                             {(error || successMessage) && (
-                                <div className={`px-4 py-2 text-sm xl:px-8 ${error ? 'bg-red-500/10 text-red-100' : 'bg-emerald-500/10 text-emerald-100'}`}>
-                                    {error || successMessage}
+                                <div className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm xl:px-8 ${error ? 'bg-red-500/10 text-red-100' : 'bg-emerald-500/10 text-emerald-100'}`}>
+                                    <span>{error || successMessage}</span>
+                                    {photoConflictError ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => window.location.reload()}
+                                            className="rounded-lg border border-red-200/20 px-3 py-1 text-xs font-semibold text-red-50 transition hover:bg-red-500/10"
+                                        >
+                                            Обновить данные
+                                        </button>
+                                    ) : null}
                                 </div>
                             )}
 

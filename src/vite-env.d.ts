@@ -11,6 +11,7 @@ interface ImportMeta {
 
 type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
 type StonesHqUpdateInfo = {
+    status?: 'ok' | 'not_configured';
     manifestUrl: string;
     version: string;
     currentVersion: string;
@@ -21,6 +22,7 @@ type StonesHqUpdateInfo = {
     sha256: string | null;
     generatedAt: string;
     updateAvailable: boolean;
+    message?: string;
 };
 
 type StonesHqUpdateDownloadResult = StonesHqUpdateInfo & {
@@ -85,9 +87,12 @@ interface StonesDesktopApi {
     };
         update?: {
             checked: boolean;
+            status?: 'ok' | 'not_configured';
             updateAvailable?: boolean;
             version?: string;
             currentVersion?: string;
+            message?: string;
+            manifestUrl?: string;
             error?: string;
         };
     }>;
@@ -116,6 +121,20 @@ interface StonesDesktopApi {
         health?: unknown;
     }>;
     showVideoHelperStorage(): Promise<{ success: true }>;
+    exportDiagnosticsMarkdown(payload: unknown): Promise<{ success: true; path: string }>;
+    selectBatchDiagnosticsMediaFolder(): Promise<{
+        cancelled: boolean;
+        directoryPath?: string;
+        files: Array<{
+            name: string;
+            mimeType: string;
+            size: number;
+            lastModified: number;
+            kind: 'photo' | 'video';
+            data: ArrayBuffer | Uint8Array;
+        }>;
+        diagnostics: string[];
+    }>;
     stageMediaQueueFileStart(fileMeta: {
         fileId?: string;
         name: string;

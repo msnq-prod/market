@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const { pathToFileURL } = require('url');
-const { app, BrowserWindow, Notification, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Notification, dialog, ipcMain, shell } = require('electron');
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
 
 let mainWindow = null;
@@ -33,6 +33,18 @@ const UPDATE_MANIFEST_FILE = 'ZAGARAMI-HQ-update.json';
 const PROXY_PREFIXES = ['/api', '/auth', '/uploads', '/healthz'];
 const DESKTOP_HELPER_PREFIX = '/desktop-helper';
 const TEXT_EXTENSIONS = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt', '.map']);
+const DIAGNOSTIC_PHOTO_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const DIAGNOSTIC_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
+
+class UpdateManifestNotConfiguredError extends Error {
+    constructor(message, manifestUrl) {
+        super(message);
+        this.name = 'UpdateManifestNotConfiguredError';
+        this.code = 'UPDATE_MANIFEST_NOT_CONFIGURED';
+        this.statusCode = 404;
+        this.manifestUrl = manifestUrl;
+    }
+}
 
 app.setName(APP_DISPLAY_NAME);
 
@@ -141,6 +153,147 @@ const getMimeType = (filePath) => {
         default:
             return TEXT_EXTENSIONS.has(ext) ? 'text/plain; charset=utf-8' : 'application/octet-stream';
     }
+};
+
+const getDiagnosticFileKind = (fileName) => {
+    const extension = path.extname(fileName).toLowerCase();
+    if (DIAGNOSTIC_PHOTO_EXTENSIONS.has(extension)) {
+        return 'photo';
+    }
+    if (DIAGNOSTIC_VIDEO_EXTENSIONS.has(extension)) {
+        return 'video';
+    }
+    return null;
+};
+
+const readBatchDiagnosticsMediaFolder = async (directoryPath) => {
+    const diagnostics = [];
+    const entries = await fsp.readdir(directoryPath, { withFileTypes: true });
+    const candidates = entries
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name)
+        .sort((left, right) => left.localeCompare(right, 'ru'));
+    const selectedNames = candidates.filter((name) => getDiagnosticFileKind(name));
+    const ignoredNames = candidates.filter((name) => !getDiagnosticFileKind(name));
+
+    if (ignoredNames.length > 0) {
+        diagnostics.push(`Игнорированы файлы: ${ignoredNames.join(', ')}`);
+    }
+
+    const files = [];
+    for (const name of selectedNames) {
+        const filePath = path.join(directoryPath, name);
+        const stat = await fsp.stat(filePath);
+        const kind = getDiagnosticFileKind(name);
+        if (!kind) {
+            continue;
+        }
+
+        files.push({
+            name,
+            mimeType: getMimeType(filePath),
+            size: stat.size,
+            lastModified: Math.round(stat.mtimeMs),
+            kind,
+            data: await fsp.readFile(filePath)
+        });
+    }
+
+    const photoCount = files.filter((file) => file.kind === 'photo').length;
+    const videoCount = files.filter((file) => file.kind === 'video').length;
+    diagnostics.push(`Найдено фото: ${photoCount}, видео: ${videoCount}.`);
+
+    if (photoCount !== 10 || videoCount !== 1) {
+        throw new Error(`Для проверки нужна папка с 10 фото и 1 видео. Сейчас: ${photoCount} фото, ${videoCount} видео.`);
+    }
+
+    return {
+        cancelled: false,
+        directoryPath,
+        files,
+        diagnostics
+    };
+};
+
+const sanitizeDownloadFilenamePart = (value) => String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 80) || 'diagnostics';
+
+const stringifyMarkdownValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return 'не указано';
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+    return `\`${JSON.stringify(value)}\``;
+};
+
+const renderMarkdownSection = (title, entries) => {
+    const rows = Object.entries(entries || {});
+    if (rows.length === 0) {
+        return `## ${title}\n\nНет данных.\n`;
+    }
+
+    return `## ${title}\n\n${rows.map(([key, value]) => `- ${key}: ${stringifyMarkdownValue(value)}`).join('\n')}\n`;
+};
+
+const buildDiagnosticsMarkdown = (payload) => {
+    const createdAt = new Date().toISOString();
+    const batchLog = payload?.batchDiagnosticsLog || {};
+    const diagnostics = payload?.diagnostics || {};
+    const queue = payload?.queue || {};
+    const queueJobs = Array.isArray(payload?.queueJobs) ? payload.queueJobs : [];
+    const batchSteps = Array.isArray(batchLog.steps) ? batchLog.steps : [];
+
+    return [
+        '# ZAGARAMI Desktop Diagnostics',
+        '',
+        `Создано: ${createdAt}`,
+        '',
+        renderMarkdownSection('Приложение', diagnostics.app),
+        renderMarkdownSection('Сеть', diagnostics.network),
+        renderMarkdownSection('Видео helper', diagnostics.helper),
+        renderMarkdownSection('Обновления', diagnostics.update || payload?.update),
+        renderMarkdownSection('Очередь', {
+            activeJobs: diagnostics.queue?.activeJobs ?? queue.activeJobs,
+            failedJobs: diagnostics.queue?.failedJobs ?? queue.failedJobs,
+            counts: diagnostics.queue?.counts ?? queue.counts
+        }),
+        '## Проверка создания партии',
+        '',
+        `- status: ${batchLog.status || 'не запускалась'}`,
+        `- batchId: ${batchLog.batchId || 'не указан'}`,
+        `- serialNumber: ${batchLog.serialNumber || 'не указан'}`,
+        `- cloneUrl: ${batchLog.cloneUrl || 'не указан'}`,
+        batchLog.error ? `- error: ${batchLog.error}` : '',
+        '',
+        '### Шаги',
+        '',
+        batchSteps.length
+            ? batchSteps.map((step) => [
+                `- ${step.label || step.key}: ${step.status}`,
+                step.durationMs == null ? '' : `  - durationMs: ${step.durationMs}`,
+                step.error ? `  - error: ${step.error}` : ''
+            ].filter(Boolean).join('\n')).join('\n')
+            : 'Нет шагов.',
+        '',
+        '## Последние задачи очереди',
+        '',
+        queueJobs.length
+            ? queueJobs.slice(0, 20).map((job) => `- ${job.type || 'job'} ${job.id || ''}: ${job.status || 'unknown'}${job.lastError ? ` (${job.lastError})` : ''}`).join('\n')
+            : 'Нет задач.',
+        '',
+        '## Raw JSON',
+        '',
+        '```json',
+        JSON.stringify(payload || {}, null, 2),
+        '```',
+        ''
+    ].filter((line) => line !== '').join('\n');
 };
 
 const isProxyRequest = (pathname) => PROXY_PREFIXES.some((prefix) => (
@@ -584,7 +737,14 @@ const requestJson = (url) => new Promise((resolve, reject) => {
 
         if (response.statusCode !== 200) {
             response.resume();
-            reject(new Error(`Update manifest недоступен: HTTP ${response.statusCode || 'unknown'}.`));
+            if (response.statusCode === 404) {
+                reject(new UpdateManifestNotConfiguredError('Manifest обновлений не опубликован.', parsedUrl.toString()));
+                return;
+            }
+
+            const error = new Error(`Update manifest недоступен: HTTP ${response.statusCode || 'unknown'}.`);
+            error.statusCode = response.statusCode || 0;
+            reject(error);
             return;
         }
 
@@ -692,8 +852,32 @@ const normalizeHqUpdateManifest = (manifest, manifestUrl) => {
 
 const checkForHqUpdate = async () => {
     const manifestUrl = await getUpdateManifestUrl();
-    const manifest = await requestJson(manifestUrl);
-    return normalizeHqUpdateManifest(manifest, manifestUrl);
+    try {
+        const manifest = await requestJson(manifestUrl);
+        return {
+            ...normalizeHqUpdateManifest(manifest, manifestUrl),
+            status: 'ok'
+        };
+    } catch (error) {
+        if (error instanceof UpdateManifestNotConfiguredError) {
+            return {
+                status: 'not_configured',
+                manifestUrl,
+                version: '',
+                currentVersion: app.getVersion(),
+                arch: getUpdateArch(),
+                fileName: '',
+                url: '',
+                size: null,
+                sha256: null,
+                generatedAt: '',
+                updateAvailable: false,
+                message: error.message
+            };
+        }
+
+        throw error;
+    }
 };
 
 const ensureUpdateDirectory = async () => {
@@ -976,9 +1160,12 @@ ipcMain.handle('stones:check-hq-update', async () => {
         const update = await checkForHqUpdate();
         lastUpdateStatus = {
             checked: true,
+            status: update.status,
             updateAvailable: update.updateAvailable,
             version: update.version,
-            currentVersion: update.currentVersion
+            currentVersion: update.currentVersion,
+            manifestUrl: update.manifestUrl,
+            message: update.message
         };
         return update;
     } catch (error) {
@@ -999,6 +1186,20 @@ ipcMain.handle('stones:download-hq-update', async () => {
         currentVersion: result.currentVersion
     };
     return result;
+});
+
+ipcMain.handle('stones:export-diagnostics-markdown', async (_event, payload) => {
+    const downloadsPath = app.getPath('downloads');
+    await fsp.mkdir(downloadsPath, { recursive: true });
+    const batchId = payload?.batchDiagnosticsLog?.batchId || 'status-center';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `${sanitizeDownloadFilenamePart(`ZAGARAMI-${batchId}-${timestamp}`)}.md`;
+    const filePath = path.join(downloadsPath, fileName);
+    await fsp.writeFile(filePath, buildDiagnosticsMarkdown(payload), 'utf8');
+    return {
+        success: true,
+        path: filePath
+    };
 });
 
 ipcMain.handle('stones:get-admin-auto-login-credentials', async () => ({ ...DESKTOP_ADMIN_AUTO_LOGIN }));
@@ -1025,6 +1226,23 @@ ipcMain.handle('stones:cleanup-video-helper', async () => {
 ipcMain.handle('stones:show-video-helper-storage', async () => {
     await shell.openPath(getHelperStorageRoot());
     return { success: true };
+});
+
+ipcMain.handle('stones:select-batch-diagnostics-media-folder', async () => {
+    const result = await dialog.showOpenDialog(mainWindow || undefined, {
+        title: 'Выберите папку с 10 фото и 1 видео для проверки партии',
+        properties: ['openDirectory']
+    });
+
+    if (result.canceled || !result.filePaths[0]) {
+        return {
+            cancelled: true,
+            files: [],
+            diagnostics: ['Выбор папки отменен.']
+        };
+    }
+
+    return readBatchDiagnosticsMediaFolder(result.filePaths[0]);
 });
 
 ipcMain.handle('stones:media-stage-file-start', async (_event, fileMeta) => {

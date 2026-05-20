@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     getVideoHelperStatus: () => ipcRenderer.invoke('stones:get-video-helper-status'),
     cleanupVideoHelper: () => ipcRenderer.invoke('stones:cleanup-video-helper'),
     showVideoHelperStorage: () => ipcRenderer.invoke('stones:show-video-helper-storage'),
+    selectBatchDiagnosticsMediaFolder: () => ipcRenderer.invoke('stones:select-batch-diagnostics-media-folder'),
+    exportDiagnosticsMarkdown: (payload) => ipcRenderer.invoke('stones:export-diagnostics-markdown', payload),
     stageMediaQueueFileStart: (fileMeta) => ipcRenderer.invoke('stones:media-stage-file-start', fileMeta),
     stageMediaQueueFileChunk: (fileId, chunk) => ipcRenderer.invoke('stones:media-stage-file-chunk', fileId, chunk),
     stageMediaQueueFileFinish: (fileId) => ipcRenderer.invoke('stones:media-stage-file-finish', fileId),

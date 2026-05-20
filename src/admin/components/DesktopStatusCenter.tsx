@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
     Activity,
-    Clipboard,
     Download,
     HardDrive,
     Info,
     LoaderCircle,
     RefreshCw,
     Server,
+    TestTube2,
     UploadCloud,
     Video,
     Wifi,
@@ -22,6 +22,7 @@ import {
     type StonesMediaQueueJob,
     type StonesMediaQueueSnapshot
 } from '../../utils/desktop';
+import { runBatchCreationDiagnostics, type BatchDiagnosticsLog } from '../services/batchDiagnostics';
 
 type StatusTone = 'ok' | 'warning' | 'error' | 'checking' | 'offline';
 type StatusTab = 'overview' | 'queue' | 'helper' | 'updates' | 'diagnostics';
@@ -305,7 +306,12 @@ export function DesktopStatusCenter() {
     const [checkingUpdate, setCheckingUpdate] = useState(false);
     const [downloadingUpdate, setDownloadingUpdate] = useState(false);
     const [actionError, setActionError] = useState('');
-    const [copied, setCopied] = useState(false);
+    const [exportedDiagnosticsPath, setExportedDiagnosticsPath] = useState('');
+    const [batchDiagnosticsLog, setBatchDiagnosticsLog] = useState<BatchDiagnosticsLog>({
+        status: 'idle',
+        steps: [],
+        mediaDiagnostics: []
+    });
 
     const queueCounts = useMemo(() => getQueueCounts(queue), [queue]);
     const videoUploadGroups = useMemo(() => getVideoUploadGroups(queue.jobs), [queue.jobs]);
@@ -319,13 +325,25 @@ export function DesktopStatusCenter() {
     const updateAvailable = update?.updateAvailable ?? cachedUpdate?.updateAvailable ?? false;
     const updateVersion = update?.version ?? cachedUpdate?.version;
     const updateError = cachedUpdate?.error;
-    const updateTone: StatusTone = updateError
+    const updateStatus = update?.status ?? cachedUpdate?.status;
+    const isUpdateNotConfigured = updateStatus === 'not_configured'
+        || /manifest.*не опубликован|HTTP 404|not found/i.test(updateError || '');
+    const updateTone: StatusTone = updateError && !isUpdateNotConfigured
         ? 'error'
-        : updateAvailable
+        : isUpdateNotConfigured
+            ? 'warning'
+            : updateAvailable
             ? 'warning'
             : updateChecked
                 ? 'ok'
                 : 'offline';
+    const updateLabel = isUpdateNotConfigured
+        ? 'Manifest не опубликован'
+        : updateAvailable
+            ? `Версия ${updateVersion}`
+            : updateChecked
+                ? 'Актуально'
+                : 'Не проверено';
     const activeVideoUploads = videoUploadGroups.reduce((total, group) => total + group.active, 0);
 
     const headerSummary = useMemo(() => {
@@ -341,14 +359,14 @@ export function DesktopStatusCenter() {
         if (!diagnostics?.helper.ok) {
             return 'Helper требует внимания';
         }
-        if (updateAvailable) {
-            return `Доступна ${updateVersion}`;
-        }
         if (activeVideoUploads > 0) {
             return `Видео в фоне: ${activeVideoUploads}`;
         }
         if (queueCounts.active > 0) {
             return `Загрузки: ${queueCounts.active}`;
+        }
+        if (updateAvailable) {
+            return `Доступна ${updateVersion}`;
         }
         return 'Все системы в норме';
     }, [activeVideoUploads, diagnostics, queueCounts.active, queueCounts.failed, updateAvailable, updateVersion]);
@@ -451,34 +469,82 @@ export function DesktopStatusCenter() {
             .catch((error) => setActionError(error instanceof Error ? error.message : 'Не удалось очистить helper.'));
     }, [desktop, refresh]);
 
-    const copyDiagnostics = useCallback(async () => {
+    const buildDiagnosticsExportPayload = useCallback((nextDiagnostics: StonesDesktopDiagnostics | null = diagnostics) => ({
+        diagnostics: nextDiagnostics,
+        update: update || nextDiagnostics?.update || null,
+        queue: nextDiagnostics?.queue || diagnostics?.queue || null,
+        queueGroups: videoUploadGroups.map((group) => ({
+            id: group.id,
+            title: group.title,
+            total: group.total,
+            done: group.done,
+            active: group.active,
+            failed: group.failed,
+            serialNumbers: group.jobs.map((job) => job.summary?.serialNumber).filter(Boolean)
+        })),
+        queueJobs: queue.jobs.slice(0, 20),
+        batchDiagnosticsLog
+    }), [batchDiagnosticsLog, diagnostics, queue.jobs, update, videoUploadGroups]);
+
+    const exportDiagnostics = useCallback(async () => {
         if (!desktop) {
             return;
         }
 
         try {
             const nextDiagnostics = await desktop.getDesktopDiagnostics();
-            const payload = JSON.stringify({
-                ...nextDiagnostics,
-                queueGroups: videoUploadGroups.map((group) => ({
-                    id: group.id,
-                    title: group.title,
-                    total: group.total,
-                    done: group.done,
-                    active: group.active,
-                    failed: group.failed,
-                    serialNumbers: group.jobs.map((job) => job.summary?.serialNumber).filter(Boolean)
-                })),
-                queueJobs: queue.jobs.slice(0, 20)
-            }, null, 2);
-            await navigator.clipboard.writeText(payload);
+            const result = await desktop.exportDiagnosticsMarkdown(buildDiagnosticsExportPayload(nextDiagnostics));
             setDiagnostics(nextDiagnostics);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 2000);
+            setExportedDiagnosticsPath(result.path);
         } catch (error) {
-            setActionError(error instanceof Error ? error.message : 'Не удалось скопировать диагностику.');
+            setActionError(error instanceof Error ? error.message : 'Не удалось экспортировать диагностику.');
         }
-    }, [desktop, queue.jobs, videoUploadGroups]);
+    }, [buildDiagnosticsExportPayload, desktop]);
+
+    const runBatchDiagnostics = useCallback(async () => {
+        if (!desktop) {
+            return;
+        }
+
+        setActionError('');
+        setExportedDiagnosticsPath('');
+        setBatchDiagnosticsLog({
+            status: 'running',
+            startedAt: new Date().toISOString(),
+            steps: [],
+            mediaDiagnostics: ['Открываем выбор папки.']
+        });
+
+        try {
+            const selected = await desktop.selectBatchDiagnosticsMediaFolder();
+            if (selected.cancelled) {
+                setBatchDiagnosticsLog({
+                    status: 'idle',
+                    steps: [],
+                    mediaDiagnostics: selected.diagnostics
+                });
+                return;
+            }
+
+            setBatchDiagnosticsLog((current) => ({
+                ...current,
+                mediaDiagnostics: selected.diagnostics
+            }));
+            await runBatchCreationDiagnostics(selected.files, {
+                onLog: setBatchDiagnosticsLog
+            });
+            await refresh();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Не удалось выполнить проверку создания партии.';
+            setActionError(message);
+            setBatchDiagnosticsLog((current) => ({
+                ...current,
+                status: 'failed',
+                finishedAt: new Date().toISOString(),
+                error: message
+            }));
+        }
+    }, [desktop, refresh]);
 
     useEffect(() => {
         if (!isStonesDesktop() || !desktop) {
@@ -514,7 +580,7 @@ export function DesktopStatusCenter() {
         { id: 'queue', label: 'Загрузки', icon: <UploadCloud size={14} /> },
         { id: 'helper', label: 'Видео helper', icon: <Video size={14} /> },
         { id: 'updates', label: 'Обновления', icon: <Download size={14} /> },
-        { id: 'diagnostics', label: 'Диагностика', icon: <Clipboard size={14} /> }
+        { id: 'diagnostics', label: 'Диагностика', icon: <Download size={14} /> }
     ];
 
     return (
@@ -549,7 +615,7 @@ export function DesktopStatusCenter() {
                         className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
                         onClick={() => setOpen(false)}
                     />
-                    <aside className="absolute right-0 top-0 flex h-full w-full max-w-[520px] flex-col border-l border-white/10 bg-[#101216] shadow-2xl">
+                    <aside className="absolute right-0 top-0 flex h-full w-full max-w-[640px] flex-col border-l border-white/10 bg-[#101216] shadow-2xl">
                         <header className="shrink-0 border-b border-white/8 px-5 py-4">
                             <div className="flex items-start justify-between gap-3">
                                 <div>
@@ -582,7 +648,7 @@ export function DesktopStatusCenter() {
                                 </StatusBadge>
                                 <StatusBadge tone={updateTone}>
                                     <Download size={13} />
-                                    {updateAvailable ? `Версия ${updateVersion}` : updateChecked ? 'Актуально' : 'Не проверено'}
+                                    {updateLabel}
                                 </StatusBadge>
                             </div>
                         </header>
@@ -639,9 +705,23 @@ export function DesktopStatusCenter() {
                                     />
                                     <StatusCard
                                         icon={<HardDrive size={18} />}
+                                        title="Обновления"
+                                        value={updateLabel}
+                                        detail={isUpdateNotConfigured ? 'Manifest обновлений не опубликован.' : updateError || 'Проверка обновлений работает отдельно от API.'}
+                                        tone={updateTone}
+                                    />
+                                    <StatusCard
+                                        icon={<TestTube2 size={18} />}
+                                        title="Диагностика партии"
+                                        value={batchDiagnosticsLog.status === 'success' ? 'Последняя проверка успешна' : batchDiagnosticsLog.status === 'failed' ? 'Есть ошибка проверки' : batchDiagnosticsLog.status === 'running' ? 'Выполняется' : 'Готова к запуску'}
+                                        detail={batchDiagnosticsLog.batchId || 'Проверяет заказ, партию, фото, видео, QR и clone.'}
+                                        tone={batchDiagnosticsLog.status === 'failed' ? 'error' : batchDiagnosticsLog.status === 'running' ? 'checking' : 'ok'}
+                                    />
+                                    <StatusCard
+                                        icon={<HardDrive size={18} />}
                                         title="Локальный render"
-                                        value="Медиа/PDF собираются в приложении"
-                                        detail="Сервер остается источником данных и файлов, но тяжелый render выполняется на Mac."
+                                        value="Медиа/PDF собираются на Mac"
+                                        detail="Сервер остается источником данных и файлов."
                                         tone="ok"
                                     />
                                 </div>
@@ -729,8 +809,8 @@ export function DesktopStatusCenter() {
                                     <StatusCard
                                         icon={<Download size={18} />}
                                         title="Обновления"
-                                        value={updateAvailable ? `Доступна версия ${updateVersion}` : updateChecked ? 'Установлена актуальная версия' : 'Проверка не выполнялась'}
-                                        detail={updateError || 'Приложение скачивает DMG и открывает установщик. Замена .app выполняется вручную.'}
+                                        value={isUpdateNotConfigured ? 'Manifest не опубликован' : updateAvailable ? `Доступна версия ${updateVersion}` : updateChecked ? 'Установлена актуальная версия' : 'Проверка не выполнялась'}
+                                        detail={isUpdateNotConfigured ? 'Файл ZAGARAMI-HQ-update.json пока отсутствует на сервере. Обновления не считаются аварией.' : updateError || 'Приложение скачивает DMG и открывает установщик. Замена .app выполняется вручную.'}
                                         tone={updateTone}
                                     />
                                     {update ? (
@@ -758,13 +838,18 @@ export function DesktopStatusCenter() {
                                         <button
                                             type="button"
                                             onClick={() => void downloadUpdate()}
-                                            disabled={!update?.updateAvailable || checkingUpdate || downloadingUpdate}
+                                            disabled={!update?.updateAvailable || isUpdateNotConfigured || checkingUpdate || downloadingUpdate}
                                             className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-400/25 bg-sky-500/10 px-3 text-xs text-sky-100 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {downloadingUpdate ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
                                             Скачать и открыть DMG
                                         </button>
                                     </div>
+                                    {isUpdateNotConfigured ? (
+                                        <p className="rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                                            Manifest обновлений не опубликован. Status Center не считает это критической ошибкой.
+                                        </p>
+                                    ) : null}
                                 </div>
                             ) : null}
 
@@ -772,23 +857,97 @@ export function DesktopStatusCenter() {
                                 <div className="space-y-3">
                                     <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
                                         <div className="flex items-start gap-3">
+                                            <TestTube2 className="mt-0.5 text-emerald-200" size={18} />
+                                            <div className="min-w-0 flex-1">
+                                                <h3 className="text-sm font-semibold text-white">Проверка создания партии</h3>
+                                                <p className="mt-1 text-sm leading-6 text-gray-400">
+                                                    Создает e2e-партию на 10 камней, загружает фото и видео, проверяет QR и публичный паспорт.
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-2 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void runBatchDiagnostics()}
+                                                disabled={batchDiagnosticsLog.status === 'running'}
+                                                data-testid="batch-diagnostics-run"
+                                                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {batchDiagnosticsLog.status === 'running' ? <LoaderCircle size={16} className="animate-spin" /> : <TestTube2 size={16} />}
+                                                Проверка создания партии
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void exportDiagnostics()}
+                                                disabled={batchDiagnosticsLog.steps.length === 0 && batchDiagnosticsLog.mediaDiagnostics.length === 0}
+                                                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 px-4 text-sm font-semibold text-gray-200 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                <Download size={16} />
+                                                Экспорт .md
+                                            </button>
+                                        </div>
+                                        <div className="mt-3 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-gray-300" data-testid="batch-diagnostics-status">
+                                            Статус: {batchDiagnosticsLog.status === 'idle'
+                                                ? 'не запускалась'
+                                                : batchDiagnosticsLog.status === 'running'
+                                                    ? 'выполняется'
+                                                    : batchDiagnosticsLog.status === 'success'
+                                                        ? 'успешно'
+                                                        : 'ошибка'}
+                                            {batchDiagnosticsLog.batchId ? ` · партия ${batchDiagnosticsLog.batchId}` : ''}
+                                            {batchDiagnosticsLog.serialNumber ? ` · serial ${batchDiagnosticsLog.serialNumber}` : ''}
+                                        </div>
+                                        {batchDiagnosticsLog.error ? (
+                                            <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
+                                                {batchDiagnosticsLog.error}
+                                            </p>
+                                        ) : null}
+                                        {batchDiagnosticsLog.steps.length > 0 ? (
+                                            <div className="mt-3 max-h-56 overflow-auto rounded-xl border border-white/8 bg-black/20">
+                                                {batchDiagnosticsLog.steps.map((step) => (
+                                                    <div key={step.key} className="flex items-start justify-between gap-3 border-b border-white/6 px-3 py-2 last:border-b-0">
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-xs font-medium text-white">{step.label}</p>
+                                                            {step.error ? <p className="mt-1 text-xs text-red-100/85">{step.error}</p> : null}
+                                                        </div>
+                                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-medium ${
+                                                            step.status === 'ok'
+                                                                ? 'bg-emerald-400/10 text-emerald-100'
+                                                                : step.status === 'failed'
+                                                                    ? 'bg-red-500/10 text-red-100'
+                                                                    : 'bg-sky-400/10 text-sky-100'
+                                                        }`}>
+                                                            {step.status === 'ok' ? 'ok' : step.status === 'failed' ? 'error' : 'run'}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                                        <div className="flex items-start gap-3">
                                             <Info className="mt-0.5 text-sky-200" size={18} />
                                             <div>
                                                 <h3 className="text-sm font-semibold text-white">Общая диагностика</h3>
                                                 <p className="mt-1 text-sm leading-6 text-gray-400">
-                                                    Скопируйте JSON для разбора проблем с сетью, helper, очередью или обновлениями.
+                                                    Экспортируйте Markdown-отчет в Downloads для разбора проблем с сетью, helper, очередью или обновлениями.
                                                 </p>
                                             </div>
                                         </div>
                                     </div>
                                     <button
                                         type="button"
-                                        onClick={() => void copyDiagnostics()}
+                                        onClick={() => void exportDiagnostics()}
                                         className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100"
                                     >
-                                        <Clipboard size={16} />
-                                        {copied ? 'Диагностика скопирована' : 'Скопировать диагностику'}
+                                        <Download size={16} />
+                                        Экспортировать диагностику .md
                                     </button>
+                                    {exportedDiagnosticsPath ? (
+                                        <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs leading-5 text-emerald-100">
+                                            Отчет сохранен: {exportedDiagnosticsPath}
+                                        </p>
+                                    ) : null}
                                     <pre className="max-h-[420px] overflow-auto rounded-2xl border border-white/8 bg-black/30 p-3 text-[11px] leading-5 text-gray-300">
                                         {JSON.stringify({
                                             app: diagnostics?.app,
