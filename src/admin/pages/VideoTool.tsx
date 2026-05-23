@@ -3,771 +3,158 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { Button } from '../components/ui';
 import { DesktopStatusCenter } from '../components/DesktopStatusCenter';
-import { authFetch } from '../../utils/authFetch';
-import { getStonesDesktop, isStonesDesktop, stageDesktopFile, waitForMediaQueueJob } from '../../utils/desktop';
+import {
+    getStonesDesktop,
+    isStonesDesktop,
+    stageDesktopFile,
+    waitForMediaQueueJob,
+    type StonesMediaWorkflow,
+    type StonesMediaWorkflowSnapshot
+} from '../../utils/desktop';
+import {
+    CROSSFADE_MS,
+    DESKTOP_VIDEO_HELPER_URL,
+    HELPER_HEALTH_TIMEOUT_MS,
+    PREVIEW_PANEL_DEFAULT_WIDTH,
+    PREVIEW_PANEL_MAX_WIDTH,
+    PREVIEW_PANEL_MIN_WIDTH,
+    PREVIEW_PANEL_WIDTH_STORAGE_KEY,
+    TIMELINE_ZOOM_STEP,
+    VIDEO_EXPORT_HELPER_PROTOCOL_VERSION,
+    VIDEO_EXPORT_HELPER_URL,
+    VIDEO_HELPER_DOWNLOAD_URL,
+    VIDEO_HELPER_DOWNLOAD_URL_ARM64,
+    exportPhaseLabel,
+    sessionStatusLabel
+} from './video-tool/constants';
+import { draftKeyFor, parseDraft } from './video-tool/draftStorage';
+import {
+    buildRenderManifest,
+    createSourceFromFingerprint,
+    createSourcesFromManifest,
+    hydrateSegmentsFromManifest
+} from './video-tool/manifest';
+import {
+    VIDEO_EXPORT_HELPER_URL_CANDIDATES,
+    buildHelperIssueMessage,
+    classifyHelperFetchError,
+    getHelperErrorDetail,
+    helperFetch,
+    revokeObjectUrl
+} from './video-tool/videoHelperClient';
+import { useVideoToolHotkeys } from './video-tool/useVideoToolHotkeys';
+import {
+    cancelVideoExportSession,
+    createVideoExportSession,
+    fetchVideoExportSession,
+    fetchVideoToolPayload,
+    retryTailVideoExportSession,
+    uploadVideoExportFile,
+    uploadVideoExportIntroFile
+} from './video-tool/videoExportClient';
+import {
+    appendInitialSourceSegment,
+    areSegmentsEqual,
+    buildRulerMarks,
+    clamp,
+    clampVisibleDuration,
+    clampVisibleStart,
+    cloneSegments,
+    createFirstSourceSegments,
+    deleteSegmentAt,
+    formatDuration,
+    getSourceForGlobalMs,
+    getSourceTimelineStartMs,
+    getTimelineMinVisibleDuration,
+    getTotalSourceDurationMs,
+    getVisibleWindowStyle,
+    isSourceBoundaryBetween,
+    moveBoundary,
+    normalizeSegments,
+    padSequence,
+    readStoredPreviewPanelWidth,
+    sleep,
+    splitSegmentAt,
+    toggleSegmentDeletedAt
+} from './video-tool/timelineUtils';
+import type {
+    ExportPhase,
+    HelperDiagnosticEntry,
+    HelperDiagnosticStatus,
+    HelperHealthPayload,
+    HelperJobPayload,
+    HelperSourceUploadPayload,
+    HelperStatus,
+    InlineNotice,
+    Segment,
+    SourceFingerprint,
+    SourceRole,
+    TimelineViewport,
+    VideoExportIntroAsset,
+    VideoExportManifest,
+    VideoExportSessionDetails,
+    VideoToolDraft,
+    VideoToolPayload,
+    WorkingSource
+} from './video-tool/types';
 
-const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
+const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = { workflows: [], counts: {} };
+const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed']);
+const SOURCE_DURATION_TOLERANCE_MS = 1000;
 
-const VIDEO_EXPORT_HELPER_URL = normalizeHelperUrl(import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012');
-const DESKTOP_VIDEO_HELPER_URL = '/desktop-helper';
-const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
-const HELPER_HEALTH_TIMEOUT_MS = 2500;
-const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
-const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
-const VIDEO_HELPER_DOWNLOAD_URL = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL).trim();
-const VIDEO_HELPER_DOWNLOAD_URL_ARM64 = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64 || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64).trim();
-const ZAGARAMI_PRODUCTION_ORIGIN = 'https://zagarami.com';
-const MIN_SEGMENT_DURATION_MS = 200;
-const CROSSFADE_MS = 200;
-const TIMELINE_ZOOM_STEP = 1.2;
-const PREVIEW_PANEL_WIDTH_STORAGE_KEY = 'video-tool-preview-panel-width';
-const PREVIEW_PANEL_MIN_WIDTH = 264;
-const PREVIEW_PANEL_DEFAULT_WIDTH = 352;
-const PREVIEW_PANEL_MAX_WIDTH = 760;
-const TIMELINE_RULER_STEPS_MS = [
-    500,
-    1000,
-    2000,
-    5000,
-    10000,
-    15000,
-    30000,
-    60000,
-    120000,
-    300000,
-    600000,
-    900000
-];
-
-type HelperRequestInit = RequestInit & {
-    targetAddressSpace?: 'local';
+const workflowPhaseLabel: Record<string, string> = {
+    queued: 'В очереди',
+    converting: 'Конвертация',
+    uploading: 'Загрузка',
+    verifying: 'Проверка',
+    preparing_session: 'Подготовка session',
+    importing_sources: 'Импорт исходников',
+    rendering_intro: 'Сборка intro',
+    rendering_outputs: 'Рендер',
+    queueing_uploads: 'Постановка upload',
+    verifying_uploads: 'Проверка upload',
+    paused_offline: 'Пауза: нет связи с сервером',
+    auth_required: 'Нужен повторный вход',
+    failed: 'Ошибка',
+    completed: 'Готово',
+    cancelled: 'Отменено'
 };
 
-type HelperFetchOptions = {
-    useTargetAddressSpace?: boolean;
-};
-
-const helperUrlHostname = (helperUrl: string) => {
-    try {
-        return new URL(helperUrl).hostname;
-    } catch {
+const normalizeWorkflowError = (value: string | null | undefined) => {
+    const message = String(value || '').trim();
+    if (!message) {
         return '';
     }
-};
 
-const helperUsesLoopback = (helperUrl: string) => {
-    const hostname = helperUrlHostname(helperUrl);
-    return hostname === '127.0.0.1'
-        || hostname === 'localhost'
-        || hostname === '::1'
-        || hostname === '[::1]';
-};
-
-const buildHelperUrlCandidates = () => {
-    const candidates = [VIDEO_EXPORT_HELPER_URL];
-    try {
-        const helperUrl = new URL(VIDEO_EXPORT_HELPER_URL);
-        if (['127.0.0.1', 'localhost', '[::1]', '::1'].includes(helperUrl.hostname)) {
-            for (const hostname of ['127.0.0.1', 'localhost', '[::1]']) {
-                const nextUrl = new URL(helperUrl.toString());
-                nextUrl.hostname = hostname;
-                candidates.push(normalizeHelperUrl(nextUrl.toString()));
-            }
-        }
-    } catch {
-        // Keep the configured helper URL as-is.
+    if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline/i.test(message)) {
+        return 'Сервер недоступен. Workflow продолжит работу после восстановления связи.';
     }
 
-    return Array.from(new Set(candidates));
-};
-
-const VIDEO_EXPORT_HELPER_URL_CANDIDATES = buildHelperUrlCandidates();
-
-const browserLooksLikeSafari = () => {
-    if (typeof navigator === 'undefined') {
-        return false;
+    if (/401|403|auth|token|войти/i.test(message)) {
+        return 'Нужно войти в HQ заново. После входа workflow продолжит работу.';
     }
 
-    const userAgent = navigator.userAgent;
-    return userAgent.includes('Safari/')
-        && !/(Chrome|Chromium|CriOS|FxiOS|Edg|OPR|YaBrowser)\//.test(userAgent);
+    return message;
 };
 
-const buildHelperIssueMessage = (rawMessage?: string) => {
-    const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
-    const currentOrigin = typeof window !== 'undefined'
-        ? window.location.origin
-        : ZAGARAMI_PRODUCTION_ORIGIN;
-    const expectedOrigin = currentOrigin.includes('zagarami.com')
-        ? currentOrigin
-        : ZAGARAMI_PRODUCTION_ORIGIN;
+const isActiveWorkflow = (workflow: StonesMediaWorkflow | null | undefined) =>
+    Boolean(workflow && !terminalWorkflowPhases.has(workflow.phase));
 
-    if (message.includes('Origin helper запроса не разрешён') || message.includes('Mutating helper requests требуют разрешённый Origin.')) {
-        return `Этот helper собран не для ${expectedOrigin}. Закройте старый Stones Video Helper, скачайте актуальный DMG с ${expectedOrigin}, откройте ZAGARAMI Video Helper снова и перепроверьте статус.`;
+const buildWorkflowStatusText = (workflow: StonesMediaWorkflow | null | undefined) => {
+    if (!workflow) {
+        return '';
     }
 
-    if (message.includes('Helper принимает запросы только с loopback-интерфейса.')) {
-        return `Браузер не смог обратиться к helper через localhost. Откройте систему через ${expectedOrigin} и перепроверьте статус helper.`;
-    }
-
-    if (message.includes('Failed to fetch') || message.includes('Load failed') || message.includes('NetworkError')) {
-        if (!VIDEO_EXPORT_HELPER_URL_CANDIDATES.some(helperUsesLoopback)) {
-            return 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
-        }
-
-        return browserLooksLikeSafari()
-            ? `Safari блокирует HTTP-доступ ${expectedOrigin} к локальному helper. Для монтажа откройте эту страницу в Chrome или Яндекс Браузере.`
-            : `Браузер заблокировал доступ к локальному helper. Нажмите «Разрешить доступ» и подтвердите доступ ${expectedOrigin} к локальной сети.`;
-    }
-
-    return message || 'Локальный helper не отвечает. Перезапустите приложение и перепроверьте статус.';
-};
-
-type VideoToolBatch = {
-    id: string;
-    status: string;
-    created_at: string;
-    updated_at: string;
-    collected_date: string | null;
-    collected_time: string | null;
-    daily_batch_seq: number | null;
-    expected_output_count: number;
-    video_processing: {
-        job_id: string;
-        status: string;
-    } | null;
-    video_export: VideoExportSessionSummary | null;
-};
-
-type VideoToolItem = {
-    id: string;
-    temp_id: string;
-    item_seq: number | null;
-    serial_number: string | null;
-    item_video_url: string | null;
-};
-
-type VideoExportSessionSummary = {
-    session_id: string;
-    status: string;
-    version: number;
-    expected_count: number;
-    uploaded_count: number;
-    crossfade_ms: number;
-    error_message: string | null;
-    started_at: string | null;
-    finished_at: string | null;
-};
-
-type RetryTailPayload = {
-    session: VideoExportSessionDetails;
-    pending_serials: string[];
-    resumed: boolean;
-    recovered_stale: boolean;
-};
-
-type VideoExportManifest = {
-    manifest_version?: number;
-    sources?: Array<{
-        source_index: number;
-        role: 'WITH_INTRO' | 'NO_INTRO';
-        fingerprint: SourceFingerprint;
-    }>;
-    segments: Array<{
-        sequence: number;
-        source_index?: number;
-        start_ms: number;
-        end_ms: number;
-    }>;
-    outputs: Array<{
-        segment_seq: number;
-        serial_number: string;
-        item_id: string;
-    }>;
-    intro_asset?: VideoExportIntroAsset | null;
-};
-
-type VideoExportSessionDetails = VideoExportSessionSummary & {
-    source_fingerprint: SourceFingerprint | null;
-    render_manifest: VideoExportManifest | null;
-    uploaded_manifest: Array<{
-        serial_number: string;
-        item_id: string;
-        file_name: string;
-        relative_path: string;
-        public_url: string;
-        uploaded_at: string;
-    }>;
-    created_at: string;
-    updated_at: string;
-};
-
-type VideoToolPayload = {
-    batch: VideoToolBatch;
-    product: {
-        id: string;
-        country_code: string;
-        location_code: string;
-        item_code: string;
-        translations: Array<{
-            language_id: number;
-            name: string;
-            description: string;
-        }>;
-    } | null;
-    items: VideoToolItem[];
-};
-
-type Segment = {
-    sequence: number;
-    sourceIndex: number;
-    startMs: number;
-    endMs: number;
-    deleted?: boolean;
-};
-
-type SourceFingerprint = {
-    name: string;
-    size: number;
-    lastModified: number;
-    durationMs: number;
-};
-
-type VideoExportIntroAsset = {
-    file_name: string;
-    relative_path: string;
-    public_url: string;
-    uploaded_at: string;
-};
-
-type SourceRole = 'WITH_INTRO' | 'NO_INTRO';
-
-type WorkingSource = SourceFingerprint & {
-    sourceIndex: number;
-    role: SourceRole;
-    file: File | null;
-    helperSourceId: string;
-    previewUrl: string;
-    previewUnavailable: boolean;
-};
-
-type VideoToolDraft = {
-    version: 2;
-    batchId: string;
-    sources: Array<{
-        sourceIndex: number;
-        role: SourceRole;
-        fingerprint: SourceFingerprint;
-        helperSourceId: string | null;
-    }>;
-    segments: Segment[];
-    sessionId: string | null;
-    sessionVersion: number | null;
-    pendingSerials: string[];
-    introHelperSourceId: string | null;
-};
-
-type ExportPhase = 'idle' | 'preparing' | 'retrying' | 'rendering' | 'uploading' | 'background_uploading' | 'completed' | 'cancelled' | 'error';
-type HelperStatus = 'checking' | 'ready' | 'unavailable' | 'version_mismatch';
-
-type HelperHealthPayload = {
-    ok: boolean;
-    helper_version?: string;
-    protocol_version?: string;
-    listen_hosts?: string[];
-    storage_root?: string;
-    free_bytes?: number;
-    allowed_origins?: string[];
-    queued_jobs?: number;
-    error?: string;
-};
-
-type HelperDiagnosticStatus = 'ok' | 'blocked' | 'connection failed' | 'bad protocol' | 'cors/pna failed';
-
-type HelperDiagnosticEntry = {
-    url: string;
-    status: HelperDiagnosticStatus;
-    detail: string;
-    mode?: 'standard' | 'pna';
-    httpStatus?: number;
-    protocolVersion?: string;
-};
-
-type HelperSourceUploadPayload = {
-    source_id: string;
-    duration_ms: number;
-    has_audio: boolean;
-    video_codec?: string;
-    format_name?: string;
-    preview_url?: string;
-    fingerprint: SourceFingerprint;
-};
-
-type HelperJobPayload = {
-    job_id?: string;
-    status?: string;
-    processed_count?: number;
-    total_count?: number;
-    error?: string;
-    error_message?: string;
-};
-
-type NoticeTone = 'info' | 'warning' | 'error';
-
-type InlineNotice = {
-    tone: NoticeTone;
-    message: string;
-};
-
-type TimelineViewport = {
-    zoom: number;
-    visibleStartMs: number;
-    visibleDurationMs: number;
-    isPanning: boolean;
-};
-
-const draftKeyFor = (batchId: string) => `video-tool-draft:${batchId}`;
-const padSequence = (sequence: number) => String(sequence).padStart(3, '0');
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-const sleep = (delayMs: number) => new Promise((resolve) => window.setTimeout(resolve, delayMs));
-const getTimelineMinVisibleDuration = (durationMs: number) => {
-    if (!durationMs) {
-        return MIN_SEGMENT_DURATION_MS * 4;
-    }
-
-    return Math.max(1500, Math.min(durationMs, Math.round(durationMs / 40)));
-};
-const clampVisibleDuration = (durationMs: number, proposedVisibleDurationMs: number) => {
-    if (!durationMs) {
-        return 0;
-    }
-
-    return clamp(
-        Math.round(proposedVisibleDurationMs),
-        Math.min(durationMs, getTimelineMinVisibleDuration(durationMs)),
-        durationMs
-    );
-};
-const clampVisibleStart = (durationMs: number, proposedVisibleStartMs: number, visibleDurationMs: number) => clamp(
-    Math.round(proposedVisibleStartMs),
-    0,
-    Math.max(0, durationMs - visibleDurationMs)
-);
-const readStoredPreviewPanelWidth = () => {
-    if (typeof window === 'undefined') {
-        return PREVIEW_PANEL_DEFAULT_WIDTH;
-    }
-
-    const stored = Number(window.localStorage.getItem(PREVIEW_PANEL_WIDTH_STORAGE_KEY));
-    if (!Number.isFinite(stored)) {
-        return PREVIEW_PANEL_DEFAULT_WIDTH;
-    }
-
-    return clamp(Math.round(stored), PREVIEW_PANEL_MIN_WIDTH, PREVIEW_PANEL_MAX_WIDTH);
-};
-const getRulerStepMs = (visibleDurationMs: number) => {
-    const targetStep = Math.max(500, visibleDurationMs / 7);
-    return TIMELINE_RULER_STEPS_MS.find((step) => step >= targetStep) || TIMELINE_RULER_STEPS_MS[TIMELINE_RULER_STEPS_MS.length - 1];
-};
-const buildRulerMarks = (visibleStartMs: number, visibleDurationMs: number) => {
-    if (!visibleDurationMs) {
-        return [];
-    }
-
-    const visibleEndMs = visibleStartMs + visibleDurationMs;
-    const stepMs = getRulerStepMs(visibleDurationMs);
-    const firstMarkMs = Math.floor(visibleStartMs / stepMs) * stepMs;
-    const marks: number[] = [];
-
-    for (let currentMs = firstMarkMs; currentMs <= visibleEndMs + stepMs; currentMs += stepMs) {
-        if (currentMs >= visibleStartMs - stepMs) {
-            marks.push(currentMs);
-        }
-    }
-
-    return marks;
-};
-const getVisibleWindowStyle = (startMs: number, endMs: number, visibleStartMs: number, visibleDurationMs: number) => {
-    const visibleEndMs = visibleStartMs + visibleDurationMs;
-    const clippedStartMs = Math.max(startMs, visibleStartMs);
-    const clippedEndMs = Math.min(endMs, visibleEndMs);
-
-    if (clippedEndMs <= clippedStartMs || visibleDurationMs <= 0) {
-        return null;
-    }
-
-    return {
-        left: `${((clippedStartMs - visibleStartMs) / visibleDurationMs) * 100}%`,
-        width: `${((clippedEndMs - clippedStartMs) / visibleDurationMs) * 100}%`
-    };
-};
-const exportPhaseLabel: Record<ExportPhase, string> = {
-    idle: 'Ожидание',
-    preparing: 'Подготовка',
-    retrying: 'Дозагрузка',
-    rendering: 'Рендер',
-    uploading: 'Загрузка',
-    background_uploading: 'Фоновая загрузка',
-    completed: 'Готово',
-    cancelled: 'Отменено',
-    error: 'Ошибка'
-};
-const sessionStatusLabel: Record<string, string> = {
-    OPEN: 'Черновик',
-    UPLOADING: 'Загрузка',
-    COMPLETED: 'Готово',
-    FAILED: 'Ошибка',
-    CANCELLED: 'Отменено',
-    ABANDONED: 'Зависло'
-};
-
-const formatDuration = (durationMs: number) => {
-    const seconds = Math.max(0, durationMs / 1000);
-    if (seconds < 60) {
-        return `${seconds.toFixed(2)} c`;
-    }
-
-    const minutes = Math.floor(seconds / 60);
-    const restSeconds = seconds - minutes * 60;
-    return `${minutes}:${restSeconds.toFixed(2).padStart(5, '0')}`;
-};
-
-const normalizeSegments = (segments: Array<Omit<Segment, 'sequence'> | Segment>) =>
-    segments
-        .map((segment) => ({
-            sourceIndex: Number.isFinite(segment.sourceIndex) ? Math.max(0, Math.round(segment.sourceIndex)) : 0,
-            startMs: Math.round(segment.startMs),
-            endMs: Math.round(segment.endMs),
-            deleted: Boolean(segment.deleted)
-        }))
-        .sort((left, right) => left.startMs - right.startMs)
-        .map((segment, index) => ({
-            sequence: index,
-            sourceIndex: segment.sourceIndex,
-            startMs: segment.startMs,
-            endMs: segment.endMs,
-            deleted: segment.deleted
-        }));
-
-const createInitialSegments = (durationMs: number, sourceIndex = 0, startOffsetMs = 0) => normalizeSegments([{
-    sourceIndex,
-    startMs: startOffsetMs,
-    endMs: startOffsetMs + durationMs
-}]);
-
-const getSourceTimelineStartMs = (sources: Array<Pick<WorkingSource, 'sourceIndex' | 'durationMs'>>, sourceIndex: number) =>
-    sources
-        .filter((source) => source.sourceIndex < sourceIndex)
-        .reduce((sum, source) => sum + source.durationMs, 0);
-
-const getTotalSourceDurationMs = (sources: Array<Pick<WorkingSource, 'durationMs'>>) =>
-    sources.reduce((sum, source) => sum + source.durationMs, 0);
-
-const getSourceForGlobalMs = (sources: WorkingSource[], globalMs: number) => {
-    let offsetMs = 0;
-    for (const source of sources) {
-        const sourceEndMs = offsetMs + source.durationMs;
-        if (globalMs >= offsetMs && globalMs <= sourceEndMs) {
-            return {
-                source,
-                localMs: clamp(globalMs - offsetMs, 0, source.durationMs)
-            };
-        }
-        offsetMs = sourceEndMs;
-    }
-
-    const fallbackSource = sources.at(-1) ?? null;
-    return fallbackSource
-        ? { source: fallbackSource, localMs: fallbackSource.durationMs }
-        : null;
-};
-
-const hydrateSegmentsFromManifest = (manifest: VideoExportManifest | null, sources: WorkingSource[]) => {
-    if (!manifest) {
-        return [];
-    }
-
-    return normalizeSegments(manifest.segments.map((segment) => {
-        const sourceIndex = segment.source_index ?? 0;
-        const offsetMs = getSourceTimelineStartMs(sources, sourceIndex);
-        return {
-            sourceIndex,
-            startMs: offsetMs + segment.start_ms,
-            endMs: offsetMs + segment.end_ms
-        };
-    }));
-};
-
-const createSourceFromFingerprint = (
-    sourceIndex: number,
-    role: SourceRole,
-    fingerprint: SourceFingerprint,
-    options?: Partial<Pick<WorkingSource, 'file' | 'helperSourceId' | 'previewUrl' | 'previewUnavailable'>>
-): WorkingSource => ({
-    sourceIndex,
-    role,
-    name: fingerprint.name,
-    size: fingerprint.size,
-    lastModified: fingerprint.lastModified,
-    durationMs: fingerprint.durationMs,
-    file: options?.file ?? null,
-    helperSourceId: options?.helperSourceId ?? '',
-    previewUrl: options?.previewUrl ?? '',
-    previewUnavailable: options?.previewUnavailable ?? false
-});
-
-const createSourcesFromManifest = (manifest: VideoExportManifest | null) => {
-    if (!manifest?.sources?.length) {
-        return [];
-    }
-
-    return manifest.sources
-        .sort((left, right) => left.source_index - right.source_index)
-        .map((source) => createSourceFromFingerprint(source.source_index, source.role, source.fingerprint));
-};
-
-const appendInitialSourceSegment = (segments: Segment[], source: WorkingSource, sources: WorkingSource[]) => {
-    const startOffsetMs = getSourceTimelineStartMs(sources, source.sourceIndex);
-    return normalizeSegments([
-        ...segments,
-        {
-            sourceIndex: source.sourceIndex,
-            startMs: startOffsetMs,
-            endMs: startOffsetMs + source.durationMs
-        }
-    ]);
-};
-
-const createFirstSourceSegments = (source: WorkingSource) => createInitialSegments(source.durationMs, source.sourceIndex, 0);
-
-const getSegmentLocalBounds = (segment: Segment, sources: WorkingSource[]) => {
-    const offsetMs = getSourceTimelineStartMs(sources, segment.sourceIndex);
-    return {
-        startMs: Math.max(0, segment.startMs - offsetMs),
-        endMs: Math.max(0, segment.endMs - offsetMs)
-    };
-};
-
-const isSourceBoundaryBetween = (left: Segment | undefined, right: Segment | undefined) =>
-    Boolean(left && right && left.sourceIndex !== right.sourceIndex);
-
-const splitSegmentAt = (segments: Segment[], playheadMs: number) => {
-    const targetIndex = segments.findIndex((segment) => playheadMs > segment.startMs && playheadMs < segment.endMs);
-    if (targetIndex < 0) {
-        return segments;
-    }
-
-    const target = segments[targetIndex];
-    if ((playheadMs - target.startMs) < MIN_SEGMENT_DURATION_MS || (target.endMs - playheadMs) < MIN_SEGMENT_DURATION_MS) {
-        return segments;
-    }
-
-    const nextSegments = [...segments];
-    nextSegments.splice(targetIndex, 1,
-        { sequence: target.sequence, sourceIndex: target.sourceIndex, startMs: target.startMs, endMs: playheadMs, deleted: target.deleted },
-        { sequence: target.sequence + 1, sourceIndex: target.sourceIndex, startMs: playheadMs, endMs: target.endMs, deleted: target.deleted }
-    );
-
-    return normalizeSegments(nextSegments);
-};
-
-const toggleSegmentDeletedAt = (segments: Segment[], index: number) => {
-    if (index < 0 || index >= segments.length) {
-        return segments;
-    }
-
-    return normalizeSegments(segments.map((segment, segmentIndex) => (
-        segmentIndex === index
-            ? { ...segment, deleted: !segment.deleted }
-            : segment
-    )));
-};
-
-const deleteSegmentAt = (segments: Segment[], index: number) => {
-    if (segments.length <= 1 || index < 0 || index >= segments.length) {
-        return segments;
-    }
-
-    const nextSegments = [...segments];
-    const [removed] = nextSegments.splice(index, 1);
-    if (!removed) {
-        return segments;
-    }
-
-    if (index === 0 && nextSegments[0]) {
-        nextSegments[0] = {
-            ...nextSegments[0],
-            startMs: 0
-        };
-    } else if (nextSegments[index - 1]) {
-        nextSegments[index - 1] = {
-            ...nextSegments[index - 1],
-            endMs: removed.endMs
-        };
-    }
-
-    return normalizeSegments(nextSegments);
-};
-
-const moveBoundary = (segments: Segment[], boundaryIndex: number, proposedMs: number) => {
-    const left = segments[boundaryIndex];
-    const right = segments[boundaryIndex + 1];
-    if (!left || !right) {
-        return segments;
-    }
-
-    const clampedBoundary = clamp(
-        Math.round(proposedMs),
-        left.startMs + MIN_SEGMENT_DURATION_MS,
-        right.endMs - MIN_SEGMENT_DURATION_MS
-    );
-
-    const nextSegments = [...segments];
-    nextSegments[boundaryIndex] = {
-        ...left,
-        endMs: clampedBoundary
-    };
-    nextSegments[boundaryIndex + 1] = {
-        ...right,
-        startMs: clampedBoundary
-    };
-
-    return normalizeSegments(nextSegments);
-};
-
-const buildRenderManifest = (segments: Segment[], sources: WorkingSource[], items: VideoToolItem[]): VideoExportManifest => {
-    const activeSegments = segments.filter((segment) => !segment.deleted);
-    const outputItems = items.slice(0, Math.max(0, activeSegments.length - 1));
-    return {
-        manifest_version: 2,
-        sources: sources.map((source) => ({
-            source_index: source.sourceIndex,
-            role: source.role,
-            fingerprint: {
-                name: source.name,
-                size: source.size,
-                lastModified: source.lastModified,
-                durationMs: source.durationMs
-            }
-        })),
-        segments: activeSegments.map((segment, index) => ({
-            sequence: index,
-            source_index: segment.sourceIndex,
-            start_ms: getSegmentLocalBounds(segment, sources).startMs,
-            end_ms: getSegmentLocalBounds(segment, sources).endMs
-        })),
-        outputs: outputItems.map((item, index) => {
-            if (!item.serial_number) {
-                throw new Error(`У Item ${item.id} отсутствует serial_number.`);
-            }
-
-            return {
-                segment_seq: index + 1,
-                serial_number: item.serial_number,
-                item_id: item.id
-            };
-        })
-    };
-};
-
-const cloneSegments = (segments: Segment[]) => segments.map((segment) => ({ ...segment }));
-
-const areSegmentsEqual = (left: Segment[], right: Segment[]) => (
-    left.length === right.length
-    && left.every((segment, index) => {
-        const compared = right[index];
-        return Boolean(compared)
-            && segment.sequence === compared.sequence
-            && segment.sourceIndex === compared.sourceIndex
-            && segment.startMs === compared.startMs
-            && segment.endMs === compared.endMs
-            && Boolean(segment.deleted) === Boolean(compared.deleted);
-    })
-);
-
-const parseDraft = (batchId: string): VideoToolDraft | null => {
-    try {
-        const raw = localStorage.getItem(draftKeyFor(batchId));
-        if (!raw) {
-            return null;
-        }
-
-        const parsed = JSON.parse(raw) as VideoToolDraft;
-        if (!parsed || parsed.batchId !== batchId || parsed.version !== 2 || !Array.isArray(parsed.sources) || !Array.isArray(parsed.segments)) {
-            return null;
-        }
-
-        return {
-            ...parsed,
-            sources: parsed.sources.map((source) => ({
-                sourceIndex: source.sourceIndex,
-                role: source.role,
-                fingerprint: source.fingerprint,
-                helperSourceId: source.helperSourceId ?? null
-            })),
-            segments: normalizeSegments(parsed.segments)
-        };
-    } catch {
-        return null;
-    }
-};
-
-const helperFetch = async (helperUrl: string, input: string, init?: RequestInit, options?: HelperFetchOptions) => {
-    const method = (init?.method || 'GET').toUpperCase();
-    const headers = new Headers(init?.headers);
-    if (method !== 'GET' && method !== 'HEAD') {
-        headers.set('X-Stones-Video-Helper-Version', VIDEO_EXPORT_HELPER_PROTOCOL_VERSION);
-    }
-
-    const requestInit: HelperRequestInit = {
-        ...init,
-        headers
-    };
-
-    if (options?.useTargetAddressSpace && helperUsesLoopback(helperUrl)) {
-        requestInit.targetAddressSpace = 'local';
-    }
-
-    const response = await fetch(`${helperUrl}${input}`, requestInit);
-    return response;
-};
-
-const classifyHelperFetchError = (error: unknown): HelperDiagnosticStatus => {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-        return 'connection failed';
-    }
-
-    if (error instanceof TypeError) {
-        return 'blocked';
-    }
-
-    return 'connection failed';
-};
-
-const getHelperErrorDetail = (error: unknown) => {
-    if (error instanceof Error && error.message) {
-        return error.message;
-    }
-
-    return 'Запрос не выполнен.';
-};
-
-const revokeObjectUrl = (value: string | null) => {
-    if (value?.startsWith('blob:')) {
-        URL.revokeObjectURL(value);
-    }
-};
-
-const isEditableHotkeyTarget = (target: EventTarget | null) => {
-    if (!(target instanceof HTMLElement)) {
-        return false;
-    }
-
-    if (target.isContentEditable) {
-        return true;
-    }
-
-    return Boolean(target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
+    const phase = workflowPhaseLabel[workflow.phase] || workflow.phase;
+    const total = Math.max(workflow.progress.total || 0, 0);
+    const completed = Math.min(Math.max(workflow.progress.completed || 0, 0), total || workflow.progress.completed || 0);
+    const left = Math.max(total - completed, 0);
+    const serial = workflow.summary?.currentSerial ? ` · сейчас ${workflow.summary.currentSerial}` : '';
+    const error = normalizeWorkflowError(workflow.lastError);
+
+    return workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
+        ? `${phase}: загружено ${completed}/${total}, осталось ${left}${serial}${error ? `. ${error}` : ''}`
+        : `${phase}: ${total} фото${error ? `. ${error}` : ''}`;
 };
 
 export function VideoTool() {
@@ -814,6 +201,8 @@ export function VideoTool() {
     const [previewPanelWidth, setPreviewPanelWidth] = useState(readStoredPreviewPanelWidth);
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [previewOpen, setPreviewOpen] = useState(true);
+    const [workflowSnapshot, setWorkflowSnapshot] = useState<StonesMediaWorkflowSnapshot>(emptyWorkflowSnapshot);
+    const completedWorkflowHandledRef = useRef<string | null>(null);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
         visibleStartMs: 0,
@@ -850,6 +239,19 @@ export function VideoTool() {
     );
     const activeProductCount = Math.max(0, activeSegments.length - 1);
     const isDesktopApp = isStonesDesktop();
+    const activeSourceNeedsLocalFile = Boolean(activeSource && (isDesktopApp ? !activeSource.file : (!activeSource.file && !activeSource.helperSourceId)));
+    const batchVideoWorkflow = useMemo(() => (
+        workflowSnapshot.workflows.find((workflow) =>
+            workflow.kind === 'VIDEO_EXPORT_WORKFLOW' && workflow.batchId === batchId
+        ) || null
+    ), [batchId, workflowSnapshot.workflows]);
+    const activeVideoWorkflow = isActiveWorkflow(batchVideoWorkflow) ? batchVideoWorkflow : null;
+    const videoWorkflowStatusText = buildWorkflowStatusText(batchVideoWorkflow);
+    const missingLocalSources = useMemo(
+        () => sources.filter((source) => isDesktopApp ? !source.file : (!source.file && !source.helperSourceId)),
+        [isDesktopApp, sources]
+    );
+    const firstMissingLocalSource = missingLocalSources[0] ?? null;
     const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
     const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
     const helperIssueKind = helperStatus === 'version_mismatch'
@@ -871,7 +273,9 @@ export function VideoTool() {
         : helperStatus === 'version_mismatch'
             ? isDesktopApp ? 'Обновите ZAGARAMI admin.' : 'Обновите ZAGARAMI Video Helper.'
             : '';
-    const exportBlockedReason = helperStatus === 'unavailable'
+    const exportBlockedReason = activeVideoWorkflow
+        ? 'По этой партии уже идет фоновый video workflow.'
+        : helperStatus === 'unavailable'
         ? helperBlockReason
         : helperStatus === 'version_mismatch'
             ? helperBlockReason
@@ -879,6 +283,8 @@ export function VideoTool() {
                 ? isDesktopApp ? 'Проверяем встроенный helper.' : 'Проверяем ZAGARAMI Video Helper.'
         : sources.length === 0 || !durationMs
             ? 'Загрузите исходник.'
+        : firstMissingLocalSource
+            ? `Привяжите локальный исходник: ${firstMissingLocalSource.name}.`
         : activeProductCount <= 0
             ? 'Нужен минимум один товарный фрагмент.'
         : activeProductCount > expectedOutputCount
@@ -1097,49 +503,52 @@ export function VideoTool() {
         setError('');
         setNotice(null);
         try {
-            const response = await authFetch(`/api/batches/${batchId}/video-tool`);
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить данные инструмента.' }));
-                throw new Error(payload.error || 'Не удалось загрузить данные инструмента.');
-            }
-
-            const payload = await response.json() as VideoToolPayload;
+            const payload = await fetchVideoToolPayload(batchId);
             setData(payload);
             const existingDraft = parseDraft(batchId);
             setDraft(existingDraft);
 
             const latestSessionId = existingDraft?.sessionId || payload.batch.video_export?.session_id || '';
             if (latestSessionId) {
-                const sessionResponse = await authFetch(`/api/batches/${batchId}/video-export-sessions/${latestSessionId}`);
-                if (sessionResponse.ok) {
-                    const sessionPayload = await sessionResponse.json() as { session: VideoExportSessionDetails };
-                    setSession(sessionPayload.session);
-                    const manifestSources = createSourcesFromManifest(sessionPayload.session.render_manifest);
+                const latestSession = await fetchVideoExportSession(batchId, latestSessionId);
+                if (latestSession) {
+                    setSession(latestSession);
+                    const manifestSources = createSourcesFromManifest(latestSession.render_manifest).map((source) => {
+                        const draftSource = existingDraft?.sources.find((entry) =>
+                            entry.sourceIndex === source.sourceIndex
+                            && entry.fingerprint.name === source.name
+                            && entry.fingerprint.size === source.size
+                            && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
+                        );
+                        return draftSource?.helperSourceId
+                            ? { ...source, helperSourceId: draftSource.helperSourceId }
+                            : source;
+                    });
                     if (manifestSources.length > 0) {
                         setSources(manifestSources);
                         setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);
-                        const manifestSegments = hydrateSegmentsFromManifest(sessionPayload.session.render_manifest, manifestSources);
+                        const manifestSegments = hydrateSegmentsFromManifest(latestSession.render_manifest, manifestSources);
                         if (manifestSegments.length > 0) {
                             setSegments(manifestSegments);
                             setSelectedSegmentIndex(0);
                             setPlayheadMs(0);
                         }
                     }
-                    const manifestOutputs = sessionPayload.session.render_manifest?.outputs ?? [];
-                    const uploadedSerialSet = new Set(sessionPayload.session.uploaded_manifest.map((entry) => entry.serial_number));
+                    const manifestOutputs = latestSession.render_manifest?.outputs ?? [];
+                    const uploadedSerialSet = new Set(latestSession.uploaded_manifest.map((entry) => entry.serial_number));
                     setPendingSerials(manifestOutputs
                         .map((output) => output.serial_number)
                         .filter((serialNumber) => !uploadedSerialSet.has(serialNumber)));
-                    if (sessionPayload.session.render_manifest?.intro_asset) {
+                    if (latestSession.render_manifest?.intro_asset) {
                         setIntroHelperSourceId('');
                     }
 
-                    if (sessionPayload.session.status === 'ABANDONED') {
+                    if (latestSession.status === 'ABANDONED') {
                         setNotice({
                             tone: 'warning',
                             message: 'Обнаружена зависшая export-session. При следующем экспорте будет выполнен retry-tail только для отсутствующих serial_number.'
                         });
-                    } else if (sessionPayload.session.status === 'CANCELLED') {
+                    } else if (latestSession.status === 'CANCELLED') {
                         setNotice({
                             tone: 'warning',
                             message: 'Предыдущая export-session была отменена вручную. При новом экспорте будет создана новая сессия.'
@@ -1297,9 +706,12 @@ export function VideoTool() {
 
         window.open(VIDEO_HELPER_DOWNLOAD_URL_ARM64, '_blank', 'noopener,noreferrer');
     };
-    const openDesktopStatusCenter = () => {
+    const openDesktopStatusCenter = (focusWorkflowId?: string) => {
         window.dispatchEvent(new CustomEvent('stones:open-status-center', {
-            detail: { tab: 'queue' }
+            detail: {
+                tab: 'queue',
+                ...(focusWorkflowId ? { focus: { type: 'workflow', id: focusWorkflowId } } : {})
+            }
         }));
     };
 
@@ -1307,6 +719,86 @@ export function VideoTool() {
         void loadPageData();
         void checkHelper();
     }, [batchId, checkHelper]);
+
+    useEffect(() => {
+        if (!isDesktopApp) {
+            return;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            return;
+        }
+
+        let cancelled = false;
+        void desktop.getMediaWorkflowSnapshot()
+            .then((snapshot) => {
+                if (!cancelled) {
+                    setWorkflowSnapshot(snapshot);
+                }
+            })
+            .catch(() => undefined);
+
+        const unsubscribe = desktop.subscribeMediaWorkflows(setWorkflowSnapshot);
+        return () => {
+            cancelled = true;
+            unsubscribe();
+        };
+    }, [isDesktopApp]);
+
+    useEffect(() => {
+        if (!batchVideoWorkflow || batchVideoWorkflow.phase !== 'completed' || completedWorkflowHandledRef.current === batchVideoWorkflow.id) {
+            return;
+        }
+
+        completedWorkflowHandledRef.current = batchVideoWorkflow.id;
+        setExportPhase('completed');
+        setExportMessage('Фоновый video workflow завершен. Обновляем данные партии...');
+
+        const sessionId = batchVideoWorkflow.sessionId || session?.session_id || draft?.sessionId || '';
+        if (!sessionId) {
+            void loadPageData();
+            return;
+        }
+
+        void fetchVideoExportSession(batchId, sessionId)
+            .then((latestSession) => {
+                if (!latestSession) {
+                    return loadPageData();
+                }
+
+                setSession(latestSession);
+                if (latestSession.status === 'COMPLETED') {
+                    setData((current) => current ? {
+                        ...current,
+                        batch: {
+                            ...current.batch,
+                            video_export: latestSession
+                        },
+                        items: current.items.map((item) => {
+                            const uploadedEntry = latestSession.uploaded_manifest.find((entry) => entry.item_id === item.id);
+                            return uploadedEntry
+                                ? { ...item, item_video_url: uploadedEntry.public_url }
+                                : item;
+                        })
+                    } : current);
+                    localStorage.removeItem(draftKeyFor(batchId));
+                    setDraft(null);
+                    setPendingSerials([]);
+                    setNotice({
+                        tone: 'info',
+                        message: 'Фоновый video workflow завершен, данные обновлены.'
+                    });
+                }
+            })
+            .catch((workflowRefreshError) => {
+                console.error(workflowRefreshError);
+                setNotice({
+                    tone: 'warning',
+                    message: 'Video workflow завершен, но данные не удалось обновить автоматически. Нажмите «Проверить».'
+                });
+            });
+    }, [batchId, batchVideoWorkflow, draft?.sessionId, session?.session_id]);
 
     useEffect(() => {
         const previousBodyOverflow = document.body.style.overflow;
@@ -1474,72 +966,19 @@ export function VideoTool() {
         syncVideoTime(nextCut ?? durationMs);
     };
 
-    useEffect(() => {
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (isEditableHotkeyTarget(event.target)) {
-                return;
-            }
-
-            if (event.code === 'Space') {
-                event.preventDefault();
-                void togglePlayback();
-                return;
-            }
-
-            const normalizedKey = event.key.toLowerCase();
-            if (event.code === 'KeyC' || normalizedKey === 'c' || normalizedKey === 'с') {
-                event.preventDefault();
-                applySegmentEdit((current) => splitSegmentAt(current, playheadMs));
-                return;
-            }
-
-            if (event.key === 'Delete' && event.shiftKey && segments.length > 0) {
-                event.preventDefault();
-                hardDeleteSelectedSegment();
-                return;
-            }
-
-            if ((event.key === 'Delete' || event.key === 'Backspace') && segments.length > 0) {
-                event.preventDefault();
-                applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex));
-                return;
-            }
-
-            if (event.code === 'KeyZ' || normalizedKey === 'z' || normalizedKey === 'я') {
-                event.preventDefault();
-                restorePreviousSegments();
-                return;
-            }
-
-            if (event.code === 'Equal' || normalizedKey === '=' || normalizedKey === '+') {
-                event.preventDefault();
-                zoomTimelineByFactor(1 / TIMELINE_ZOOM_STEP);
-                return;
-            }
-
-            if (event.code === 'Minus' || normalizedKey === '-' || normalizedKey === '_') {
-                event.preventDefault();
-                zoomTimelineByFactor(TIMELINE_ZOOM_STEP);
-                return;
-            }
-
-            if (event.key === 'ArrowLeft') {
-                event.preventDefault();
-                const previousCut = [...timelineCuts].reverse().find((cutMs) => cutMs < playheadMs - 1);
-                syncVideoTime(previousCut ?? 0);
-                return;
-            }
-
-            if (event.key === 'ArrowRight') {
-                event.preventDefault();
-                const nextCut = timelineCuts.find((cutMs) => cutMs > playheadMs + 1);
-                syncVideoTime(nextCut ?? durationMs);
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [applySegmentEdit, durationMs, hardDeleteSelectedSegment, playheadMs, restorePreviousSegments, selectedSegmentIndex, segments.length, syncVideoTime, timelineCuts, togglePlayback, zoomTimelineByFactor]);
+    useVideoToolHotkeys({
+        applySegmentEdit,
+        durationMs,
+        hardDeleteSelectedSegment,
+        playheadMs,
+        restorePreviousSegments,
+        selectedSegmentIndex,
+        segmentsLength: segments.length,
+        syncVideoTime,
+        timelineCuts,
+        togglePlayback,
+        zoomTimelineByFactor
+    });
 
     useEffect(() => {
         if (!durationMs || !visibleDurationMs) {
@@ -1566,13 +1005,15 @@ export function VideoTool() {
         }
     }, [durationMs, playheadMs, segments, selectedSegmentIndex]);
 
-    const handleSourcePicked = (file: File | null, mode: 'first' | 'append' = 'first') => {
+    const handleSourcePicked = (file: File | null, mode: 'first' | 'append' = 'first', targetSourceIndex?: number) => {
         if (!file) {
             return;
         }
 
-        const sourceIndex = mode === 'first' ? 0 : sources.length;
-        const role: SourceRole = sourceIndex === 0 ? 'WITH_INTRO' : 'NO_INTRO';
+        const sourceIndex = typeof targetSourceIndex === 'number' ? targetSourceIndex : mode === 'first' ? 0 : sources.length;
+        const existingSource = sources.find((source) => source.sourceIndex === sourceIndex) ?? null;
+        const role: SourceRole = existingSource?.role ?? (sourceIndex === 0 ? 'WITH_INTRO' : 'NO_INTRO');
+        const preserveExistingTimeline = Boolean(existingSource && (mode === 'first' || mode === 'append'));
         const nextObjectUrl = URL.createObjectURL(file);
         sourceObjectUrlsRef.current.add(nextObjectUrl);
 
@@ -1583,7 +1024,7 @@ export function VideoTool() {
         setRenderProgress({ processed: 0, total: 0 });
         setIsPlaying(false);
 
-        if (mode === 'first') {
+        if (mode === 'first' && !preserveExistingTimeline) {
             sourceObjectUrlsRef.current.forEach((objectUrl) => {
                 if (objectUrl !== nextObjectUrl) {
                     revokeObjectUrl(objectUrl);
@@ -1598,7 +1039,10 @@ export function VideoTool() {
         }
 
         setActiveSourceIndex(sourceIndex);
-        void importSourceIntoHelper(file, sourceIndex, role, nextObjectUrl);
+        void importSourceIntoHelper(file, sourceIndex, role, nextObjectUrl, {
+            preserveTimeline: preserveExistingTimeline,
+            expectedFingerprint: existingSource
+        });
     };
 
     const handleLoadedMetadata = () => {
@@ -1615,7 +1059,11 @@ export function VideoTool() {
         file: File,
         sourceIndex: number,
         role: SourceRole,
-        fallbackPreviewUrl = ''
+        fallbackPreviewUrl = '',
+        options?: {
+            preserveTimeline?: boolean;
+            expectedFingerprint?: SourceFingerprint | null;
+        }
     ) => {
         try {
             const form = new FormData();
@@ -1637,6 +1085,13 @@ export function VideoTool() {
                 lastModified: payload.fingerprint.lastModified,
                 durationMs: payload.fingerprint.durationMs
             };
+            const expectedFingerprint = options?.expectedFingerprint ?? null;
+            if (expectedFingerprint) {
+                const durationDiff = Math.abs(nextFingerprint.durationMs - expectedFingerprint.durationMs);
+                if (nextFingerprint.size !== expectedFingerprint.size || durationDiff > SOURCE_DURATION_TOLERANCE_MS) {
+                    throw new Error(`Файл не совпадает с восстановленным source "${expectedFingerprint.name}". Выберите исходник с тем же размером и длительностью.`);
+                }
+            }
             let previewUrl = fallbackPreviewUrl;
 
             const codec = (payload.video_codec || '').toLowerCase();
@@ -1650,12 +1105,21 @@ export function VideoTool() {
                 }
             }
 
-            const nextSource = createSourceFromFingerprint(sourceIndex, role, nextFingerprint, {
+            const nextSource = createSourceFromFingerprint(sourceIndex, role, expectedFingerprint || nextFingerprint, {
                 file,
                 helperSourceId: payload.source_id,
                 previewUrl,
                 previewUnavailable: false
             });
+
+            if (options?.preserveTimeline) {
+                setSources((current) => current.map((source) => source.sourceIndex === sourceIndex ? nextSource : source));
+                setNotice({
+                    tone: 'info',
+                    message: `Исходник ${nextSource.name} привязан к восстановленному монтажу.`
+                });
+                return payload.source_id;
+            }
 
             const baseSources = sourceIndex === 0
                 ? []
@@ -1741,27 +1205,12 @@ export function VideoTool() {
             throw new Error('Невозможно создать export-session без данных партии и source fingerprint.');
         }
 
-        const response = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                expected_count: data.batch.expected_output_count,
-                crossfade_ms: CROSSFADE_MS,
-                source_fingerprint: {
-                    name: sources[0].name,
-                    size: sources[0].size,
-                    lastModified: sources[0].lastModified,
-                    durationMs: sources[0].durationMs
-                },
-                render_manifest: manifest
-            })
-        });
-        const payload = await response.json().catch(() => ({ error: 'Не удалось создать сессию экспорта.' }));
-        if (!response.ok || !payload.session) {
-            throw new Error(payload.error || 'Не удалось создать сессию экспорта.');
-        }
-
-        const nextSession = payload.session as VideoExportSessionDetails;
+        const nextSession = await createVideoExportSession(data.batch.id, manifest, data.batch.expected_output_count, {
+            name: sources[0].name,
+            size: sources[0].size,
+            lastModified: sources[0].lastModified,
+            durationMs: sources[0].durationMs
+        }, CROSSFADE_MS);
         setSession(nextSession);
         const uploadedSerialSet = new Set(nextSession.uploaded_manifest.map((entry) => entry.serial_number));
         const nextPendingSerials = manifest.outputs
@@ -1780,15 +1229,7 @@ export function VideoTool() {
             throw new Error('Нет export-session для retry-tail.');
         }
 
-        const response = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${session.session_id}/retry-tail`, {
-            method: 'POST'
-        });
-        const payload = await response.json().catch(() => ({ error: 'Не удалось подготовить retry-tail.' }));
-        if (!response.ok || !payload.session) {
-            throw new Error(payload.error || 'Не удалось подготовить retry-tail.');
-        }
-
-        const typedPayload = payload as RetryTailPayload;
+        const typedPayload = await retryTailVideoExportSession(data.batch.id, session.session_id);
         setSession(typedPayload.session);
         setPendingSerials(typedPayload.pending_serials);
 
@@ -1903,19 +1344,7 @@ export function VideoTool() {
         }
 
         const fileBlob = await fileResponse.blob();
-        const form = new FormData();
-        form.append('file', fileBlob, 'intro.mp4');
-
-        const uploadResponse = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${sessionId}/intro-file`, {
-            method: 'POST',
-            body: form
-        });
-        const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось сохранить intro на сервере.' }));
-        if (!uploadResponse.ok || !uploadPayload.session) {
-            throw new Error(uploadPayload.error || 'Не удалось сохранить intro на сервере.');
-        }
-
-        const updatedSession = uploadPayload.session as VideoExportSessionDetails;
+        const updatedSession = await uploadVideoExportIntroFile(data.batch.id, sessionId, fileBlob);
         setSession(updatedSession);
         return updatedSession;
     };
@@ -2082,20 +1511,7 @@ export function VideoTool() {
             }
 
             const fileBlob = await fileResponse.blob();
-            const form = new FormData();
-            form.append('file', fileBlob, `${serialNumber}.mp4`);
-            form.append('serial_number', serialNumber);
-
-            const uploadResponse = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${sessionId}/files`, {
-                method: 'POST',
-                body: form
-            });
-            const uploadPayload = await uploadResponse.json().catch(() => ({ error: 'Не удалось загрузить финальный ролик на сервер.' }));
-            if (!uploadResponse.ok || !uploadPayload.session) {
-                throw new Error(uploadPayload.error || 'Не удалось загрузить финальный ролик на сервер.');
-            }
-
-            const updatedSession = uploadPayload.session as VideoExportSessionDetails;
+            const updatedSession = await uploadVideoExportFile(data.batch.id, sessionId, serialNumber, fileBlob);
             setSession(updatedSession);
             nextPending = nextPending.filter((item) => item !== serialNumber);
             setPendingSerials(nextPending);
@@ -2108,15 +1524,7 @@ export function VideoTool() {
         }
 
         try {
-            const response = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${session.session_id}/cancel`, {
-                method: 'POST'
-            });
-            const payload = await response.json().catch(() => ({ error: 'Не удалось отменить export-session.' }));
-            if (!response.ok || !payload.session) {
-                throw new Error(payload.error || 'Не удалось отменить export-session.');
-            }
-
-            const nextSession = payload.session as VideoExportSessionDetails;
+            const nextSession = await cancelVideoExportSession(data.batch.id, session.session_id);
             setSession(nextSession);
             setExportPhase('cancelled');
             setExportMessage('Текущая export-session отменена.');
@@ -2189,6 +1597,13 @@ export function VideoTool() {
 
     const handleExport = async () => {
         if (!data) {
+            return;
+        }
+
+        if (activeVideoWorkflow) {
+            setExportPhase('background_uploading');
+            setExportMessage(videoWorkflowStatusText || 'Видео уже обрабатывается в фоне.');
+            openDesktopStatusCenter(activeVideoWorkflow.id);
             return;
         }
 
@@ -2272,29 +1687,28 @@ export function VideoTool() {
                 ? 'Экспорт завершён: все финальные ролики загружены.'
                 : `Частичная выгрузка готова: ${manifest.outputs.length}/${expectedOutputCount}. Можно добавить ещё видео.`);
 
-            const latestSessionResponse = await authFetch(`/api/batches/${data.batch.id}/video-export-sessions/${nextSession.session_id}`);
-        if (latestSessionResponse.ok) {
-            const latestSessionPayload = await latestSessionResponse.json() as { session: VideoExportSessionDetails };
-            setSession(latestSessionPayload.session);
-            if (latestSessionPayload.session.status === 'COMPLETED') {
-                setData((current) => current ? {
-                    ...current,
-                    batch: {
-                        ...current.batch,
-                        video_export: latestSessionPayload.session
-                    },
-                    items: current.items.map((item) => {
-                        const uploadedEntry = latestSessionPayload.session.uploaded_manifest.find((entry) => entry.item_id === item.id);
-                        return uploadedEntry
-                            ? { ...item, item_video_url: uploadedEntry.public_url }
-                            : item;
-                    })
-                } : current);
-                localStorage.removeItem(draftKeyFor(batchId));
-                setDraft(null);
-                setPendingSerials([]);
+            const latestSession = await fetchVideoExportSession(data.batch.id, nextSession.session_id);
+            if (latestSession) {
+                setSession(latestSession);
+                if (latestSession.status === 'COMPLETED') {
+                    setData((current) => current ? {
+                        ...current,
+                        batch: {
+                            ...current.batch,
+                            video_export: latestSession
+                        },
+                        items: current.items.map((item) => {
+                            const uploadedEntry = latestSession.uploaded_manifest.find((entry) => entry.item_id === item.id);
+                            return uploadedEntry
+                                ? { ...item, item_video_url: uploadedEntry.public_url }
+                                : item;
+                        })
+                    } : current);
+                    localStorage.removeItem(draftKeyFor(batchId));
+                    setDraft(null);
+                    setPendingSerials([]);
+                }
             }
-        }
         } catch (exportError) {
             console.error(exportError);
             setExportPhase('error');
@@ -2379,6 +1793,7 @@ export function VideoTool() {
                 : helperProblemDescription;
     const statusMessage = error
         || session?.error_message
+        || (activeVideoWorkflow ? videoWorkflowStatusText : '')
         || exportMessage
         || notice?.message
         || helperIssueMessage
@@ -2556,7 +1971,7 @@ export function VideoTool() {
 	                                    <button
 	                                        type="button"
 	                                        data-testid="helper-open-status-center-top"
-	                                        onClick={openDesktopStatusCenter}
+	                                        onClick={() => openDesktopStatusCenter()}
 	                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
 	                                    >
 	                                        <Clipboard size={14} />
@@ -2573,6 +1988,28 @@ export function VideoTool() {
                                     Проверить снова
                                 </button>
                             </div>
+                        </div>
+                    </section>
+                )}
+
+                {activeVideoWorkflow && (
+                    <section
+                        data-testid="video-workflow-banner"
+                        className="shrink-0 border-b border-sky-400/20 bg-sky-500/10 px-4 py-3"
+                    >
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="min-w-[240px] flex-1">
+                                <p className="text-sm font-semibold text-sky-50">Видео уже обрабатывается в фоне</p>
+                                <p className="mt-1 text-xs leading-5 text-sky-100/80">{videoWorkflowStatusText}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => openDesktopStatusCenter(activeVideoWorkflow.id)}
+                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-sky-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-sky-100"
+                            >
+                                <Clipboard size={14} />
+                                Открыть Status Center
+                            </button>
                         </div>
                     </section>
                 )}
@@ -2595,29 +2032,58 @@ export function VideoTool() {
 
                                     {sources.length > 0 && (
                                         <div data-testid="source-list" className="mt-2 grid gap-1.5">
-                                            {sources.map((source) => (
-                                                <button
-                                                    key={`source-${source.sourceIndex}`}
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setActiveSourceIndex(source.sourceIndex);
-                                                        syncVideoTime(getSourceTimelineStartMs(sources, source.sourceIndex));
-                                                    }}
-                                                    className={`w-full min-w-0 overflow-hidden rounded-lg px-2 py-1.5 text-left transition ${
-                                                        activeSourceIndex === source.sourceIndex
-                                                            ? 'bg-emerald-400/12 ring-1 ring-emerald-400/45'
-                                                            : 'bg-zinc-950/70 hover:bg-zinc-900'
-                                                    }`}
-                                                >
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span className="min-w-0 truncate text-xs font-medium text-zinc-100">{source.name}</span>
-                                                        <span className="shrink-0 rounded-full bg-zinc-800/80 px-1.5 py-0.5 text-[8px] uppercase tracking-[0.1em] text-zinc-400">
-                                                            {source.role === 'WITH_INTRO' ? 'с интро' : 'без интро'}
-                                                        </span>
+                                            {sources.map((source) => {
+                                                const sourceNeedsLocalFile = isDesktopApp ? !source.file : (!source.file && !source.helperSourceId);
+                                                return (
+                                                    <div
+                                                        key={`source-${source.sourceIndex}`}
+                                                        className={`rounded-lg transition ${
+                                                            activeSourceIndex === source.sourceIndex
+                                                                ? 'bg-emerald-400/12 ring-1 ring-emerald-400/45'
+                                                                : sourceNeedsLocalFile
+                                                                    ? 'bg-amber-500/10 ring-1 ring-amber-300/25'
+                                                                    : 'bg-zinc-950/70'
+                                                        }`}
+                                                    >
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setActiveSourceIndex(source.sourceIndex);
+                                                                syncVideoTime(getSourceTimelineStartMs(sources, source.sourceIndex));
+                                                            }}
+                                                            className="w-full min-w-0 overflow-hidden px-2 py-1.5 text-left"
+                                                        >
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <span className="min-w-0 truncate text-xs font-medium text-zinc-100">{source.name}</span>
+                                                                <span className="shrink-0 rounded-full bg-zinc-800/80 px-1.5 py-0.5 text-[8px] uppercase tracking-[0.1em] text-zinc-400">
+                                                                    {source.role === 'WITH_INTRO' ? 'с интро' : 'без интро'}
+                                                                </span>
+                                                            </div>
+                                                            <p className="mt-0.5 text-[10px] text-zinc-500">{formatDuration(source.durationMs)}</p>
+                                                            {sourceNeedsLocalFile && (
+                                                                <p className="mt-1 text-[10px] text-amber-100">Нужен локальный файл для продолжения.</p>
+                                                            )}
+                                                        </button>
+                                                        {sourceNeedsLocalFile && (
+                                                            <label className="mx-2 mb-2 inline-flex cursor-pointer items-center rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-1 text-[10px] font-medium text-amber-50 transition hover:bg-amber-300/15">
+                                                                <Upload size={11} />
+                                                                <span className="ml-1">Привязать файл</span>
+                                                                <input
+                                                                    data-testid={`bind-source-input-${source.sourceIndex}`}
+                                                                    aria-label={`Привязать исходник ${source.name}`}
+                                                                    type="file"
+                                                                    accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
+                                                                    className="hidden"
+                                                                    onChange={(event) => {
+                                                                        handleSourcePicked(event.target.files?.[0] || null, source.sourceIndex === 0 ? 'first' : 'append', source.sourceIndex);
+                                                                        event.currentTarget.value = '';
+                                                                    }}
+                                                                />
+                                                            </label>
+                                                        )}
                                                     </div>
-                                                    <p className="mt-0.5 text-[10px] text-zinc-500">{formatDuration(source.durationMs)}</p>
-                                                </button>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
                                     )}
 
@@ -2735,7 +2201,7 @@ export function VideoTool() {
 	                                                    <button
 	                                                        type="button"
 	                                                        data-testid="helper-open-status-center"
-	                                                        onClick={openDesktopStatusCenter}
+		                                                        onClick={() => openDesktopStatusCenter()}
 	                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
 	                                                    >
 	                                                        <Clipboard size={14} />
@@ -2824,6 +2290,11 @@ export function VideoTool() {
                                         {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading' || exportPhase === 'background_uploading') && (
                                             <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                                 {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
+                                            </div>
+                                        )}
+                                        {batchVideoWorkflow && (
+                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
+                                                Workflow: {workflowPhaseLabel[batchVideoWorkflow.phase] || batchVideoWorkflow.phase}
                                             </div>
                                         )}
                                         {session && (
@@ -2973,7 +2444,7 @@ export function VideoTool() {
                                             className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40"
                                         >
                                             <HardDriveDownload size={14} />
-                                            Экспорт
+                                            {activeVideoWorkflow ? 'В фоне' : 'Экспорт'}
                                         </Button>
                                         {canCancelSession && (
                                             <Button
@@ -3308,6 +2779,8 @@ export function VideoTool() {
                                                 <p className="text-base font-medium text-zinc-100">
                                                     {sourceUrl && sourcePreviewUnavailable
                                                         ? 'Превью недоступно'
+                                                        : activeSourceNeedsLocalFile && activeSource
+                                                            ? 'Монтаж восстановлен'
                                                         : helperNeedsAttention
                                                             ? helperProblemTitle
                                                             : 'Загрузите вертикальный исходник'}
@@ -3327,6 +2800,8 @@ export function VideoTool() {
                                                     <p className="mt-2 text-sm text-zinc-400">
                                                         {sourceUrl && sourcePreviewUnavailable
                                                             ? 'MOV/H.265 уже принят helper. Можно резать таймлайн и запускать экспорт без превью.'
+                                                            : activeSourceNeedsLocalFile && activeSource
+                                                                ? `Для продолжения привяжите локальный исходник: ${activeSource.name}. Нарезка уже восстановлена.`
                                                             : 'После загрузки появятся просмотр и навигация по стыкам.'}
                                                     </p>
                                                 )}

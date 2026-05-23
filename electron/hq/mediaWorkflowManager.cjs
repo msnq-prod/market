@@ -321,13 +321,21 @@ class MediaWorkflowManager extends EventEmitter {
         ) || null;
     }
 
+    findActiveBatchWorkflow(kind, batchId) {
+        return this.workflows.find((workflow) =>
+            workflow.kind === kind
+            && workflow.batchId === batchId
+            && !TERMINAL_PHASES.has(workflow.phase)
+        ) || null;
+    }
+
     async startPhotoApplyWorkflow(payload) {
         const manifestHash = createWorkflowHash({
             batchId: payload.batchId,
             basePhotoStateToken: payload.basePhotoStateToken,
             items: payload.items
         });
-        const duplicate = this.findDuplicate('PHOTO_APPLY_WORKFLOW', payload.batchId, manifestHash);
+        const duplicate = this.findActiveBatchWorkflow('PHOTO_APPLY_WORKFLOW', payload.batchId);
         if (duplicate) {
             return buildWorkflowSnapshot(duplicate);
         }
@@ -748,6 +756,46 @@ class MediaWorkflowManager extends EventEmitter {
         return session;
     }
 
+    async reopenVideoSessionTail(workflow) {
+        if (!workflow.sessionId) {
+            return null;
+        }
+
+        const payload = await this.apiRequest(
+            `/api/batches/${encodeURIComponent(workflow.batchId)}/video-export-sessions/${encodeURIComponent(workflow.sessionId)}/retry-tail`,
+            { method: 'POST' },
+            'Не удалось восстановить export-session.'
+        );
+        const session = payload?.session || null;
+        if (!session) {
+            throw new Error('Сервер не вернул export-session.');
+        }
+
+        workflow.sessionVersion = session.version || workflow.sessionVersion;
+        const uploadedManifest = Array.isArray(session.uploaded_manifest) ? session.uploaded_manifest : [];
+        const confirmed = uploadedManifest
+            .map((entry) => String(entry.serial_number || '').trim().toUpperCase())
+            .filter(Boolean);
+        const confirmedSet = new Set(confirmed);
+        const pendingSerials = Array.isArray(payload.pending_serials)
+            ? payload.pending_serials.map((serial) => String(serial || '').trim().toUpperCase()).filter(Boolean)
+            : (Array.isArray(session.render_manifest?.outputs) ? session.render_manifest.outputs : [])
+                .map((output) => String(output.serial_number || '').trim().toUpperCase())
+                .filter((serial) => serial && !confirmedSet.has(serial));
+
+        workflow.confirmedSerials = confirmed;
+        workflow.pendingSerials = pendingSerials;
+        for (const [serial, jobId] of Object.entries(workflow.uploadJobIds)) {
+            if (confirmedSet.has(serial) || !jobId) {
+                delete workflow.uploadJobIds[serial];
+            }
+        }
+
+        workflow.updatedAt = nowIso();
+        await this.markChanged();
+        return session;
+    }
+
     getMediaQueueJob(jobId) {
         return this.mediaQueue.getSnapshot().jobs.find((job) => job.id === jobId) || null;
     }
@@ -1143,7 +1191,7 @@ class MediaWorkflowManager extends EventEmitter {
             if (workflow.phase === 'queued' || workflow.phase === 'preparing_session') {
                 await this.setWorkflowPhase(workflow, 'preparing_session', { nextAttemptAt: 0, lastError: '' });
                 const session = workflow.sessionId
-                    ? await this.reconcileVideoSession(workflow)
+                    ? await this.reopenVideoSessionTail(workflow)
                     : await this.ensureVideoSession(workflow);
                 if (workflow.confirmedSerials.length >= workflow.expectedCount) {
                     await this.cleanupWorkflowFiles(workflow);
@@ -1152,6 +1200,9 @@ class MediaWorkflowManager extends EventEmitter {
                 }
                 if (!session) {
                     await this.ensureVideoSession(workflow);
+                }
+                if (workflow.phase === 'preparing_session') {
+                    await this.setWorkflowPhase(workflow, 'importing_sources', { nextAttemptAt: 0, lastError: '' });
                 }
             }
 

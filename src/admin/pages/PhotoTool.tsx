@@ -14,8 +14,15 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { Button } from '../components/ui';
+import { DesktopStatusCenter } from '../components/DesktopStatusCenter';
 import { authFetch } from '../../utils/authFetch';
-import { getStonesDesktop, isStonesDesktop, stageDesktopFile } from '../../utils/desktop';
+import {
+    getStonesDesktop,
+    isStonesDesktop,
+    stageDesktopFile,
+    type StonesMediaWorkflow,
+    type StonesMediaWorkflowSnapshot
+} from '../../utils/desktop';
 
 type PhotoToolBatch = {
     id: string;
@@ -117,6 +124,43 @@ const PHOTO_TOOL_RAW_EXTENSIONS = new Set(['arw', 'cr2', 'cr3', 'dng', 'nef', 'o
 const PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS = new Set(['heic', 'heif']);
 const PHOTO_TOOL_ALLOWED_FORMAT_LABEL = 'JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP, HEIC/HEIF';
 const PHOTO_TOOL_THUMBNAIL_MAX_SIZE = 160;
+const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = { workflows: [], counts: {} };
+const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed']);
+
+const workflowPhaseLabel: Record<string, string> = {
+    queued: 'В очереди',
+    converting: 'Конвертация',
+    uploading: 'Загрузка',
+    verifying: 'Проверка',
+    paused_offline: 'Пауза: нет связи с сервером',
+    auth_required: 'Нужен повторный вход',
+    failed: 'Ошибка',
+    completed: 'Готово',
+    cancelled: 'Отменено'
+};
+
+const normalizeWorkflowError = (value: string | null | undefined) => {
+    const message = String(value || '').trim();
+    if (!message) return '';
+    if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline/i.test(message)) {
+        return 'Сервер недоступен. Workflow продолжит работу после восстановления связи.';
+    }
+    if (/401|403|auth|token|войти/i.test(message)) {
+        return 'Нужно войти в HQ заново. После входа workflow продолжит работу.';
+    }
+    return message;
+};
+
+const isActiveWorkflow = (workflow: StonesMediaWorkflow | null | undefined) =>
+    Boolean(workflow && !terminalWorkflowPhases.has(workflow.phase));
+
+const buildWorkflowStatusText = (workflow: StonesMediaWorkflow | null | undefined) => {
+    if (!workflow) return '';
+    const phase = workflowPhaseLabel[workflow.phase] || workflow.phase;
+    const total = Math.max(workflow.progress.total || 0, 0);
+    const error = normalizeWorkflowError(workflow.lastError);
+    return `${phase}: ${total} фото${error ? `. ${error}` : ''}`;
+};
 
 const padItemSeq = (value: number | null) => value == null ? '' : String(value).padStart(3, '0');
 const draftKeyFor = (batchId: string) => `photo-tool-draft:${batchId}`;
@@ -614,6 +658,7 @@ export function PhotoTool() {
     const [successMessage, setSuccessMessage] = useState('');
     const [sidebarControlsOpen, setSidebarControlsOpen] = useState(true);
     const [importProgress, setImportProgress] = useState<PhotoImportProgress | null>(null);
+    const [workflowSnapshot, setWorkflowSnapshot] = useState<StonesMediaWorkflowSnapshot>(emptyWorkflowSnapshot);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const photosRef = useRef<WorkingPhoto[]>([]);
     const activePhotoIdRef = useRef('');
@@ -621,6 +666,25 @@ export function PhotoTool() {
     const itemSeqsRef = useRef<number[]>([]);
     const baselineSignatureRef = useRef('');
     const draftFileSignatureRef = useRef('');
+    const completedWorkflowHandledRef = useRef<string | null>(null);
+    const isDesktopApp = isStonesDesktop();
+
+    const batchPhotoWorkflow = useMemo(() => (
+        workflowSnapshot.workflows.find((workflow) =>
+            workflow.kind === 'PHOTO_APPLY_WORKFLOW' && workflow.batchId === batchId
+        ) || null
+    ), [batchId, workflowSnapshot.workflows]);
+    const activePhotoWorkflow = isActiveWorkflow(batchPhotoWorkflow) ? batchPhotoWorkflow : null;
+    const photoWorkflowStatusText = buildWorkflowStatusText(batchPhotoWorkflow);
+
+    const openDesktopStatusCenter = useCallback((focusWorkflowId?: string) => {
+        window.dispatchEvent(new CustomEvent('stones:open-status-center', {
+            detail: {
+                tab: 'queue',
+                ...(focusWorkflowId ? { focus: { type: 'workflow', id: focusWorkflowId } } : {})
+            }
+        }));
+    }, []);
 
     useEffect(() => {
         photosRef.current = photos;
@@ -642,70 +706,116 @@ export function PhotoTool() {
         });
     }, []);
 
-    useEffect(() => {
-        let cancelled = false;
-
-        const load = async () => {
+    const loadPhotoTool = useEffectEvent(async (options?: { restoreDraft?: boolean; showLoading?: boolean; successMessage?: string }) => {
+        const restoreDraft = options?.restoreDraft ?? true;
+        if (options?.showLoading ?? true) {
             setLoading(true);
-            setError('');
-            setPhotoConflictError(false);
+        }
+        setError('');
+        setPhotoConflictError(false);
+        if (!options?.successMessage) {
             setSuccessMessage('');
+        }
 
-            try {
-                const response = await authFetch(`/api/batches/${batchId}/photo-tool`);
-                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить photo-tool.' }));
-                if (!response.ok) {
-                    throw new Error(payload.error || 'Не удалось загрузить photo-tool.');
-                }
-
-                const typedPayload = payload as PhotoToolPayload;
-                const restoredDraft = await restoreDraftState(batchId, typedPayload).catch(() => null);
-                const nextPhotos = restoredDraft?.photos.length
-                    ? restoredDraft.photos
-                    : typedPayload.items
-                        .filter((item) => Boolean(item.item_photo_url))
-                        .map((item) => buildPersistedPhoto(item));
-
-                if (cancelled) {
-                    return;
-                }
-
-                photosRef.current.forEach((photo) => {
-                    if (photo.source === 'local') {
-                        revokeLocalPhotoUrls(photo);
-                    }
-                });
-                baselineSignatureRef.current = buildBaselineSignature(typedPayload);
-                draftFileSignatureRef.current = restoredDraft?.photos.length ? buildDraftFileSignature(nextPhotos) : '';
-                setData(typedPayload);
-                setPhotos(nextPhotos);
-                setCarouselDirection(0);
-                setAssignmentDraft(null);
-                setActivePhotoId(restoredDraft?.activePhotoId || nextPhotos[0]?.id || '');
-                setSortMode(restoredDraft?.sortMode || 'name');
-                setSortDescending(restoredDraft?.sortDescending || false);
-                setAssignmentDescending(restoredDraft?.assignmentDescending || false);
-                if (restoredDraft?.warningMessage) {
-                    setSuccessMessage(restoredDraft.warningMessage);
-                }
-            } catch (loadError) {
-                console.error(loadError);
-                if (!cancelled) {
-                    setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить photo-tool.');
-                }
-            } finally {
-                if (!cancelled) {
-                    setLoading(false);
-                }
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/photo-tool`);
+            const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить photo-tool.' }));
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось загрузить photo-tool.');
             }
-        };
 
-        void load();
+            const typedPayload = payload as PhotoToolPayload;
+            const restoredDraft = restoreDraft
+                ? await restoreDraftState(batchId, typedPayload).catch(() => null)
+                : null;
+            const nextPhotos = restoredDraft?.photos.length
+                ? restoredDraft.photos
+                : typedPayload.items
+                    .filter((item) => Boolean(item.item_photo_url))
+                    .map((item) => buildPersistedPhoto(item));
+            const nextSortMode = restoredDraft?.sortMode || 'name';
+            const nextSortDescending = restoredDraft?.sortDescending || false;
+            const nextAssignmentDescending = restoredDraft?.assignmentDescending || false;
 
+            photosRef.current.forEach((photo) => {
+                if (photo.source === 'local') {
+                    revokeLocalPhotoUrls(photo);
+                }
+            });
+            baselineSignatureRef.current = restoredDraft
+                ? buildBaselineSignature(typedPayload)
+                : buildCurrentSignature(
+                    nextPhotos,
+                    nextSortMode,
+                    nextSortDescending,
+                    nextAssignmentDescending
+                );
+            draftFileSignatureRef.current = restoredDraft?.photos.length ? buildDraftFileSignature(nextPhotos) : '';
+            setData(typedPayload);
+            setPhotos(nextPhotos);
+            setCarouselDirection(0);
+            setAssignmentDraft(null);
+            setActivePhotoId(restoredDraft?.activePhotoId || nextPhotos[0]?.id || '');
+            setSortMode(nextSortMode);
+            setSortDescending(nextSortDescending);
+            setAssignmentDescending(nextAssignmentDescending);
+            if (options?.successMessage || restoredDraft?.warningMessage) {
+                setSuccessMessage(options?.successMessage || restoredDraft?.warningMessage || '');
+            }
+        } catch (loadError) {
+            console.error(loadError);
+            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить photo-tool.');
+        } finally {
+            setLoading(false);
+        }
+    });
+
+    useEffect(() => {
+        void loadPhotoTool({ restoreDraft: true, showLoading: true });
+    }, [batchId]);
+
+    useEffect(() => {
+        if (!isDesktopApp) {
+            return;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            return;
+        }
+
+        let cancelled = false;
+        void desktop.getMediaWorkflowSnapshot()
+            .then((snapshot) => {
+                if (!cancelled) {
+                    setWorkflowSnapshot(snapshot);
+                }
+            })
+            .catch(() => undefined);
+
+        const unsubscribe = desktop.subscribeMediaWorkflows(setWorkflowSnapshot);
         return () => {
             cancelled = true;
+            unsubscribe();
         };
-    }, [batchId]);
+    }, [isDesktopApp]);
+
+    useEffect(() => {
+        if (!batchPhotoWorkflow || batchPhotoWorkflow.phase !== 'completed' || completedWorkflowHandledRef.current === batchPhotoWorkflow.id) {
+            return;
+        }
+
+        completedWorkflowHandledRef.current = batchPhotoWorkflow.id;
+        void clearDraftStorage(batchId)
+            .catch(() => undefined)
+            .finally(() => {
+                void loadPhotoTool({
+                    restoreDraft: false,
+                    showLoading: false,
+                    successMessage: 'Фоновое сохранение фото завершено, данные обновлены.'
+                });
+            });
+    }, [batchId, batchPhotoWorkflow]);
 
     const itemSeqs = useMemo(() => data?.items.map((item) => item.item_seq) ?? [], [data]);
     useEffect(() => {
@@ -1038,6 +1148,14 @@ export function PhotoTool() {
             return;
         }
 
+        if (activePhotoWorkflow) {
+            setError('');
+            setPhotoConflictError(false);
+            setSuccessMessage(photoWorkflowStatusText || 'Фоновое сохранение уже выполняется.');
+            openDesktopStatusCenter(activePhotoWorkflow.id);
+            return;
+        }
+
         if (!canSave) {
             setError('Нужно назначить уникальную фотографию для каждой позиции партии.');
             return;
@@ -1097,7 +1215,7 @@ export function PhotoTool() {
                 fileIndex += 1;
             }
 
-            if (isStonesDesktop() && localPhotosForQueue.length > 0) {
+            if (isDesktopApp && localPhotosForQueue.length > 0) {
                 const desktop = getStonesDesktop();
                 if (!desktop) {
                     throw new Error('Desktop queue недоступна.');
@@ -1206,7 +1324,7 @@ export function PhotoTool() {
             let message = saveError instanceof Error ? saveError.message : 'Не удалось сохранить назначения photo-tool.';
             if (code === 'PHOTO_TOOL_STATE_STALE') {
                 setPhotoConflictError(true);
-                message = 'Photo Tool устарел: партия изменена в другом окне или фоновой загрузкой. Локальный черновик сохранен, обновите инструмент и проверьте назначения.';
+                message = 'Данные photo-tool изменились после открытия страницы. Обновите инструмент и повторите сохранение. Локальный черновик сохранен, проверьте назначения перед повторным сохранением.';
             } else {
                 setPhotoConflictError(false);
             }
@@ -1383,23 +1501,47 @@ export function PhotoTool() {
                                 <StatusPill label="Назначено" value={`${Math.min(itemSeqs.length, assignedCount)}/${itemSeqs.length}`} tone={canSave ? 'success' : 'default'} />
                                 <StatusPill label="Без номера" value={String(unassignedCount)} tone={unassignedCount > 0 ? 'warning' : 'default'} />
                                 <StatusPill label="Лишние" value={String(extraPhotoCount)} tone="default" />
+                                {batchPhotoWorkflow && (
+                                    <StatusPill
+                                        label="Workflow"
+                                        value={workflowPhaseLabel[batchPhotoWorkflow.phase] || batchPhotoWorkflow.phase}
+                                        tone={activePhotoWorkflow ? 'warning' : batchPhotoWorkflow.phase === 'completed' ? 'success' : 'default'}
+                                    />
+                                )}
+                                {isDesktopApp && <DesktopStatusCenter />}
                             </div>
 
                             <button
                                 type="button"
                                 data-testid="photo-save"
                                 onClick={() => void handleSave()}
-                                disabled={!canSave || saving || isImportingPhotos}
-                                className={`inline-flex h-11 items-center justify-center gap-2 rounded-full border px-5 text-sm font-semibold transition ${canSave && !saving && !isImportingPhotos
+                                disabled={(!canSave && !activePhotoWorkflow) || saving || isImportingPhotos}
+                                className={`inline-flex h-11 items-center justify-center gap-2 rounded-full border px-5 text-sm font-semibold transition ${(canSave || activePhotoWorkflow) && !saving && !isImportingPhotos
                                     ? 'border-sky-300/40 bg-sky-400 text-[#061018] shadow-[0_16px_44px_rgba(56,189,248,0.24)] hover:bg-sky-300'
                                     : 'border-white/10 bg-white/[0.06] text-white/42'
                                     }`}
                             >
                                 {saving ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
-                                {saving ? 'Сохраняем' : 'Сохранить'}
+                                {saving ? 'Сохраняем' : activePhotoWorkflow ? 'В фоне' : 'Сохранить'}
                             </button>
                         </div>
                     </header>
+
+                    {activePhotoWorkflow && (
+                        <section
+                            data-testid="photo-workflow-banner"
+                            className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-400/20 bg-sky-500/10 px-5 py-3 text-sm text-sky-50 xl:px-8"
+                        >
+                            <span>{photoWorkflowStatusText || 'Фоновое сохранение фото выполняется.'}</span>
+                            <button
+                                type="button"
+                                onClick={() => openDesktopStatusCenter(activePhotoWorkflow.id)}
+                                className="rounded-xl bg-sky-200 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-sky-100"
+                            >
+                                Открыть Status Center
+                            </button>
+                        </section>
+                    )}
 
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="flex min-h-0 flex-col border-r border-white/5 bg-[#14171b]">
@@ -1418,15 +1560,15 @@ export function PhotoTool() {
                                         });
                                     }}
                                 />
-                                <Button
-                                    variant="secondary"
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={isImportingPhotos}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 text-sm text-white hover:bg-white/[0.1]"
-                                >
-                                    {isImportingPhotos ? <LoaderCircle size={16} className="animate-spin" /> : <ImagePlus size={16} />}
-                                    {isImportingPhotos ? 'Обработка...' : 'Добавить фото'}
-                                </Button>
+	                                <Button
+	                                    variant="secondary"
+	                                    onClick={() => fileInputRef.current?.click()}
+	                                    disabled={isImportingPhotos || Boolean(activePhotoWorkflow)}
+	                                    className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 text-sm text-white hover:bg-white/[0.1]"
+	                                >
+	                                    {isImportingPhotos ? <LoaderCircle size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+	                                    {isImportingPhotos ? 'Обработка...' : activePhotoWorkflow ? 'Сохранение в фоне' : 'Добавить фото'}
+	                                </Button>
 
                                 {importProgress && (
                                     <PhotoImportPanel progress={importProgress} />

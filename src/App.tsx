@@ -21,6 +21,8 @@ import { Brandbook } from './admin/pages/Brandbook'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
 
+const VideoTool = React.lazy(() => import('./admin/pages/VideoTool').then((module) => ({ default: module.VideoTool })))
+
 type StonesDebugWindow = Window & {
   __STONES_DEBUG__?: {
     orbit?: {
@@ -587,7 +589,6 @@ import { Orders } from './admin/pages/Orders'
 import { Clients } from './admin/pages/Clients'
 import { SalesInventory } from './admin/pages/SalesInventory'
 import { SalesHistory } from './admin/pages/SalesHistory'
-import { VideoTool } from './admin/pages/VideoTool'
 import { VideoToolLauncher } from './admin/pages/VideoToolLauncher'
 import { PhotoTool } from './admin/pages/PhotoTool'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
@@ -614,7 +615,9 @@ function App() {
           path="/admin/video-tool/:batchId"
           element={(
             <AdminFullscreenRoute>
-              <VideoTool />
+              <Suspense fallback={null}>
+                <VideoTool />
+              </Suspense>
             </AdminFullscreenRoute>
           )}
         />

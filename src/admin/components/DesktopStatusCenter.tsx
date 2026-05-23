@@ -82,11 +82,28 @@ const workflowPhaseLabel: Record<string, string> = {
     rendering_outputs: 'Рендер',
     queueing_uploads: 'Постановка upload',
     verifying_uploads: 'Проверка upload',
-    paused_offline: 'Пауза: offline',
+    paused_offline: 'Пауза: нет связи',
     auth_required: 'Нужен вход',
     failed: 'Ошибка',
     completed: 'Готово',
     cancelled: 'Отменено'
+};
+
+const normalizeQueueOrWorkflowError = (value: string | null | undefined) => {
+    const message = String(value || '').trim();
+    if (!message) {
+        return '';
+    }
+
+    if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline|timeout/i.test(message)) {
+        return 'Сервер недоступен. Задача продолжит работу после восстановления связи.';
+    }
+
+    if (/401|403|auth|token|войти/i.test(message)) {
+        return 'Нужно войти в HQ заново. После входа задача продолжит работу.';
+    }
+
+    return message;
 };
 
 const formatBytes = (value: number | null | undefined) => {
@@ -275,6 +292,7 @@ function JobRow({
     const isPhotoToolStale = job.blockingReason === 'photo_tool_state_stale';
     const canRetry = !isPhotoToolStale && (job.status === 'failed' || job.status === 'auth_required');
     const canCancel = job.status === 'queued' || job.status === 'retrying' || job.status === 'failed' || job.status === 'auth_required';
+    const normalizedLastError = normalizeQueueOrWorkflowError(job.lastError);
 
     return (
         <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
@@ -328,7 +346,7 @@ function JobRow({
                 <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
                     {isPhotoToolStale
                         ? 'Партия была изменена после постановки этой фоновой задачи. Повтор этой задачи небезопасен: откройте Photo Tool, проверьте актуальные назначения и сохраните заново. Если задача больше не нужна, нажмите “Убрать”.'
-                        : job.lastError}
+                        : normalizedLastError}
                 </p>
             ) : null}
         </div>
@@ -355,9 +373,13 @@ function WorkflowRow({
             : workflow.phase === 'completed'
                 ? 'border-emerald-400/20 bg-emerald-400/10'
                 : 'border-sky-400/20 bg-sky-400/10';
+    const total = Math.max(workflow.progress.total || 0, 0);
+    const completed = Math.min(Math.max(workflow.progress.completed || 0, 0), total || workflow.progress.completed || 0);
+    const left = Math.max(total - completed, 0);
     const detail = workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-        ? `${workflow.progress.completed}/${workflow.progress.total} serial`
-        : `${workflow.progress.total} фото`;
+        ? `загружено ${completed}/${total}, осталось ${left}`
+        : `${total} фото`;
+    const normalizedLastError = normalizeQueueOrWorkflowError(workflow.lastError);
 
     return (
         <div className={`rounded-2xl border p-3 ${tone}`}>
@@ -369,15 +391,15 @@ function WorkflowRow({
                     <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">{workflowPhaseLabel[workflow.phase] || workflow.phase}</p>
                     <p className="mt-1 text-xs text-gray-300">
                         Batch: {workflow.summary?.batchLabel || workflow.batchId.slice(0, 8)} · {workflow.summary?.subtitle || detail}
-                        {workflow.summary?.currentSerial ? ` · serial ${workflow.summary.currentSerial}` : ''}
+                        {workflow.summary?.currentSerial ? ` · сейчас ${workflow.summary.currentSerial}` : ''}
                     </p>
                     {workflow.nextAttemptAt ? (
                         <p className="mt-1 text-xs text-gray-500">Следующая попытка: {new Date(workflow.nextAttemptAt).toLocaleString()}</p>
                     ) : null}
                     {workflow.stuck ? <p className="mt-1 text-xs font-semibold text-amber-100">Возможный stuck</p> : null}
-                    {workflow.lastError ? (
+                    {normalizedLastError ? (
                         <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
-                            {workflow.lastError}
+                            {normalizedLastError}
                         </p>
                     ) : null}
                 </div>
