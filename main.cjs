@@ -259,7 +259,7 @@ const resolveDesktopHelperVersion = () => {
 };
 
 const startHelper = async () => {
-    const helperModule = await import(pathToFileURL(path.join(__dirname, '..', 'server.js')).href);
+    const helperModule = await import(pathToFileURL(path.join(__dirname, 'video-export-helper', 'server.js')).href);
     const allowedOrigins = await readBundledAllowedOrigins();
     const nextController = await helperModule.startVideoExportHelperServer({
         storageRoot: getStorageRoot(),

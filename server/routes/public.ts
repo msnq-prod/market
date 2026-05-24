@@ -1,6 +1,8 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import QRCode from 'qrcode';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { IS_LOCAL_AUTH_ENVIRONMENT } from '../config/env.ts';
 import { buildCloneUrl } from '../utils/cloneUrls.ts';
 import { getDefaultProductTranslation, isPublicPassportAvailable, looksLikeLegacyItemSerial } from '../utils/collectionWorkflow.ts';
@@ -9,11 +11,12 @@ import {
     createRateLimitMiddleware,
     writeSecurityAuditLog
 } from '../services/security.ts';
+import { logDomainEvent } from '../services/logger.ts';
+import { prisma } from '../services/prisma.ts';
 import { runTelegramSideEffect, syncTelegramLowStockNotifications } from '../services/telegramNotifications.ts';
+import { PUBLIC_ACTIVATION_ALLOWED_ITEM_STATUSES } from '../../shared/domain/policy.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
-const PUBLIC_ACTIVATION_ALLOWED_STATUSES = new Set(['ON_CONSIGNMENT', 'STOCK_ONLINE', 'SOLD_ONLINE']);
 const publicActivateRateLimitMax = IS_LOCAL_AUTH_ENVIRONMENT ? 100 : 8;
 
 const pickCollectionDate = (batchDate: Date | null, itemDate: Date | null): Date | null => batchDate || itemDate || null;
@@ -239,7 +242,7 @@ router.post('/items/:serialNumber/activate', publicActivateRateLimit, async (req
 
         const now = new Date();
 
-        if (!PUBLIC_ACTIVATION_ALLOWED_STATUSES.has(item.status)) {
+        if (!PUBLIC_ACTIVATION_ALLOWED_ITEM_STATUSES.includes(item.status as typeof PUBLIC_ACTIVATION_ALLOWED_ITEM_STATUSES[number])) {
             return res.status(409).json({
                 error: 'Item is not available for public activation.'
             });
@@ -258,6 +261,12 @@ router.post('/items/:serialNumber/activate', publicActivateRateLimit, async (req
         if (productId) {
             await runTelegramSideEffect(() => syncTelegramLowStockNotifications(prisma, [productId]));
         }
+        logDomainEvent('api', 'public-clone-activated', {
+            entity_type: 'item',
+            entity_id: item.id,
+            serial_number: item.serial_number,
+            product_id: productId
+        });
         res.json({
             success: true,
             message: 'Item activated. Financial settlement must be completed in a protected staff workflow.'
@@ -265,6 +274,32 @@ router.post('/items/:serialNumber/activate', publicActivateRateLimit, async (req
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Не удалось активировать камень.' });
+    }
+});
+
+router.post('/helper-logs', async (req, res) => {
+    try {
+        const payload = req.body;
+        if (!payload || typeof payload !== 'object') {
+            return res.status(400).json({ error: 'Неверный формат логов.' });
+        }
+
+        const storageRoot = path.resolve('storage');
+        const helperLogsDir = path.join(storageRoot, 'helper-logs');
+        
+        await fs.mkdir(helperLogsDir, { recursive: true });
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const uniqueId = crypto.randomUUID();
+        const fileName = `helper-logs-${timestamp}-${uniqueId}.json`;
+        const filePath = path.join(helperLogsDir, fileName);
+
+        await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+
+        res.json({ success: true, fileName });
+    } catch (error) {
+        console.error('[server] Failed to save uploaded helper logs', error);
+        res.status(500).json({ error: 'Не удалось сохранить логи хелпера на сервере.' });
     }
 });
 

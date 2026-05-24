@@ -1,12 +1,13 @@
 import express from 'express';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import { buildCloneUrl, buildQrUrl } from '../utils/cloneUrls.ts';
 import { isStaffRole, looksLikeLegacyItemSerial } from '../utils/collectionWorkflow.ts';
+import { isPartnerRole } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const ITEM_DETAIL_INCLUDE = Prisma.validator<Prisma.ItemInclude>()({
     batch: {
@@ -187,10 +188,10 @@ router.get('/batch/:batchId', authenticateToken, async (req: AuthRequest, res) =
             return res.status(404).json({ error: 'Партия не найдена.' });
         }
 
-        if (req.user.role === 'FRANCHISEE' && batch.owner_id !== req.user.id) {
+        if (isPartnerRole(req.user.role) && batch.owner_id !== req.user.id) {
             return res.sendStatus(403);
         }
-        if (req.user.role !== 'FRANCHISEE' && !isStaffRole(req.user.role)) {
+        if (!isPartnerRole(req.user.role) && !isStaffRole(req.user.role)) {
             return res.sendStatus(403);
         }
 

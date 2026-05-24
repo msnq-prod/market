@@ -120,17 +120,18 @@ test.describe('Desktop landing page', () => {
         }
 
         await page.mouse.click(
-            canvasBox.x + (canvasBox.width * 0.35),
-            canvasBox.y + (canvasBox.height * 0.45)
+            canvasBox.x + (canvasBox.width * 0.06),
+            canvasBox.y + (canvasBox.height * 0.08)
         );
-        await page.waitForTimeout(200);
 
-        const selectedLocationAfterPlanetClick = await page.evaluate(() => {
-            return (window as Window & {
-                __STONES_STORE__?: { getState: () => { selectedLocation: { id: string } | null } };
-            }).__STONES_STORE__?.getState().selectedLocation;
-        });
-        expect(selectedLocationAfterPlanetClick).toBeNull();
+        await expect.poll(
+            async () => page.evaluate(() => {
+                return (window as Window & {
+                    __STONES_STORE__?: { getState: () => { selectedLocation: { id: string } | null } };
+                }).__STONES_STORE__?.getState().selectedLocation ?? null;
+            }),
+            { timeout: 2_000 }
+        ).toBeNull();
     });
 
     test.afterAll(async () => {

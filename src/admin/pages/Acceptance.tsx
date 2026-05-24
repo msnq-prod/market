@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Download, PackageCheck, QrCode, Search, Video } from 'lucide-react';
-import { Button } from '../components/ui';
+import { Camera, Download, PackageCheck, QrCode, Search, Video, RefreshCw, X, FileText } from 'lucide-react';
+import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
+import {
+    canFinalizeBatch,
+    canReceiveBatch,
+    getBatchStatusMeta,
+    getItemStatusMeta
+} from '../../../shared/domain/policy';
+import {
+    getStonesDesktop,
+    isStonesDesktop,
+    type StonesMediaWorkflow
+} from '../../utils/desktop';
 
 type BatchItem = {
     id: string;
@@ -74,40 +85,6 @@ type BatchView = {
     items: BatchItem[];
 };
 
-const statusLabel: Record<string, string> = {
-    TRANSIT: 'В пути',
-    RECEIVED: 'Принята',
-    FINISHED: 'Завершена',
-    ERROR: 'Ошибка'
-};
-
-const statusClass: Record<string, string> = {
-    TRANSIT: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
-    RECEIVED: 'bg-violet-500/15 text-violet-200 border border-violet-500/30',
-    FINISHED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
-    ERROR: 'bg-red-500/15 text-red-200 border border-red-500/30'
-};
-
-const itemStatusLabel: Record<string, string> = {
-    NEW: 'Новый',
-    REJECTED: 'Отклонен',
-    STOCK_HQ: 'На складе HQ',
-    STOCK_ONLINE: 'Готов к продаже',
-    ON_CONSIGNMENT: 'На консигнации',
-    SOLD_ONLINE: 'Продан онлайн',
-    ACTIVATED: 'Активирован'
-};
-
-const itemStatusClass: Record<string, string> = {
-    NEW: 'border-white/8 bg-white/[0.04] text-gray-400',
-    REJECTED: 'border-red-500/30 bg-red-500/15 text-red-200',
-    STOCK_HQ: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
-    STOCK_ONLINE: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
-    ON_CONSIGNMENT: 'border-amber-500/30 bg-amber-500/15 text-amber-200',
-    SOLD_ONLINE: 'border-blue-500/30 bg-blue-500/15 text-blue-200',
-    ACTIVATED: 'border-violet-500/30 bg-violet-500/15 text-violet-200'
-};
-
 const videoProcessingLabel: Record<string, string> = {
     UPLOADED: 'Загружено',
     QUEUED: 'В очереди',
@@ -144,6 +121,23 @@ const videoExportClass: Record<string, string> = {
 
 const activeVideoProcessingStatuses = new Set(['QUEUED', 'PROCESSING']);
 const activeVideoExportStatuses = new Set(['OPEN', 'UPLOADING']);
+
+const workflowPhaseLabel: Record<string, string> = {
+    queued: 'В очереди',
+    converting: 'Конвертация',
+    uploading: 'Загрузка',
+    verifying: 'Проверка',
+    preparing_session: 'Подготовка session',
+    importing_sources: 'Импорт source',
+    rendering_intro: 'Сборка intro',
+    rendering_outputs: 'Рендер',
+    uploading_outputs: 'Загрузка MP4',
+    paused_offline: 'Пауза: нет связи',
+    auth_required: 'Нужен вход',
+    failed: 'Ошибка',
+    completed: 'Готово',
+    cancelled: 'Отменено'
+};
 const isPublicPassportItem = (batchStatus: string, itemStatus: string) =>
     (batchStatus === 'RECEIVED' || batchStatus === 'FINISHED') && itemStatus !== 'REJECTED';
 
@@ -187,6 +181,76 @@ export function Acceptance() {
     const [selectedQrItemIds, setSelectedQrItemIds] = useState<string[]>([]);
     const [batchQuery, setBatchQuery] = useState('');
     const [updatingBatchId, setUpdatingBatchId] = useState('');
+    const [receivingBatchId, setReceivingBatchId] = useState('');
+    const [receivedCount, setReceivedCount] = useState('');
+    const [workflows, setWorkflows] = useState<StonesMediaWorkflow[]>([]);
+
+    useEffect(() => {
+        const desktop = getStonesDesktop();
+        if (!isStonesDesktop() || !desktop) {
+            return;
+        }
+
+        void desktop.getMediaWorkflowSnapshot().then((snapshot) => {
+            setWorkflows(snapshot.workflows);
+        });
+
+        const unsubscribe = desktop.subscribeMediaWorkflows((snapshot) => {
+            setWorkflows(snapshot.workflows);
+        });
+
+        return () => {
+            unsubscribe();
+        };
+    }, []);
+
+    const handleRetryWorkflow = async (workflowId: string) => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        setError('');
+        try {
+            await desktop.retryMediaWorkflow(workflowId);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось повторить workflow.');
+        }
+    };
+
+    const handleCancelWorkflow = async (workflowId: string) => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        setError('');
+        try {
+            await desktop.cancelMediaWorkflow(workflowId);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось отменить workflow.');
+        }
+    };
+
+    const handleCollectDiagnosticsForWorkflow = async (workflow: StonesMediaWorkflow) => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        setError('');
+        try {
+            const nextDiagnostics = await desktop.getDesktopDiagnostics();
+            const queueSnapshot = await desktop.getMediaQueueSnapshot();
+            
+            const payload = {
+                diagnostics: nextDiagnostics,
+                queue: nextDiagnostics.queue,
+                queueJobs: queueSnapshot.jobs,
+                workflows: { workflows: [workflow], counts: {} },
+                batchDiagnosticsLog: {
+                    status: 'acceptance',
+                    batchId: workflow.batchId,
+                    serialNumber: workflow.sessionId || 'none'
+                }
+            };
+            const result = await desktop.exportDiagnosticsMarkdown(payload);
+            setError(`[Инфо] Отчет сохранен в: ${result.path}`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось экспортировать отчет.');
+        }
+    };
 
     const loadBatches = async (showSpinner = true) => {
         if (showSpinner) {
@@ -217,7 +281,7 @@ export function Acceptance() {
     }, []);
 
     const relevantBatches = useMemo(
-        () => batches.filter((batch) => batch.status === 'TRANSIT' || batch.status === 'RECEIVED'),
+        () => batches.filter((batch) => canReceiveBatch(batch.status) || canFinalizeBatch(batch.status)),
         [batches]
     );
 
@@ -231,7 +295,7 @@ export function Acceptance() {
 
         const exists = relevantBatches.some((batch) => batch.id === selectedBatchId);
         if (!selectedBatchId || !exists) {
-            const nextBatch = relevantBatches.find((batch) => batch.status === 'TRANSIT') || relevantBatches[0];
+            const nextBatch = relevantBatches.find((batch) => canReceiveBatch(batch.status)) || relevantBatches[0];
             setSelectedBatchId(nextBatch.id);
         }
     }, [relevantBatches, selectedBatchId]);
@@ -292,9 +356,12 @@ export function Acceptance() {
     const hasActiveVideoExport = Boolean(
         selectedBatch?.video_export && activeVideoExportStatuses.has(selectedBatch.video_export.status)
     );
+    const activeWorkflow = useMemo(() => {
+        return workflows.find((w) => w.batchId === selectedBatch?.id);
+    }, [workflows, selectedBatch]);
     const canFinalize = Boolean(
         selectedBatch
-        && selectedBatch.status === 'RECEIVED'
+        && canFinalizeBatch(selectedBatch.status)
         && !hasActiveVideoJob
         && !hasActiveVideoExport
         && missingMediaCount === 0
@@ -402,8 +469,8 @@ export function Acceptance() {
             )}
 
             <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-4">
-                <MetricCard title="В пути" value={relevantBatches.filter((batch) => batch.status === 'TRANSIT').length} />
-                <MetricCard title="Приняты" value={relevantBatches.filter((batch) => batch.status === 'RECEIVED').length} />
+                <MetricCard title="В пути" value={relevantBatches.filter((batch) => canReceiveBatch(batch.status)).length} />
+                <MetricCard title="Приняты" value={relevantBatches.filter((batch) => canFinalizeBatch(batch.status)).length} />
                 <MetricCard title="Фото готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_photo_url)).length, 0)} />
                 <MetricCard title="Видео готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_video_url)).length, 0)} />
             </section>
@@ -464,8 +531,8 @@ export function Acceptance() {
                                                     <p className="truncate font-semibold text-white">{productName}</p>
                                                     <p className="mt-1 truncate font-mono text-xs text-gray-500">{batch.id}</p>
                                                 </div>
-                                                <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                    {statusLabel[batch.status] || batch.status}
+                                                <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBatchStatusMeta(batch.status).className}`}>
+                                                    {getBatchStatusMeta(batch.status).label}
                                                 </span>
                                             </div>
                                             <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
@@ -478,6 +545,15 @@ export function Acceptance() {
                                                 <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
                                                     Media: {counts.fullyReady}/{counts.total}
                                                 </span>
+                                                {(() => {
+                                                    const batchWorkflow = workflows.find((w) => w.batchId === batch.id);
+                                                    if (!batchWorkflow) return null;
+                                                    return (
+                                                        <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-200 animate-pulse">
+                                                            Рендер: {batchWorkflow.progress.completed}/{batchWorkflow.progress.total}
+                                                        </span>
+                                                    );
+                                                })()}
                                             </div>
                                         </button>
                                     );
@@ -504,8 +580,8 @@ export function Acceptance() {
                                                         ? getDefaultTranslationValue(selectedBatch.product.translations, 'name')
                                                         : 'Партия без карточки товара'}
                                                 </h2>
-                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${statusClass[selectedBatch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                    {statusLabel[selectedBatch.status] || selectedBatch.status}
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(selectedBatch.status).className}`}>
+                                                    {getBatchStatusMeta(selectedBatch.status).label}
                                                 </span>
                                                 {selectedBatch.video_export && (
                                                     <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoExportClass[selectedBatch.video_export.status] || 'bg-gray-700 text-gray-200'}`}>
@@ -527,16 +603,16 @@ export function Acceptance() {
                                         </div>
 
                                         <div className="flex flex-wrap gap-2 lg:justify-end">
-                                            {selectedBatch.status === 'TRANSIT' && (
+                                            {canReceiveBatch(selectedBatch.status) && (
                                                 <Button
-                                                    onClick={() => void handleReceiveBatch(selectedBatch.id)}
+                                                    onClick={() => setReceivingBatchId(selectedBatch.id)}
                                                     disabled={updatingBatchId === selectedBatch.id}
                                                 >
                                                     Принять партию
                                                 </Button>
                                             )}
 
-                                            {selectedBatch.status === 'RECEIVED' && (
+                                            {canFinalizeBatch(selectedBatch.status) && (
                                                 <>
                                                     <Button
                                                         variant="ghost"
@@ -587,7 +663,75 @@ export function Acceptance() {
                                     <InfoTile title="Позиции в партии" value={`${mediaStats.total}`} note="Все экземпляры текущей партии" />
                                 </div>
 
-                                {selectedBatch.status === 'RECEIVED' && (
+                                {activeWorkflow && (
+                                    <div className="border-t border-white/6 px-6 py-5">
+                                        <h4 className="text-sm font-semibold text-white uppercase tracking-wider">Фоновый экспорт видео (Desktop Workflow)</h4>
+                                        <div className="mt-3 rounded-2xl border border-zinc-800 bg-[#101115] p-4 space-y-4">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium text-white">
+                                                        {activeWorkflow.summary?.title || 'Экспорт видеороликов'}
+                                                    </p>
+                                                    <p className="mt-1 text-xs text-gray-400">
+                                                        Статус: <span className="font-semibold text-blue-300">{workflowPhaseLabel[activeWorkflow.phase] || activeWorkflow.phase}</span>
+                                                    </p>
+                                                    <p className="mt-1 text-xs text-gray-500">
+                                                        Обработано: {activeWorkflow.progress.completed} из {activeWorkflow.progress.total} видеороликов
+                                                        {activeWorkflow.summary?.currentSerial ? ` (сейчас: ${activeWorkflow.summary.currentSerial})` : ''}
+                                                    </p>
+                                                    {activeWorkflow.lastError && (
+                                                        <p className="mt-2 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-200">
+                                                            Ошибка: {activeWorkflow.lastError}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <div className="flex shrink-0 flex-wrap gap-2 justify-end">
+                                                    {['failed', 'auth_required', 'paused_offline'].includes(activeWorkflow.phase) && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => void handleRetryWorkflow(activeWorkflow.id)}
+                                                            className="h-9 text-xs"
+                                                        >
+                                                            <RefreshCw size={12} className="mr-1" />
+                                                            Повторить
+                                                        </Button>
+                                                    )}
+                                                    {!['completed', 'cancelled'].includes(activeWorkflow.phase) && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => void handleCancelWorkflow(activeWorkflow.id)}
+                                                            className="h-9 text-xs text-red-300 hover:text-red-100 hover:bg-red-950/20"
+                                                        >
+                                                            <X size={12} className="mr-1" />
+                                                            Отменить
+                                                        </Button>
+                                                    )}
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => void handleCollectDiagnosticsForWorkflow(activeWorkflow)}
+                                                        className="h-9 text-xs"
+                                                    >
+                                                        <FileText size={12} className="mr-1" />
+                                                        Отчет
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                            <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                                                <div
+                                                    className="h-full bg-blue-400 transition-[width] duration-300"
+                                                    style={{
+                                                        width: `${activeWorkflow.progress.total > 0 ? Math.round((activeWorkflow.progress.completed / activeWorkflow.progress.total) * 100) : 0}%`
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {canFinalizeBatch(selectedBatch.status) && (
                                     <div className="border-t border-white/6 px-6 py-5">
                                         <div className="grid gap-4 lg:grid-cols-3">
                                             <NoticeCard
@@ -608,7 +752,7 @@ export function Acceptance() {
                                                 tone={canFinalize ? 'success' : 'warning'}
                                             />
                                         </div>
-                                        {selectedBatch.status === 'RECEIVED' && (
+                                        {canFinalizeBatch(selectedBatch.status) && (
                                             <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-gray-400">
                                                 <span>Публичные QR: {printableItemIds.length}</span>
                                                 <button
@@ -642,7 +786,7 @@ export function Acceptance() {
                                         <div key={item.id} className="flex flex-col gap-4 px-6 py-4 transition hover:bg-white/[0.025] xl:flex-row xl:items-center xl:justify-between">
                                             <div className="min-w-0 space-y-2">
                                                 <div className="flex flex-wrap items-center gap-2">
-                                                    {selectedBatch.status === 'RECEIVED' && (
+                                                    {canFinalizeBatch(selectedBatch.status) && (
                                                         <input
                                                             type="checkbox"
                                                             checked={selectedQrItemIds.includes(item.id)}
@@ -652,8 +796,8 @@ export function Acceptance() {
                                                         />
                                                     )}
                                                     <p className="font-semibold text-white">{item.serial_number || item.temp_id}</p>
-                                                    <span className={`rounded-full border px-2.5 py-1 text-xs ${itemStatusClass[item.status] || 'border-white/8 bg-white/[0.04] text-gray-300'}`}>
-                                                        {itemStatusLabel[item.status] || item.status}
+                                                    <span className={`rounded-full border px-2.5 py-1 text-xs ${getItemStatusMeta(item.status).className}`}>
+                                                        {getItemStatusMeta(item.status).label}
                                                     </span>
                                                     {isPublicPassportItem(selectedBatch.status, item.status) ? (
                                                         <span className="rounded-full border border-blue-500/30 bg-blue-500/15 px-2.5 py-1 text-xs text-blue-200">
@@ -721,6 +865,43 @@ export function Acceptance() {
                     )}
                 </section>
             </div>
+
+            <Modal
+                isOpen={Boolean(receivingBatchId)}
+                onClose={() => { setReceivingBatchId(''); setReceivedCount(''); }}
+                title="Подтверждение приемки"
+            >
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-300">
+                        Пожалуйста, пересчитайте физически приехавшие позиции и введите их количество для сверки с системой.
+                    </p>
+                    <input
+                        type="number"
+                        value={receivedCount}
+                        onChange={(e) => setReceivedCount(e.target.value)}
+                        placeholder={`Ожидается: ${selectedBatch?.items.length} шт.`}
+                        className="w-full rounded-xl border border-white/10 bg-[#0f1217] px-4 py-3 text-white focus:border-blue-500/50 focus:outline-none"
+                    />
+                    <div className="mt-4 flex justify-end gap-3 border-t border-white/10 pt-4">
+                        <Button variant="ghost" onClick={() => { setReceivingBatchId(''); setReceivedCount(''); }}>Отмена</Button>
+                        <Button 
+                            onClick={() => {
+                                if (Number(receivedCount) === selectedBatch?.items.length) {
+                                    void handleReceiveBatch(receivingBatchId);
+                                    setReceivingBatchId('');
+                                    setReceivedCount('');
+                                } else {
+                                    setError(`Ошибка приемки: Введенное количество (${receivedCount}) не совпадает с ожидаемым в партии (${selectedBatch?.items.length}).`);
+                                    setReceivingBatchId('');
+                                    setReceivedCount('');
+                                }
+                            }}
+                        >
+                            Подтвердить
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 }

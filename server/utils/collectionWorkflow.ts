@@ -1,28 +1,28 @@
 import type { Product, ProductTranslation } from '@prisma/client';
+import {
+    COLLECTION_WORKFLOW_STATUSES,
+    PUBLIC_PASSPORT_BATCH_STATUSES,
+    SALES_STAFF_ROLES,
+    HQ_STAFF_ROLES,
+    isHqStaffRole,
+    isSalesStaffRole
+} from '../../shared/domain/policy.ts';
 
-export const STAFF_ROLES = new Set(['ADMIN', 'MANAGER']);
-export const SALES_STAFF_ROLES = new Set(['ADMIN', 'SALES_MANAGER']);
+export const STAFF_ROLES = new Set(HQ_STAFF_ROLES);
+export { SALES_STAFF_ROLES };
 export const HQ_IMMEDIATE_BATCH_OWNER_EMAIL = 'hq-immediate-batch-owner@stones.local';
 export const HQ_IMMEDIATE_BATCH_OWNER_NAME = 'HQ immediate intake';
 export const HQ_IMMEDIATE_BATCH_OWNER_MARKER = 'hq_immediate_batch_owner';
-export const COLLECTION_STATUSES = new Set([
-    'OPEN',
-    'IN_PROGRESS',
-    'IN_TRANSIT',
-    'RECEIVED',
-    'IN_STOCK',
-    'CANCELLED'
-]);
-export const PUBLIC_PASSPORT_BATCH_STATUSES = new Set(['RECEIVED', 'FINISHED']);
+export const COLLECTION_STATUSES = new Set(COLLECTION_WORKFLOW_STATUSES);
 const LEGACY_ITEM_SERIAL_PATTERNS = [
     /^e2e-token-/i,
     /^[0-9a-f]{20,}$/i,
 ];
 
-export const isStaffRole = (role?: string): boolean => STAFF_ROLES.has(role || '');
-export const isSalesStaffRole = (role?: string): boolean => SALES_STAFF_ROLES.has(role || '');
+export const isStaffRole = isHqStaffRole;
+export { isSalesStaffRole };
 export const isPublicPassportAvailable = (itemStatus?: string | null, batchStatus?: string | null): boolean =>
-    PUBLIC_PASSPORT_BATCH_STATUSES.has(batchStatus || '') && itemStatus !== 'REJECTED';
+    PUBLIC_PASSPORT_BATCH_STATUSES.includes(batchStatus as typeof PUBLIC_PASSPORT_BATCH_STATUSES[number]) && itemStatus !== 'REJECTED';
 export const looksLikeLegacyItemSerial = (value?: string | null): boolean => {
     const normalized = value?.trim();
     if (!normalized) {

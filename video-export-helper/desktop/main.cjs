@@ -5,6 +5,58 @@ const https = require('https');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
+const Sentry = require('@sentry/node');
+
+let sentryInitialized = false;
+
+const getBundledMetadataSync = () => {
+    if (!app.isPackaged) {
+        return {};
+    }
+    try {
+        const packageJsonPath = path.join(app.getAppPath(), 'package.json');
+        const raw = require('fs').readFileSync(packageJsonPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        return parsed?.stonesVideoHelper && typeof parsed.stonesVideoHelper === 'object'
+            ? parsed.stonesVideoHelper
+            : {};
+    } catch {
+        return {};
+    }
+};
+
+const resolveDesktopHelperVersion = () => {
+    const appVersion = typeof app.getVersion === 'function' ? app.getVersion().trim() : '';
+    if (appVersion && appVersion !== '0.0.0') {
+        return appVersion;
+    }
+
+    return process.versions.electron || appVersion || 'desktop';
+};
+
+const initSentry = () => {
+    try {
+        const metadata = getBundledMetadataSync();
+        const sentryDsn = process.env.STONES_HELPER_SENTRY_DSN || metadata.sentryDsn || '';
+        const sentryEnv = process.env.STONES_HELPER_SENTRY_ENVIRONMENT || metadata.sentryEnv || 'production';
+
+        if (sentryDsn) {
+            Sentry.init({
+                dsn: sentryDsn,
+                environment: sentryEnv,
+                release: resolveDesktopHelperVersion(),
+                tracesSampleRate: 0,
+                sendDefaultPii: false
+            });
+            sentryInitialized = true;
+            console.log('[video-export-helper-desktop] Sentry initialized successfully');
+        }
+    } catch (error) {
+        console.error('[video-export-helper-desktop] Failed to initialize Sentry', error);
+    }
+};
+
+initSentry();
 
 let helperController = null;
 let mainWindow = null;
@@ -493,22 +545,19 @@ const configureLaunchAtLogin = () => {
     });
 };
 
-const resolveDesktopHelperVersion = () => {
-    const appVersion = typeof app.getVersion === 'function' ? app.getVersion().trim() : '';
-    if (appVersion && appVersion !== PLACEHOLDER_HELPER_VERSION) {
-        return appVersion;
-    }
-
-    return process.versions.electron || appVersion || 'desktop';
-};
-
 const startHelper = async () => {
     const helperModule = await import(pathToFileURL(path.join(__dirname, '..', 'server.js')).href);
     const allowedOrigins = await readBundledAllowedOrigins();
+    const metadata = getBundledMetadataSync();
+    const sentryDsn = process.env.STONES_HELPER_SENTRY_DSN || metadata.sentryDsn || '';
+    const sentryEnv = process.env.STONES_HELPER_SENTRY_ENVIRONMENT || metadata.sentryEnv || 'production';
+
     const nextController = await helperModule.startVideoExportHelperServer({
         storageRoot: getStorageRoot(),
         helperVersion: resolveDesktopHelperVersion(),
-        allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined
+        allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
+        sentryDsn,
+        sentryEnv
     });
 
     try {
@@ -558,6 +607,132 @@ ipcMain.handle('helper:check-update', async () => checkForHelperUpdate());
 
 ipcMain.handle('helper:download-update', async () => downloadHelperUpdate());
 
+ipcMain.handle('helper:report-renderer-error', async (event, errorInfo) => {
+    if (sentryInitialized) {
+        const error = new Error(errorInfo.message || 'Renderer error');
+        error.name = errorInfo.name || 'Error';
+        error.stack = errorInfo.stack || '';
+        
+        Sentry.withScope((scope) => {
+            scope.setTag('process', 'renderer');
+            if (errorInfo.source) {
+                scope.setExtra('source', errorInfo.source);
+                scope.setExtra('line', errorInfo.lineno);
+                scope.setExtra('column', errorInfo.colno);
+            }
+            Sentry.captureException(error);
+        });
+        console.error('[video-export-helper-desktop] Captured renderer error in Sentry', errorInfo);
+    } else {
+        console.error('[video-export-helper-desktop] Uncaptured renderer error (Sentry not active):', errorInfo);
+    }
+    return { success: true };
+});
+
+ipcMain.handle('helper:save-logs', async () => {
+    try {
+        const metadata = getBundledMetadataSync();
+        const serverLogs = helperController ? helperController.getRecentLogs() : [];
+        const healthInfo = helperController ? await helperController.getHealthInfo() : {};
+        
+        let stateData = {};
+        try {
+            const rawState = await fsp.readFile(path.join(getStorageRoot(), 'state.json'), 'utf8');
+            stateData = JSON.parse(rawState);
+        } catch (e) {
+            stateData = { error: 'Failed to read state.json: ' + e.message };
+        }
+
+        let configData = {};
+        try {
+            const rawConfig = await fsp.readFile(path.join(getStorageRoot(), 'config.json'), 'utf8');
+            configData = JSON.parse(rawConfig);
+        } catch (e) {
+            configData = { error: 'Failed to read config.json: ' + e.message };
+        }
+
+        const logsPayload = {
+            timestamp: new Date().toISOString(),
+            helperVersion: resolveDesktopHelperVersion(),
+            electronVersion: process.versions.electron,
+            chromeVersion: process.versions.chrome,
+            nodeVersion: process.versions.node,
+            platform: process.platform,
+            arch: process.arch,
+            osRelease: require('os').release(),
+            osTotalMem: require('os').totalmem(),
+            osFreeMem: require('os').freemem(),
+            allowedOrigins: metadata.allowedOrigin ? [metadata.allowedOrigin] : [],
+            health: healthInfo,
+            state: stateData,
+            config: configData,
+            recentLogs: serverLogs
+        };
+
+        // 1. Save to local Downloads directory
+        const downloadsPath = app.getPath('downloads');
+        const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `zagarami-helper-logs-${fileTimestamp}.json`;
+        const filePath = path.join(downloadsPath, fileName);
+        await fsp.writeFile(filePath, JSON.stringify(logsPayload, null, 2), 'utf8');
+
+        // 2. Upload to remote server
+        const origin = metadata.allowedOrigin || PRODUCTION_ORIGIN;
+        const uploadUrl = `${origin.replace(/\/+$/, '')}/api/public/helper-logs`;
+        
+        let uploadSuccess = false;
+        let uploadError = null;
+
+        try {
+            const payloadString = JSON.stringify(logsPayload);
+            const parsedUrl = new URL(uploadUrl);
+            const client = parsedUrl.protocol === 'https:' ? https : http;
+            
+            const uploadPromise = () => new Promise((resolve, reject) => {
+                const req = client.request(parsedUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(payloadString)
+                    },
+                    timeout: 8000
+                }, (res) => {
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        resolve(true);
+                    } else {
+                        reject(new Error(`Server responded with HTTP ${res.statusCode}`));
+                    }
+                    res.resume();
+                });
+
+                req.on('error', reject);
+                req.on('timeout', () => {
+                    req.destroy();
+                    reject(new Error('Upload timeout'));
+                });
+                req.write(payloadString);
+                req.end();
+            });
+
+            uploadSuccess = await uploadPromise();
+        } catch (e) {
+            uploadError = e.message;
+            console.error('[video-export-helper-desktop] Failed to upload logs to server', e);
+        }
+
+        return {
+            success: true,
+            filePath,
+            fileName,
+            uploaded: uploadSuccess,
+            uploadError
+        };
+    } catch (error) {
+        console.error('[video-export-helper-desktop] Failed to collect and save logs', error);
+        throw error;
+    }
+});
+
 if (hasSingleInstanceLock) {
     app.whenReady().then(async () => {
         ensureTray();
@@ -577,6 +752,9 @@ if (hasSingleInstanceLock) {
         } catch (error) {
             startupErrorMessage = await normalizeStartupError(error);
             console.error('[video-export-helper-desktop] failed to start helper', error);
+            if (sentryInitialized) {
+                Sentry.captureException(error);
+            }
             await showMainWindow();
         }
 
@@ -585,6 +763,9 @@ if (hasSingleInstanceLock) {
         });
     }).catch((error) => {
         console.error('[video-export-helper-desktop] failed to start', error);
+        if (sentryInitialized) {
+            Sentry.captureException(error);
+        }
         app.exit(1);
     });
 

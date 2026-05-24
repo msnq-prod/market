@@ -157,7 +157,9 @@ const main = async () => {
                 version: helperVersion,
                 stonesVideoHelper: {
                     allowedOrigin,
-                    updateBaseUrl
+                    updateBaseUrl,
+                    sentryDsn: process.env.STONES_HELPER_SENTRY_DSN || '',
+                    sentryEnv: process.env.STONES_HELPER_SENTRY_ENVIRONMENT || 'production'
                 }
             }
         };

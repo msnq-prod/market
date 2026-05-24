@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode, Trash2 } from 'lucide-react';
+import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode, Trash2, Search } from 'lucide-react';
 import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -285,6 +285,7 @@ export function Warehouse() {
     const [itemLoading, setItemLoading] = useState(false);
     const [itemError, setItemError] = useState('');
     const [deletingBatchId, setDeletingBatchId] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
 
     const loadData = async (showSpinner = true) => {
         if (showSpinner) {
@@ -329,7 +330,18 @@ export function Warehouse() {
             }>;
         }>();
 
-        for (const batch of batches) {
+        const searchLower = searchQuery.trim().toLowerCase();
+        const filteredBatches = batches.map(batch => {
+            const filteredItems = searchLower 
+                ? batch.items.filter(item => 
+                    item.serial_number?.toLowerCase().includes(searchLower) || 
+                    item.temp_id.toLowerCase().includes(searchLower)
+                  )
+                : batch.items;
+            return { ...batch, items: filteredItems };
+        }).filter(batch => batch.items.length > 0);
+
+        for (const batch of filteredBatches) {
             const locationKey = batch.product?.location?.id || 'no-location';
             const locationName = batch.product?.location
                 ? getDefaultTranslationValue(batch.product.location.translations, 'name')
@@ -389,7 +401,7 @@ export function Warehouse() {
                 };
             })
             .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-    }, [batches]);
+    }, [batches, searchQuery]);
 
     const summary = useMemo(() => {
         const allItems = batches.flatMap((batch) => batch.items);
@@ -527,6 +539,16 @@ export function Warehouse() {
                     <p className="mt-1 text-sm text-gray-500">
                         Сначала локации каталога, затем товары. Для каждого товара можно включить режим `Партии` или `Все товары`.
                     </p>
+                    <div className="mt-4 flex max-w-md items-center gap-3 rounded-xl border border-white/10 bg-[#0f1217] px-3 py-2">
+                        <Search size={18} className="text-gray-500" />
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="Поиск по серийному номеру..."
+                            className="w-full bg-transparent text-sm text-white placeholder:text-gray-600 focus:outline-none"
+                        />
+                    </div>
                 </div>
 
                 {loading ? (

@@ -1,5 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
+import { DesktopStatusCenter } from './DesktopStatusCenter';
+import { isAdminRole, isAdminWorkspaceRole, isHqStaffRole, isPartnerRole, isSalesStaffRole } from '../../../shared/domain/policy';
 
 const pageMeta: Record<string, { title: string; description: string }> = {
     '/admin': {
@@ -60,9 +62,8 @@ export function AdminLayout() {
     const location = useLocation();
     const token = localStorage.getItem('accessToken');
     const role = localStorage.getItem('userRole');
-    const isHqStaff = role === 'ADMIN' || role === 'MANAGER';
-    const isSalesManager = role === 'SALES_MANAGER';
-    const isStaff = isHqStaff || isSalesManager;
+    const isSalesManager = isSalesStaffRole(role) && !isAdminRole(role);
+    const isStaff = isAdminWorkspaceRole(role);
     const isDev = import.meta.env.DEV;
     const hasAdminAccess = isStaff || isDev;
     const salesRoutes = new Set([
@@ -80,13 +81,13 @@ export function AdminLayout() {
     }
 
     if (!hasAdminAccess) {
-        if (role === 'FRANCHISEE') {
+        if (isPartnerRole(role)) {
             return <Navigate to="/partner/dashboard" replace />;
         }
         return <Navigate to="/" replace />;
     }
 
-    if (adminOnlyRoutes.has(location.pathname) && role !== 'ADMIN') {
+    if (adminOnlyRoutes.has(location.pathname) && !isAdminRole(role)) {
         return <Navigate to="/admin" replace />;
     }
 
@@ -94,7 +95,7 @@ export function AdminLayout() {
         return <Navigate to="/admin/orders" replace />;
     }
 
-    if (role === 'MANAGER' && salesRoutes.has(location.pathname)) {
+    if (isHqStaffRole(role) && !isAdminRole(role) && salesRoutes.has(location.pathname)) {
         return <Navigate to="/admin" replace />;
     }
 
@@ -112,10 +113,17 @@ export function AdminLayout() {
                 <div className="flex min-w-0 flex-1 flex-col lg:min-h-0">
                     <header className="shrink-0 border-b border-white/6 bg-black/10">
                         <div className={`mx-auto w-full px-4 py-5 sm:px-6 lg:py-6 ${isWideWorkspace ? 'max-w-none lg:px-4' : 'max-w-[1240px] lg:px-8'}`}>
-                            <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[2rem]">{meta.title}</h1>
-                            {meta.description ? (
-                                <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
-                            ) : null}
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[2rem]">{meta.title}</h1>
+                                    {meta.description ? (
+                                        <p className="mt-2 text-sm text-gray-500">{meta.description}</p>
+                                    ) : null}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <DesktopStatusCenter />
+                                </div>
+                            </div>
                         </div>
                     </header>
 

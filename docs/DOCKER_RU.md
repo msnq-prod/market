@@ -34,6 +34,7 @@ docker compose up -d --build
 - uploads и video storage вынесены в docker volumes
 - `CLIENT_URL` внутри local docker stack — `http://localhost:3001`
 - сиды не выполняются автоматически
+- throughput server-side video jobs управляется env-переменными `VIDEO_PROCESSOR_WORKERS`, `VIDEO_JOB_CONCURRENCY`, `VIDEO_JOB_FFMPEG_THREADS`
 - runtime image использует системный `ffmpeg` из Alpine; desktop helper-зависимости `ffmpeg-static` и `ffprobe-static` в compose-сборку не устанавливаются
 
 ## 2.1 Dev stack для редактирования UI без пересборки контейнера
@@ -88,6 +89,9 @@ Production compose рассчитан на один сервер и один п�
 - `app`
 - `video-processor`
 - `telegram-worker`
+- `loki`
+- `promtail`
+- `grafana`
 
 Наружу публикуются только:
 
@@ -119,6 +123,9 @@ cp .env.production.example .env.production
 - `REFRESH_TOKEN_SECRET`
 - `TELEGRAM_TOKEN_ENCRYPTION_KEY`
 - `VIDEO_PROCESSOR_POLL_MS`
+- `VIDEO_PROCESSOR_WORKERS` — сколько polling loop запускает один процесс `video-processor` (по умолчанию `1`)
+- `VIDEO_JOB_CONCURRENCY` — сколько tail clips одного video job собираются параллельно (по умолчанию `2`)
+- `VIDEO_JOB_FFMPEG_THREADS` — сколько `ffmpeg` threads выделять на encode/re-encode одной операции (по умолчанию `1`)
 - `TELEGRAM_WORKER_POLL_MS`
 - `TELEGRAM_WORKER_RETRY_BASE_MS`
 - `TELEGRAM_WORKER_MAX_ATTEMPTS`
@@ -127,6 +134,15 @@ cp .env.production.example .env.production
 - `STONES_HELPER_UPDATE_BASE_URL` — опциональный base URL для update manifest и DMG, по умолчанию `${STONES_HELPER_ALLOWED_ORIGIN}/uploads/downloads`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, если нужен внешний URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` — опционально, если нужен отдельный arm64 URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
+- `LOG_LEVEL`
+- `LOG_PRETTY`
+- `LOG_SLOW_QUERY_MS`
+- `LOG_PAYLOAD_MAX_BYTES`
+- `LOG_REDACT_FIELDS`
+- `SENTRY_DSN_BACKEND` — DSN backend SDK; можно указывать внешний self-hosted Sentry/Sentry-compatible endpoint
+- `SENTRY_DSN_FRONTEND` — DSN, который пробрасывается в frontend build как `VITE_SENTRY_DSN_FRONTEND`
+- `SENTRY_ENVIRONMENT`
+- `GRAFANA_ADMIN_PASSWORD`
 
 Инварианты:
 
@@ -214,6 +230,8 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail
 - открыть витрину;
 - открыть `/admin/login`;
 - открыть `/partner/login`;
+- открыть Grafana на `127.0.0.1:3002`;
+- проверить, что в Loki видны логи `app`, `video-processor`, `telegram-worker`.
 - открыть хотя бы один `clone` URL;
 - проверить HQ video flow и QR при необходимости.
 

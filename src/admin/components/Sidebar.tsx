@@ -3,6 +3,7 @@ import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, Qr
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { logoutSession } from '../../utils/session';
+import { isAdminRole, isSalesStaffRole } from '../../../shared/domain/policy';
 
 type NavConfig = {
     id: string;
@@ -44,8 +45,8 @@ export function Sidebar() {
     const location = useLocation();
     const navigate = useNavigate();
     const role = localStorage.getItem('userRole');
-    const isSalesManager = role === 'SALES_MANAGER';
-    const canAccessSalesCabinet = role === 'ADMIN' || role === 'SALES_MANAGER';
+    const isSalesManager = isSalesStaffRole(role) && !isAdminRole(role);
+    const canAccessSalesCabinet = isAdminRole(role) || isSalesManager;
     const storageKey = `${SIDEBAR_VISIBILITY_STORAGE_PREFIX}.${role || 'unknown'}`;
     const [visibility, setVisibility] = useState<SidebarVisibility>(() => readSidebarVisibility(storageKey));
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -90,7 +91,7 @@ export function Sidebar() {
             title: 'Система',
             items: [
                 { id: 'users', to: '/admin/users', icon: <Users size={18} />, label: 'Пользователи' },
-                ...(role === 'ADMIN'
+                ...(isAdminRole(role)
                     ? [{ id: 'telegram-bots', to: '/admin/telegram-bots', icon: <Bot size={18} />, label: 'Telegram' }]
                     : [])
             ]

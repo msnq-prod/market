@@ -1,11 +1,11 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import { DEFAULT_CLONE_PAGE_CONTENT, sanitizeClonePageContent } from '../../src/shared/clonePageContent.ts';
+import { isHqStaffRole } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const CLONE_PAGE_KEY = 'clone_page';
 
@@ -27,7 +27,7 @@ router.get('/clone-page', async (_req, res) => {
 });
 
 router.put('/clone-page', authenticateToken, async (req: AuthRequest, res) => {
-    if (!req.user || !['ADMIN', 'MANAGER'].includes(req.user.role)) {
+    if (!req.user || !isHqStaffRole(req.user.role)) {
         return res.sendStatus(403);
     }
 
@@ -53,4 +53,3 @@ router.put('/clone-page', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 export default router;
-

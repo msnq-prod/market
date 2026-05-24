@@ -19,6 +19,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { ArrowLeft, ChevronLeft, ChevronRight, Download, GripVertical, RotateCcw, X } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import { isStonesDesktop } from '../../utils/desktop';
 
 type Html2CanvasRenderer = typeof import('html2canvas').default;
 
@@ -1410,7 +1411,7 @@ export function QrPrint() {
                     : 'Для этой партии пока нет публичных QR-позиций.';
 
     const closeWindowOrReturn = () => {
-        if (window.opener) {
+        if (window.opener || isStonesDesktop()) {
             window.close();
             return;
         }

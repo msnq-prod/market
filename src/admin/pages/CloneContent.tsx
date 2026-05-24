@@ -6,6 +6,7 @@ import {
     sanitizeClonePageContent,
     type ClonePageContent
 } from '../../shared/clonePageContent';
+import { apiFetch } from '../../utils/apiFetch';
 import { authFetch } from '../../utils/authFetch';
 
 const FIELD_CONFIG: Array<{
@@ -66,7 +67,7 @@ export function CloneContent() {
         const loadContent = async () => {
             setLoading(true);
             try {
-                const res = await fetch('/api/content/clone-page');
+                const res = await apiFetch('/api/content/clone-page');
                 if (res.ok) {
                     const data = sanitizeClonePageContent(await res.json());
                     setDraft(data);
@@ -136,7 +137,7 @@ export function CloneContent() {
         setLoadingPreview(true);
         setPreviewStatus('');
         try {
-            const res = await fetch(`/api/public/items/${encodeURIComponent(serialNumber)}`);
+            const res = await apiFetch(`/api/public/items/${encodeURIComponent(serialNumber)}`);
             if (!res.ok) {
                 setPreviewStatus('Предмет по серийному номеру не найден, показан демо-предмет.');
                 setPreviewItem(PREVIEW_ITEM);

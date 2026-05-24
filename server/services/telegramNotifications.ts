@@ -59,11 +59,13 @@ const formatDateTime = (value: Date | string): string => {
 };
 
 const formatRoleLabel = (role: Role | string): string => {
-    if (role === 'ADMIN') return 'ADMIN';
-    if (role === 'MANAGER') return 'MANAGER';
-    if (role === 'SALES_MANAGER') return 'SALES_MANAGER';
-    if (role === 'FRANCHISEE') return 'FRANCHISEE';
-    return role;
+    const labels: Record<string, string> = {
+        ADMIN: 'ADMIN',
+        MANAGER: 'MANAGER',
+        SALES_MANAGER: 'SALES_MANAGER',
+        FRANCHISEE: 'FRANCHISEE'
+    };
+    return labels[role] || role;
 };
 
 const formatRub = (value: number): string => new Intl.NumberFormat('ru-RU', {

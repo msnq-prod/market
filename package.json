@@ -1,7 +1,7 @@
 {
   "name": "stones",
   "private": true,
-  "version": "1.5.15",
+  "version": "1.5.25-2",
   "type": "module",
   "packageManager": "npm@10.9.3",
   "engines": {
@@ -12,6 +12,7 @@
     "dev": "concurrently \"npm run server\" \"vite\"",
     "dev:e2e": "concurrently \"PORT=3101 npm run server\" \"VITE_HOST=127.0.0.1 VITE_PORT=5273 VITE_API_TARGET=http://127.0.0.1:3101 vite --host 127.0.0.1 --port 5273\"",
     "typecheck": "tsc -b",
+    "test:unit": "ACCESS_TOKEN_SECRET=test-access-secret REFRESH_TOKEN_SECRET=test-refresh-secret TELEGRAM_TOKEN_ENCRYPTION_KEY=12345678901234567890123456789012 LOG_PRETTY=0 node --import tsx --test tests/unit/**/*.test.ts",
     "build:server": "node scripts/build-server.mjs",
     "build:client": "vite build",
     "build": "npm run prisma:generate && npm run typecheck && npm run build:server && npm run build:client",
@@ -29,6 +30,11 @@
     "video-export-helper:desktop": "electron video-export-helper/desktop/main.cjs",
     "video-export-helper:desktop:dist": "node video-export-helper/build-desktop.mjs",
     "video-export-helper:desktop:dist:raw": "electron-builder --config video-export-helper/electron-builder.json",
+    "admin:desktop": "electron electron/hq/main.cjs",
+    "admin:desktop:dev": "node scripts/dev-admin-desktop.mjs",
+    "admin:desktop:prod-like": "node scripts/dev-admin-desktop.mjs --dist",
+    "admin:desktop:dist": "node scripts/build-admin-desktop.mjs",
+    "admin:desktop:dist:raw": "electron-builder --config electron/hq/electron-builder.json",
     "db:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "db:seed:languages": "npm run prisma:generate && tsx prisma/seed_languages.ts",
@@ -47,10 +53,15 @@
     "@prisma/client": "^5.22.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.2",
+    "@sentry/browser": "^10.53.1",
+    "@sentry/node": "^10.53.1",
+    "@sentry/react": "^10.53.1",
     "@tailwindcss/postcss": "^4.1.17",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^5.2.1",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
     "framer-motion": "^12.23.25",
     "heic-convert": "^2.1.0",
     "heic2any": "^0.0.4",
@@ -61,6 +72,8 @@
     "lucide-react": "^0.556.0",
     "maath": "^0.10.8",
     "multer": "^2.0.2",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
     "prisma": "^5.22.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
@@ -72,9 +85,7 @@
   },
   "optionalDependencies": {
     "electron": "^36.3.2",
-    "electron-builder": "^26.0.12",
-    "ffmpeg-static": "^5.2.0",
-    "ffprobe-static": "^3.1.0"
+    "electron-builder": "^26.0.12"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
@@ -102,5 +113,10 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.0",
     "vite": "^7.2.4"
+  },
+  "main": "electron/hq/main.cjs",
+  "stonesHq": {
+    "apiOrigin": "https://zagarami.com",
+    "updateBaseUrl": "https://zagarami.com/uploads/downloads"
   }
 }

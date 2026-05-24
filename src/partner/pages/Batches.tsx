@@ -3,6 +3,11 @@ import type { MouseEvent } from 'react';
 import { Check, ChevronDown, ChevronUp, Copy, Download, Loader2, Package, RefreshCw, Search } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { Button, EmptyState, MetricTile, Panel, Select, StatusPill, partnerControlClassName, type PartnerTone } from '../components/ui';
+import {
+    SOLD_ITEM_STATUSES,
+    getBatchStatusMeta,
+    getItemStatusMeta
+} from '../../../shared/domain/policy';
 
 type BatchItem = {
     id: string;
@@ -22,9 +27,8 @@ type BatchFilter = 'ALL' | 'SENT' | 'FINISHED';
 type SaleFilter = 'ALL' | 'SOLD' | 'UNSOLD';
 type SortBy = 'NEWEST' | 'OLDEST' | 'MOST_SOLD' | 'LEAST_SOLD';
 
-const SOLD_ITEM_STATUSES = new Set(['SOLD_ONLINE', 'ACTIVATED']);
 const SENT_BATCH_STATUSES = new Set(['TRANSIT', 'RECEIVED', 'FINISHED']);
-const getSoldCount = (items: BatchItem[]): number => items.filter((item) => SOLD_ITEM_STATUSES.has(item.status)).length;
+const getSoldCount = (items: BatchItem[]): number => items.filter((item) => SOLD_ITEM_STATUSES.includes(item.status as typeof SOLD_ITEM_STATUSES[number])).length;
 
 const toDateValue = (value: string): number => {
     const timestamp = new Date(value).getTime();
@@ -365,7 +369,7 @@ export function Batches() {
                                                                     ) : null}
 
                                                                     {batch.items.map((item) => {
-                                                                        const isSold = SOLD_ITEM_STATUSES.has(item.status);
+                                                                        const isSold = SOLD_ITEM_STATUSES.includes(item.status as typeof SOLD_ITEM_STATUSES[number]);
                                                                         return (
                                                                             <tr key={item.id} className="hover:bg-white/[0.02]">
                                                                                 <td className="px-4 py-2.5 text-xs font-semibold text-gray-300">
@@ -433,49 +437,19 @@ function FilterButton({ label, count, active, onClick }: { label: string; count:
 }
 
 function StatusBadge({ status }: { status: string }) {
-    const labels: Record<string, string> = {
-        TRANSIT: 'В ДОСТАВКЕ',
-        RECEIVED: 'ПОЛУЧЕНО',
-        FINISHED: 'ЗАВЕРШЕНО',
-        ERROR: 'ОШИБКА',
-        CANCELLED: 'ОТМЕНЕНО'
-    };
-    const tones: Record<string, PartnerTone> = {
-        TRANSIT: 'amber',
-        RECEIVED: 'blue',
-        FINISHED: 'emerald',
-        ERROR: 'red',
-        CANCELLED: 'red'
-    };
+    const meta = getBatchStatusMeta(status);
 
     return (
         <StatusPill
-            label={labels[status] || status}
-            tone={tones[status] || 'muted'}
+            label={meta.label.toUpperCase()}
+            tone={meta.tone as PartnerTone}
             className="gap-1"
         />
     );
 }
 
 function ItemStatusBadge({ status }: { status: string }) {
-    const labels: Record<string, string> = {
-        NEW: 'НОВЫЙ',
-        REJECTED: 'ОТКЛОНЕН',
-        STOCK_HQ: 'СКЛАД HQ',
-        STOCK_ONLINE: 'НА САЙТЕ',
-        ON_CONSIGNMENT: 'КОНСИГНАЦИЯ',
-        SOLD_ONLINE: 'ПРОДАН ОНЛАЙН',
-        ACTIVATED: 'АКТИВИРОВАН'
-    };
-    const tones: Record<string, PartnerTone> = {
-        NEW: 'slate',
-        REJECTED: 'red',
-        STOCK_HQ: 'emerald',
-        STOCK_ONLINE: 'blue',
-        ON_CONSIGNMENT: 'violet',
-        SOLD_ONLINE: 'amber',
-        ACTIVATED: 'emerald'
-    };
+    const meta = getItemStatusMeta(status);
 
-    return <StatusPill label={labels[status] || status} tone={tones[status] || 'muted'} compact />;
+    return <StatusPill label={meta.label.toUpperCase()} tone={meta.tone as PartnerTone} compact />;
 }

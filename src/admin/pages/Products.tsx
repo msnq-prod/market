@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, PencilLine, Plus, QrCode } from 'lucide-react';
 import { Button, Input, Modal, Textarea } from '../components/ui';
 import { TranslationModal } from '../components/TranslationModal';
+import { apiFetch } from '../../utils/apiFetch';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
+import { getBatchStatusMeta } from '../../../shared/domain/policy';
 
 type Location = {
     id: string;
@@ -197,22 +199,6 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
     return typeof value === 'string' ? value : '';
 };
 
-const batchStatusLabel: Record<string, string> = {
-    DRAFT: 'Черновик',
-    TRANSIT: 'В доставке',
-    RECEIVED: 'Получен',
-    FINISHED: 'Завершен',
-    ERROR: 'Ошибка'
-};
-
-const batchStatusClass: Record<string, string> = {
-    DRAFT: 'bg-amber-500/20 text-amber-200 border border-amber-500/30',
-    TRANSIT: 'bg-blue-500/20 text-blue-200 border border-blue-500/30',
-    RECEIVED: 'bg-violet-500/20 text-violet-200 border border-violet-500/30',
-    FINISHED: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30',
-    ERROR: 'bg-red-500/20 text-red-200 border border-red-500/30'
-};
-
 const itemStatusMeta: Record<string, { label: string; className: string }> = {
     NEW: { label: 'Новый', className: 'bg-gray-800 text-gray-300' },
     REJECTED: { label: 'Отклонен', className: 'bg-red-500/15 text-red-200' },
@@ -404,9 +390,9 @@ export function Products() {
         setScreenError('');
         try {
             const [locRes, prodRes, catRes, usersRes] = await Promise.all([
-                fetch('/api/locations'),
+                apiFetch('/api/locations'),
                 authFetch('/api/products'),
-                fetch('/api/categories'),
+                apiFetch('/api/categories'),
                 authFetch('/api/users')
             ]);
 
@@ -1737,7 +1723,7 @@ function PublishSwitch({
         >
             <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-current opacity-70 transition-transform ${checked ? 'translate-x-[80px]' : 'translate-x-0'}`} />
             <span className={`pointer-events-none relative z-10 flex w-full items-center leading-none ${checked ? 'justify-start pl-2 pr-7' : 'justify-end pl-7 pr-2'}`}>
-                {checked ? 'На сайте' : 'Скрыт'}
+                {disabled ? 'Ожидание...' : checked ? 'На сайте' : 'Скрыт'}
             </span>
         </button>
     );
@@ -1880,8 +1866,8 @@ function ProductTemplateRow({
                                                 </div>
                                             </button>
                                             <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${batchStatusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                    {batchStatusLabel[batch.status] || batch.status}
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(batch.status).className}`}>
+                                                    {getBatchStatusMeta(batch.status).label}
                                                 </span>
                                                 <BatchReadinessPill readiness={readiness} />
                                                 <button

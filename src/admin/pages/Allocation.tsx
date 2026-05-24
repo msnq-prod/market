@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Globe, ArrowRight } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import { Modal, Button } from '../components/ui';
 
 type StockItem = {
     id: string;
@@ -19,6 +20,7 @@ export function Allocation() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [query, setQuery] = useState('');
+    const [confirmModalOpen, setConfirmModalOpen] = useState(false);
 
     useEffect(() => {
         void loadStock();
@@ -122,7 +124,7 @@ export function Allocation() {
 
                         <div className="space-y-3">
                             <button
-                                onClick={() => void handleAllocate()}
+                                onClick={() => setConfirmModalOpen(true)}
                                 disabled={selectedItems.length === 0 || loading}
                                 className="group flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.06] p-3 text-white transition hover:bg-white/[0.1] disabled:opacity-50"
                             >
@@ -182,6 +184,31 @@ export function Allocation() {
                     </div>
                 </div>
             </div>
+
+            <Modal
+                isOpen={confirmModalOpen}
+                onClose={() => setConfirmModalOpen(false)}
+                title="Подтверждение распределения"
+            >
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-300">
+                        Вы уверены, что хотите распределить {selectedItems.length} позиций на онлайн-маркетплейс?
+                        Это действие обновит статусы товаров в базе данных.
+                    </p>
+                    <div className="mt-4 flex justify-end gap-3 border-t border-white/10 pt-4">
+                        <Button variant="ghost" onClick={() => setConfirmModalOpen(false)}>Отмена</Button>
+                        <Button 
+                            onClick={() => {
+                                setConfirmModalOpen(false);
+                                void handleAllocate();
+                            }}
+                            disabled={loading}
+                        >
+                            Подтвердить
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 }

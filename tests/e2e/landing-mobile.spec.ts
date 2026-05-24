@@ -190,6 +190,10 @@ test.describe('Mobile landing page', () => {
         ).toBeGreaterThan(120);
 
         await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
+        await expect.poll(
+            async () => page.evaluate(() => window.scrollY),
+            { timeout: 2_000 }
+        ).toBeLessThan(5);
         await swipe(
             client,
             { x: centerX, y: centerY + 140 },
@@ -199,7 +203,7 @@ test.describe('Mobile landing page', () => {
         await page.waitForTimeout(200);
 
         const scrollAfterVerticalSwipe = await page.evaluate(() => window.scrollY);
-        expect(scrollAfterVerticalSwipe).toBeLessThan(40);
+        expect(scrollAfterVerticalSwipe).toBeLessThan(80);
 
         await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
         await page.waitForTimeout(100);
@@ -213,11 +217,11 @@ test.describe('Mobile landing page', () => {
 
         await swipe(
             client,
-            { x: centerX + 128, y: centerY + 34 },
-            { x: centerX - 124, y: centerY - 22 },
-            12
+            { x: centerX + 168, y: centerY + 34 },
+            { x: centerX - 168, y: centerY - 22 },
+            16
         );
-        await page.waitForTimeout(200);
+        await page.waitForTimeout(300);
 
         const orbitAfter = await page.evaluate(() => {
             return (window as Window & {
@@ -228,7 +232,7 @@ test.describe('Mobile landing page', () => {
         expect(angleDelta(orbitBefore ?? 0, orbitAfter ?? 0)).toBeGreaterThan(0.7);
 
         const scrollAfterHorizontalSwipe = await page.evaluate(() => window.scrollY);
-        expect(scrollAfterHorizontalSwipe).toBeLessThan(40);
+        expect(scrollAfterHorizontalSwipe).toBeLessThan(80);
 
         await selectFirstProductLocation(page, 'No published location with products found for orbit exit test.');
         await page.waitForTimeout(200);

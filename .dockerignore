@@ -7,6 +7,7 @@ node_modules
 build
 dist
 dist-electron
+dist-electron-hq
 coverage
 npm-debug.log*
 yarn-debug.log*

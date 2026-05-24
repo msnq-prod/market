@@ -1,7 +1,10 @@
 import crypto from 'crypto';
+import { execFile } from 'child_process';
 import fs from 'fs';
 import fsp from 'fs/promises';
+import os from 'os';
 import path from 'path';
+import { promisify } from 'util';
 import { createRequire } from 'module';
 import multer from 'multer';
 import type { Request, Response } from 'express';
@@ -14,6 +17,11 @@ type SharedUploadMetadata = {
     extension: string;
     kind: SharedUploadKind;
     mimeType: string;
+};
+
+type PreparedUploadedFile = {
+    file: MutableUploadedFile;
+    metadata: SharedUploadMetadata;
 };
 
 type MutableUploadedFile = Express.Multer.File & {
@@ -80,6 +88,37 @@ const ACTIVE_CONTENT_MARKERS = ['<!doctype', '<body', '<html', '<iframe', '<scri
 const UPLOAD_MAX_FILE_SIZE_BYTES = 300 * 1024 * 1024;
 const UPLOAD_SNIFF_BYTES = 4096;
 
+const parseBooleanEnv = (value: string | undefined) =>
+    typeof value === 'string' && ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+
+const parsePositiveIntegerEnv = (name: string, fallback: number) => {
+    const raw = process.env[name]?.trim();
+    if (!raw) {
+        return fallback;
+    }
+
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`Environment variable ${name} must be a positive integer.`);
+    }
+
+    return parsed;
+};
+
+const execFileAsync = promisify(execFile);
+const APPLE_SILICON_HEIC_FAST_PATH = process.platform === 'darwin' && process.arch === 'arm64';
+const DEFAULT_HEIC_APPLE_SILICON_CONCURRENCY = Math.min(Math.max(os.availableParallelism() - 1, 2), 8);
+const PHOTO_CONCURRENCY = parsePositiveIntegerEnv('PHOTO_CONCURRENCY', 2);
+const HEIC_APPLE_SILICON_CONCURRENCY = parsePositiveIntegerEnv(
+    'HEIC_APPLE_SILICON_CONCURRENCY',
+    DEFAULT_HEIC_APPLE_SILICON_CONCURRENCY
+);
+const VIDEO_PIPELINE_DIAGNOSTICS = parseBooleanEnv(process.env.VIDEO_PIPELINE_DIAGNOSTICS);
+let activePhotoConversionTasks = 0;
+
+sharp.cache({ files: 0 });
+sharp.concurrency(1);
+
 export const uploadDir = resolveProjectPath('public', 'uploads');
 export const photoDir = resolveProjectPath('public', 'uploads', 'photos');
 export const videoDir = resolveProjectPath('public', 'uploads', 'videos');
@@ -95,6 +134,90 @@ export const VIDEO_UPLOAD_PUBLIC_URL_ROOT = '/uploads/videos';
 
 const createUploadValidationError = (message: string) =>
     Object.assign(new Error(message), { statusCode: 400 });
+
+const formatDiagnosticValue = (value: unknown) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) {
+            return null;
+        }
+
+        return Number.isInteger(value)
+            ? String(value)
+            : String(Number(value.toFixed(3)));
+    }
+
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+
+    const normalized = String(value).trim();
+    return normalized ? normalized.replace(/\s+/g, '_') : null;
+};
+
+const logDiagnostic = (fields: Record<string, unknown>) => {
+    if (!VIDEO_PIPELINE_DIAGNOSTICS) {
+        return;
+    }
+
+    const payload = Object.entries({
+        component: 'upload-photo',
+        ...fields
+    })
+        .map(([key, value]) => {
+            const formatted = formatDiagnosticValue(value);
+            return formatted === null ? null : `${key}=${formatted}`;
+        })
+        .filter(Boolean)
+        .join(' ');
+
+    if (payload) {
+        console.log('[upload]', payload);
+    }
+};
+
+const runDiagnosticStage = async <T>(
+    stage: string,
+    baseFields: Record<string, unknown>,
+    task: () => Promise<T>,
+    successFields?: Record<string, unknown> | ((result: T) => Record<string, unknown>),
+    failureFields?: Record<string, unknown> | ((error: unknown) => Record<string, unknown>)
+) => {
+    const startedAt = Date.now();
+
+    try {
+        const result = await task();
+        logDiagnostic({
+            event: 'timing',
+            stage,
+            status: 'ok',
+            duration_ms: Date.now() - startedAt,
+            ...baseFields,
+            ...(typeof successFields === 'function' ? successFields(result) : successFields)
+        });
+        return result;
+    } catch (error) {
+        logDiagnostic({
+            event: 'timing',
+            stage,
+            status: 'failed',
+            duration_ms: Date.now() - startedAt,
+            ...baseFields,
+            ...(typeof failureFields === 'function' ? failureFields(error) : failureFields)
+        });
+        throw error;
+    }
+};
+
+const createPhotoNormalizationError = (sourceExtension: string) =>
+    createUploadValidationError(
+        isHeicLikeExtension(sourceExtension)
+            ? 'Не удалось обработать HEIC/HEIF-фото. Попробуйте экспортировать его в JPEG или PNG.'
+            : 'Не удалось обработать изображение. Поддерживаются JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP и HEIC/HEIF.'
+    );
 
 const getOriginalExtension = (originalName: string) => path.extname(originalName || '').trim().toLowerCase();
 
@@ -156,6 +279,25 @@ const buildSafeUploadMetadata = (file: Express.Multer.File): SharedUploadMetadat
 };
 
 const isHeicLikeExtension = (extension: string) => extension === '.heic' || extension === '.heif';
+const shouldUseAppleSiliconHeicFastPath = (sourceExtension: string) =>
+    APPLE_SILICON_HEIC_FAST_PATH && isHeicLikeExtension(sourceExtension);
+
+const normalizeHeicToJpegWithSips = async (filePath: string) => {
+    const targetPath = `${filePath}.jpg`;
+
+    try {
+        await execFileAsync('/usr/bin/sips', ['-s', 'format', 'jpeg', filePath, '--out', targetPath]);
+    } catch (error) {
+        const stat = await fsp.stat(targetPath).catch(() => null);
+        if (!stat || stat.size <= 0) {
+            throw error;
+        }
+    }
+
+    await fsp.rm(filePath, { force: true });
+
+    return targetPath;
+};
 
 const normalizePhotoToJpeg = async (filePath: string, sourceExtension: string) => {
     const targetPath = `${filePath}.jpg`;
@@ -184,6 +326,21 @@ const normalizePhotoToJpeg = async (filePath: string, sourceExtension: string) =
 
     await fsp.rm(filePath, { force: true });
     return targetPath;
+};
+
+const canUseJpegFastPath = async (filePath: string, sourceExtension: string) => {
+    if (sourceExtension !== '.jpg') {
+        return false;
+    }
+
+    try {
+        const metadata = await sharp(filePath, { animated: false }).metadata();
+        return metadata.format === 'jpeg'
+            && (metadata.pages ?? 1) <= 1
+            && (metadata.orientation == null || metadata.orientation === 1);
+    } catch {
+        return false;
+    }
 };
 
 const readUploadSnippet = async (filePath: string) => {
@@ -222,6 +379,145 @@ const moveFileSafely = async (sourcePath: string, targetPath: string) => {
         await fsp.copyFile(sourcePath, targetPath);
         await fsp.unlink(sourcePath);
     }
+};
+
+const finalizeNormalizedUpload = async (
+    file: MutableUploadedFile,
+    metadata: SharedUploadMetadata,
+    normalizedPath: string
+) => {
+    const stat = await fsp.stat(normalizedPath).catch(() => null);
+    const normalizedFilename = path.basename(normalizedPath);
+
+    file.path = normalizedPath;
+    file.filename = normalizedFilename;
+    file.size = stat?.size ?? file.size;
+    file.mimetype = metadata.kind === 'photo' ? 'image/jpeg' : metadata.mimeType;
+    file.safe_extension = metadata.kind === 'photo' ? '.jpg' : metadata.extension;
+    file.safe_kind = metadata.kind;
+    file.safe_mime_type = metadata.kind === 'photo' ? 'image/jpeg' : metadata.mimeType;
+    file.safe_source_extension = metadata.extension;
+
+    return file;
+};
+
+const normalizeSingleUploadedPhoto = async (file: MutableUploadedFile, metadata: SharedUploadMetadata) => {
+    activePhotoConversionTasks += 1;
+    let usedFastPath = false;
+    let converter = 'sharp';
+    try {
+        const normalizedFile = await runDiagnosticStage(
+            'photo_convert',
+            {
+                source_ext: metadata.extension,
+                size_bytes: file.size,
+                active_tasks: activePhotoConversionTasks,
+                converter: shouldUseAppleSiliconHeicFastPath(metadata.extension) ? 'sips' : 'sharp',
+                heic_concurrency: shouldUseAppleSiliconHeicFastPath(metadata.extension) ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                platform: process.platform,
+                arch: process.arch
+            },
+            async () => {
+                const normalizedPath = `${file.path}.jpg`;
+                usedFastPath = await canUseJpegFastPath(file.path, metadata.extension);
+                if (usedFastPath) {
+                    converter = 'rename';
+                    await moveFileSafely(file.path, normalizedPath);
+                    return finalizeNormalizedUpload(file, metadata, normalizedPath);
+                }
+
+                if (shouldUseAppleSiliconHeicFastPath(metadata.extension)) {
+                    try {
+                        converter = 'sips';
+                        return finalizeNormalizedUpload(file, metadata, await normalizeHeicToJpegWithSips(file.path));
+                    } catch {
+                        converter = 'heic-convert';
+                    }
+                }
+
+                converter = isHeicLikeExtension(metadata.extension) ? 'heic-convert' : 'sharp';
+                return finalizeNormalizedUpload(file, metadata, await normalizePhotoToJpeg(file.path, metadata.extension));
+            },
+            (result) => ({
+                used_fast_path: usedFastPath,
+                size_bytes: result.size,
+                active_tasks: activePhotoConversionTasks,
+                converter
+            }),
+            () => ({
+                used_fast_path: usedFastPath,
+                active_tasks: activePhotoConversionTasks,
+                converter
+            })
+        );
+
+        return normalizedFile;
+    } catch {
+        throw createPhotoNormalizationError(metadata.extension);
+    } finally {
+        activePhotoConversionTasks = Math.max(0, activePhotoConversionTasks - 1);
+    }
+};
+
+const normalizeSingleUploadedVideo = async (file: MutableUploadedFile, metadata: SharedUploadMetadata) => {
+    const normalizedFilename = `${path.parse(file.filename).name}${metadata.extension}`;
+    const normalizedPath = path.join(path.dirname(file.path), normalizedFilename);
+
+    if (normalizedPath !== file.path) {
+        await moveFileSafely(file.path, normalizedPath);
+    }
+
+    return finalizeNormalizedUpload(file, metadata, normalizedPath);
+};
+
+const mapWithConcurrency = async <Input, Output>(
+    items: Input[],
+    concurrency: number,
+    mapper: (item: Input, index: number) => Promise<Output>
+) => {
+    if (items.length === 0) {
+        return [] as Output[];
+    }
+
+    const results = new Array<Output>(items.length);
+    let nextIndex = 0;
+    let firstError: unknown = null;
+
+    const runWorker = async () => {
+        while (true) {
+            if (firstError) {
+                return;
+            }
+
+            const currentIndex = nextIndex;
+            nextIndex += 1;
+
+            if (currentIndex >= items.length) {
+                return;
+            }
+
+            try {
+                results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+            } catch (error) {
+                if (!firstError) {
+                    firstError = error;
+                }
+                return;
+            }
+        }
+    };
+
+    const workers = Array.from(
+        { length: Math.min(concurrency, items.length) },
+        () => runWorker()
+    );
+    await Promise.allSettled(workers);
+
+    if (firstError) {
+        throw firstError;
+    }
+
+    return results;
 };
 
 const storage = multer.diskStorage({
@@ -302,7 +598,7 @@ export const normalizeSharedUploadedFiles = async (
         return [];
     }
 
-    const normalizedFiles: MutableUploadedFile[] = [];
+    const preparedFiles: PreparedUploadedFile[] = [];
 
     for (const rawFile of files) {
         const file = rawFile as MutableUploadedFile;
@@ -320,33 +616,61 @@ export const normalizeSharedUploadedFiles = async (
             throw createUploadValidationError('Файл отклонен: активный HTML/SVG/XML-контент запрещен.');
         }
 
-        let normalizedFilename = `${path.parse(file.filename).name}${metadata.extension}`;
-        let normalizedPath = path.join(path.dirname(file.path), normalizedFilename);
-        if (metadata.kind === 'photo') {
-            try {
-                normalizedPath = await normalizePhotoToJpeg(file.path, metadata.extension);
-                normalizedFilename = path.basename(normalizedPath);
-            } catch {
-                throw createUploadValidationError(
-                    isHeicLikeExtension(metadata.extension)
-                        ? 'Не удалось обработать HEIC/HEIF-фото. Попробуйте экспортировать его в JPEG или PNG.'
-                        : 'Не удалось обработать изображение. Поддерживаются JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP и HEIC/HEIF.'
-                );
-            }
-        } else if (normalizedPath !== file.path) {
-            await moveFileSafely(file.path, normalizedPath);
-        }
+        preparedFiles.push({ file, metadata });
+    }
 
-        const stat = await fsp.stat(normalizedPath).catch(() => null);
-        file.path = normalizedPath;
-        file.filename = normalizedFilename;
-        file.size = stat?.size ?? file.size;
-        file.mimetype = metadata.kind === 'photo' ? 'image/jpeg' : metadata.mimeType;
-        file.safe_extension = metadata.kind === 'photo' ? '.jpg' : metadata.extension;
-        file.safe_kind = metadata.kind;
-        file.safe_mime_type = metadata.kind === 'photo' ? 'image/jpeg' : metadata.mimeType;
-        file.safe_source_extension = metadata.extension;
-        normalizedFiles.push(file);
+    if (preparedFiles.every(({ metadata }) => metadata.kind === 'photo')) {
+        const hasOnlyAppleSiliconHeicFiles = preparedFiles.every(({ metadata }) =>
+            shouldUseAppleSiliconHeicFastPath(metadata.extension)
+        );
+        const photoBatchConcurrency = hasOnlyAppleSiliconHeicFiles
+            ? HEIC_APPLE_SILICON_CONCURRENCY
+            : PHOTO_CONCURRENCY;
+
+        return runDiagnosticStage(
+            'photo_batch',
+            {
+                event: 'summary',
+                file_count: preparedFiles.length,
+                photo_concurrency: PHOTO_CONCURRENCY,
+                heic_concurrency: hasOnlyAppleSiliconHeicFiles ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                converter: hasOnlyAppleSiliconHeicFiles ? 'sips' : 'mixed',
+                platform: process.platform,
+                arch: process.arch
+            },
+            () => mapWithConcurrency(
+                preparedFiles,
+                photoBatchConcurrency,
+                async ({ file, metadata }) => normalizeSingleUploadedPhoto(file, metadata)
+            ),
+            () => ({
+                event: 'summary',
+                file_count: preparedFiles.length,
+                photo_concurrency: PHOTO_CONCURRENCY,
+                heic_concurrency: hasOnlyAppleSiliconHeicFiles ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                converter: hasOnlyAppleSiliconHeicFiles ? 'sips' : 'mixed',
+                platform: process.platform,
+                arch: process.arch
+            }),
+            () => ({
+                event: 'summary',
+                file_count: preparedFiles.length,
+                photo_concurrency: PHOTO_CONCURRENCY,
+                heic_concurrency: hasOnlyAppleSiliconHeicFiles ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                converter: hasOnlyAppleSiliconHeicFiles ? 'sips' : 'mixed',
+                platform: process.platform,
+                arch: process.arch
+            })
+        );
+    }
+
+    const normalizedFiles: MutableUploadedFile[] = [];
+    for (const { file, metadata } of preparedFiles) {
+        normalizedFiles.push(
+            metadata.kind === 'photo'
+                ? await normalizeSingleUploadedPhoto(file, metadata)
+                : await normalizeSingleUploadedVideo(file, metadata)
+        );
     }
 
     return normalizedFiles;

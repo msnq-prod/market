@@ -2,6 +2,7 @@ import type { NextFunction, Response } from 'express';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { AuthRequest } from '../middleware/auth.ts';
 import { IS_LOCAL_AUTH_ENVIRONMENT } from '../config/env.ts';
+import { getLogContext, getLogger, sanitizeForLog } from './logger.ts';
 
 type SecurityDbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -67,18 +68,30 @@ export const writeSecurityAuditLog = async (
         action: string;
         user_id?: string | null;
         details?: Record<string, unknown>;
+        entity_type?: string | null;
+        entity_id?: string | null;
+        actor_role?: string | null;
     }
 ) => {
     try {
+        const context = getLogContext();
         await db.auditLog.create({
             data: {
                 user_id: payload.user_id ?? null,
                 action: payload.action,
-                details: payload.details as Prisma.InputJsonValue | undefined
+                details: sanitizeForLog(payload.details) as Prisma.InputJsonValue | undefined,
+                request_id: context.request_id ?? null,
+                entity_type: payload.entity_type ?? null,
+                entity_id: payload.entity_id ?? null,
+                actor_role: payload.actor_role ?? context.role ?? null
             }
         });
     } catch (error) {
-        console.error('Failed to write security audit log', payload.action, error);
+        getLogger('api').error({
+            event: 'audit-log-write-failed',
+            action: payload.action,
+            error: sanitizeForLog(error)
+        }, 'Failed to write security audit log');
     }
 };
 

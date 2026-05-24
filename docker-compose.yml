@@ -26,6 +26,8 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_VIDEO_HELPER_DOWNLOAD_URL: ${VITE_VIDEO_HELPER_DOWNLOAD_URL:-}
+        VITE_SENTRY_DSN_FRONTEND: ${SENTRY_DSN_FRONTEND:-}
+        VITE_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
     container_name: stones-app
     restart: unless-stopped
     depends_on:
@@ -38,6 +40,13 @@ services:
       TELEGRAM_TOKEN_ENCRYPTION_KEY: ${TELEGRAM_TOKEN_ENCRYPTION_KEY:?TELEGRAM_TOKEN_ENCRYPTION_KEY is required}
       PORT: 3001
       CLIENT_URL: http://localhost:3001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: ${LOG_PRETTY:-1}
+      LOG_SLOW_QUERY_MS: ${LOG_SLOW_QUERY_MS:-250}
+      LOG_PAYLOAD_MAX_BYTES: ${LOG_PAYLOAD_MAX_BYTES:-8192}
+      LOG_REDACT_FIELDS: ${LOG_REDACT_FIELDS:-authorization,cookie,set-cookie,password,token,refreshToken,accessToken,encrypted_token,secret,key}
+      SENTRY_DSN_BACKEND: ${SENTRY_DSN_BACKEND:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
       RUN_MIGRATIONS: "1"
       NODE_ENV: production
     ports:
@@ -66,6 +75,13 @@ services:
     environment:
       DATABASE_URL: mysql://stones:stones@db:3306/stones?connection_limit=20&pool_timeout=30
       VIDEO_PROCESSOR_POLL_MS: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: ${LOG_PRETTY:-1}
+      LOG_SLOW_QUERY_MS: ${LOG_SLOW_QUERY_MS:-250}
+      LOG_PAYLOAD_MAX_BYTES: ${LOG_PAYLOAD_MAX_BYTES:-8192}
+      LOG_REDACT_FIELDS: ${LOG_REDACT_FIELDS:-authorization,cookie,set-cookie,password,token,refreshToken,accessToken,encrypted_token,secret,key}
+      SENTRY_DSN_BACKEND: ${SENTRY_DSN_BACKEND:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
       RUN_MIGRATIONS: "0"
       NODE_ENV: production
     volumes:
@@ -95,6 +111,13 @@ services:
       TELEGRAM_WORKER_POLL_MS: ${TELEGRAM_WORKER_POLL_MS:-5000}
       TELEGRAM_WORKER_RETRY_BASE_MS: ${TELEGRAM_WORKER_RETRY_BASE_MS:-5000}
       TELEGRAM_WORKER_MAX_ATTEMPTS: ${TELEGRAM_WORKER_MAX_ATTEMPTS:-5}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: ${LOG_PRETTY:-1}
+      LOG_SLOW_QUERY_MS: ${LOG_SLOW_QUERY_MS:-250}
+      LOG_PAYLOAD_MAX_BYTES: ${LOG_PAYLOAD_MAX_BYTES:-8192}
+      LOG_REDACT_FIELDS: ${LOG_REDACT_FIELDS:-authorization,cookie,set-cookie,password,token,refreshToken,accessToken,encrypted_token,secret,key}
+      SENTRY_DSN_BACKEND: ${SENTRY_DSN_BACKEND:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
       RUN_MIGRATIONS: "0"
       NODE_ENV: production
     healthcheck:

@@ -1,8 +1,9 @@
-import { PrismaClient } from '@prisma/client';
 import { assertTelegramEncryptionConfigured, decryptTelegramBotToken } from './services/telegramCrypto.ts';
 import { getTelegramUpdates, isRetryableTelegramApiError, sendTelegramTextMessage } from './services/telegramClient.ts';
+import { initServerObservability, logDomainEvent } from './services/logger.ts';
+import { prisma } from './services/prisma.ts';
 
-const prisma = new PrismaClient();
+initServerObservability('telegram-worker');
 const POLL_INTERVAL_MS = Number(process.env.TELEGRAM_WORKER_POLL_MS || '5000');
 const RETRY_BASE_MS = Number(process.env.TELEGRAM_WORKER_RETRY_BASE_MS || '5000');
 const MAX_ATTEMPTS = Number(process.env.TELEGRAM_WORKER_MAX_ATTEMPTS || '5');
@@ -91,6 +92,13 @@ const processPendingJobs = async () => {
                     last_error: null
                 }
             });
+            logDomainEvent('telegram-worker', 'telegram-job-sent', {
+                job_id: job.id,
+                entity_type: 'telegram_notification_job',
+                entity_id: job.id,
+                bot_id: job.bot_id,
+                recipient: job.recipient_target
+            });
         } catch (error) {
             const attempts = job.attempts + 1;
             const shouldRetry = attempts < normalizePollingValue(MAX_ATTEMPTS, 5) && isRetryableTelegramApiError(error);
@@ -105,6 +113,15 @@ const processPendingJobs = async () => {
                     last_error: error instanceof Error ? error.message : 'Неизвестная ошибка отправки Telegram.'
                 }
             });
+            logDomainEvent('telegram-worker', 'telegram-job-failed', {
+                job_id: job.id,
+                entity_type: 'telegram_notification_job',
+                entity_id: job.id,
+                bot_id: job.bot_id,
+                attempts,
+                should_retry: shouldRetry,
+                error
+            }, 'warn');
             log('job failed', job.id, error instanceof Error ? error.message : error);
         }
     }

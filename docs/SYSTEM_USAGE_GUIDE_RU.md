@@ -50,6 +50,11 @@ TELEGRAM_TOKEN_ENCRYPTION_KEY="change_me_telegram_crypto"
 VITE_HOST=127.0.0.1
 VITE_PORT=5173
 VITE_API_TARGET=http://127.0.0.1:3001
+# VIDEO_PIPELINE_DIAGNOSTICS=1
+# VIDEO_PROCESSOR_POLL_MS=3000
+# VIDEO_PROCESSOR_WORKERS=1
+# VIDEO_JOB_CONCURRENCY=2
+# VIDEO_JOB_FFMPEG_THREADS=1
 # TELEGRAM_WORKER_POLL_MS=5000
 # TELEGRAM_WORKER_RETRY_BASE_MS=5000
 # TELEGRAM_WORKER_MAX_ATTEMPTS=5
@@ -90,6 +95,19 @@ npm run telegram-worker
 
 ```bash
 npm run dev:e2e
+```
+
+Для server-side video processing можно отдельно настраивать worker через env:
+
+- `VIDEO_PROCESSOR_WORKERS` — сколько polling loop работает в одном процессе `video-processor`
+- `VIDEO_JOB_CONCURRENCY` — сколько tail clips одного job обрабатываются параллельно после подготовки base clip
+- `VIDEO_JOB_FFMPEG_THREADS` — лимит `ffmpeg` threads на encode/re-encode операцию
+- `VIDEO_PIPELINE_DIAGNOSTICS=1` — включает короткие `key=value` diagnostics для `video-export-helper`, `video-processor` и photo normalization upload pipeline
+
+Консервативные значения по умолчанию: `1 / 2 / 1`. Для локального smoke test удобно запускать:
+
+```bash
+VIDEO_PROCESSOR_WORKERS=2 VIDEO_JOB_CONCURRENCY=2 VIDEO_JOB_FFMPEG_THREADS=1 npm run video-processor
 ```
 
 ## 5. Роли и доступ
@@ -191,6 +209,8 @@ npm run dev:e2e
 
 На странице `Наличие` доступны фильтры по локации, остатку, публикации и цене, сортировка по основным колонкам, 300 строк на странице по умолчанию и раскрытие товара до конкретных `Item`. Ручное резервирование, создание заказов и массовые операции на этой странице не выполняются.
 
+В desktop-версии `Status Center` содержит диагностику `Проверка создания партии`: оператор выбирает папку с 10 фото и 1 видео, после чего система создает тестовую партию, загружает media, проверяет QR и публичный паспорт.
+
 ## 9.1 Dashboard
 
 Показывает:
@@ -285,6 +305,8 @@ npm run dev:e2e
 - лишние фото допустимы, но без полного покрытия партии сохранить нельзя;
 - несохраненный черновик восстанавливается после перезагрузки страницы;
 - если другой оператор изменил фото партии, save будет отклонен до обновления страницы.
+- в Electron HQ новые локальные файлы при сохранении ставятся в desktop media queue; при плохом соединении задача сохраняется локально и повторяется после восстановления backend;
+- в браузерном HQ поведение остается прежним: сохранение идет прямым upload-запросом.
 
 ## 9.7 Video Tool
 
@@ -304,6 +326,7 @@ npm run dev:e2e
 Особенности:
 
 - Video Tool проверяет локальный helper и версию протокола `stones-video-export-helper-v3`;
+- в Electron HQ helper встроен в приложение `ZAGARAMI HQ`, отдельное helper-приложение для основного desktop-сценария не нужно;
 - черновик нарезки и текущая session восстанавливаются после перезагрузки страницы;
 - export-session имеет статусы `OPEN`, `UPLOADING`, `COMPLETED`, `FAILED`, `CANCELLED`, `ABANDONED`;
 - частичная выгрузка хранит файлы в `uploaded_manifest`, но не обновляет `item_video_url` до полного набора роликов партии;
@@ -311,6 +334,7 @@ npm run dev:e2e
 - при зависшей или частично загруженной session доступна append-only догрузка и `retry-tail` только для отсутствующих роликов;
 - уже загруженные `serial_number` не пересобираются и не переупорядочиваются;
 - после `CANCELLED` следующая попытка создает новую session.
+- в Electron HQ upload готовых `.mp4` идет через desktop media queue; failed-задачи можно повторить или отменить из индикатора очереди.
 
 ## 9.8 QR Print
 
@@ -537,7 +561,12 @@ Endpoint:
 
 Заметка по безопасности:
 - `POST /api/upload/photo` принимает только raster-изображения (`png/jpg/gif/webp`), canonicalizes extension и блокирует HTML/SVG/XML payload.
+- Для batch-нормализации shared photo upload backend использует ограниченную параллельность; `PHOTO_CONCURRENCY` управляет числом одновременно обрабатываемых фото.
+- На `macOS arm64` HEIC/HEIF по умолчанию конвертируются через системный `sips`; `HEIC_APPLE_SILICON_CONCURRENCY` управляет отдельным лимитом параллельности для этого fast-path.
 - `POST /api/upload/video` принимает только `mp4/mov/m4v/webm`; uploaded files под `/uploads/*` отдаются с `X-Content-Type-Options: nosniff`.
+
+Для baseline-замеров включите `VIDEO_PIPELINE_DIAGNOSTICS=1` и сравнивайте логи по полям `stage`, `duration_ms`, `active_jobs`, `active_tasks`, `active_renders`, `processed_count`, `total_count`, `size_bytes`, `job_concurrency`, `render_concurrency`, `ffmpeg_threads`, `converter`, `heic_concurrency`, `platform`, `arch`.
+Ключевые stage: `probe`, `normalize`, `preview_render`, `final_render`, `final_concat`, `photo_convert`, `photo_batch`, `job`.
 
 ## 14. Частые проблемы
 

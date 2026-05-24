@@ -1,12 +1,12 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { NextFunction, Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.ts';
 import { runTelegramSideEffect, syncTelegramLowStockNotifications } from '../services/telegramNotifications.ts';
+import { isHqStaffRole } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.get('/me', authenticateToken, async (req: AuthRequest, res) => {
     try {
@@ -33,7 +33,7 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res) => {
 
 router.get('/ledger', authenticateToken, async (req: AuthRequest, res) => {
     if (!req.user) return res.sendStatus(401);
-    const isStaff = ['ADMIN', 'MANAGER'].includes(req.user.role);
+    const isStaff = isHqStaffRole(req.user.role);
     const userIdFromQuery = typeof req.query.user_id === 'string' ? req.query.user_id : undefined;
     const userId = isStaff && userIdFromQuery ? userIdFromQuery : req.user.id;
 
@@ -65,7 +65,7 @@ const requireStaff = (req: AuthRequest, res: Response, next: NextFunction) => {
         res.sendStatus(401);
         return;
     }
-    if (['ADMIN', 'MANAGER'].includes(req.user.role)) {
+    if (isHqStaffRole(req.user.role)) {
         next();
     } else {
         res.sendStatus(403);

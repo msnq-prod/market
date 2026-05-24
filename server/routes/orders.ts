@@ -1,5 +1,4 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
@@ -15,9 +14,9 @@ import {
     transitionSalesOrderStatus,
     updateSalesOrderFields
 } from '../services/sales.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.use(authenticateToken);
 

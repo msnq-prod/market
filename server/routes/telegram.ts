@@ -1,5 +1,4 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken, requireRole } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
@@ -11,9 +10,10 @@ import {
 } from '../services/telegramConfig.ts';
 import { assertTelegramEncryptionConfigured, decryptTelegramBotToken, encryptTelegramBotToken } from '../services/telegramCrypto.ts';
 import { validateTelegramBotToken } from '../services/telegramClient.ts';
+import { ADMIN_ONLY_ROLES } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const serializeBot = (bot: {
     id: string;
@@ -43,7 +43,7 @@ const serializeBot = (bot: {
     updated_at: bot.updated_at
 });
 
-router.use(authenticateToken, requireRole(['ADMIN']));
+router.use(authenticateToken, requireRole(ADMIN_ONLY_ROLES));
 
 router.get('/bots', async (_req, res) => {
     try {

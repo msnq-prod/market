@@ -1,0 +1,58 @@
+{
+  "appId": "com.stones.hq",
+  "productName": "ZAGARAMI admin",
+  "artifactName": "ZAGARAMI-HQ-${version}-${arch}.${ext}",
+  "directories": {
+    "output": "dist-electron-hq"
+  },
+  "extraMetadata": {
+    "main": "electron/hq/main.cjs",
+    "stonesHq": {
+      "apiOrigin": "https://zagarami.com"
+    }
+  },
+  "files": [
+    "dist/**/*",
+    "electron/hq/**/*",
+    "video-export-helper/**/*",
+    "node_modules/ffmpeg-static/index.js",
+    "node_modules/ffmpeg-static/package.json",
+    "node_modules/ffmpeg-static/LICENSE",
+    "node_modules/ffmpeg-static/ffmpeg",
+    "node_modules/ffprobe-static/index.js",
+    "node_modules/ffprobe-static/package.json",
+    "node_modules/ffprobe-static/LICENSE",
+    "node_modules/ffprobe-static/bin/**/*",
+    "!**/node_modules/electron/**",
+    "!**/node_modules/electron-builder/**",
+    "package.json"
+  ],
+  "asarUnpack": [
+    "node_modules/ffmpeg-static/ffmpeg",
+    "node_modules/ffprobe-static/bin/**/*"
+  ],
+  "mac": {
+    "icon": "electron/hq/assets/icon.icns",
+    "target": [
+      {
+        "target": "dir",
+        "arch": [
+          "arm64",
+          "x64"
+        ]
+      }
+    ],
+    "category": "public.app-category.business"
+  },
+  "win": {
+    "target": [
+      "nsis"
+    ]
+  },
+  "linux": {
+    "target": [
+      "AppImage"
+    ],
+    "category": "Office"
+  }
+}

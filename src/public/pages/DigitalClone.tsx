@@ -4,6 +4,7 @@ import type { CloneItemView } from '../components/DigitalCloneView';
 import { DigitalCloneView } from '../components/DigitalCloneView';
 import { PassportPlanetScene } from '../components/PassportPlanetScene';
 import { DEFAULT_CLONE_PAGE_CONTENT, sanitizeClonePageContent, type ClonePageContent } from '../../shared/clonePageContent';
+import { apiFetch } from '../../utils/apiFetch';
 
 export function DigitalClone() {
     const { serialNumber } = useParams();
@@ -24,8 +25,8 @@ export function DigitalClone() {
             setError('');
             try {
                 const [itemRes, contentRes] = await Promise.all([
-                    fetch(`/api/public/items/${encodeURIComponent(serialNumber)}`),
-                    fetch('/api/content/clone-page')
+                    apiFetch(`/api/public/items/${encodeURIComponent(serialNumber)}`),
+                    apiFetch('/api/content/clone-page')
                 ]);
 
                 if (!itemRes.ok) {

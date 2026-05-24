@@ -1,11 +1,14 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
-import React, { Suspense, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import * as THREE from 'three';
+import { apiFetch } from '../../utils/apiFetch';
+import { getStonesDesktop, isStonesDesktop } from '../../utils/desktop';
 import { persistAuthSession } from '../../utils/session';
 import { hasWebGLSupport } from '../../utils/webgl';
 import { partnerControlClassName } from '../components/ui';
+import { isAdminWorkspaceRole, isPartnerRole } from '../../../shared/domain/policy';
 
 type LoginPortal = 'partner' | 'admin';
 
@@ -105,6 +108,7 @@ export function Login({ portal = 'partner' }: LoginProps) {
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
     const location = useLocation();
+    const desktopAutoLoginAttemptedRef = useRef(false);
     const isAdminPortal = portal === 'admin';
     const title = isAdminPortal ? 'Админ-панель HQ' : 'Партнерский кабинет';
     const subtitle = isAdminPortal
@@ -114,17 +118,15 @@ export function Login({ portal = 'partner' }: LoginProps) {
         ? 'Доступ запрещён. Нужна учетная запись администратора, менеджера HQ или менеджера продаж.'
         : 'Доступ запрещён. Нужен партнерский или staff-аккаунт.';
 
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const loginWithCredentials = useCallback(async (nextEmail: string, nextPassword: string) => {
         setError('');
         setLoading(true);
 
         try {
-            const response = await fetch('/auth/login', {
+            const response = await apiFetch('/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify({ email: nextEmail, password: nextPassword }),
             });
 
             const data = await response.json();
@@ -133,8 +135,8 @@ export function Login({ portal = 'partner' }: LoginProps) {
                 throw new Error(data.error || 'Ошибка входа');
             }
 
-            const isStaff = data.role === 'ADMIN' || data.role === 'MANAGER' || data.role === 'SALES_MANAGER';
-            const isFranchisee = data.role === 'FRANCHISEE';
+            const isStaff = isAdminWorkspaceRole(data.role);
+            const isFranchisee = isPartnerRole(data.role);
 
             if (isAdminPortal && !isStaff) {
                 throw new Error(deniedMessage);
@@ -147,7 +149,8 @@ export function Login({ portal = 'partner' }: LoginProps) {
             persistAuthSession({
                 accessToken: data.accessToken,
                 role: data.role,
-                name: data.name
+                name: data.name,
+                userId: data.user?.id || null
             });
 
             if (isStaff) {
@@ -163,6 +166,44 @@ export function Login({ portal = 'partner' }: LoginProps) {
         } finally {
             setLoading(false);
         }
+    }, [deniedMessage, isAdminPortal, location.state, navigate]);
+
+    useEffect(() => {
+        if (!isAdminPortal || !isStonesDesktop() || localStorage.getItem('accessToken') || desktopAutoLoginAttemptedRef.current) {
+            return;
+        }
+
+        desktopAutoLoginAttemptedRef.current = true;
+        const desktop = getStonesDesktop();
+        if (!desktop?.getAdminAutoLoginCredentials) {
+            return;
+        }
+
+        let cancelled = false;
+        void desktop.getAdminAutoLoginCredentials()
+            .then((credentials) => {
+                if (cancelled) {
+                    return;
+                }
+
+                setEmail(credentials.email);
+                setPassword(credentials.password);
+                return loginWithCredentials(credentials.email, credentials.password);
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setError(error instanceof Error ? error.message : 'Автовход в desktop-приложении не удался.');
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isAdminPortal, loginWithCredentials]);
+
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        await loginWithCredentials(email, password);
     };
 
     const form = (

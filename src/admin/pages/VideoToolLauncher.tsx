@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PackageCheck, Search, Video } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import { getBatchStatusMeta } from '../../../shared/domain/policy';
 
 type VideoExportState = {
     session_id: string;
@@ -42,16 +43,6 @@ type BatchView = {
         item_video_url?: string | null;
         item_photo_url?: string | null;
     }>;
-};
-
-const statusLabel: Record<string, string> = {
-    TRANSIT: 'В пути',
-    RECEIVED: 'Принята'
-};
-
-const statusClass: Record<string, string> = {
-    TRANSIT: 'border-white/12 bg-white/[0.06] text-gray-100',
-    RECEIVED: 'border-white/12 bg-white/[0.06] text-gray-100'
 };
 
 const videoExportLabel: Record<string, string> = {
@@ -224,8 +215,8 @@ export function VideoToolLauncher() {
                                             </div>
 
                                             <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
-                                                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass[batch.status] || 'border-white/10 bg-[#1b1e24] text-gray-300'}`}>
-                                                    {statusLabel[batch.status] || batch.status}
+                                                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${getBatchStatusMeta(batch.status).className}`}>
+                                                    {getBatchStatusMeta(batch.status).label}
                                                 </span>
                                                 {batch.video_export && (
                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${videoExportClass[batch.video_export.status] || 'border-white/10 bg-[#1b1e24] text-gray-300'}`}>

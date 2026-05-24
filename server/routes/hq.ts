@@ -1,5 +1,4 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { NextFunction, Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.ts';
@@ -8,9 +7,12 @@ import {
     queueBatchMediaReadyNotifications,
     runTelegramSideEffect
 } from '../services/telegramNotifications.ts';
+import { logDomainEvent } from '../services/logger.ts';
+import { writeSecurityAuditLog } from '../services/security.ts';
+import { isHqStaffRole } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Middleware to ensure Admin/Manager
 const requireStaff = (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -18,7 +20,7 @@ const requireStaff = (req: AuthRequest, res: Response, next: NextFunction) => {
         res.sendStatus(401);
         return;
     }
-    if (['ADMIN', 'MANAGER'].includes(req.user.role)) {
+    if (isHqStaffRole(req.user.role)) {
         next();
     } else {
         res.sendStatus(403);
@@ -90,13 +92,19 @@ router.post('/items/:itemId/reject', async (req: AuthRequest, res) => {
         });
 
         // Log audit?
-        await prisma.auditLog.create({
-            data: {
-                user_id: req.user.id,
-                action: 'ITEM_REJECTED',
-                details: { itemId, reason, batchId: existingItem.batch_id }
-            }
+        await writeSecurityAuditLog(prisma, {
+            action: 'ITEM_REJECTED',
+            user_id: req.user.id,
+            entity_type: 'item',
+            entity_id: itemId,
+            details: { itemId, reason, batchId: existingItem.batch_id }
         });
+        logDomainEvent('api', 'item-rejected', {
+            entity_type: 'item',
+            entity_id: itemId,
+            batch_id: existingItem.batch_id,
+            user_id: req.user.id
+        }, 'warn');
 
         res.json(item);
     } catch (_error) {

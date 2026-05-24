@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Home, ListOrdered, LogOut, Menu, Package, RussianRuble, X } from 'lucide-react';
 import { logoutSession } from '../../utils/session';
+import { isAdminWorkspaceRole, isPartnerRole } from '../../../shared/domain/policy';
 
 type PageMeta = {
     title: string;
@@ -51,8 +52,8 @@ export function PartnerLayout() {
 
     const token = localStorage.getItem('accessToken');
     const role = localStorage.getItem('userRole');
-    const isStaff = role === 'ADMIN' || role === 'MANAGER' || role === 'SALES_MANAGER';
-    const isFranchisee = role === 'FRANCHISEE';
+    const isStaff = isAdminWorkspaceRole(role);
+    const isFranchisee = isPartnerRole(role);
 
     const handleLogout = () => {
         logoutSession();

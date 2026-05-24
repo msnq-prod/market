@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import multer from 'multer';
+import * as Sentry from '@sentry/node';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +38,110 @@ const packageJsonPath = path.join(projectRoot, 'package.json');
 const PLACEHOLDER_HELPER_VERSION = '0.0.0';
 
 const secondsFromMs = (value) => (value / 1000).toFixed(3);
+const parseBooleanEnv = (value) => typeof value === 'string'
+    && ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+const VIDEO_PIPELINE_DIAGNOSTICS = parseBooleanEnv(process.env.VIDEO_PIPELINE_DIAGNOSTICS);
+
+const formatDiagnosticValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) {
+            return null;
+        }
+
+        return Number.isInteger(value)
+            ? String(value)
+            : String(Number(value.toFixed(3)));
+    }
+
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+
+    const normalized = String(value).trim();
+    return normalized ? normalized.replace(/\s+/g, '_') : null;
+};
+
+const recentLogs = [];
+const MAX_RECENT_LOGS = 1000;
+
+export const appendToRecentLogs = (message) => {
+    try {
+        recentLogs.push({
+            timestamp: new Date().toISOString(),
+            message
+        });
+        if (recentLogs.length > MAX_RECENT_LOGS) {
+            recentLogs.shift();
+        }
+    } catch {
+        // Ignore logging errors
+    }
+};
+
+const logDiagnostic = (component, fields) => {
+    const payload = Object.entries({ component, ...fields })
+        .map(([key, value]) => {
+            const formatted = formatDiagnosticValue(value);
+            return formatted === null ? null : `${key}=${formatted}`;
+        })
+        .filter(Boolean)
+        .join(' ');
+
+    if (payload) {
+        const fullMessage = `[${component}] ${payload}`;
+        appendToRecentLogs(fullMessage);
+        if (VIDEO_PIPELINE_DIAGNOSTICS) {
+            console.log(`[${component}]`, payload);
+        }
+    }
+};
+
+const resolveDiagnosticFields = (resolver, value) => {
+    if (!resolver) {
+        return {};
+    }
+
+    const fields = typeof resolver === 'function' ? resolver(value) : resolver;
+    return isRecord(fields) ? fields : {};
+};
+
+const runDiagnosticStage = async (
+    component,
+    stage,
+    baseFields,
+    task,
+    successFields,
+    failureFields
+) => {
+    const startedAt = Date.now();
+
+    try {
+        const result = await task();
+        logDiagnostic(component, {
+            event: 'timing',
+            stage,
+            status: 'ok',
+            duration_ms: Date.now() - startedAt,
+            ...baseFields,
+            ...resolveDiagnosticFields(successFields, result)
+        });
+        return result;
+    } catch (error) {
+        logDiagnostic(component, {
+            event: 'timing',
+            stage,
+            status: 'failed',
+            duration_ms: Date.now() - startedAt,
+            ...baseFields,
+            ...resolveDiagnosticFields(failureFields, error)
+        });
+        throw error;
+    }
+};
 
 const buildVideoFilter = (labelPrefix, inputIndex, startMs, endMs) => (
     `[${inputIndex}:v]trim=start=${secondsFromMs(startMs)}:end=${secondsFromMs(endMs)},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,fps=24,setsar=1[${labelPrefix}]`
@@ -172,6 +277,78 @@ const getFreeBytes = async (targetPath) => {
 };
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+const countCompletedOutputs = (outputs) => outputs.filter((output) => output.status === 'COMPLETED').length;
+
+const parsePositiveInteger = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    const parsed = typeof value === 'number'
+        ? value
+        : Number.parseInt(String(value), 10);
+
+    if (!Number.isFinite(parsed) || parsed < 1) {
+        return null;
+    }
+
+    return Math.floor(parsed);
+};
+
+const getAvailableCpuCount = () => {
+    const parallelism = typeof os.availableParallelism === 'function'
+        ? os.availableParallelism()
+        : os.cpus().length;
+
+    return Math.max(1, parsePositiveInteger(parallelism) || 1);
+};
+
+const getDefaultVideoRenderConcurrency = (cpuCount) => (
+    Math.min(2, Math.max(1, Math.floor(cpuCount / 4)))
+);
+
+const getDefaultVideoRenderFfmpegThreads = (cpuCount, renderConcurrency) => (
+    Math.min(2, Math.max(1, Math.floor(cpuCount / (renderConcurrency * 2))))
+);
+
+const createConcurrencyLimiter = (limit) => {
+    let activeCount = 0;
+    const queue = [];
+
+    const drainQueue = () => {
+        while (activeCount < limit && queue.length > 0) {
+            const nextEntry = queue.shift();
+            if (!nextEntry) {
+                continue;
+            }
+
+            activeCount += 1;
+            Promise.resolve()
+                .then(nextEntry.task)
+                .then(nextEntry.resolve, nextEntry.reject)
+                .finally(() => {
+                    activeCount -= 1;
+                    drainQueue();
+                });
+        }
+    };
+
+    return {
+        run(task) {
+            return new Promise((resolve, reject) => {
+                queue.push({ task, resolve, reject });
+                drainQueue();
+            });
+        },
+        getStats() {
+            return {
+                activeCount,
+                queuedCount: queue.length,
+                limit
+            };
+        }
+    };
+};
 
 const mergeAllowedOrigins = (...entries) => Array.from(new Set(
     entries
@@ -310,36 +487,51 @@ const normalizeRenderSources = (sourceEntries, fallbackSourceId, sources) => {
     return sourceMap;
 };
 
-const readHelperConfig = async (storageRoot, explicitAllowedOrigins) => {
-    const fromOptions = Array.isArray(explicitAllowedOrigins) ? explicitAllowedOrigins : null;
-    if (fromOptions && fromOptions.length > 0) {
-        return mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, fromOptions);
+const readHelperConfig = async (storageRoot, options = {}) => {
+    let parsed = {};
+    try {
+        const raw = await fsp.readFile(path.join(storageRoot, 'config.json'), 'utf8');
+        const nextParsed = JSON.parse(raw);
+        if (isRecord(nextParsed)) {
+            parsed = nextParsed;
+        }
+    } catch {
+        parsed = {};
     }
 
-    const fromEnv = (process.env.VIDEO_EXPORT_HELPER_ALLOWED_ORIGINS || '')
+    const configOrigins = Array.isArray(parsed.allowed_origins)
+        ? parsed.allowed_origins
+            .map((item) => typeof item === 'string' ? item.trim() : '')
+            .filter(Boolean)
+        : [];
+    const envOrigins = (process.env.VIDEO_EXPORT_HELPER_ALLOWED_ORIGINS || '')
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean);
-    if (fromEnv.length > 0) {
-        return mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, fromEnv);
-    }
+    const explicitOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
+    const allowedOrigins = explicitOrigins.length > 0
+        ? mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, explicitOrigins)
+        : envOrigins.length > 0
+            ? mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, envOrigins)
+            : configOrigins.length > 0
+                ? mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, configOrigins)
+                : DEFAULT_ALLOWED_ORIGINS;
 
-    try {
-        const raw = await fsp.readFile(path.join(storageRoot, 'config.json'), 'utf8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed.allowed_origins)) {
-            const origins = parsed.allowed_origins
-                .map((item) => typeof item === 'string' ? item.trim() : '')
-                .filter(Boolean);
-            if (origins.length > 0) {
-                return mergeAllowedOrigins(DEFAULT_ALLOWED_ORIGINS, origins);
-            }
-        }
-    } catch {
-        return DEFAULT_ALLOWED_ORIGINS;
-    }
+    const cpuCount = getAvailableCpuCount();
+    const videoRenderConcurrency = parsePositiveInteger(options.videoRenderConcurrency)
+        || parsePositiveInteger(process.env.VIDEO_RENDER_CONCURRENCY)
+        || parsePositiveInteger(parsed.video_render_concurrency)
+        || getDefaultVideoRenderConcurrency(cpuCount);
+    const videoRenderFfmpegThreads = parsePositiveInteger(options.videoRenderFfmpegThreads)
+        || parsePositiveInteger(process.env.VIDEO_RENDER_FFMPEG_THREADS)
+        || parsePositiveInteger(parsed.video_render_ffmpeg_threads)
+        || getDefaultVideoRenderFfmpegThreads(cpuCount, videoRenderConcurrency);
 
-    return DEFAULT_ALLOWED_ORIGINS;
+    return {
+        allowedOrigins,
+        videoRenderConcurrency,
+        videoRenderFfmpegThreads
+    };
 };
 
 const probeSource = async (ffprobePath, filePath) => {
@@ -470,7 +662,8 @@ const renderOutputFile = async (
     introSegment,
     tailSegment,
     outputPath,
-    crossfadeMs
+    crossfadeMs,
+    ffmpegThreads
 ) => {
     const introDurationMs = introSegment.end_ms - introSegment.start_ms;
     const tailDurationMs = tailSegment.end_ms - tailSegment.start_ms;
@@ -525,7 +718,14 @@ const renderOutputFile = async (
         '-c:a', 'aac',
         '-b:a', '192k',
         '-ar', '48000',
-        '-ac', '2',
+        '-ac', '2'
+    );
+
+    if (parsePositiveInteger(ffmpegThreads)) {
+        args.push('-threads', String(ffmpegThreads));
+    }
+
+    args.push(
         '-movflags', '+faststart',
         outputPath
     );
@@ -534,6 +734,34 @@ const renderOutputFile = async (
 };
 
 export async function startVideoExportHelperServer(options = {}) {
+    const helperVersion = resolveHelperVersion(
+        typeof options.helperVersion === 'string'
+            ? options.helperVersion
+            : await readPackageVersion()
+    );
+
+    const sentryDsn = options.sentryDsn || process.env.STONES_HELPER_SENTRY_DSN || '';
+    const sentryEnv = options.sentryEnv || process.env.STONES_HELPER_SENTRY_ENVIRONMENT || 'production';
+    let serverSentryInitialized = false;
+
+    if (sentryDsn && !Sentry.getClient()) {
+        try {
+            Sentry.init({
+                dsn: sentryDsn,
+                environment: sentryEnv,
+                release: helperVersion,
+                tracesSampleRate: 0,
+                sendDefaultPii: false
+            });
+            serverSentryInitialized = true;
+            console.log('[video-export-helper-server] Sentry initialized successfully');
+        } catch (error) {
+            console.error('[video-export-helper-server] Failed to initialize Sentry', error);
+        }
+    } else if (Sentry.getClient()) {
+        serverSentryInitialized = true;
+    }
+
     const app = express();
     const port = Number.parseInt(String(options.port || process.env.VIDEO_EXPORT_HELPER_PORT || DEFAULT_PORT), 10) || DEFAULT_PORT;
     const host = typeof options.host === 'string' ? options.host : DEFAULT_HOST;
@@ -546,11 +774,6 @@ export async function startVideoExportHelperServer(options = {}) {
     const cleanupMaxAgeMs = Number(options.cleanupMaxAgeMs || process.env.VIDEO_EXPORT_HELPER_CLEANUP_MAX_AGE_MS || DEFAULT_CLEANUP_MAX_AGE_MS);
     const minFreeBytes = Number(options.minFreeBytes || process.env.VIDEO_EXPORT_HELPER_MIN_FREE_BYTES || DEFAULT_MIN_FREE_BYTES);
     const maxSourceDurationMs = Number(options.maxSourceDurationMs || process.env.VIDEO_EXPORT_HELPER_MAX_SOURCE_DURATION_MS || DEFAULT_MAX_SOURCE_DURATION_MS);
-    const helperVersion = resolveHelperVersion(
-        typeof options.helperVersion === 'string'
-            ? options.helperVersion
-            : await readPackageVersion()
-    );
     const { ffmpegStaticPath, ffprobeStaticPath } = await resolveBundledBinaryPaths();
     const ffmpegPath = resolveExecutablePath(options.ffmpegPath || process.env.VIDEO_EXPORT_HELPER_FFMPEG_BIN || ffmpegStaticPath || 'ffmpeg');
     const ffprobePath = resolveExecutablePath(options.ffprobePath || process.env.VIDEO_EXPORT_HELPER_FFPROBE_BIN || ffprobeStaticPath || 'ffprobe');
@@ -560,11 +783,55 @@ export async function startVideoExportHelperServer(options = {}) {
     await ensureDirectory(previewRoot);
     await ensureDirectory(jobRoot);
 
-    const allowedOrigins = await readHelperConfig(storageRoot, options.allowedOrigins);
+    const helperConfig = await readHelperConfig(storageRoot, {
+        allowedOrigins: options.allowedOrigins,
+        videoRenderConcurrency: options.videoRenderConcurrency,
+        videoRenderFfmpegThreads: options.videoRenderFfmpegThreads
+    });
+    const { allowedOrigins, videoRenderConcurrency, videoRenderFfmpegThreads } = helperConfig;
     const allowedOriginSet = new Set(allowedOrigins);
     const sources = new Map();
     const jobs = new Map();
     const buildHelperUrl = (pathname) => `http://${host}:${port}${pathname}`;
+    const renderLimiter = createConcurrencyLimiter(videoRenderConcurrency);
+    const getJobStats = () => {
+        let activeJobs = 0;
+        let queuedJobs = 0;
+
+        for (const job of jobs.values()) {
+            if (job.status === 'PROCESSING') {
+                activeJobs += 1;
+            } else if (job.status === 'QUEUED') {
+                queuedJobs += 1;
+            }
+        }
+
+        return {
+            activeJobs,
+            queuedJobs
+        };
+    };
+    const getRenderStats = () => renderLimiter.getStats();
+    const logJobSummary = (job, status, durationMs) => {
+        const { activeJobs, queuedJobs } = getJobStats();
+        const { activeCount } = getRenderStats();
+
+        logDiagnostic('video-export-helper', {
+            event: 'summary',
+            stage: 'job',
+            status,
+            duration_ms: durationMs,
+            job_id: job.id,
+            job_kind: job.kind || 'RENDER',
+            processed_count: job.processed_count,
+            total_count: job.total_count,
+            active_jobs: activeJobs,
+            active_renders: activeCount,
+            queued_jobs: queuedJobs,
+            render_concurrency: videoRenderConcurrency,
+            ffmpeg_threads: videoRenderFfmpegThreads
+        });
+    };
 
     let stateWritePromise = Promise.resolve();
     const persistState = async () => {
@@ -669,8 +936,28 @@ export async function startVideoExportHelperServer(options = {}) {
         return { removed_jobs: removedJobs, removed_sources: removedSources };
     };
 
+    const getDirectorySize = async (dirPath) => {
+        let totalSize = 0;
+        try {
+            const files = await fsp.readdir(dirPath, { withFileTypes: true });
+            for (const file of files) {
+                const fullPath = path.join(dirPath, file.name);
+                if (file.isDirectory()) {
+                    totalSize += await getDirectorySize(fullPath);
+                } else if (file.isFile()) {
+                    const stat = await fsp.stat(fullPath);
+                    totalSize += stat.size;
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+        return totalSize;
+    };
+
     const getHealthInfo = async () => {
         const freeBytes = await getFreeBytes(storageRoot);
+        const cacheBytes = await getDirectorySize(storageRoot);
         await ensureBinaryExists(ffmpegPath);
         await ensureBinaryExists(ffprobePath);
 
@@ -686,6 +973,7 @@ export async function startVideoExportHelperServer(options = {}) {
             storage_root: storageRoot,
             allowed_origins: allowedOrigins,
             free_bytes: freeBytes,
+            cache_bytes: cacheBytes,
             cleanup_threshold_days: Math.round(cleanupMaxAgeMs / (24 * 60 * 60 * 1000)),
             queued_jobs: Array.from(jobs.values()).filter((job) => job.status === 'QUEUED' || job.status === 'PROCESSING').length
         };
@@ -730,17 +1018,35 @@ export async function startVideoExportHelperServer(options = {}) {
         }
 
         await updateJob(jobId, { status: 'PROCESSING', error_message: null });
+        logJobSummary(job, 'started', 0);
         const outputState = job.outputs[0];
         if (!outputState) {
             await updateJob(jobId, { status: 'FAILED', error_message: 'В intro job отсутствует output.' });
             return;
         }
 
+        const jobStartedAt = Date.now();
         try {
             outputState.status = 'PROCESSING';
             await updateJob(jobId, { outputs: [...job.outputs] });
 
-            await renderIntroFile(ffmpegPath, introSource, introSegment, outputState.file_path);
+            await runDiagnosticStage(
+                'video-export-helper',
+                'final_render',
+                {
+                    job_id: job.id,
+                    job_kind: job.kind,
+                    output_index: 0,
+                    processed_count: job.processed_count,
+                    total_count: job.total_count,
+                    active_jobs: getJobStats().activeJobs,
+                    active_renders: getRenderStats().activeCount,
+                    queued_jobs: getJobStats().queuedJobs,
+                    render_concurrency: videoRenderConcurrency,
+                    ffmpeg_threads: videoRenderFfmpegThreads
+                },
+                () => renderIntroFile(ffmpegPath, introSource, introSegment, outputState.file_path)
+            );
 
             outputState.status = 'COMPLETED';
             outputState.error_message = null;
@@ -750,15 +1056,20 @@ export async function startVideoExportHelperServer(options = {}) {
                 processed_count: 1,
                 error_message: null
             });
+            logJobSummary(jobs.get(jobId) || job, 'completed', Date.now() - jobStartedAt);
         } catch (error) {
             outputState.status = 'FAILED';
             outputState.error_message = error instanceof Error ? error.message : 'Не удалось отрендерить intro.';
+            if (serverSentryInitialized) {
+                Sentry.captureException(error);
+            }
             await updateJob(jobId, {
                 status: 'FAILED',
                 outputs: [...job.outputs],
                 processed_count: 0,
                 error_message: outputState.error_message
             });
+            logJobSummary(jobs.get(jobId) || job, 'failed', Date.now() - jobStartedAt);
         }
     };
 
@@ -780,14 +1091,25 @@ export async function startVideoExportHelperServer(options = {}) {
         }
 
         await updateJob(jobId, { status: 'PROCESSING', error_message: null });
+        logJobSummary(job, 'started', 0);
+        const jobStartedAt = Date.now();
 
-        let processedCount = 0;
-        for (const outputState of job.outputs) {
+        let nextOutputIndex = 0;
+        let stopScheduling = false;
+        let firstFailureMessage = null;
+        const workerCount = Math.min(job.outputs.length, videoRenderConcurrency);
+
+        const processOneOutput = async (outputState) => renderLimiter.run(async () => {
+            if (stopScheduling) {
+                return false;
+            }
+
             try {
                 const tailSegment = segments[outputState.segment_seq];
                 if (!tailSegment) {
                     throw new Error(`Не найден товарный сегмент ${String(outputState.segment_seq).padStart(3, '0')}.`);
                 }
+
                 const tailSource = sourceMap.get(tailSegment.source_index ?? 0);
                 if (!tailSource) {
                     throw new Error(`Не найден source для товарного сегмента ${String(outputState.segment_seq).padStart(3, '0')}.`);
@@ -796,34 +1118,97 @@ export async function startVideoExportHelperServer(options = {}) {
                 outputState.status = 'PROCESSING';
                 await updateJob(jobId, { outputs: [...job.outputs] });
 
-                await renderOutputFile(ffmpegPath, introSource, tailSource, introSegment, tailSegment, outputState.file_path, job.crossfade_ms);
+                await runDiagnosticStage(
+                    'video-export-helper',
+                    'final_render',
+                    {
+                        job_id: job.id,
+                        job_kind: job.kind || 'RENDER',
+                        output_index: outputState.segment_seq,
+                        processed_count: job.processed_count,
+                        total_count: job.total_count,
+                        active_jobs: getJobStats().activeJobs,
+                        active_renders: getRenderStats().activeCount,
+                        queued_jobs: getJobStats().queuedJobs,
+                        render_concurrency: videoRenderConcurrency,
+                        ffmpeg_threads: videoRenderFfmpegThreads
+                    },
+                    () => renderOutputFile(
+                        ffmpegPath,
+                        introSource,
+                        tailSource,
+                        introSegment,
+                        tailSegment,
+                        outputState.file_path,
+                        job.crossfade_ms,
+                        videoRenderFfmpegThreads
+                    )
+                );
 
                 outputState.status = 'COMPLETED';
                 outputState.error_message = null;
-                processedCount += 1;
                 await updateJob(jobId, {
                     outputs: [...job.outputs],
-                    processed_count: processedCount
+                    processed_count: countCompletedOutputs(job.outputs)
                 });
+                return true;
             } catch (error) {
                 outputState.status = 'FAILED';
                 outputState.error_message = error instanceof Error ? error.message : 'Не удалось отрендерить файл.';
+                if (serverSentryInitialized) {
+                    Sentry.captureException(error);
+                }
+                stopScheduling = true;
+                firstFailureMessage = firstFailureMessage || outputState.error_message;
                 await updateJob(jobId, {
-                    status: 'FAILED',
                     outputs: [...job.outputs],
-                    processed_count: processedCount,
-                    error_message: outputState.error_message
+                    processed_count: countCompletedOutputs(job.outputs),
+                    error_message: firstFailureMessage
                 });
-                return;
+                return false;
             }
+        });
+
+        const worker = async () => {
+            while (true) {
+                if (stopScheduling) {
+                    return;
+                }
+
+                const outputState = job.outputs[nextOutputIndex];
+                if (!outputState) {
+                    return;
+                }
+
+                nextOutputIndex += 1;
+                const shouldContinue = await processOneOutput(outputState);
+                if (!shouldContinue) {
+                    return;
+                }
+            }
+        };
+
+        await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+        const currentJob = jobs.get(jobId);
+        if (!currentJob) {
+            return;
         }
 
-        await updateJob(jobId, {
+        const processedCount = countCompletedOutputs(currentJob.outputs);
+        const failedOutput = currentJob.outputs.find((output) => output.status === 'FAILED');
+        await updateJob(jobId, failedOutput ? {
+            status: 'FAILED',
+            outputs: [...currentJob.outputs],
+            processed_count: processedCount,
+            error_message: failedOutput.error_message || firstFailureMessage || 'Не удалось отрендерить файл.'
+        } : {
             status: 'COMPLETED',
-            outputs: [...job.outputs],
+            outputs: [...currentJob.outputs],
             processed_count: processedCount,
             error_message: null
         });
+        logJobSummary(currentJob, failedOutput ? 'failed' : 'completed', Date.now() - jobStartedAt);
     };
 
     try {
@@ -924,6 +1309,15 @@ export async function startVideoExportHelperServer(options = {}) {
         }
     });
 
+    app.use((req, res, next) => {
+        const start = Date.now();
+        res.on('finish', () => {
+            const duration = Date.now() - start;
+            appendToRecentLogs(`[server] HTTP ${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
+        });
+        next();
+    });
+
     app.use(express.json({ limit: '2mb' }));
     app.use((req, res, next) => {
         if (!isLoopbackAddress(req.socket.remoteAddress)) {
@@ -1018,7 +1412,20 @@ export async function startVideoExportHelperServer(options = {}) {
 
             await ensureEnoughDiskSpace(req.file.size);
 
-            const probe = await probeSource(ffprobePath, req.file.path);
+            const sourceId = crypto.randomUUID();
+            const probe = await runDiagnosticStage(
+                'video-export-helper',
+                'probe',
+                {
+                    source_id: sourceId,
+                    size_bytes: req.file.size
+                },
+                () => probeSource(ffprobePath, req.file.path),
+                (result) => ({
+                    has_audio: result.hasAudio,
+                    preview_expected: shouldGeneratePreview(req.file.originalname, result)
+                })
+            );
             if (probe.durationMs <= 0) {
                 throw new Error('Не удалось определить длительность исходного ролика.');
             }
@@ -1027,7 +1434,6 @@ export async function startVideoExportHelperServer(options = {}) {
                 throw new Error(`Исходный ролик длиннее допустимого лимита ${Math.round(maxSourceDurationMs / 60000)} минут.`);
             }
 
-            const sourceId = crypto.randomUUID();
             const sourceRecord = {
                 id: sourceId,
                 original_name: req.file.originalname,
@@ -1042,7 +1448,16 @@ export async function startVideoExportHelperServer(options = {}) {
             if (shouldGeneratePreview(req.file.originalname, probe)) {
                 const previewPath = path.join(previewRoot, `${sourceId}.mp4`);
                 try {
-                    await renderPreviewFile(ffmpegPath, sourceRecord, previewPath);
+                    await runDiagnosticStage(
+                        'video-export-helper',
+                        'preview_render',
+                        {
+                            source_id: sourceId,
+                            size_bytes: req.file.size,
+                            has_audio: sourceRecord.has_audio
+                        },
+                        () => renderPreviewFile(ffmpegPath, sourceRecord, previewPath)
+                    );
                     sourceRecord.preview_path = previewPath;
                 } catch (previewError) {
                     console.warn('[video-export-helper] preview render failed', previewError);
@@ -1325,6 +1740,10 @@ export async function startVideoExportHelperServer(options = {}) {
     app.use((error, _req, res, _next) => {
         console.error('[video-export-helper] request failed', error);
 
+        if (serverSentryInitialized) {
+            Sentry.captureException(error);
+        }
+
         const statusCode = error instanceof multer.MulterError
             ? 400
             : typeof error?.statusCode === 'number'
@@ -1371,16 +1790,31 @@ export async function startVideoExportHelperServer(options = {}) {
         ffprobePath,
         getHealthInfo,
         cleanupOldAssets,
+        getRecentLogs: () => recentLogs,
         stop: async () => {
             await Promise.all(servers.map(({ server: currentServer }) => new Promise((resolve, reject) => {
-                currentServer.close((error) => {
-                    if (error) {
-                        reject(error);
+                try {
+                    currentServer.close((error) => {
+                        if (error) {
+                            if (error.code === 'ERR_SERVER_NOT_RUNNING') {
+                                resolve();
+                                return;
+                            }
+
+                            reject(error);
+                            return;
+                        }
+
+                        resolve();
+                    });
+                } catch (error) {
+                    if (error?.code === 'ERR_SERVER_NOT_RUNNING') {
+                        resolve();
                         return;
                     }
 
-                    resolve();
-                });
+                    reject(error);
+                }
             })));
         }
     };

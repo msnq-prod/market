@@ -7,6 +7,7 @@ import { getLocalizedValue } from '../utils/language';
 import type { Product, User } from '../data/db'
 import { Languages, Menu, RotateCcw, ShoppingBag, ShoppingCart, UserRound, X } from 'lucide-react';
 import { formatRub } from '../utils/currency';
+import { apiFetch } from '../utils/apiFetch';
 import projectLogo from '../assets/project-logo.png';
 import { MarketplaceButtons } from './MarketplaceButtons';
 import { AccountView as StorefrontAccountView, CartView as StorefrontCartView } from './StorefrontPanels';
@@ -80,7 +81,7 @@ export function UIOverlay() {
     }, [hydrateSession])
 
     useEffect(() => {
-        fetch('/api/languages')
+        apiFetch('/api/languages')
             .then(res => {
                 if (!res.ok) throw new Error('Network response was not ok');
                 return res.json();

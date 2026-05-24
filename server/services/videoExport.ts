@@ -48,12 +48,20 @@ export type VideoExportIntroAsset = {
     uploaded_at: string;
 };
 
+export type VideoExportSettings = {
+    resolution?: '1080p' | '720p';
+    quality?: 'high' | 'medium' | 'low';
+    fps?: 30 | 60;
+    audio_normalize?: boolean;
+};
+
 export type VideoExportManifest = {
     manifest_version?: number;
     sources?: VideoExportSource[];
     segments: VideoExportSegment[];
     outputs: VideoExportOutput[];
     intro_asset?: VideoExportIntroAsset | null;
+    export_settings?: VideoExportSettings;
 };
 
 export type UploadedVideoExportManifestEntry = {
@@ -63,6 +71,7 @@ export type UploadedVideoExportManifestEntry = {
     relative_path: string;
     public_url: string;
     uploaded_at: string;
+    skipped?: boolean;
 };
 
 const toPosixPath = (value: string) => value.split(path.sep).join('/');
@@ -235,12 +244,36 @@ export const parseVideoExportManifest = (value: Prisma.JsonValue | null | undefi
             : null;
     }
 
+    let exportSettings: VideoExportSettings | undefined;
+    if (isRecord(value.export_settings)) {
+        const resolution = value.export_settings.resolution === '1080p' || value.export_settings.resolution === '720p'
+            ? value.export_settings.resolution
+            : undefined;
+        const quality = value.export_settings.quality === 'high' || value.export_settings.quality === 'medium' || value.export_settings.quality === 'low'
+            ? value.export_settings.quality
+            : undefined;
+        const fps = value.export_settings.fps === 30 || value.export_settings.fps === 60
+            ? value.export_settings.fps
+            : undefined;
+        const audioNormalize = typeof value.export_settings.audio_normalize === 'boolean'
+            ? value.export_settings.audio_normalize
+            : undefined;
+
+        exportSettings = {
+            ...(resolution ? { resolution } : {}),
+            ...(quality ? { quality } : {}),
+            ...(fps ? { fps } : {}),
+            ...(audioNormalize !== undefined ? { audio_normalize: audioNormalize } : {})
+        };
+    }
+
     return {
         ...(Number.isFinite(manifestVersion) ? { manifest_version: manifestVersion } : {}),
         ...(sources ? { sources } : {}),
         segments,
         outputs,
-        ...(introAsset !== undefined ? { intro_asset: introAsset } : {})
+        ...(introAsset !== undefined ? { intro_asset: introAsset } : {}),
+        ...(exportSettings ? { export_settings: exportSettings } : {})
     };
 };
 
@@ -260,8 +293,9 @@ export const parseUploadedVideoExportManifest = (
         const relativePath = typeof entry.relative_path === 'string' ? entry.relative_path : '';
         const publicUrl = typeof entry.public_url === 'string' ? entry.public_url : '';
         const uploadedAt = typeof entry.uploaded_at === 'string' ? entry.uploaded_at : '';
+        const skipped = Boolean(entry.skipped);
 
-        if (!serialNumber || !itemId || !fileName || !relativePath || !publicUrl || !uploadedAt) {
+        if (!serialNumber || !itemId || (!skipped && (!fileName || !relativePath || !publicUrl)) || !uploadedAt) {
             return [];
         }
 
@@ -271,7 +305,8 @@ export const parseUploadedVideoExportManifest = (
             file_name: fileName,
             relative_path: relativePath,
             public_url: publicUrl,
-            uploaded_at: uploadedAt
+            uploaded_at: uploadedAt,
+            skipped
         }];
     });
 };
