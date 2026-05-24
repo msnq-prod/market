@@ -1,3 +1,10 @@
+import type {
+    DesktopStartVideoExportRunPayload,
+    DesktopVideoExportItemPayload,
+    LocalVideoExportRunSnapshot,
+    VideoExportManifestSlice
+} from '../admin/pages/video-tool/types';
+
 export type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
 
 export type StonesDesktopAppInfo = {
@@ -259,6 +266,13 @@ export type StonesDesktopApi = {
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs: () => Promise<StonesMediaQueueSnapshot>;
+    startVideoExportRun: (payload: DesktopStartVideoExportRunPayload) => Promise<{ run?: LocalVideoExportRunSnapshot }>;
+    renderVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
+    uploadVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
+    retryVideoExportItemUpload: (runId: string, itemId: string) => Promise<{ success: boolean }>;
+    rerenderVideoExportItem: (runId: string, itemId: string, manifestSlice: VideoExportManifestSlice) => Promise<{ success: boolean }>;
+    cancelVideoExportItem: (runId: string, itemId: string) => Promise<{ success: boolean }>;
+    getVideoExportRunSnapshot: (batchId: string) => Promise<LocalVideoExportRunSnapshot | null>;
     openExternal: (url: string) => Promise<{ ok: true }>;
 };
 

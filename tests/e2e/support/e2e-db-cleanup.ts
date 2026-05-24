@@ -35,6 +35,8 @@ type CleanupSummary = {
     qrPrintPresets: number;
     videoProcessingJobs: number;
     batchVideoExportSessions: number;
+    batchVideoExportRunItems: number;
+    batchVideoExportRuns: number;
     items: number;
     batches: number;
     collectionRequests: number;
@@ -59,6 +61,8 @@ const emptySummary = (): CleanupSummary => ({
     qrPrintPresets: 0,
     videoProcessingJobs: 0,
     batchVideoExportSessions: 0,
+    batchVideoExportRunItems: 0,
+    batchVideoExportRuns: 0,
     items: 0,
     batches: 0,
     collectionRequests: 0,
@@ -74,6 +78,21 @@ const emptySummary = (): CleanupSummary => ({
 const unique = <T>(values: T[]) => Array.from(new Set(values));
 
 const hasValues = <T>(values: T[]): values is [T, ...T[]] => values.length > 0;
+
+const isMissingTableError = (error: unknown) =>
+    error instanceof Prisma.PrismaClientKnownRequestError
+    && error.code === 'P2021';
+
+const deleteManyIfTableExists = async (runner: () => Promise<{ count: number }>) => {
+    try {
+        return (await runner()).count;
+    } catch (error) {
+        if (isMissingTableError(error)) {
+            return 0;
+        }
+        throw error;
+    }
+};
 
 const legacyLocationPatterns: Prisma.LocationTranslationWhereInput[] = [
     { name: { startsWith: '[e2e] ' } },
@@ -294,6 +313,14 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
         summary.videoProcessingJobs = (await prisma.videoProcessingJob.deleteMany({
             where: { batch_id: { in: batchIds } },
         })).count;
+
+        summary.batchVideoExportRunItems = await deleteManyIfTableExists(() => prisma.batchVideoExportItem.deleteMany({
+            where: { run: { batch_id: { in: batchIds } } },
+        }));
+
+        summary.batchVideoExportRuns = await deleteManyIfTableExists(() => prisma.batchVideoExportRun.deleteMany({
+            where: { batch_id: { in: batchIds } },
+        }));
 
         summary.batchVideoExportSessions = (await prisma.batchVideoExportSession.deleteMany({
             where: { batch_id: { in: batchIds } },

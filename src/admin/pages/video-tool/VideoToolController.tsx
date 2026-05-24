@@ -1,21 +1,15 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, HardDrive, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, AlertTriangle, CheckCircle2, HelpCircle } from 'lucide-react';
-import { Button } from '../../components/ui';
-import { DesktopStatusCenter } from '../../components/DesktopStatusCenter';
+import { RefreshCw, HardDriveDownload, Clipboard } from 'lucide-react';
 import {
     getStonesDesktop,
     isStonesDesktop,
     stageDesktopVideoSourceFile,
-    waitForMediaQueueJob,
-    type StonesMediaWorkflow,
     type StonesMediaWorkflowSnapshot
 } from '../../../utils/desktop';
 import {
-    CROSSFADE_MS,
     DESKTOP_VIDEO_HELPER_URL,
     HELPER_HEALTH_TIMEOUT_MS,
-    PREVIEW_PANEL_DEFAULT_WIDTH,
     PREVIEW_PANEL_MAX_WIDTH,
     PREVIEW_PANEL_MIN_WIDTH,
     PREVIEW_PANEL_WIDTH_STORAGE_KEY,
@@ -23,9 +17,7 @@ import {
     VIDEO_EXPORT_HELPER_PROTOCOL_VERSION,
     VIDEO_EXPORT_HELPER_URL,
     VIDEO_HELPER_DOWNLOAD_URL,
-    VIDEO_HELPER_DOWNLOAD_URL_ARM64,
-    exportPhaseLabel,
-    sessionStatusLabel
+    VIDEO_HELPER_DOWNLOAD_URL_ARM64
 } from './constants';
 import { draftKeyFor, parseDraft } from './draftStorage';
 import {
@@ -39,7 +31,6 @@ import {
     createFirstSourceSegments,
     deleteSegmentAt,
     getSourceForGlobalMs,
-    getSourceTimelineStartMs,
     getTotalSourceDurationMs,
     isSourceBoundaryBetween,
     moveBoundary,
@@ -59,46 +50,45 @@ import {
     revokeObjectUrl
 } from './videoHelperClient';
 import { useVideoToolHotkeys } from './useVideoToolHotkeys';
-import { ReviewQCStep } from './components/ReviewQCStep';
 import {
-    cancelVideoExportSession,
-    createVideoExportSession,
-    fetchVideoExportSession,
+    cancelVideoExportRun,
+    commitVideoExportRun,
+    createVideoExportRun,
+    fetchVideoExportRunDetails,
+    fetchVideoExportRuns,
     fetchVideoToolPayload,
-    retryTailVideoExportSession,
-    uploadVideoExportFile,
-    uploadVideoExportIntroFile,
-    createVideoExportPlan,
-    uploadVideoExportPlanArtifact,
-    commitVideoExportPlan
+    uploadVideoExportRunItemManual
 } from './videoExportClient';
 import {
-    buildRulerMarks,
     clampVisibleDuration,
     clampVisibleStart,
-    formatDuration,
-    getTimelineMinVisibleDuration,
-    getVisibleWindowStyle,
-    readStoredPreviewPanelWidth,
-    sleep
+    readStoredPreviewPanelWidth
 } from './timelineUtils';
 import { videoToolReducer } from './videoToolReducer';
+import { VideoToolTopNav } from './components/VideoToolTopNav';
+import { PrepareMenu } from './components/PrepareMenu';
+import { EditorWorkspace } from './components/EditorWorkspace';
+import { ExportMenu } from './components/ExportMenu';
 import type {
+    DesktopVideoExportSource,
     ExportPhase,
     HelperDiagnosticEntry,
-    HelperDiagnosticStatus,
     HelperHealthPayload,
-    HelperJobPayload,
     HelperSourceUploadPayload,
     HelperStatus,
     InlineNotice,
+    LocalVideoExportRunSnapshot,
     Segment,
     SourceFingerprint,
     SourceRole,
     TimelineViewport,
-    VideoExportIntroAsset,
     VideoExportManifest,
-    VideoExportSessionDetails,
+    VideoExportManifestSlice,
+    VideoExportRunDetails,
+    VideoExportSettings,
+    VideoToolPanViewportState,
+    VideoToolPreviewResizeState,
+    VideoToolSegmentRow,
     VideoToolDraft,
     VideoToolPayload,
     VideoToolState,
@@ -223,8 +213,8 @@ export function VideoToolController() {
     const timelineScrollbarRef = useRef<HTMLDivElement | null>(null);
     const dragBoundaryIndexRef = useRef<number | null>(null);
     const dragPlayheadRef = useRef(false);
-    const panViewportRef = useRef<{ source: 'timeline' | 'scrollbar'; startClientX: number; startVisibleStartMs: number } | null>(null);
-    const previewResizeRef = useRef<{ startClientX: number; startWidth: number } | null>(null);
+    const panViewportRef = useRef<VideoToolPanViewportState | null>(null);
+    const previewResizeRef = useRef<VideoToolPreviewResizeState | null>(null);
     const segmentHistoryRef = useRef<Segment[][]>([]);
     const sourceObjectUrlsRef = useRef<Set<string>>(new Set());
 
@@ -245,8 +235,7 @@ export function VideoToolController() {
     const [helperBaseUrl, setHelperBaseUrl] = useState(() => (
         isStonesDesktop() ? DESKTOP_VIDEO_HELPER_URL : VIDEO_EXPORT_HELPER_URL
     ));
-    const [helperDiagnostics, setHelperDiagnostics] = useState<HelperDiagnosticEntry[]>([]);
-    const [helperDiagnosticCopied, setHelperDiagnosticCopied] = useState(false);
+    const [, setHelperDiagnostics] = useState<HelperDiagnosticEntry[]>([]);
     const [sources, setSources] = useState<WorkingSource[]>([]);
     const [activeSourceIndex, setActiveSourceIndex] = useState(0);
     const [introHelperSourceId, setIntroHelperSourceId] = useState('');
@@ -254,19 +243,18 @@ export function VideoToolController() {
     const [selectedSegmentIndex, setSelectedSegmentIndex] = useState(0);
     const [playheadMs, setPlayheadMs] = useState(0);
     const [draft, setDraft] = useState<VideoToolDraft | null>(null);
-    const [session, setSession] = useState<VideoExportSessionDetails | null>(null);
-    const USE_API_V2 = true;
+    const [activeMode, setActiveMode] = useState<'prepare' | 'edit' | 'export'>('prepare');
+    const [activeV2Run, setActiveV2Run] = useState<VideoExportRunDetails | null>(null);
+    const [localRunSnapshot, setLocalRunSnapshot] = useState<LocalVideoExportRunSnapshot | null>(null);
+    const [isStartingRun, setIsStartingRun] = useState(false);
+    const [isRefreshingRun, setIsRefreshingRun] = useState(false);
     const [isCommitting, setIsCommitting] = useState(false);
     const [pendingSerials, setPendingSerials] = useState<string[]>([]);
     const exportPhase = controllerState.export.phase;
     const setExportPhase = useCallback((phase: ExportPhase) => {
         dispatchVideoTool({ type: 'export/phase', phase });
     }, []);
-    const setRenderJobId = useCallback((jobId: string) => {
-        dispatchVideoTool({ type: 'export/renderJobId', jobId });
-    }, []);
     const [exportMessage, setExportMessage] = useState('');
-    const [renderProgress, setRenderProgress] = useState({ processed: 0, total: 0 });
     const [notice, setNotice] = useState<InlineNotice | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
@@ -280,10 +268,8 @@ export function VideoToolController() {
         const resolvedWidth = typeof nextWidth === 'function' ? nextWidth(previewPanelWidth) : nextWidth;
         dispatchVideoTool({ type: 'layout/preview-width', width: resolvedWidth });
     }, [previewPanelWidth]);
-    const [sidebarOpen, setSidebarOpen] = useState(true);
     const [previewOpen, setPreviewOpen] = useState(true);
     const [workflowSnapshot, setWorkflowSnapshot] = useState<StonesMediaWorkflowSnapshot>(emptyWorkflowSnapshot);
-    const completedWorkflowHandledRef = useRef<string | null>(null);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
         visibleStartMs: 0,
@@ -292,13 +278,6 @@ export function VideoToolController() {
     });
 
     const expectedOutputCount = data?.batch.expected_output_count ?? 0;
-    const isQcPhase = Boolean(
-        USE_API_V2 &&
-        session &&
-        session.status !== 'CANCELLED' &&
-        session.status !== 'COMPLETED' &&
-        session.uploaded_count === session.expected_count
-    );
     const durationMs = getTotalSourceDurationMs(sources);
     const activeSource = sources.find((source) => source.sourceIndex === activeSourceIndex) ?? sources[0] ?? null;
     const sourceUrl = activeSource?.previewUrl ?? '';
@@ -327,7 +306,6 @@ export function VideoToolController() {
     );
     const activeProductCount = Math.max(0, activeSegments.length - 1);
     const isDesktopApp = isStonesDesktop();
-    const activeSourceNeedsLocalFile = Boolean(activeSource && (isDesktopApp ? !activeSource.stagedSourceId : (!activeSource.file && !activeSource.helperSourceId)));
     const batchVideoWorkflow = useMemo(() => (
         workflowSnapshot.workflows.find((workflow) =>
             workflow.kind === 'VIDEO_EXPORT_WORKFLOW' && workflow.batchId === batchId
@@ -377,13 +355,14 @@ export function VideoToolController() {
             ? 'Нужен минимум один товарный фрагмент.'
         : activeProductCount > expectedOutputCount
             ? `Лишних товарных фрагментов: ${activeProductCount - expectedOutputCount}.`
-        : session && activeProductCount < session.uploaded_count
-            ? 'Нельзя удалить уже загруженные товарные фрагменты.'
-            : '';
-    const selectedSegment = segments[selectedSegmentIndex] ?? null;
+        : '';
     const sessionUploadedSerials = useMemo(
-        () => new Set(session?.uploaded_manifest.map((entry) => entry.serial_number) ?? []),
-        [session]
+        () => new Set(
+            activeV2Run?.items
+                .filter((item) => item.status === 'UPLOADED' || item.upload_status === 'UPLOADED' || Boolean(item.file_url))
+                .map((item) => item.serial_number) ?? []
+        ),
+        [activeV2Run]
     );
     const pushSegmentsToHistory = useCallback((snapshot: Segment[]) => {
         const clonedSnapshot = cloneSegments(snapshot);
@@ -410,7 +389,7 @@ export function VideoToolController() {
         setExportPhase('idle');
         setExportMessage('');
         setPreflightIssues([]);
-    }, [pushSegmentsToHistory]);
+    }, [pushSegmentsToHistory, setExportPhase]);
     const restorePreviousSegments = useCallback(() => {
         const previous = segmentHistoryRef.current.pop();
         if (!previous) {
@@ -421,7 +400,7 @@ export function VideoToolController() {
         setSelectedSegmentIndex((current) => Math.min(current, Math.max(0, previous.length - 1)));
         setExportPhase('idle');
         setExportMessage('');
-    }, []);
+    }, [setExportPhase]);
     const clearSavedDraft = useCallback(() => {
         if (isDesktopApp) {
             void getStonesDesktop()?.discardVideoDraft?.(batchId).catch(() => undefined);
@@ -442,8 +421,8 @@ export function VideoToolController() {
         setSelectedSegmentIndex((current) => Math.max(0, Math.min(current, segments.length - 2)));
         setExportPhase('idle');
         setExportMessage('');
-    }, [pushSegmentsToHistory, segments.length, selectedSegmentIndex]);
-    const segmentRows = useMemo(() => {
+    }, [pushSegmentsToHistory, segments.length, selectedSegmentIndex, setExportPhase]);
+    const segmentRows = useMemo<VideoToolSegmentRow[]>(() => {
         let activeIndex = -1;
 
         return segments.map((segment, index) => {
@@ -474,10 +453,6 @@ export function VideoToolController() {
             };
         });
     }, [data?.items, segments, sessionUploadedSerials]);
-    const rulerMarks = useMemo(
-        () => buildRulerMarks(visibleStartMs, visibleDurationMs),
-        [visibleDurationMs, visibleStartMs]
-    );
     const updateTimelineViewport = useCallback((nextVisibleStartMs: number, nextVisibleDurationMs: number, options?: { isPanning?: boolean }) => {
         if (!durationMs) {
             return;
@@ -492,13 +467,6 @@ export function VideoToolController() {
             isPanning: options?.isPanning ?? false
         });
     }, [durationMs]);
-    const fitTimelineToAll = useCallback(() => {
-        if (!durationMs) {
-            return;
-        }
-
-        updateTimelineViewport(0, durationMs);
-    }, [durationMs, updateTimelineViewport]);
     const zoomTimelineTo = useCallback((anchorMs: number, nextVisibleDurationMs: number) => {
         if (!durationMs || !visibleDurationMs) {
             return;
@@ -535,30 +503,6 @@ export function VideoToolController() {
         videoRef.current.currentTime = Math.max(0, (sourceHit?.localMs ?? nextMs) / 1000);
         setPlayheadMs(nextMs);
     }, [activeSourceIndex, sources]);
-    const handleTimelineWheel = useCallback((event: React.WheelEvent<HTMLElement>, rect: DOMRect) => {
-        if (!durationMs || !visibleDurationMs) {
-            return;
-        }
-
-        event.preventDefault();
-
-        const dominantDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-            ? event.deltaX
-            : event.deltaY;
-
-        if (event.ctrlKey || event.metaKey) {
-            const anchorMs = timelineClientXToMs(event.clientX, rect);
-            const zoomFactor = dominantDelta > 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP;
-            zoomTimelineTo(anchorMs, visibleDurationMs * zoomFactor);
-            return;
-        }
-
-        updateTimelineViewport(
-            visibleStartMs + ((dominantDelta / rect.width) * visibleDurationMs),
-            visibleDurationMs,
-            { isPanning: true }
-        );
-    }, [durationMs, timelineClientXToMs, updateTimelineViewport, visibleDurationMs, visibleStartMs, zoomTimelineTo]);
     const getSnappedMs = useCallback((targetMs: number) => {
         if (segments.length === 0) return targetMs;
         const boundaries = new Set<number>([0, durationMs]);
@@ -580,16 +524,6 @@ export function VideoToolController() {
         return closest;
     }, [segments, durationMs]);
 
-    const seekTimelineAtClientX = useCallback((clientX: number) => {
-        if (!timelineRef.current || !durationMs) {
-            return;
-        }
-
-        const rect = timelineRef.current.getBoundingClientRect();
-        const nextMs = timelineClientXToMs(clientX, rect);
-        const snappedMs = getSnappedMs(nextMs);
-        syncVideoTime(snappedMs);
-    }, [durationMs, syncVideoTime, timelineClientXToMs, getSnappedMs]);
     const togglePlayback = useCallback(async () => {
         if (!videoRef.current || !sourceUrl || sourcePreviewUnavailable) {
             return;
@@ -611,21 +545,66 @@ export function VideoToolController() {
         videoRef.current.pause();
     }, [sourcePreviewUnavailable, sourceUrl]);
 
+    const applyLoadedExportSettings = useCallback((settings?: VideoExportSettings | null) => {
+        if (!settings) {
+            return;
+        }
+
+        if (settings.resolution) setExportResolution(settings.resolution);
+        if (settings.quality) setExportQuality(settings.quality);
+        if (settings.fps) setExportFps(settings.fps);
+        if (settings.audio_normalize !== undefined) setExportAudioNormalize(settings.audio_normalize);
+    }, []);
+
+    const refreshLocalRunSnapshot = useCallback(async (nextBatchId = batchId) => {
+        if (!isDesktopApp) {
+            setLocalRunSnapshot(null);
+            return null;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            setLocalRunSnapshot(null);
+            return null;
+        }
+
+        const snapshot = await desktop.getVideoExportRunSnapshot(nextBatchId).catch(() => null) as LocalVideoExportRunSnapshot | null;
+        setLocalRunSnapshot(snapshot);
+        return snapshot;
+    }, [batchId, isDesktopApp]);
+
+    const refreshActiveV2Run = useCallback(async (
+        runId?: string | null,
+        options?: { silent?: boolean }
+    ) => {
+        const targetRunId = runId || activeV2Run?.run_id || null;
+        if (!targetRunId) {
+            setActiveV2Run(null);
+            return null;
+        }
+
+        if (!options?.silent) {
+            setIsRefreshingRun(true);
+        }
+
+        try {
+            const nextRun = await fetchVideoExportRunDetails(batchId, targetRunId) as VideoExportRunDetails;
+            setActiveV2Run(nextRun);
+            applyLoadedExportSettings(nextRun.export_settings ?? nextRun.render_manifest?.export_settings ?? null);
+            return nextRun;
+        } finally {
+            if (!options?.silent) {
+                setIsRefreshingRun(false);
+            }
+        }
+    }, [activeV2Run?.run_id, applyLoadedExportSettings, batchId]);
+
     const loadPageData = useEffectEvent(async () => {
         if (!batchId) {
             setError('Не указан batchId для монтажа.');
             setLoading(false);
             return;
         }
-
-        const applyLoadedExportSettings = (settings?: any) => {
-            if (settings) {
-                if (settings.resolution) setExportResolution(settings.resolution);
-                if (settings.quality) setExportQuality(settings.quality);
-                if (settings.fps) setExportFps(settings.fps);
-                if (settings.audio_normalize !== undefined) setExportAudioNormalize(settings.audio_normalize);
-            }
-        };
 
         setLoading(true);
         setError('');
@@ -638,61 +617,48 @@ export function VideoToolController() {
                 ? normalizeDesktopDraft(batchId, await desktop.getVideoDraft(batchId))
                 : parseDraft(batchId);
             setDraft(existingDraft);
+            const { runs } = await fetchVideoExportRuns(batchId);
+            const preferredRun = runs.find((run) => !['COMPLETED', 'CANCELLED'].includes(run.status)) ?? runs[0] ?? null;
+            setActiveV2Run(preferredRun as VideoExportRunDetails | null);
 
-            const latestSessionId = existingDraft?.sessionId || payload.batch.video_export?.session_id || '';
-            if (latestSessionId) {
-                const latestSession = await fetchVideoExportSession(batchId, latestSessionId);
-                if (latestSession) {
-                    setSession(latestSession);
-                    applyLoadedExportSettings(latestSession.render_manifest?.export_settings);
-                    const manifestSources = createSourcesFromManifest(latestSession.render_manifest).map((source) => {
-                        const draftSource = existingDraft?.sources.find((entry) =>
-                            entry.sourceIndex === source.sourceIndex
-                            && entry.fingerprint.name === source.name
-                            && entry.fingerprint.size === source.size
-                            && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
-                        );
-                        return draftSource?.helperSourceId
-                            ? {
-                                ...source,
-                                helperSourceId: draftSource.helperSourceId,
-                                stagedSourceId: draftSource.stagedSourceId || null,
-                                cachePath: draftSource.cachePath || null,
-                                checksumSha256: draftSource.checksumSha256 || null
-                            }
-                            : source;
-                    });
-                    if (manifestSources.length > 0) {
-                        setSources(manifestSources);
-                        setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);
-                        const manifestSegments = hydrateSegmentsFromManifest(latestSession.render_manifest, manifestSources);
-                        if (manifestSegments.length > 0) {
-                            setSegments(manifestSegments);
-                            setSelectedSegmentIndex(0);
-                            setPlayheadMs(0);
+            if (preferredRun) {
+                const latestRun = await fetchVideoExportRunDetails(batchId, preferredRun.run_id) as VideoExportRunDetails;
+                setActiveV2Run(latestRun);
+                applyLoadedExportSettings(latestRun.export_settings ?? latestRun.render_manifest?.export_settings ?? null);
+
+                const manifestSources = createSourcesFromManifest(latestRun.render_manifest).map((source) => {
+                    const draftSource = existingDraft?.sources.find((entry) =>
+                        entry.sourceIndex === source.sourceIndex
+                        && entry.fingerprint.name === source.name
+                        && entry.fingerprint.size === source.size
+                        && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
+                    );
+                    return draftSource?.helperSourceId
+                        ? {
+                            ...source,
+                            helperSourceId: draftSource.helperSourceId,
+                            stagedSourceId: draftSource.stagedSourceId || null,
+                            cachePath: draftSource.cachePath || null,
+                            checksumSha256: draftSource.checksumSha256 || null
                         }
-                    }
-                    const manifestOutputs = latestSession.render_manifest?.outputs ?? [];
-                    const uploadedSerialSet = new Set(latestSession.uploaded_manifest.map((entry) => entry.serial_number));
-                    setPendingSerials(manifestOutputs
-                        .map((output) => output.serial_number)
-                        .filter((serialNumber) => !uploadedSerialSet.has(serialNumber)));
-                    if (latestSession.render_manifest?.intro_asset) {
-                        setIntroHelperSourceId('');
-                    }
-
-                    if (latestSession.status === 'ABANDONED') {
-                        setNotice({
-                            tone: 'warning',
-                            message: 'Обнаружена зависшая export-session. При следующем экспорте будет выполнен retry-tail только для отсутствующих serial_number.'
-                        });
-                    } else if (latestSession.status === 'CANCELLED') {
-                        setNotice({
-                            tone: 'warning',
-                            message: 'Предыдущая export-session была отменена вручную. При новом экспорте будет создана новая сессия.'
-                        });
+                        : source;
+                });
+                if (manifestSources.length > 0) {
+                    setSources(manifestSources);
+                    setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);
+                    const manifestSegments = hydrateSegmentsFromManifest(latestRun.render_manifest, manifestSources);
+                    if (manifestSegments.length > 0) {
+                        setSegments(manifestSegments);
+                        setSelectedSegmentIndex(0);
+                        setPlayheadMs(0);
                     }
                 }
+
+                setPendingSerials(
+                    latestRun.items
+                        .filter((item) => !['UPLOADED', 'SKIPPED', 'CANCELLED'].includes(item.status))
+                        .map((item) => item.serial_number)
+                );
             } else if (existingDraft?.sources.length) {
                 const draftSources = existingDraft.sources.map((source) => createSourceFromFingerprint(
                     source.sourceIndex,
@@ -713,6 +679,8 @@ export function VideoToolController() {
                 setIntroHelperSourceId(existingDraft.introHelperSourceId || '');
                 applyLoadedExportSettings(existingDraft.exportSettings);
             }
+
+            await refreshLocalRunSnapshot(batchId);
         } catch (loadError) {
             console.error(loadError);
             setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить данные инструмента.');
@@ -809,7 +777,7 @@ export function VideoToolController() {
             setHelperStatus('unavailable');
             console.error(helperError);
         }
-    }, [fetchHelperHealth, isDesktopApp]);
+    }, [fetchHelperHealth, isDesktopApp, setHelperIssueMessage, setHelperStatus]);
     const requestHelperBrowserAccess = async () => {
         setHelperAccessRequesting(true);
         setHelperStatus('checking');
@@ -868,7 +836,7 @@ export function VideoToolController() {
             setHelperStatus('unavailable');
             setHelperIssueMessage('Video Tool доступен только в ZAGARAMI admin Desktop app.');
         }
-    }, [batchId, checkHelper, isDesktopApp]);
+    }, [batchId, checkHelper, isDesktopApp, setHelperIssueMessage, setHelperStatus]);
 
     useEffect(() => {
         if (!isDesktopApp) {
@@ -895,60 +863,6 @@ export function VideoToolController() {
             unsubscribe();
         };
     }, [isDesktopApp]);
-
-    useEffect(() => {
-        if (!batchVideoWorkflow || batchVideoWorkflow.phase !== 'completed' || completedWorkflowHandledRef.current === batchVideoWorkflow.id) {
-            return;
-        }
-
-        completedWorkflowHandledRef.current = batchVideoWorkflow.id;
-        setExportPhase('completed');
-        setExportMessage('Фоновый video workflow завершен. Обновляем данные партии...');
-
-        const sessionId = batchVideoWorkflow.sessionId || session?.session_id || draft?.sessionId || '';
-        if (!sessionId) {
-            void loadPageData();
-            return;
-        }
-
-        void fetchVideoExportSession(batchId, sessionId)
-            .then((latestSession) => {
-                if (!latestSession) {
-                    return loadPageData();
-                }
-
-                setSession(latestSession);
-                if (latestSession.status === 'COMPLETED') {
-                    setData((current) => current ? {
-                        ...current,
-                        batch: {
-                            ...current.batch,
-                            video_export: latestSession
-                        },
-                        items: current.items.map((item) => {
-                            const uploadedEntry = latestSession.uploaded_manifest.find((entry) => entry.item_id === item.id);
-                            return uploadedEntry
-                                ? { ...item, item_video_url: uploadedEntry.public_url }
-                                : item;
-                        })
-                    } : current);
-                    clearSavedDraft();
-                    setDraft(null);
-                    setPendingSerials([]);
-                    setNotice({
-                        tone: 'info',
-                        message: 'Фоновый video workflow завершен, данные обновлены.'
-                    });
-                }
-            })
-            .catch((workflowRefreshError) => {
-                console.error(workflowRefreshError);
-                setNotice({
-                    tone: 'warning',
-                    message: 'Video workflow завершен, но данные не удалось обновить автоматически. Нажмите «Проверить».'
-                });
-            });
-    }, [batchId, batchVideoWorkflow, clearSavedDraft, draft?.sessionId, session?.session_id]);
 
     useEffect(() => {
         const previousBodyOverflow = document.body.style.overflow;
@@ -1013,8 +927,8 @@ export function VideoToolController() {
                 checksumSha256: source.checksumSha256 || null
             })),
             segments,
-            sessionId: session?.session_id || null,
-            sessionVersion: session?.version || null,
+            sessionId: activeV2Run?.run_id || null,
+            sessionVersion: activeV2Run?.version || null,
             pendingSerials,
             introHelperSourceId: introHelperSourceId || null,
             renderManifest,
@@ -1033,7 +947,21 @@ export function VideoToolController() {
             localStorage.setItem(draftKeyFor(batchId), JSON.stringify(nextDraft));
         }
         setDraft(nextDraft);
-    }, [batchId, data, introHelperSourceId, isDesktopApp, pendingSerials, segments, session?.session_id, session?.version, sources, exportResolution, exportQuality, exportFps, exportAudioNormalize]);
+    }, [activeV2Run?.run_id, activeV2Run?.version, batchId, data, introHelperSourceId, isDesktopApp, pendingSerials, segments, sources, exportResolution, exportQuality, exportFps, exportAudioNormalize]);
+
+    useEffect(() => {
+        if (!isDesktopApp || !activeV2Run?.run_id) {
+            return;
+        }
+
+        void refreshLocalRunSnapshot();
+        const intervalId = window.setInterval(() => {
+            void refreshLocalRunSnapshot();
+            void refreshActiveV2Run(activeV2Run.run_id, { silent: true }).catch(() => undefined);
+        }, 1500);
+
+        return () => window.clearInterval(intervalId);
+    }, [activeV2Run?.run_id, isDesktopApp, refreshActiveV2Run, refreshLocalRunSnapshot]);
 
     useEffect(() => {
         setPreviewPanelWidth((current) => clampPreviewPanelWidth(current));
@@ -1125,21 +1053,6 @@ export function VideoToolController() {
         [segments]
     );
 
-    const seekToNearestCut = (direction: 'prev' | 'next') => {
-        if (timelineCuts.length === 0) {
-            return;
-        }
-
-        if (direction === 'prev') {
-            const previousCut = [...timelineCuts].reverse().find((cutMs) => cutMs < playheadMs - 1);
-            syncVideoTime(previousCut ?? 0);
-            return;
-        }
-
-        const nextCut = timelineCuts.find((cutMs) => cutMs > playheadMs + 1);
-        syncVideoTime(nextCut ?? durationMs);
-    };
-
     useVideoToolHotkeys({
         applySegmentEdit,
         durationMs,
@@ -1194,8 +1107,6 @@ export function VideoToolController() {
         setError('');
         setExportPhase('idle');
         setExportMessage('');
-        setRenderJobId('');
-        setRenderProgress({ processed: 0, total: 0 });
         setIsPlaying(false);
 
         if (mode === 'first' && !preserveExistingTimeline) {
@@ -1340,7 +1251,8 @@ export function VideoToolController() {
     const handleDiscardDraft = () => {
         clearSavedDraft();
         setDraft(null);
-        setSession(null);
+        setActiveV2Run(null);
+        setLocalRunSnapshot(null);
         setNotice(null);
         setPendingSerials([]);
         setIntroHelperSourceId('');
@@ -1363,384 +1275,120 @@ export function VideoToolController() {
         }
     };
 
-    const ensureHelperSource = async (sourceIndex: number) => {
-        const source = sources.find((entry) => entry.sourceIndex === sourceIndex);
-        if (!source) {
-            throw new Error(`Source ${sourceIndex} не найден.`);
-        }
-
-        if (source.helperSourceId) {
-            return source.helperSourceId;
-        }
-
-        if (!source.file) {
-            throw new Error(`Source ${sourceIndex} не загружен в helper. Добавьте исходник заново.`);
-        }
-
-        return importSourceIntoHelper(source.file, source.sourceIndex, source.role, source.previewUrl);
-    };
-
-    const createOrResumeServerSession = async (manifest: VideoExportManifest) => {
-        if (!data || sources.length === 0) {
-            throw new Error('Невозможно создать export-session без данных партии и source fingerprint.');
-        }
-
-        const nextSession = USE_API_V2
-            ? await createVideoExportPlan(data.batch.id, manifest, data.batch.expected_output_count, {
-                name: sources[0].name,
-                size: sources[0].size,
-                lastModified: sources[0].lastModified,
-                durationMs: sources[0].durationMs
-            }, CROSSFADE_MS)
-            : await createVideoExportSession(data.batch.id, manifest, data.batch.expected_output_count, {
-                name: sources[0].name,
-                size: sources[0].size,
-                lastModified: sources[0].lastModified,
-                durationMs: sources[0].durationMs
-            }, CROSSFADE_MS);
-        setSession(nextSession);
-        const uploadedSerialSet = new Set(nextSession.uploaded_manifest.map((entry) => entry.serial_number));
-        const nextPendingSerials = manifest.outputs
-            .map((output) => output.serial_number)
-            .filter((serialNumber) => !uploadedSerialSet.has(serialNumber));
-        setPendingSerials(nextPendingSerials);
-
-        return {
-            session: nextSession,
-            pending: nextPendingSerials
-        };
-    };
-
-    const retryTailSession = async () => {
-        if (!data || !session) {
-            throw new Error('Нет export-session для retry-tail.');
-        }
-
-        const typedPayload = await retryTailVideoExportSession(data.batch.id, session.session_id);
-        setSession(typedPayload.session);
-        setPendingSerials(typedPayload.pending_serials);
-
-        if (typedPayload.recovered_stale) {
-            setNotice({
-                tone: 'warning',
-                message: 'Зависшая export-session автоматически восстановлена. Будут дозагружены только отсутствующие ролики.'
-            });
-        }
-
-        return {
-            session: typedPayload.session,
-            pending: typedPayload.pending_serials
-        };
-    };
-
-    const prepareServerSession = async (manifest: VideoExportManifest) => {
-        const canRetryTail = session
-            && session.session_id
-            && ['OPEN', 'UPLOADING', 'FAILED', 'ABANDONED'].includes(session.status);
-        const isAppendingCurrentSession = manifest.outputs.length > (session?.render_manifest?.outputs.length ?? 0);
-
-        if (canRetryTail && !isAppendingCurrentSession) {
-            setExportPhase('rendering');
-            setExportMessage('Подготовка retry-tail для отсутствующих роликов...');
-            return retryTailSession();
-        }
-
-        return createOrResumeServerSession(manifest);
-    };
-
-    const waitForHelperJobCompletion = async (jobId: string, endpointPrefix: '/render-jobs' | '/intro-jobs') => {
-        while (true) {
-            const response = await helperFetch(helperBaseUrl, `${endpointPrefix}/${jobId}`);
-            const payload = await response.json().catch(() => ({ error: 'Не удалось получить статус helper job.' })) as HelperJobPayload;
-            if (!response.ok) {
-                throw new Error(payload.error || 'Не удалось получить статус helper job.');
-            }
-
-            const safeProcessed = typeof payload.processed_count === 'number' ? payload.processed_count : 0;
-            const safeTotal = typeof payload.total_count === 'number' ? payload.total_count : 0;
-            setRenderProgress({ processed: safeProcessed, total: safeTotal });
-
-            if (payload.status === 'FAILED') {
-                throw new Error(payload.error_message || 'Helper завершил job с ошибкой.');
-            }
-
-            if (payload.status === 'COMPLETED') {
-                return;
-            }
-
-            await sleep(1200);
-        }
-    };
-
-    const createIntroJobInHelper = async (manifest: VideoExportManifest) => {
-        const introSegment = manifest.segments[0];
-        if (!introSegment) {
-            throw new Error('В манифесте нет intro-сегмента.');
-        }
-
-        const introSourceIndex = introSegment.source_index ?? 0;
-        const sourceId = await ensureHelperSource(introSourceIndex);
-        const response = await helperFetch(helperBaseUrl, '/intro-jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                sources: [{ source_index: introSourceIndex, source_id: sourceId }],
-                segment: introSegment
-            })
-        });
-        const payload = await response.json().catch(() => ({ error: 'Не удалось создать intro job в helper.' })) as HelperJobPayload;
-        if (!response.ok || !payload.job_id) {
-            throw new Error(payload.error || 'Не удалось создать intro job в helper.');
-        }
-
-        return payload.job_id;
-    };
-
-    const uploadIntroAsset = async (jobId: string, sessionId: string) => {
+    const buildCurrentManifest = useCallback(() => {
         if (!data) {
             throw new Error('Данные партии не загружены.');
         }
 
-        if (isDesktopApp) {
-            const desktop = getStonesDesktop();
-            if (!desktop) {
-                throw new Error('Desktop queue недоступна.');
+        return {
+            ...buildRenderManifest(segments, sources, data.items),
+            export_settings: {
+                resolution: exportResolution,
+                quality: exportQuality,
+                fps: exportFps,
+                audio_normalize: exportAudioNormalize
             }
+        } satisfies VideoExportManifest;
+    }, [data, exportAudioNormalize, exportFps, exportQuality, exportResolution, segments, sources]);
 
-            const queuedJob = await desktop.enqueueVideoIntroUpload({
-                batchId: data.batch.id,
-                sessionId,
-                helperBaseUrl,
-                helperJobId: jobId
-            });
-            setExportMessage(`Intro поставлен в локальную очередь: ${queuedJob.id.slice(0, 8)}.`);
-            const completedJob = await waitForMediaQueueJob(queuedJob.id);
-            const result = completedJob.result as { session?: VideoExportSessionDetails } | undefined;
-            if (!result?.session) {
-                throw new Error('Очередь не вернула обновленную export-session после intro upload.');
-            }
-
-            setSession(result.session);
-            return result.session;
+    const buildManifestSliceForItem = useCallback((itemId: string, manifest: VideoExportManifest): VideoExportManifestSlice => {
+        const output = manifest.outputs.find((entry) => entry.item_id === itemId);
+        if (!output) {
+            throw new Error('Не найден output для выбранного item.');
         }
 
-        const fileResponse = await helperFetch(helperBaseUrl, `/intro-jobs/${jobId}/file`);
-        if (!fileResponse.ok) {
-            const payload = await fileResponse.json().catch(() => ({ error: 'Не удалось получить intro-файл из helper.' }));
-            throw new Error(payload.error || 'Не удалось получить intro-файл из helper.');
+        const introSegment = manifest.segments.find((segment) => segment.sequence === 0);
+        const targetSegment = manifest.segments.find((segment) => segment.sequence === output.segment_seq);
+        if (!introSegment || !targetSegment) {
+            throw new Error('Не удалось собрать manifest slice для перерендера.');
         }
 
-        const fileBlob = await fileResponse.blob();
-        const updatedSession = await uploadVideoExportIntroFile(data.batch.id, sessionId, fileBlob);
-        setSession(updatedSession);
-        return updatedSession;
-    };
+        return {
+            segments: [introSegment, targetSegment],
+            outputs: [output]
+        };
+    }, []);
 
-    const ensureIntroAsset = async (currentSession: VideoExportSessionDetails, manifest: VideoExportManifest) => {
-        if (currentSession.render_manifest?.intro_asset) {
-            return currentSession;
-        }
-
-        setExportPhase('rendering');
-        setExportMessage('Helper сохраняет intro для будущих догрузок...');
-        const introJobId = await createIntroJobInHelper(manifest);
-        await waitForHelperJobCompletion(introJobId, '/intro-jobs');
-        const updatedSession = await uploadIntroAsset(introJobId, currentSession.session_id);
-        return updatedSession;
-    };
-
-    const ensureIntroHelperSource = async (introAsset: VideoExportIntroAsset) => {
-        if (introHelperSourceId) {
-            return introHelperSourceId;
-        }
-
-        const response = await fetch(introAsset.public_url);
-        if (!response.ok) {
-            throw new Error('Не удалось загрузить сохранённое intro с сервера.');
-        }
-
-        const blob = await response.blob();
-        const form = new FormData();
-        form.append('file', blob, introAsset.file_name || 'intro.mp4');
-        form.append('lastModified', String(Date.parse(introAsset.uploaded_at) || Date.now()));
-
-        const helperResponse = await helperFetch(helperBaseUrl, '/sources', {
-            method: 'POST',
-            body: form
-        });
-        const payload = await helperResponse.json().catch(() => ({ error: 'Не удалось импортировать intro в helper.' })) as Partial<HelperSourceUploadPayload> & { error?: string };
-        if (!helperResponse.ok || !payload.source_id) {
-            throw new Error(payload.error || 'Не удалось импортировать intro в helper.');
-        }
-
-        setIntroHelperSourceId(payload.source_id);
-        return payload.source_id;
-    };
-
-    const createRenderJobInHelper = async (manifest: VideoExportManifest, pending: string[], introAsset: VideoExportIntroAsset) => {
-        const renderOutputs = manifest.outputs.filter((output) => pending.includes(output.serial_number));
-        const pendingSegmentSeqs = new Set(renderOutputs.map((output) => output.segment_seq));
-        const pendingTailSegments = manifest.segments.filter((segment) => pendingSegmentSeqs.has(segment.sequence));
-        const introSourceId = await ensureIntroHelperSource(introAsset);
-        const requiredTailSourceIndexes = Array.from(new Set(pendingTailSegments.map((segment) => segment.source_index ?? 0)));
-        const tailRenderSources = await Promise.all(requiredTailSourceIndexes.map(async (sourceIndex) => ({
-            source_index: sourceIndex + 1,
-            source_id: await ensureHelperSource(sourceIndex)
-        })));
-        const renderSources = [
-            { source_index: 0, source_id: introSourceId },
-            ...tailRenderSources
-        ];
-        const introSegment = manifest.segments[0];
-        const introDurationMs = introSegment ? introSegment.end_ms - introSegment.start_ms : 0;
-        const helperSegments = manifest.segments.map((segment) => (
-            segment.sequence === 0
-                ? {
-                    ...segment,
-                    source_index: 0,
-                    start_ms: 0,
-                    end_ms: introDurationMs
-                }
-                : {
-                    ...segment,
-                    source_index: (segment.source_index ?? 0) + 1
-                }
-        ));
-
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-            const renderResponse = await helperFetch(helperBaseUrl, '/render-jobs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sources: renderSources,
-                    crossfade_ms: CROSSFADE_MS,
-                    segments: helperSegments,
-                    outputs: renderOutputs
-                })
-            });
-            const renderPayload = await renderResponse.json().catch(() => ({ error: 'Не удалось создать render job в helper.' }));
-            if (renderResponse.ok && renderPayload.job_id) {
-                return {
-                    jobId: renderPayload.job_id as string,
-                    processed: Number(renderPayload.processed_count) || 0,
-                    total: Number(renderPayload.total_count) || renderOutputs.length
-                };
-            }
-
-            const message = renderPayload.error || 'Не удалось создать render job в helper.';
-            if (attempt === 0 && /исходный файл.*не найден/i.test(message)) {
-                setSources((current) => current.map((source) => requiredTailSourceIndexes.includes(source.sourceIndex)
-                    ? { ...source, helperSourceId: '' }
-                    : source));
-                setIntroHelperSourceId('');
-                continue;
-            }
-
-            throw new Error(message);
-        }
-
-        throw new Error('Не удалось создать render job в helper.');
-    };
-
-    const waitForRenderCompletion = async (jobId: string) => {
-        return waitForHelperJobCompletion(jobId, '/render-jobs');
-    };
-
-    const uploadPendingFiles = async (jobId: string, sessionId: string, serials: string[]) => {
-        if (!data) {
-            throw new Error('Данные партии не загружены.');
-        }
-
-        if (isDesktopApp) {
-            const desktop = getStonesDesktop();
-            if (!desktop) {
-                throw new Error('Desktop queue недоступна.');
-            }
-
-            const groupId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-                ? crypto.randomUUID()
-                : `${sessionId}:${jobId}:${Date.now()}`;
-            const groupTitle = `Видео партии ${data.batch.daily_batch_seq ? `#${data.batch.daily_batch_seq}` : data.batch.id.slice(0, 8)}`;
-            for (let index = 0; index < serials.length; index += 1) {
-                const serialNumber = serials[index];
-                setExportMessage(`Постановка в фоновую очередь ${index + 1}/${serials.length}: ${serialNumber}.mp4`);
-                await desktop.enqueueVideoRenderUpload({
-                    batchId: data.batch.id,
-                    sessionId,
-                    helperBaseUrl,
-                    helperJobId: jobId,
-                    serialNumber,
-                    groupId,
-                    groupTitle,
-                    groupKind: 'VIDEO_EXPORT_UPLOAD',
-                    groupTotal: serials.length,
-                    notifyOnComplete: true,
-                    cleanupHelperJob: true
-                });
+    const buildDesktopRunSources = useCallback((): DesktopVideoExportSource[] => {
+        return sources.map((source) => {
+            if (!source.stagedSourceId) {
+                throw new Error(`Source ${source.sourceIndex + 1} не сохранён в Desktop cache. Добавьте исходник заново.`);
             }
 
             return {
-                backgroundQueued: true,
-                groupId,
-                total: serials.length
+                fileId: source.stagedSourceId,
+                originalName: source.name,
+                mimeType: source.file?.type || 'video/mp4',
+                size: source.size,
+                checksumSha256: source.checksumSha256 || '',
+                cachePath: source.cachePath || '',
+                sourceIndex: source.sourceIndex,
+                role: source.role,
+                helperSourceId: source.helperSourceId || '',
+                lastModified: source.lastModified,
+                fingerprint: {
+                    name: source.name,
+                    size: source.size,
+                    lastModified: source.lastModified,
+                    durationMs: source.durationMs
+                }
             };
+        });
+    }, [sources]);
+
+    const runPreflightCheck = useCallback(() => {
+        if (!data) {
+            throw new Error('Данные партии не загружены.');
         }
 
-        let nextPending = [...serials];
-        for (let index = 0; index < serials.length; index += 1) {
-            const serialNumber = serials[index];
-            setExportMessage(`Загрузка ${index + 1}/${serials.length}: ${serialNumber}.mp4`);
-
-            const fileResponse = await helperFetch(helperBaseUrl, `/render-jobs/${jobId}/files/${encodeURIComponent(serialNumber)}`);
-            if (!fileResponse.ok) {
-                const payload = await fileResponse.json().catch(() => ({ error: 'Не удалось получить готовый файл из helper.' }));
-                throw new Error(payload.error || 'Не удалось получить готовый файл из helper.');
-            }
-
-            const fileBlob = await fileResponse.blob();
-            const updatedSession = USE_API_V2
-                ? await uploadVideoExportPlanArtifact(data.batch.id, sessionId, serialNumber, fileBlob)
-                : await uploadVideoExportFile(data.batch.id, sessionId, serialNumber, fileBlob);
-            setSession(updatedSession);
-            nextPending = nextPending.filter((item) => item !== serialNumber);
-            setPendingSerials(nextPending);
+        const preflight = runPreflight({
+            helperStatus,
+            helperHealth,
+            sources,
+            segments,
+            items: data.items,
+            expectedOutputCount
+        });
+        setPreflightIssues(preflight.issues);
+        if (!preflight.passed) {
+            throw new Error('Префлайт-проверка выявила блокирующие проблемы.');
         }
-    };
+    }, [data, expectedOutputCount, helperHealth, helperStatus, segments, sources]);
 
-    const handleCancelSession = async () => {
-        if (!data || !session) {
+    const handleCut = useCallback(() => {
+        applySegmentEdit((current) => splitSegmentAt(current, playheadMs));
+    }, [applySegmentEdit, playheadMs]);
+
+    const handleToggleDeleted = useCallback(() => {
+        if (selectedSegmentIndex < 0) {
             return;
         }
 
-        try {
-            const nextSession = await cancelVideoExportSession(data.batch.id, session.session_id);
-            setSession(nextSession);
-            setExportPhase('cancelled');
-            setExportMessage('Текущая export-session отменена.');
-            setNotice({
-                tone: 'warning',
-                message: 'Сессия отменена вручную. При следующем экспорте будет создана новая session.'
-            });
-        } catch (cancelError) {
-            console.error(cancelError);
-            setExportPhase('failed');
-            setExportMessage(cancelError instanceof Error ? cancelError.message : 'Не удалось отменить export-session.');
+        applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex));
+    }, [applySegmentEdit, selectedSegmentIndex]);
+
+    const zoomIn = useCallback(() => {
+        zoomTimelineByFactor(1 / TIMELINE_ZOOM_STEP);
+    }, [zoomTimelineByFactor]);
+
+    const zoomOut = useCallback(() => {
+        zoomTimelineByFactor(TIMELINE_ZOOM_STEP);
+    }, [zoomTimelineByFactor]);
+
+    const zoomFit = useCallback(() => {
+        if (!durationMs) {
+            return;
         }
-    };
+
+        updateTimelineViewport(0, durationMs);
+    }, [durationMs, updateTimelineViewport]);
 
     const isExporting = Boolean(
-        activeVideoWorkflow ||
-        ['rendering', 'uploading', 'verifying'].includes(exportPhase)
+        isStartingRun
+        || isRefreshingRun
+        || activeVideoWorkflow
+        || ['rendering', 'uploading', 'verifying'].includes(exportPhase)
     );
-
-    const formatBytes = useCallback((bytes?: number | null) => {
-        if (bytes === undefined || bytes === null) return 'Неизвестно';
-        if (bytes === 0) return '0 B';
-        const k = 1024;
-        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }, []);
 
     const handleCleanupCache = async () => {
         const desktop = getStonesDesktop();
@@ -1788,7 +1436,7 @@ export function VideoToolController() {
                 batchDiagnosticsLog: {
                     status: 'video-tool',
                     batchId: batchId,
-                    serialNumber: session?.session_id || 'none'
+                    serialNumber: activeV2Run?.run_id || 'none'
                 }
             };
             
@@ -1805,61 +1453,6 @@ export function VideoToolController() {
                 message: err instanceof Error ? err.message : 'Не удалось экспортировать диагностику.'
             });
         }
-    };
-
-    void formatBytes;
-    void handleCleanupCache;
-    void handleCollectDiagnostics;
-
-    const handleRefreshSession = async () => {
-        if (!session?.session_id) return;
-        try {
-            const latestSession = await fetchVideoExportSession(batchId, session.session_id);
-            if (latestSession) {
-                setSession(latestSession);
-            }
-        } catch (error) {
-            console.error('Failed to refresh session:', error);
-        }
-    };
-
-    const handleCommitSession = async () => {
-        if (!data || !session) return;
-        setIsCommitting(true);
-        try {
-            const updatedSession = await commitVideoExportPlan(data.batch.id, session.session_id);
-            setSession(updatedSession);
-            setExportPhase('completed');
-            setExportMessage('Экспорт успешно применен к товарам партии!');
-            
-            // Update items locally
-            setData((current) => current ? {
-                ...current,
-                batch: {
-                    ...current.batch,
-                    video_export: updatedSession
-                },
-                items: current.items.map((item) => {
-                    const uploadedEntry = updatedSession.uploaded_manifest.find((entry) => entry.item_id === item.id);
-                    return uploadedEntry
-                        ? { ...item, item_video_url: uploadedEntry.public_url }
-                        : item;
-                })
-            } : current);
-
-            clearSavedDraft();
-            setDraft(null);
-            setPendingSerials([]);
-        } catch (err) {
-            console.error(err);
-            setError(err instanceof Error ? err.message : 'Не удалось применить экспорт.');
-        } finally {
-            setIsCommitting(false);
-        }
-    };
-
-    const handleDiscardSession = async () => {
-        await handleCancelSession();
     };
 
     const handleRestoreAllDeleted = () => {
@@ -1881,84 +1474,8 @@ export function VideoToolController() {
         setNotice({ tone: 'info', message: 'Нарезка сброшена. Шкала объединена.' });
     };
 
-    const handleResetSource = () => {
-        if (confirm('Вы уверены, что хотите сбросить все источники и черновик? Это действие необратимо.')) {
-            handleDiscardDraft();
-            setSources([]);
-            setSegments([]);
-            setNotice({ tone: 'info', message: 'Все источники и черновик очищены.' });
-        }
-    };
-
-    const startDesktopExportWorkflow = async (manifest: VideoExportManifest) => {
-        const desktop = getStonesDesktop();
-        const batchData = data;
-        if (!desktop) {
-            throw new Error('Desktop workflow недоступен.');
-        }
-        if (!batchData) {
-            throw new Error('Данные партии не загружены.');
-        }
-
-        const stagedSources = [];
-        for (const source of sources) {
-            if (!source.stagedSourceId) {
-                throw new Error(`Source ${source.sourceIndex + 1} не сохранён в Desktop cache. Добавьте исходник заново.`);
-            }
-
-            stagedSources.push({
-                fileId: source.stagedSourceId,
-                originalName: source.name,
-                mimeType: source.file?.type || 'video/mp4',
-                size: source.size,
-                checksumSha256: source.checksumSha256 || '',
-                cachePath: source.cachePath || '',
-                sourceIndex: source.sourceIndex,
-                role: source.role,
-                helperSourceId: source.helperSourceId || '',
-                lastModified: source.lastModified,
-                fingerprint: {
-                    name: source.name,
-                    size: source.size,
-                    lastModified: source.lastModified,
-                    durationMs: source.durationMs
-                }
-            });
-        }
-
-        const workflow = await desktop.startVideoExportWorkflow({
-            batchId: batchData.batch.id,
-            batchLabel: batchData.batch.id,
-            subtitle: `${manifest.outputs?.length || 0} роликов`,
-            helperBaseUrl,
-            sessionId: session?.session_id || draft?.sessionId || '',
-            sessionVersion: session?.version || draft?.sessionVersion || null,
-            introHelperSourceId,
-            sourceFingerprint: manifest.sources?.[0]?.fingerprint || null,
-            renderManifest: manifest,
-            sources: stagedSources
-        });
-
-        setExportPhase('uploading');
-        setExportMessage(`Экспорт передан в фон: ${workflow.id.slice(0, 8)}. Прогресс и восстановление доступны в Status Center.`);
-        setNotice({
-            tone: 'info',
-            message: 'Desktop workflow сохранён локально и продолжит render/upload после перезапуска HQ или восстановления сети.'
-        });
-        window.dispatchEvent(new CustomEvent('stones:open-status-center', {
-            detail: { tab: 'queue', focus: { type: 'workflow', id: workflow.id } }
-        }));
-    };
-
-    const handleExport = async () => {
+    const handleStartRun = useCallback(async () => {
         if (!data) {
-            return;
-        }
-
-        if (activeVideoWorkflow) {
-            setExportPhase('uploading');
-            setExportMessage(videoWorkflowStatusText || 'Видео уже обрабатывается в фоне.');
-            openDesktopStatusCenter(activeVideoWorkflow.id);
             return;
         }
 
@@ -1968,142 +1485,245 @@ export function VideoToolController() {
             return;
         }
 
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            setExportPhase('failed');
+            setExportMessage('Desktop workflow недоступен.');
+            return;
+        }
+
         try {
             setError('');
+            setNotice(null);
             setExportPhase('preflight');
-            setExportMessage('Выполняется проверка готовности к экспорту (preflight)...');
-            setRenderProgress({ processed: 0, total: 0 });
+            setExportMessage('Подготавливаем V2 запуск экспорта...');
+            runPreflightCheck();
 
-            const preflight = runPreflight({
-                helperStatus,
-                helperHealth,
-                sources,
-                segments,
-                items: data.items,
-                expectedOutputCount
+            const manifest = buildCurrentManifest();
+            setIsStartingRun(true);
+            const created = await createVideoExportRun(
+                data.batch.id,
+                data.batch.expected_output_count,
+                manifest,
+                manifest.export_settings
+            );
+            const nextRun = created.run as VideoExportRunDetails;
+            setActiveV2Run(nextRun);
+            setPendingSerials(nextRun.items.map((item) => item.serial_number));
+
+            await desktop.startVideoExportRun({
+                batchId: data.batch.id,
+                runId: nextRun.run_id,
+                renderManifest: manifest,
+                sources: buildDesktopRunSources()
             });
-            setPreflightIssues(preflight.issues);
+            await refreshLocalRunSnapshot();
+            await refreshActiveV2Run(nextRun.run_id);
 
-            if (!preflight.passed) {
-                setExportPhase('failed');
-                setExportMessage('Префлайт-проверка выявила блокирующие проблемы. Экспорт отменен.');
-                return;
-            }
-
-            const baseManifest = buildRenderManifest(segments, sources, data.items);
-            const manifest: VideoExportManifest = {
-                ...baseManifest,
-                export_settings: {
-                    resolution: exportResolution,
-                    quality: exportQuality,
-                    fps: exportFps,
-                    audio_normalize: exportAudioNormalize
-                }
-            };
-            if (isDesktopApp) {
-                await startDesktopExportWorkflow(manifest);
-                return;
-            }
-
-            const { session: preparedSession, pending } = await prepareServerSession(manifest);
-
-            if (pending.length === 0) {
-                setExportPhase('completed');
-                setExportMessage('Все финальные ролики уже загружены для этой сессии.');
-                if (preparedSession.status === 'COMPLETED') {
-                    clearSavedDraft();
-                }
-                return;
-            }
-
-            const nextSession = await ensureIntroAsset(preparedSession, manifest);
-            const introAsset = nextSession.render_manifest?.intro_asset;
-            if (!introAsset) {
-                throw new Error('Intro сохранён некорректно: в session отсутствует intro_asset.');
-            }
-
-            if (pending.length !== manifest.outputs.length) {
-                setExportPhase('rendering');
-                setExportMessage(`Дозагрузка хвоста: осталось ${pending.length} из ${manifest.outputs.length} роликов.`);
-            }
-
-            const renderJob = await createRenderJobInHelper(manifest, pending, introAsset);
-            setRenderJobId(renderJob.jobId);
-            setExportPhase('rendering');
-            setExportMessage('Helper рендерит финальные MP4...');
-            setRenderProgress({
-                processed: renderJob.processed,
-                total: renderJob.total
-            });
-
-            await waitForRenderCompletion(renderJob.jobId);
-
-            setExportPhase('uploading');
-            setExportMessage(isDesktopApp ? 'Ставим готовые ролики в фоновую очередь...' : 'Загрузка готовых роликов на сервер...');
-            const uploadResult = await uploadPendingFiles(renderJob.jobId, nextSession.session_id, pending);
-
-            if (uploadResult?.backgroundQueued) {
-                setExportPhase('uploading');
-                setExportMessage(`Загрузка продолжается в фоне: ${uploadResult.total} MP4 в очереди. Можно перейти в другие разделы, прогресс виден в Status Center.`);
-                setNotice({
-                    tone: 'info',
-                    message: 'Фоновая загрузка видео запущена. Приложение уведомит о завершении, а детали доступны в Status Center.'
-                });
-                setRenderJobId('');
-                openDesktopStatusCenter();
-                return;
-            }
-
-            const cleanupResponse = await helperFetch(helperBaseUrl, `/render-jobs/${renderJob.jobId}/cleanup`, {
-                method: 'POST'
-            });
-            if (!cleanupResponse.ok) {
-                throw new Error('Серверные файлы загружены, но helper не смог очистить локальный render job. Черновик сохранён.');
-            }
-
-            setRenderJobId('');
-            setExportPhase('completed');
-            setExportMessage(manifest.outputs.length === expectedOutputCount
-                ? 'Экспорт завершён: все финальные ролики загружены.'
-                : `Частичная выгрузка готова: ${manifest.outputs.length}/${expectedOutputCount}. Можно добавить ещё видео.`);
-
-            const latestSession = await fetchVideoExportSession(data.batch.id, nextSession.session_id);
-            if (latestSession) {
-                setSession(latestSession);
-                if (latestSession.status === 'COMPLETED') {
-                    setData((current) => current ? {
-                        ...current,
-                        batch: {
-                            ...current.batch,
-                            video_export: latestSession
-                        },
-                        items: current.items.map((item) => {
-                            const uploadedEntry = latestSession.uploaded_manifest.find((entry) => entry.item_id === item.id);
-                            return uploadedEntry
-                                ? { ...item, item_video_url: uploadedEntry.public_url }
-                                : item;
-                        })
-                    } : current);
-                    clearSavedDraft();
-                    setDraft(null);
-                    setPendingSerials([]);
-                }
-            }
-        } catch (exportError) {
-            console.error(exportError);
+            setExportPhase('ready');
+            setExportMessage(created.resumed ? 'V2 запуск экспорта восстановлен.' : 'V2 запуск экспорта создан.');
+            setActiveMode('export');
+        } catch (startError) {
+            console.error(startError);
             setExportPhase('failed');
-            setExportMessage(exportError instanceof Error ? exportError.message : 'Не удалось завершить экспорт.');
+            setExportMessage(startError instanceof Error ? startError.message : 'Не удалось создать V2 запуск экспорта.');
+        } finally {
+            setIsStartingRun(false);
         }
-    };
+    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, runPreflightCheck, setExportPhase]);
 
-    const selectedSegmentRow = selectedSegment ? segmentRows[selectedSegmentIndex] ?? null : null;
-    const totalSegments = activeProductCount;
-    const clipCounterText = `Товарных клипов: ${totalSegments} / ${expectedOutputCount}`;
-    const selectedSegmentIsDeleted = Boolean(selectedSegmentRow?.isDeleted);
-    const selectedSegmentLocked = Boolean(
-        selectedSegmentRow?.isUploaded
-        || (selectedSegmentRow?.role === 'intro' && session?.render_manifest?.intro_asset)
-    );
+    const handleStartRender = useCallback(async (itemId: string) => {
+        if (!data || !activeV2Run) {
+            return;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            setExportPhase('failed');
+            setExportMessage('Desktop workflow недоступен.');
+            return;
+        }
+
+        try {
+            setExportPhase('rendering');
+            setExportMessage('Запускаем рендер и загрузку по товару...');
+            await desktop.renderVideoExportItem({ batchId: data.batch.id, runId: activeV2Run.run_id, itemId });
+            await desktop.uploadVideoExportItem({ batchId: data.batch.id, runId: activeV2Run.run_id, itemId });
+            await refreshLocalRunSnapshot();
+            await refreshActiveV2Run(activeV2Run.run_id);
+            setExportPhase('uploading');
+            setExportMessage('Рендер и загрузка поставлены в обработку.');
+        } catch (renderError) {
+            console.error(renderError);
+            setExportPhase('failed');
+            setExportMessage(renderError instanceof Error ? renderError.message : 'Не удалось запустить рендер элемента.');
+        }
+    }, [activeV2Run, data, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
+
+    const handleRetryUpload = useCallback(async (itemId: string) => {
+        if (!activeV2Run) {
+            return;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            setExportPhase('failed');
+            setExportMessage('Desktop workflow недоступен.');
+            return;
+        }
+
+        try {
+            setExportPhase('uploading');
+            setExportMessage('Повторяем загрузку элемента...');
+            await desktop.retryVideoExportItemUpload(activeV2Run.run_id, itemId);
+            await refreshLocalRunSnapshot();
+            await refreshActiveV2Run(activeV2Run.run_id);
+        } catch (retryError) {
+            console.error(retryError);
+            setExportPhase('failed');
+            setExportMessage(retryError instanceof Error ? retryError.message : 'Не удалось повторить загрузку.');
+        }
+    }, [activeV2Run, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
+
+    const handleRerender = useCallback(async (itemId: string) => {
+        if (!data || !activeV2Run) {
+            return;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            setExportPhase('failed');
+            setExportMessage('Desktop workflow недоступен.');
+            return;
+        }
+
+        try {
+            const manifest = buildCurrentManifest();
+            const manifestSlice = buildManifestSliceForItem(itemId, manifest);
+            setExportPhase('rendering');
+            setExportMessage('Перерендериваем товар по актуальному таймлайну...');
+            await desktop.rerenderVideoExportItem(activeV2Run.run_id, itemId, manifestSlice);
+            await desktop.uploadVideoExportItem({ batchId: data.batch.id, runId: activeV2Run.run_id, itemId });
+            await refreshLocalRunSnapshot();
+            await refreshActiveV2Run(activeV2Run.run_id);
+        } catch (rerenderError) {
+            console.error(rerenderError);
+            setExportPhase('failed');
+            setExportMessage(rerenderError instanceof Error ? rerenderError.message : 'Не удалось перерендерить элемент.');
+        }
+    }, [activeV2Run, buildCurrentManifest, buildManifestSliceForItem, data, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
+
+    const handleCancelItem = useCallback(async (itemId: string) => {
+        if (!activeV2Run) {
+            return;
+        }
+
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            setExportPhase('failed');
+            setExportMessage('Desktop workflow недоступен.');
+            return;
+        }
+
+        try {
+            await desktop.cancelVideoExportItem(activeV2Run.run_id, itemId);
+            await refreshLocalRunSnapshot();
+            await refreshActiveV2Run(activeV2Run.run_id);
+            setExportPhase('cancelled');
+            setExportMessage('Элемент отменён.');
+        } catch (cancelError) {
+            console.error(cancelError);
+            setExportPhase('failed');
+            setExportMessage(cancelError instanceof Error ? cancelError.message : 'Не удалось отменить элемент.');
+        }
+    }, [activeV2Run, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
+
+    const handleManualReplace = useCallback(async (itemId: string, file: File) => {
+        if (!data || !activeV2Run) {
+            return;
+        }
+
+        const targetItem = activeV2Run.items.find((item) => item.item_id === itemId);
+        if (!targetItem) {
+            setExportPhase('failed');
+            setExportMessage('Элемент для ручной замены не найден.');
+            return;
+        }
+
+        try {
+            setExportPhase('uploading');
+            setExportMessage('Загружаем MP4 вручную...');
+            const updatedRun = await uploadVideoExportRunItemManual(
+                data.batch.id,
+                activeV2Run.run_id,
+                itemId,
+                targetItem.serial_number,
+                file
+            ) as VideoExportRunDetails;
+            setActiveV2Run(updatedRun);
+            setPendingSerials(updatedRun.items
+                .filter((item) => !['UPLOADED', 'SKIPPED', 'CANCELLED'].includes(item.status))
+                .map((item) => item.serial_number));
+            await refreshLocalRunSnapshot();
+            setExportPhase('completed');
+            setExportMessage('Файл заменён вручную.');
+        } catch (uploadError) {
+            console.error(uploadError);
+            setExportPhase('failed');
+            setExportMessage(uploadError instanceof Error ? uploadError.message : 'Не удалось заменить файл вручную.');
+        }
+    }, [activeV2Run, data, refreshLocalRunSnapshot, setExportPhase]);
+
+    const handleCommitRun = useCallback(async () => {
+        if (!data || !activeV2Run) {
+            return;
+        }
+
+        setIsCommitting(true);
+        try {
+            const updatedRun = await commitVideoExportRun(data.batch.id, activeV2Run.run_id) as VideoExportRunDetails;
+            setActiveV2Run(updatedRun);
+            setPendingSerials([]);
+            setData((current) => current ? {
+                ...current,
+                items: current.items.map((item) => {
+                    const runItem = updatedRun.items.find((entry) => entry.item_id === item.id);
+                    return runItem?.file_url
+                        ? { ...item, item_video_url: runItem.file_url }
+                        : item;
+                })
+            } : current);
+            clearSavedDraft();
+            setDraft(null);
+            setExportPhase('completed');
+            setExportMessage('Результаты V2 экспорта применены.');
+        } catch (commitError) {
+            console.error(commitError);
+            setExportPhase('failed');
+            setExportMessage(commitError instanceof Error ? commitError.message : 'Не удалось применить результаты экспорта.');
+        } finally {
+            setIsCommitting(false);
+        }
+    }, [activeV2Run, clearSavedDraft, data, setExportPhase]);
+
+    const handleCancelRun = useCallback(async () => {
+        if (!data || !activeV2Run) {
+            return;
+        }
+
+        try {
+            const updatedRun = await cancelVideoExportRun(data.batch.id, activeV2Run.run_id) as VideoExportRunDetails;
+            setActiveV2Run(updatedRun);
+            await refreshLocalRunSnapshot();
+            setExportPhase('cancelled');
+            setExportMessage('Запуск экспорта отменён.');
+        } catch (cancelError) {
+            console.error(cancelError);
+            setExportPhase('failed');
+            setExportMessage(cancelError instanceof Error ? cancelError.message : 'Не удалось отменить запуск.');
+        }
+    }, [activeV2Run, data, refreshLocalRunSnapshot, setExportPhase]);
+
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
     const helperSidebarStatus = isDesktopApp
         ? helperStatus === 'checking'
@@ -2124,17 +1744,6 @@ export function VideoToolController() {
                             ? 'Доступ к helper заблокирован браузером.'
                             : 'Локальный helper не найден или не запущен.'
                     : 'Готово к работе';
-    const helperProblemTitle = isDesktopApp
-        ? helperStatus === 'version_mismatch' ? 'Обновите ZAGARAMI admin' : 'Встроенный helper требует внимания'
-        : helperStatus === 'version_mismatch'
-            ? 'Helper устарел'
-            : helperIssueKind === 'safari'
-                ? 'Safari не подходит для helper'
-                : helperIssueKind === 'browser'
-                    ? 'Доступ к helper заблокирован'
-                    : helperIssueKind === 'old'
-                        ? 'Запущен старый helper'
-                        : 'Helper не запущен';
     const helperProblemDescription = isDesktopApp
         ? helperStatus === 'version_mismatch'
             ? 'Установите актуальную версию ZAGARAMI admin и перепроверьте статус.'
@@ -2148,13 +1757,6 @@ export function VideoToolController() {
                     : helperIssueKind === 'old'
                         ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
                         : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
-    const helperSteps = isDesktopApp
-        ? ['Перезапустите ZAGARAMI admin', 'Нажмите «Проверить снова»', 'Откройте Status Center при повторной ошибке']
-        : helperIssueKind === 'safari'
-            ? ['Откройте эту страницу в Chrome или Яндекс Браузере', 'Убедитесь, что ZAGARAMI Video Helper запущен', 'Нажмите «Проверить снова»']
-            : helperIssueKind === 'browser'
-                ? ['Нажмите «Разрешить доступ»', 'Подтвердите запрос браузера', 'Нажмите «Проверить снова»']
-                : ['Откройте ZAGARAMI Video Helper', 'Нажмите «Проверить»', 'Загрузите вертикальный исходник'];
     const helperQuickActionTitle = isDesktopApp
         ? helperStatus === 'version_mismatch' ? 'Обновите ZAGARAMI admin' : 'Встроенный helper требует внимания'
         : helperStatus === 'version_mismatch'
@@ -2172,7 +1774,6 @@ export function VideoToolController() {
                 ? 'Сайт может вызвать запрос доступа только по клику. Если браузер не покажет окно, разрешение уже заблокировано в настройках браузера или macOS.'
                 : helperProblemDescription;
     const statusMessage = error
-        || session?.error_message
         || (activeVideoWorkflow ? videoWorkflowStatusText : '')
         || exportMessage
         || notice?.message
@@ -2181,7 +1782,7 @@ export function VideoToolController() {
     const normalizedStatusMessage = statusMessage === 'Load failed'
         ? 'Не удалось загрузить исходник.'
         : statusMessage;
-    const statusMessageToneClass = error || session?.error_message || exportPhase === 'failed'
+    const statusMessageToneClass = error || exportPhase === 'failed'
         ? 'border-red-500/30 bg-red-500/10 text-red-100'
         : exportPhase === 'completed'
             ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100'
@@ -2190,48 +1791,20 @@ export function VideoToolController() {
             : notice?.tone === 'info'
                 ? 'border-white/12 bg-white/[0.06] text-gray-100'
                 : 'border-zinc-800 bg-zinc-950/80 text-zinc-300';
-    const canCancelSession = Boolean(session && ['OPEN', 'UPLOADING', 'FAILED', 'ABANDONED'].includes(session.status));
-    const helperDiagnosticReport = useMemo(() => JSON.stringify({
-        page: typeof window === 'undefined' ? '' : window.location.href,
-        userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
-        helperStatus,
-        helperIssueMessage,
-        helperBaseUrl,
-        expectedProtocol: VIDEO_EXPORT_HELPER_PROTOCOL_VERSION,
-        candidates: helperDiagnostics,
-        health: helperHealth
+    const exportMenuRun = useMemo(() => (
+        activeV2Run
             ? {
-                helper_version: helperHealth.helper_version,
-                protocol_version: helperHealth.protocol_version,
-                listen_hosts: helperHealth.listen_hosts,
-                allowed_origins: helperHealth.allowed_origins
+                run_id: activeV2Run.run_id,
+                status: activeV2Run.status,
+                version: activeV2Run.version,
+                items: activeV2Run.items.map((item) => ({
+                    ...item,
+                    render_status: item.render_status || '',
+                    upload_status: item.upload_status || ''
+                }))
             }
             : null
-    }, null, 2), [helperBaseUrl, helperDiagnostics, helperHealth, helperIssueMessage, helperStatus]);
-    const copyHelperDiagnostics = async () => {
-        try {
-            await navigator.clipboard.writeText(helperDiagnosticReport);
-            setHelperDiagnosticCopied(true);
-            window.setTimeout(() => setHelperDiagnosticCopied(false), 2200);
-        } catch (copyError) {
-            console.error(copyError);
-            setNotice({
-                tone: 'warning',
-                message: 'Не удалось скопировать диагностику. Откройте DevTools и скопируйте ошибку из Console.'
-            });
-        }
-    };
-    const helperDiagnosticToneClass = (status: HelperDiagnosticStatus) => {
-        if (status === 'ok') {
-            return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-100';
-        }
-
-        if (status === 'bad protocol') {
-            return 'border-amber-300/25 bg-amber-300/10 text-amber-100';
-        }
-
-        return 'border-red-400/25 bg-red-400/10 text-red-100';
-    };
+    ), [activeV2Run]);
 
     if (loading) {
         return (
@@ -2276,1260 +1849,179 @@ export function VideoToolController() {
     }
 
     return (
-        <div className="h-screen overflow-hidden bg-[#0f1013] text-zinc-100">
-            <div className="flex h-full flex-col">
-                <header className="flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-[#15161a] px-3 py-2">
-                    <button
-                        type="button"
-                        onClick={() => navigate('/admin/warehouse')}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                        aria-label="Вернуться на склад"
-                    >
-                        <ArrowLeft size={14} />
-                    </button>
+        <div className="h-screen overflow-hidden bg-[#0f1013] text-zinc-100 flex flex-col">
+            <VideoToolTopNav
+                activeMode={activeMode}
+                setActiveMode={setActiveMode}
+                onBack={() => navigate('/admin/warehouse')}
+                batchLabel={data?.batch.id}
+                hasHelperIssues={helperNeedsAttention}
+            />
 
-                    <div className="min-w-0 flex-1">
-                        <h1 data-testid="video-tool-heading" className="text-xs font-semibold text-zinc-100 sm:text-sm">
-                            Монтаж видео партии
-                        </h1>
-                    </div>
-
-                    <DesktopStatusCenter />
-
-                    <button
-                        type="button"
-                        onClick={() => setSidebarOpen((current) => !current)}
-                        className="inline-flex h-8 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                        aria-label={sidebarOpen ? 'Скрыть сайдбар' : 'Показать сайдбар'}
-                        title={sidebarOpen ? 'Скрыть сайдбар' : 'Показать сайдбар'}
-                    >
-                        {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-                        <span className="hidden sm:inline">{sidebarOpen ? 'Скрыть' : 'Показать'}</span>
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={() => setPreviewOpen((current) => !current)}
-                        className="inline-flex h-8 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                        aria-label={previewOpen ? 'Скрыть просмотр' : 'Показать просмотр'}
-                        title={previewOpen ? 'Скрыть просмотр' : 'Показать просмотр'}
-                    >
-                        {previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-                        <span className="hidden sm:inline">{previewOpen ? 'Скрыть просмотр' : 'Показать просмотр'}</span>
-                    </button>
-                </header>
-
-                {helperNeedsAttention && (
-                    <section
-                        data-testid="helper-quick-actions"
-                        className="shrink-0 border-b border-amber-400/20 bg-[#22190b] px-4 py-3"
-                    >
-                        <div className="flex flex-wrap items-center gap-3">
-                            <div className="min-w-[240px] flex-1">
-                                <p className="text-sm font-semibold text-amber-50">{helperQuickActionTitle}</p>
-                                <p className="mt-1 text-xs leading-5 text-amber-100/75">{helperQuickActionDescription}</p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                {helperIssueKind === 'browser' && (
-                                    <button
-                                        type="button"
-                                        data-testid="helper-request-access-top"
-                                        onClick={() => void requestHelperBrowserAccess()}
-                                        disabled={helperAccessRequesting}
-                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        <RefreshCw size={14} />
-                                        {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
-                                    </button>
-                                )}
-                                {helperNeedsDownload && helperDownloadArm64Configured && (
-                                    <button
-                                        type="button"
-                                        data-testid="helper-download-arm64-top"
-                                        onClick={openHelperDownloadArm64}
-                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
-                                    >
-                                        <HardDriveDownload size={14} />
-                                        Скачать Apple Silicon
-                                    </button>
-                                )}
-	                                {helperNeedsDownload && helperDownloadConfigured && (
-	                                    <button
-	                                        type="button"
-                                        data-testid="helper-download-top"
-                                        onClick={openHelperDownload}
-                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-50 transition hover:bg-amber-200/15"
-                                    >
-                                        <HardDriveDownload size={14} />
-	                                        Скачать Intel
-	                                    </button>
-	                                )}
-	                                {isDesktopApp && (
-	                                    <button
-	                                        type="button"
-	                                        data-testid="helper-open-status-center-top"
-	                                        onClick={() => openDesktopStatusCenter()}
-	                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
-	                                    >
-	                                        <Clipboard size={14} />
-	                                        Открыть диагностику
-	                                    </button>
-	                                )}
-	                                <button
-	                                    type="button"
-                                    data-testid="helper-recheck-top"
-                                    onClick={() => void checkHelper()}
-                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-600 bg-zinc-950/70 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:border-zinc-400"
+            {/* Quick Actions (if helper needs attention) */}
+            {helperNeedsAttention && (
+                <section
+                    data-testid="helper-quick-actions"
+                    className="shrink-0 border-b border-amber-400/20 bg-[#22190b] px-4 py-3"
+                >
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="min-w-[240px] flex-1">
+                            <p className="text-sm font-semibold text-amber-50">{helperQuickActionTitle}</p>
+                            <p className="mt-1 text-xs leading-5 text-amber-100/75">{helperQuickActionDescription}</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            {helperIssueKind === 'browser' && (
+                                <button
+                                    type="button"
+                                    data-testid="helper-request-access-top"
+                                    onClick={() => void requestHelperBrowserAccess()}
+                                    disabled={helperAccessRequesting}
+                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <RefreshCw size={14} />
-                                    Проверить снова
+                                    {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
                                 </button>
-                            </div>
-                        </div>
-                    </section>
-                )}
-
-                {activeVideoWorkflow && (
-                    <section
-                        data-testid="video-workflow-banner"
-                        className="shrink-0 border-b border-sky-400/20 bg-sky-500/10 px-4 py-3"
-                    >
-                        <div className="flex flex-wrap items-center gap-3">
-                            <div className="min-w-[240px] flex-1">
-                                <p className="text-sm font-semibold text-sky-50">Видео уже обрабатывается в фоне</p>
-                                <p className="mt-1 text-xs leading-5 text-sky-100/80">{videoWorkflowStatusText}</p>
-                            </div>
+                            )}
+                            {helperNeedsDownload && helperDownloadArm64Configured && (
+                                <button
+                                    type="button"
+                                    data-testid="helper-download-arm64-top"
+                                    onClick={openHelperDownloadArm64}
+                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
+                                >
+                                    <HardDriveDownload size={14} />
+                                    Скачать Apple Silicon
+                                </button>
+                            )}
+                            {helperNeedsDownload && helperDownloadConfigured && (
+                                <button
+                                    type="button"
+                                    data-testid="helper-download-top"
+                                    onClick={openHelperDownload}
+                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-50 transition hover:bg-amber-200/15"
+                                >
+                                    <HardDriveDownload size={14} />
+                                    Скачать Intel
+                                </button>
+                            )}
+                            {isDesktopApp && (
+                                <button
+                                    type="button"
+                                    data-testid="helper-open-status-center-top"
+                                    onClick={() => openDesktopStatusCenter()}
+                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
+                                >
+                                    <Clipboard size={14} />
+                                    Открыть диагностику
+                                </button>
+                            )}
                             <button
                                 type="button"
-                                onClick={() => openDesktopStatusCenter(activeVideoWorkflow.id)}
-                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-sky-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-sky-100"
+                                data-testid="helper-recheck-top"
+                                onClick={() => void checkHelper()}
+                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-600 bg-zinc-950/70 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:border-zinc-400"
                             >
-                                <Clipboard size={14} />
-                                Открыть Status Center
+                                <RefreshCw size={14} />
+                                Проверить снова
                             </button>
-                        </div>
-                    </section>
-                )}
-
-                <div
-                    className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[grid-template-columns] duration-300 lg:grid lg:overflow-hidden"
-                    style={{
-                        gridTemplateColumns: `${sidebarOpen ? 'minmax(176px,196px)' : '0px'} minmax(0,1fr) ${(!isQcPhase && previewOpen) ? `${previewPanelWidth}px` : '0px'}`
-                    }}
-                >
-                        <aside className={`${sidebarOpen ? 'min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-2.5' : 'pointer-events-none min-h-0 overflow-hidden border-r-0 p-0 opacity-0'}`}>
-                            <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-y-auto pb-2 pr-1">
-                                <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
-                                    <div className="min-w-0">
-                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Исходники</p>
-                                        <p className="mt-0.5 text-xs font-medium text-zinc-200">
-                                            {sources.length > 0 ? `${sources.length} видео` : 'Видео не выбрано'}
-                                        </p>
-                                    </div>
-
-                                    {sources.length > 0 && (
-                                        <div data-testid="source-list" className="mt-2 grid gap-1.5">
-                                            {sources.map((source) => {
-                                                const sourceNeedsLocalFile = isDesktopApp ? !source.stagedSourceId : (!source.file && !source.helperSourceId);
-                                                return (
-                                                    <div
-                                                        key={`source-${source.sourceIndex}`}
-                                                        className={`rounded-lg transition ${
-                                                            activeSourceIndex === source.sourceIndex
-                                                                ? 'bg-emerald-400/12 ring-1 ring-emerald-400/45'
-                                                                : sourceNeedsLocalFile
-                                                                    ? 'bg-amber-500/10 ring-1 ring-amber-300/25'
-                                                                    : 'bg-zinc-950/70'
-                                                        }`}
-                                                    >
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => {
-                                                                setActiveSourceIndex(source.sourceIndex);
-                                                                syncVideoTime(getSourceTimelineStartMs(sources, source.sourceIndex));
-                                                            }}
-                                                            className="w-full min-w-0 overflow-hidden px-2 py-1.5 text-left"
-                                                        >
-                                                            <div className="flex items-center justify-between gap-2">
-                                                                <span className="min-w-0 truncate text-xs font-medium text-zinc-100">{source.name}</span>
-                                                                <span className="shrink-0 rounded-full bg-zinc-800/80 px-1.5 py-0.5 text-[8px] uppercase tracking-[0.1em] text-zinc-400">
-                                                                    {source.role === 'WITH_INTRO' ? 'с интро' : 'без интро'}
-                                                                </span>
-                                                            </div>
-                                                            <p className="mt-0.5 text-[10px] text-zinc-500">{formatDuration(source.durationMs)}</p>
-                                                            {sourceNeedsLocalFile && (
-                                                                <p className="mt-1 text-[10px] text-amber-100">Нужен локальный файл для продолжения.</p>
-                                                            )}
-                                                        </button>
-                                                        {sourceNeedsLocalFile && (
-                                                            <label className="mx-2 mb-2 inline-flex cursor-pointer items-center rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-1 text-[10px] font-medium text-amber-50 transition hover:bg-amber-300/15">
-                                                                <Upload size={11} />
-                                                                <span className="ml-1">Привязать файл</span>
-                                                                <input
-                                                                    data-testid={`bind-source-input-${source.sourceIndex}`}
-                                                                    aria-label={`Привязать исходник ${source.name}`}
-                                                                    type="file"
-                                                                    accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
-                                                                    className="hidden"
-                                                                    onChange={(event) => {
-                                                                        handleSourcePicked(event.target.files?.[0] || null, source.sourceIndex === 0 ? 'first' : 'append', source.sourceIndex);
-                                                                        event.currentTarget.value = '';
-                                                                    }}
-                                                                />
-                                                            </label>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-
-                                    {sources.length === 0 && (
-                                        <label className="mt-3 inline-flex cursor-pointer items-center rounded-lg border border-emerald-700/60 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-100 transition hover:bg-emerald-500/15">
-                                            <Upload size={13} />
-                                            <span className="ml-1.5">Открыть видео</span>
-                                            <input
-                                                data-testid="source-input"
-                                                aria-label="Исходное видео"
-                                                type="file"
-                                                accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
-                                                className="hidden"
-                                                onChange={(event) => {
-                                                    handleSourcePicked(event.target.files?.[0] || null, 'first');
-                                                    event.currentTarget.value = '';
-                                                }}
-                                            />
-                                        </label>
-                                    )}
-
-                                    {sources.length > 0 && (
-                                        <label className="mt-2 inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-medium text-zinc-100 transition hover:border-zinc-500">
-                                            <Plus size={13} />
-                                            <span className="ml-1.5">Добавить ещё видео</span>
-                                            <input
-                                                data-testid="append-source-input"
-                                                aria-label="Добавить ещё видео без интро"
-                                                type="file"
-                                                accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm,video/*"
-                                                className="hidden"
-                                                onChange={(event) => {
-                                                    handleSourcePicked(event.target.files?.[0] || null, 'append');
-                                                    event.currentTarget.value = '';
-                                                }}
-                                            />
-                                        </label>
-                                    )}
-
-                                </section>
-
-                                <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
-                                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Настройки экспорта</p>
-                                    <div className="mt-3 space-y-3.5 font-sans">
-                                        <div className="flex flex-col gap-1">
-                                            <label className="text-[10px] text-zinc-400">Разрешение видео</label>
-                                            <select
-                                                value={exportResolution}
-                                                onChange={(e) => setExportResolution(e.target.value as '1080p' | '720p')}
-                                                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-zinc-700"
-                                            >
-                                                <option value="1080p">1080p (Full HD)</option>
-                                                <option value="720p">720p (HD)</option>
-                                            </select>
-                                        </div>
-
-                                        <div className="flex flex-col gap-1">
-                                            <label className="text-[10px] text-zinc-400">Качество (Quality preset)</label>
-                                            <select
-                                                value={exportQuality}
-                                                onChange={(e) => setExportQuality(e.target.value as 'high' | 'medium' | 'low')}
-                                                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-zinc-700"
-                                            >
-                                                <option value="high">Высокое (crf 20)</option>
-                                                <option value="medium">Среднее (crf 23)</option>
-                                                <option value="low">Низкое (crf 26)</option>
-                                            </select>
-                                        </div>
-
-                                        <div className="flex flex-col gap-1">
-                                            <label className="text-[10px] text-zinc-400">Частота кадров (FPS)</label>
-                                            <select
-                                                value={exportFps}
-                                                onChange={(e) => setExportFps(Number(e.target.value) as 30 | 60)}
-                                                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-zinc-700"
-                                            >
-                                                <option value="30">30 FPS</option>
-                                                <option value="60">60 FPS</option>
-                                            </select>
-                                        </div>
-
-                                        <div className="flex items-center justify-between gap-2 pt-1">
-                                            <span className="text-[10px] text-zinc-400 font-sans">Нормализация звука</span>
-                                            <input
-                                                type="checkbox"
-                                                checked={exportAudioNormalize}
-                                                onChange={(e) => setExportAudioNormalize(e.target.checked)}
-                                                className="h-3.5 w-3.5 rounded border-zinc-800 bg-zinc-950 accent-emerald-500"
-                                            />
-                                        </div>
-                                    </div>
-                                </section>
-
-                                <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Статус</p>
-                                        <button
-                                            type="button"
-                                            onClick={() => void checkHelper()}
-                                            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
-                                        >
-                                            <RefreshCw size={12} />
-                                            Проверить
-                                        </button>
-                                    </div>
-
-                                    <p className={`mt-2 rounded-lg border px-2 py-1.5 text-[11px] leading-4 ${statusMessageToneClass}`}>
-                                        {normalizedStatusMessage}
-                                    </p>
-                                    <p data-testid="blocking-status" className="mt-1.5 text-[10px] text-zinc-500">
-                                        {exportBlockedReason || 'Готово к экспорту'}
-                                    </p>
-
-                                    {preflightIssues.length > 0 && (
-                                        <div className="mt-3 space-y-1.5 border-t border-zinc-800 pt-3">
-                                            <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Результаты preflight-проверки:</p>
-                                            {preflightIssues.map((issue, idx) => (
-                                                <div
-                                                    key={idx}
-                                                    className={`rounded-lg border px-2.5 py-2 text-[10px] leading-relaxed ${
-                                                        issue.type === 'blocker'
-                                                            ? 'border-red-500/30 bg-red-500/10 text-red-200'
-                                                            : 'border-amber-400/25 bg-amber-500/10 text-amber-200'
-                                                    }`}
-                                                >
-                                                    <span className="font-semibold">{issue.type === 'blocker' ? 'Блокировщик: ' : 'Предупреждение: '}</span>
-                                                    {issue.message}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {helperNeedsAttention && (
-                                        <div
-                                            data-testid="helper-install-panel"
-                                            className="mt-4 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-3"
-                                        >
-                                            <p className="text-sm font-medium text-amber-50">{helperProblemTitle}</p>
-                                            <p className="mt-2 text-sm leading-6 text-amber-100/90">{helperProblemDescription}</p>
-                                            <ol className="mt-3 grid gap-2 text-xs text-amber-50/85">
-                                                {helperSteps.map((step, index) => (
-                                                    <li key={step} className="flex gap-2">
-                                                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-200/15 text-[10px] text-amber-50">
-                                                            {index + 1}
-                                                        </span>
-                                                        <span>{step}</span>
-                                                    </li>
-                                                ))}
-                                            </ol>
-                                            <div className="mt-3 grid gap-2">
-                                                {helperIssueKind === 'browser' && (
-                                                    <button
-                                                        type="button"
-                                                        data-testid="helper-request-access"
-                                                        onClick={() => void requestHelperBrowserAccess()}
-                                                        disabled={helperAccessRequesting}
-                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                                    >
-                                                        <RefreshCw size={14} />
-                                                        {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
-                                                    </button>
-                                                )}
-                                                {helperNeedsDownload && helperDownloadConfigured && (
-                                                    <button
-                                                        type="button"
-                                                        data-testid="helper-download"
-                                                        onClick={openHelperDownload}
-                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
-                                                    >
-                                                        <HardDriveDownload size={14} />
-                                                        Скачать для Intel
-                                                    </button>
-                                                )}
-	                                                {helperNeedsDownload && helperDownloadArm64Configured && (
-	                                                    <button
-                                                        type="button"
-                                                        data-testid="helper-download-arm64"
-                                                        onClick={openHelperDownloadArm64}
-                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/20 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/25"
-                                                    >
-                                                        <HardDriveDownload size={14} />
-	                                                        Скачать для Apple Silicon
-	                                                    </button>
-	                                                )}
-	                                                {isDesktopApp && (
-	                                                    <button
-	                                                        type="button"
-	                                                        data-testid="helper-open-status-center"
-		                                                        onClick={() => openDesktopStatusCenter()}
-	                                                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
-	                                                    >
-	                                                        <Clipboard size={14} />
-	                                                        Открыть Status Center
-	                                                    </button>
-	                                                )}
-	                                                <button
-                                                    type="button"
-                                                    data-testid="helper-recheck"
-                                                    onClick={() => void checkHelper()}
-                                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-500 hover:text-white"
-                                                >
-                                                    <RefreshCw size={14} />
-                                                    Проверить снова
-                                                </button>
-                                            </div>
-	                                            {!isDesktopApp && helperDiagnostics.length > 0 && (
-                                                <div
-                                                    data-testid="helper-diagnostics"
-                                                    className="mt-3 rounded-2xl border border-zinc-700/70 bg-zinc-950/70 p-3"
-                                                >
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <p className="text-xs font-medium text-zinc-100">Диагностика браузера</p>
-                                                        <button
-                                                            type="button"
-                                                            data-testid="helper-copy-diagnostics"
-                                                            onClick={() => void copyHelperDiagnostics()}
-                                                            className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-100 transition hover:border-zinc-500"
-                                                        >
-                                                            <Clipboard size={13} />
-                                                            {helperDiagnosticCopied ? 'Скопировано' : 'Скопировать'}
-                                                        </button>
-                                                    </div>
-                                                    <div className="mt-3 grid gap-2">
-                                                        {helperDiagnostics.map((entry) => (
-                                                            <div
-                                                                key={`${entry.url}-${entry.mode || 'standard'}`}
-                                                                className={`rounded-xl border px-2.5 py-2 text-[11px] leading-5 ${helperDiagnosticToneClass(entry.status)}`}
-                                                            >
-                                                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                                                    <span className="font-mono text-[10px]">{entry.url}{entry.mode ? ` (${entry.mode})` : ''}</span>
-                                                                    <span className="uppercase tracking-[0.12em]">{entry.status}</span>
-                                                                </div>
-                                                                <p className="mt-1 text-zinc-300">
-                                                                    {entry.httpStatus ? `HTTP ${entry.httpStatus}. ` : ''}
-                                                                    {entry.protocolVersion ? `protocol ${entry.protocolVersion}. ` : ''}
-                                                                    {entry.detail}
-                                                                </p>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                    <p className="mt-3 break-words text-[10px] leading-4 text-zinc-500">
-                                                        {typeof navigator === 'undefined' ? '' : navigator.userAgent}
-                                                    </p>
-                                                </div>
-                                            )}
-                                            {helperNeedsDownload && !helperDownloadConfigured && !helperDownloadArm64Configured && (
-                                                <p className="mt-3 text-xs leading-5 text-amber-100/75">
-                                                    Ссылка на production DMG ещё не настроена в `VITE_VIDEO_HELPER_DOWNLOAD_URL`.
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {draft && (
-                                        <div
-                                            data-testid="draft-banner"
-                                            className="mt-2 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1.5 text-[11px] leading-4 text-gray-100"
-                                        >
-                                            <p>Найден локальный draft: {draft.segments.length} фрагментов.</p>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={handleDiscardDraft}
-                                                className="mt-1 h-auto justify-start px-0 py-0 text-[11px] text-gray-300 hover:bg-transparent hover:text-white"
-                                            >
-                                                Сбросить черновик
-                                            </Button>
-                                        </div>
-                                    )}
-
-                                    <div className="mt-2 grid gap-1.5 text-[10px] text-zinc-300">
-                                        <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
-                                            Загружено: {session ? `${session.uploaded_count}/${session.expected_count}` : `0/${expectedOutputCount}`}
-                                        </div>
-                                        {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading' || exportPhase === 'verifying') && (
-                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
-                                                {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
-                                            </div>
-                                        )}
-                                        {batchVideoWorkflow && (
-                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
-                                                Workflow: {workflowPhaseLabel[batchVideoWorkflow.phase] || batchVideoWorkflow.phase}
-                                            </div>
-                                        )}
-                                        {session && (
-                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
-                                                Сессия: {sessionStatusLabel[session.status] || session.status}
-                                            </div>
-                                        )}
-                                        {helperHealth?.helper_version && (
-                                            <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
-                                                Версия helper: {helperHealth.helper_version}
-                                            </div>
-                                        )}
-                                    </div>
-                                </section>
-
-                                {isDesktopApp && (
-                                    <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
-                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Управление и отчеты</p>
-                                        <div className="mt-3 space-y-3 font-sans text-xs">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="text-zinc-400">Локальный кэш:</span>
-                                                <span className="font-mono font-medium text-zinc-200" data-testid="cache-size">
-                                                    {formatBytes(helperHealth?.cache_bytes)}
-                                                </span>
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                <button
-                                                    type="button"
-                                                    data-testid="cleanup-cache-button"
-                                                    disabled={isExporting}
-                                                    onClick={() => void handleCleanupCache()}
-                                                    className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-200 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                                                    title={isExporting ? 'Нельзя очистить кэш во время экспорта' : 'Очистить кэш исходников и рендеров'}
-                                                >
-                                                    <HardDrive size={12} />
-                                                    Очистить кэш
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    data-testid="collect-diagnostics-button"
-                                                    onClick={() => void handleCollectDiagnostics()}
-                                                    className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
-                                                    title="Экспортировать отчет диагностики в Downloads"
-                                                >
-                                                    <Clipboard size={12} />
-                                                    Собрать отчет
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </section>
-                                )}
-
-                            </div>
-                        </aside>
-
-                    <section className="relative min-h-0 bg-[#131418] p-2.5">
-                        {isQcPhase ? (
-                            <ReviewQCStep
-                                batchId={batchId}
-                                session={session!}
-                                items={data?.items || []}
-                                onCommit={handleCommitSession}
-                                onCancel={handleDiscardSession}
-                                isCommitting={isCommitting}
-                                onRefresh={handleRefreshSession}
-                            />
-                        ) : (
-                            <div className={`grid h-full min-h-0 gap-2.5 ${segments.length === 0 ? 'grid-rows-[minmax(0,1fr)_minmax(250px,0.6fr)]' : 'grid-rows-[auto_minmax(280px,1fr)]'}`}>
-                            <section className={`flex min-h-0 flex-col overflow-hidden ${segments.length > 0 ? 'max-h-[40vh]' : ''}`}>
-                                <div className={`min-h-0 flex-1 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto pr-1'}`}>
-                                    {segments.length === 0 ? (
-                                        <div className="flex h-full min-h-[220px] items-center justify-center bg-zinc-950/20 p-6 text-center text-sm text-zinc-500">
-                                            <div className="max-w-xl">
-                                                <p className="text-base font-medium text-zinc-200">Рабочая область появится после исходника</p>
-                                                <p className="mt-2 leading-6">
-                                                    Сначала решите статус helper’а, затем загрузите вертикальный ролик. После загрузки здесь появятся интро, товарные клипы и стыки.
-                                                </p>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-2 2xl:grid-cols-3">
-                                            {segmentRows.map((row) => {
-                                                const { index, segment, item, isDeleted, isUploaded, role, displaySequence } = row;
-                                                const duration = segment.endMs - segment.startMs;
-                                                const isTooShort = !isDeleted && role !== 'intro' && duration < 1500;
-                                                const isMissing = !isDeleted && role !== 'intro' && !isUploaded;
-
-                                                const cardTitle = isDeleted
-                                                    ? 'Удалённый фрагмент'
-                                                    : role === 'intro'
-                                                        ? 'Интро'
-                                                        : item?.serial_number || `Клип ${displaySequence}`;
-
-                                                let badgeClass = 'bg-zinc-800 text-zinc-400';
-                                                let badgeLabel = 'Клип';
-                                                if (isDeleted) {
-                                                    badgeClass = 'bg-zinc-800/40 text-zinc-500';
-                                                    badgeLabel = 'Удалён';
-                                                } else if (role === 'intro') {
-                                                    badgeClass = 'bg-white/[0.06] text-gray-100';
-                                                    badgeLabel = 'Интро';
-                                                } else if (isTooShort) {
-                                                    badgeClass = 'bg-amber-500/15 text-amber-300';
-                                                    badgeLabel = 'Короткий';
-                                                } else if (isUploaded) {
-                                                    badgeClass = 'bg-emerald-500/15 text-emerald-300';
-                                                    badgeLabel = 'Готов';
-                                                } else if (isMissing) {
-                                                    badgeClass = 'bg-rose-500/10 text-rose-300';
-                                                    badgeLabel = 'Ожидает';
-                                                }
-
-                                                let cardClasses = 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-600';
-                                                if (isDeleted) {
-                                                    cardClasses = 'border-zinc-800/40 bg-zinc-950/10 opacity-40 hover:opacity-50';
-                                                } else if (index === selectedSegmentIndex) {
-                                                    cardClasses = 'border-emerald-400/80 bg-emerald-400/10';
-                                                } else if (isTooShort) {
-                                                    cardClasses = 'border-amber-500/50 bg-amber-500/5 hover:border-amber-400';
-                                                } else if (isUploaded) {
-                                                    cardClasses = 'border-emerald-500/30 bg-emerald-500/3 hover:border-emerald-500/50';
-                                                } else if (role === 'intro') {
-                                                    cardClasses = 'border-white/12 bg-white/[0.06] hover:border-white/20';
-                                                }
-
-                                                return (
-                                                    <button
-                                                        key={`clip-card-${segment.sequence}`}
-                                                        data-testid={`clip-card-${padSequence(segment.sequence)}`}
-                                                        type="button"
-                                                        aria-pressed={index === selectedSegmentIndex}
-                                                        onClick={() => {
-                                                            setSelectedSegmentIndex(index);
-                                                            syncVideoTime(segment.startMs);
-                                                        }}
-                                                        className={`flex min-h-[96px] w-full flex-col items-start gap-2.5 rounded-2xl border px-3.5 py-3 text-left transition ${cardClasses}`}
-                                                    >
-                                                        <div className="flex w-full items-start justify-between gap-3">
-                                                            <div className="min-w-0">
-                                                                <div className="flex items-center gap-1.5">
-                                                                    <span className="text-base font-semibold text-zinc-100">{displaySequence || '×××'}</span>
-                                                                    {isDeleted && <Trash2 size={12} className="text-zinc-500" />}
-                                                                    {isTooShort && <AlertTriangle size={12} className="text-amber-400" />}
-                                                                    {isUploaded && <CheckCircle2 size={12} className="text-emerald-400" />}
-                                                                </div>
-                                                                <p className="mt-1 text-[11px] text-zinc-500">{formatDuration(segment.endMs - segment.startMs)}</p>
-                                                            </div>
-                                                            <span className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${badgeClass}`}>
-                                                                {badgeLabel}
-                                                            </span>
-                                                        </div>
-
-                                                        <div className="min-w-0">
-                                                            <p
-                                                                className="truncate text-sm font-medium text-zinc-100"
-                                                                title={cardTitle}
-                                                            >
-                                                                {cardTitle}
-                                                            </p>
-                                                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-                                                                <span className="rounded-full border border-zinc-700 px-2.5 py-1">
-                                                                    {formatDuration(segment.startMs)} → {formatDuration(segment.endMs)}
-                                                                </span>
-                                                                {!isDeleted && role !== 'intro' && item?.temp_id && (
-                                                                    <span className="rounded-full border border-zinc-700 px-2.5 py-1">
-                                                                        Пакет {item.temp_id}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-                            </section>
-
-                            <section className="min-h-0 overflow-hidden rounded-2xl border border-zinc-800 bg-[#15171c]">
-                                    <div className="flex items-center gap-1.5 overflow-x-auto border-b border-zinc-800 px-3 py-2 whitespace-nowrap">
-                                        <Button
-                                            data-testid="action-cut"
-                                            aria-label="Разрезать"
-                                            size="sm"
-                                            onClick={() => applySegmentEdit((current) => splitSegmentAt(current, playheadMs))}
-                                            disabled={sources.length === 0 || !durationMs}
-                                            variant="secondary"
-                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
-                                        >
-                                            <Scissors size={14} />
-                                            Разрезать
-                                        </Button>
-                                        <Button
-                                            data-testid="action-delete"
-                                            aria-label={selectedSegmentIsDeleted ? 'Вернуть фрагмент' : 'Удалить фрагмент'}
-                                            variant={selectedSegmentIsDeleted ? 'ghost' : 'danger'}
-                                            size="sm"
-                                            onClick={() => applySegmentEdit((current) => toggleSegmentDeletedAt(current, selectedSegmentIndex))}
-                                            disabled={!selectedSegment || selectedSegmentLocked}
-                                            className={selectedSegmentIsDeleted
-                                                ? '!h-8 !min-h-0 rounded-lg border border-emerald-400/40 bg-emerald-400/12 px-2.5 py-0 text-[11px] text-emerald-100 hover:bg-emerald-400/18 hover:text-emerald-50 disabled:opacity-40'
-                                                : '!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40'}
-                                        >
-                                            {selectedSegmentIsDeleted ? <RotateCcw size={14} /> : <Trash2 size={14} />}
-                                            {selectedSegmentIsDeleted ? 'Вернуть' : 'Удалить'}
-                                        </Button>
-                                        <Button
-                                            data-testid="action-export"
-                                            aria-label="Экспорт"
-                                            size="sm"
-                                            onClick={() => void handleExport()}
-                                            disabled={Boolean(exportBlockedReason) || exportPhase === 'preflight' || exportPhase === 'rendering' || exportPhase === 'uploading'}
-                                            variant="primary"
-                                            className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40"
-                                        >
-                                            <HardDriveDownload size={14} />
-                                            {activeVideoWorkflow ? 'В фоне' : 'Экспорт'}
-                                        </Button>
-                                        {canCancelSession && (
-                                            <Button
-                                                variant="danger"
-                                                size="sm"
-                                                onClick={() => void handleCancelSession()}
-                                                disabled={exportPhase === 'rendering' || exportPhase === 'uploading'}
-                                                className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none"
-                                            >
-                                                <Ban size={14} />
-                                                Отменить
-                                            </Button>
-                                        )}
-                                        <Button
-                                            aria-label="Восстановить все"
-                                            size="sm"
-                                            onClick={handleRestoreAllDeleted}
-                                            disabled={sources.length === 0}
-                                            variant="secondary"
-                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
-                                        >
-                                            <RotateCcw size={14} />
-                                            Восстановить всё
-                                        </Button>
-                                        <Button
-                                            aria-label="Сбросить нарезку"
-                                            size="sm"
-                                            onClick={handleClearCuts}
-                                            disabled={sources.length === 0}
-                                            variant="secondary"
-                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
-                                        >
-                                            <Scissors size={14} />
-                                            Сбросить нарезку
-                                        </Button>
-                                        <Button
-                                            aria-label="Сбросить всё"
-                                            size="sm"
-                                            onClick={handleResetSource}
-                                            disabled={sources.length === 0}
-                                            variant="danger"
-                                            className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40"
-                                        >
-                                            <Trash2 size={14} />
-                                            Очистить всё
-                                        </Button>
-                                        <Button
-                                            aria-label="Помощь"
-                                            size="sm"
-                                            onClick={() => setShowHotkeyHelp(true)}
-                                            variant="secondary"
-                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800"
-                                        >
-                                            <HelpCircle size={14} />
-                                            Помощь
-                                        </Button>
-                                        <span
-                                            data-testid="clip-counter"
-                                            className="ml-1 rounded-full border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-zinc-200"
-                                        >
-                                            {clipCounterText}
-                                        </span>
-                                        <span className="ml-auto text-[9px] text-zinc-500">Масштаб {timelineViewport.zoom.toFixed(1)}x</span>
-                                        <button
-                                            type="button"
-                                            onClick={() => zoomTimelineByFactor(TIMELINE_ZOOM_STEP)}
-                                            disabled={!durationMs || visibleDurationMs >= durationMs}
-                                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            <Minus size={12} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => zoomTimelineByFactor(1 / TIMELINE_ZOOM_STEP)}
-                                            disabled={!durationMs || visibleDurationMs <= getTimelineMinVisibleDuration(durationMs)}
-                                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            <Plus size={12} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={fitTimelineToAll}
-                                            disabled={!durationMs}
-                                            className="inline-flex h-6 items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            <Maximize2 size={12} />
-                                            Показать всё
-                                        </button>
-                                    </div>
-
-                                <div className="h-full min-h-[280px] px-3 pb-3 pt-2.5">
-                                    <div className="grid h-full min-h-0 grid-rows-[26px_1fr_18px] rounded-[20px] border border-zinc-800 bg-[#15171c]">
-                                        <div
-                                            className="relative overflow-hidden border-b border-zinc-800 bg-[#101115]"
-                                            onPointerDown={(event) => {
-                                                if (!durationMs || !timelineRef.current) {
-                                                    return;
-                                                }
-                                                seekTimelineAtClientX(event.clientX);
-                                                dragPlayheadRef.current = true;
-                                            }}
-                                            onWheel={(event) => {
-                                                if (!durationMs || !visibleDurationMs || !timelineRef.current) {
-                                                    return;
-                                                }
-
-                                                const rect = timelineRef.current.getBoundingClientRect();
-                                                handleTimelineWheel(event, rect);
-                                            }}
-                                        >
-                                            {rulerMarks.map((markMs) => {
-                                                const left = ((markMs - visibleStartMs) / visibleDurationMs) * 100;
-                                                return (
-                                                    <div key={`ruler-${markMs}`} className="absolute inset-y-0" style={{ left: `${left}%` }}>
-                                                        <div className="pointer-events-none h-full border-l border-zinc-700/70" />
-                                                        <span className="absolute left-2 top-1 text-[10px] text-zinc-500">{formatDuration(markMs)}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-
-                                        <div
-                                            ref={timelineRef}
-                                            data-testid="timeline-region"
-                                            className="relative min-h-0 overflow-hidden bg-[#101218]"
-                                            onPointerDown={(event) => {
-                                                if (event.target !== event.currentTarget) {
-                                                    return;
-                                                }
-                                                seekTimelineAtClientX(event.clientX);
-                                                dragPlayheadRef.current = true;
-                                            }}
-                                            onWheel={(event) => {
-                                                if (!durationMs || !visibleDurationMs) {
-                                                    return;
-                                                }
-
-                                                const rect = event.currentTarget.getBoundingClientRect();
-                                                handleTimelineWheel(event, rect);
-                                            }}
-                                            onClick={(event) => {
-                                                if (event.target !== event.currentTarget) {
-                                                    return;
-                                                }
-                                                seekTimelineAtClientX(event.clientX);
-                                            }}
-                                        >
-                                            {rulerMarks.map((markMs) => {
-                                                const left = ((markMs - visibleStartMs) / visibleDurationMs) * 100;
-                                                return <div key={`grid-${markMs}`} className="pointer-events-none absolute inset-y-0 border-l border-zinc-800/80" style={{ left: `${left}%` }} />;
-                                            })}
-
-                                            {segmentRows.map((row) => {
-                                                const { index, segment, isDeleted, isUploaded, role, item, displaySequence } = row;
-                                                const visibleSegmentStartMs = Math.max(segment.startMs, visibleStartMs);
-                                                const visibleSegmentEndMs = Math.min(segment.endMs, visibleEndMs);
-                                                if (visibleSegmentEndMs <= visibleSegmentStartMs || visibleDurationMs <= 0) {
-                                                    return null;
-                                                }
-
-                                                const widthPercent = ((visibleSegmentEndMs - visibleSegmentStartMs) / visibleDurationMs) * 100;
-                                                const style = getVisibleWindowStyle(segment.startMs, segment.endMs, visibleStartMs, visibleDurationMs);
-                                                if (!style) {
-                                                    return null;
-                                                }
-
-                                                const duration = segment.endMs - segment.startMs;
-                                                const isTooShort = !isDeleted && role !== 'intro' && duration < 1500;
-
-                                                const showSequence = widthPercent >= 3.2;
-                                                const showSecondaryLabel = widthPercent >= 10;
-                                                const label = isDeleted
-                                                    ? 'Удалён'
-                                                    : role === 'intro'
-                                                        ? 'Интро'
-                                                        : item?.serial_number || `Клип ${displaySequence}`;
-
-                                                let timelineClasses = 'border-white/16 bg-white/[0.12] text-white hover:bg-white/[0.16]';
-                                                if (isDeleted) {
-                                                    timelineClasses = 'border-zinc-800/40 bg-zinc-950/20 text-zinc-500 opacity-40 hover:opacity-50';
-                                                } else if (index === selectedSegmentIndex) {
-                                                    timelineClasses = 'border-emerald-300/80 bg-emerald-400/18 text-white';
-                                                } else if (isTooShort) {
-                                                    timelineClasses = 'border-amber-500/80 bg-amber-500/20 text-amber-100 hover:bg-amber-500/25';
-                                                } else if (isUploaded) {
-                                                    timelineClasses = 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/20';
-                                                } else if (role === 'intro') {
-                                                    timelineClasses = 'border-white/12 bg-white/[0.06] text-gray-100 hover:bg-white/[0.08]';
-                                                }
-
-                                                return (
-                                                    <button
-                                                        key={`video-segment-${segment.sequence}`}
-                                                        type="button"
-                                                        className={`absolute bottom-4 top-4 overflow-hidden rounded-lg border px-2 text-left transition ${timelineClasses}`}
-                                                        style={style}
-                                                        onClick={() => {
-                                                            setSelectedSegmentIndex(index);
-                                                            syncVideoTime(segment.startMs);
-                                                        }}
-                                                    >
-                                                        {showSequence && (
-                                                            <div className="flex items-center gap-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.16em]">
-                                                                <span>{displaySequence || 'DEL'}</span>
-                                                                {isDeleted && <Trash2 size={10} className="text-zinc-500" />}
-                                                                {isTooShort && <AlertTriangle size={10} className="text-amber-400" />}
-                                                                {isUploaded && <CheckCircle2 size={10} className="text-emerald-400" />}
-                                                            </div>
-                                                        )}
-                                                        {showSecondaryLabel && (
-                                                            <div className="mt-1 truncate text-[10px] text-white/75">
-                                                                {label}
-                                                            </div>
-                                                        )}
-                                                    </button>
-                                                );
-                                            })}
-
-                                            {segments.slice(0, -1).map((segment, index) => {
-                                                if (segment.endMs < visibleStartMs || segment.endMs > visibleEndMs) {
-                                                    return null;
-                                                }
-
-                                                if (isSourceBoundaryBetween(segment, segments[index + 1])) {
-                                                    return (
-                                                        <div
-                                                            key={`source-boundary-${segment.sequence}`}
-                                                            data-testid={`source-boundary-${segment.sequence}`}
-                                                            className="pointer-events-none absolute inset-y-4 z-20 w-1 -translate-x-1/2 bg-amber-200/80 shadow-[0_0_14px_rgba(253,230,138,0.35)]"
-                                                            style={{ left: `${((segment.endMs - visibleStartMs) / visibleDurationMs) * 100}%` }}
-                                                        />
-                                                    );
-                                                }
-
-                                                return (
-                                                    <button
-                                                        key={`boundary-${segment.sequence}`}
-                                                        type="button"
-                                                        className="absolute inset-y-4 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-white/80 transition hover:bg-emerald-300"
-                                                        style={{ left: `${((segment.endMs - visibleStartMs) / visibleDurationMs) * 100}%` }}
-                                                        onPointerDown={(event) => {
-                                                            event.stopPropagation();
-                                                            pushSegmentsToHistory(segments);
-                                                            dragBoundaryIndexRef.current = index;
-                                                        }}
-                                                        aria-label={`Изменить границу между ${padSequence(index)} и ${padSequence(index + 1)}`}
-                                                    />
-                                                );
-                                            })}
-
-                                            {durationMs > 0 && playheadMs >= visibleStartMs && playheadMs <= visibleEndMs && (
-                                                <>
-                                                    <button
-                                                        type="button"
-                                                        className="absolute top-2 z-30 h-4 w-4 -translate-x-1/2 rounded-full border border-red-300 bg-red-400 shadow-[0_0_14px_rgba(248,113,113,0.6)]"
-                                                        style={{ left: `${((playheadMs - visibleStartMs) / visibleDurationMs) * 100}%` }}
-                                                        onPointerDown={(event) => {
-                                                            event.stopPropagation();
-                                                            dragPlayheadRef.current = true;
-                                                        }}
-                                                        aria-label="Переместить плейхед"
-                                                    />
-                                                    <div
-                                                        className="pointer-events-none absolute inset-y-0 z-20 w-0.5 bg-red-400 shadow-[0_0_14px_rgba(248,113,113,0.55)]"
-                                                        style={{ left: `${((playheadMs - visibleStartMs) / visibleDurationMs) * 100}%` }}
-                                                    />
-                                                </>
-                                            )}
-                                        </div>
-
-                                        <div className="border-t border-zinc-800 bg-[#101115] px-3 py-2">
-                                            <div
-                                                ref={timelineScrollbarRef}
-                                                className={`relative h-2 w-full rounded-full bg-zinc-900 ${timelineViewport.isPanning ? 'ring-1 ring-white/20' : ''}`}
-                                                onClick={(event) => {
-                                                    if (!durationMs || !visibleDurationMs) {
-                                                        return;
-                                                    }
-
-                                                    const rect = event.currentTarget.getBoundingClientRect();
-                                                    const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-                                                    const centeredStartMs = (ratio * durationMs) - (visibleDurationMs / 2);
-                                                    updateTimelineViewport(centeredStartMs, visibleDurationMs);
-                                                }}
-                                            >
-                                                <button
-                                                    type="button"
-                                                    className="absolute inset-y-0 rounded-full border border-white/25 bg-white/25 shadow-[0_0_20px_rgba(255,255,255,0.12)]"
-                                                    style={{
-                                                        left: `${durationMs ? (visibleStartMs / durationMs) * 100 : 0}%`,
-                                                        width: `${durationMs ? (visibleDurationMs / durationMs) * 100 : 100}%`
-                                                    }}
-                                                    onClick={(event) => event.stopPropagation()}
-                                                    onPointerDown={(event) => {
-                                                        event.stopPropagation();
-                                                        panViewportRef.current = {
-                                                            source: 'scrollbar',
-                                                            startClientX: event.clientX,
-                                                            startVisibleStartMs: visibleStartMs
-                                                        };
-                                                        setTimelineViewport((current) => ({ ...current, isPanning: true }));
-                                                    }}
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </section>
-                        </div>
-                        )}
-                    </section>
-
-                    <section className={`${previewOpen ? 'relative min-h-0 border-l border-zinc-800 bg-[#121317] p-3' : 'pointer-events-none relative min-h-0 border-l-0 bg-[#121317] p-0 opacity-0'}`}>
-                        <button
-                            type="button"
-                            className="absolute bottom-0 left-0 top-0 z-30 w-2 -translate-x-1/2 cursor-col-resize touch-none border-l border-transparent text-zinc-700 transition hover:border-emerald-300/70 hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70"
-                            onPointerDown={(event) => {
-                                event.preventDefault();
-                                previewResizeRef.current = {
-                                    startClientX: event.clientX,
-                                    startWidth: previewPanelWidth
-                                };
-                            }}
-                            aria-label="Изменить ширину окна просмотра"
-                            title="Потяните, чтобы изменить ширину просмотра"
-                        >
-                            <span className="pointer-events-none absolute left-1/2 top-1/2 h-16 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current" />
-                        </button>
-                        <div className="relative flex h-full min-h-0 flex-col items-center overflow-hidden rounded-[28px] border border-zinc-800 bg-[#090a0d]">
-                            <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/65 via-black/25 to-transparent px-4 py-4 text-[11px] uppercase tracking-[0.18em] text-zinc-300">
-                                <span>Просмотр</span>
-                                <span className="inline-flex items-center gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setPreviewPanelWidth(clampPreviewPanelWidth(PREVIEW_PANEL_DEFAULT_WIDTH))}
-                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 hover:text-white"
-                                        aria-label="Сбросить ширину просмотра"
-                                        title="Сбросить ширину просмотра"
-                                    >
-                                        <RotateCcw size={13} />
-                                    </button>
-                                    <span>{selectedSegmentRow?.displaySequence || (selectedSegmentRow?.isDeleted ? 'del' : '—')}</span>
-                                </span>
-                            </div>
-
-                            <div className="absolute inset-x-0 top-12 z-10 flex items-center justify-between px-4 text-xs text-zinc-400">
-                                <span>{formatDuration(playheadMs)}</span>
-                                <span>{durationMs ? formatDuration(durationMs) : '—'}</span>
-                            </div>
-
-                            <div className="flex min-h-0 w-full flex-1 items-center justify-center p-4 pb-3">
-                                <div className="relative aspect-[9/16] w-full max-w-[360px] max-h-full overflow-hidden rounded-[28px] border border-zinc-900 bg-black shadow-[0_18px_80px_rgba(0,0,0,0.55)] 2xl:max-w-[400px]">
-                                    {sourceUrl && !sourcePreviewUnavailable ? (
-                                        <video
-                                            ref={videoRef}
-                                            src={sourceUrl}
-                                            preload="metadata"
-                                            playsInline
-                                            className="h-full w-full object-contain"
-                                            onLoadedMetadata={handleLoadedMetadata}
-                                            onPlay={() => setIsPlaying(true)}
-                                            onPause={() => setIsPlaying(false)}
-                                            onTimeUpdate={(event) => {
-                                                const offsetMs = activeSource
-                                                    ? getSourceTimelineStartMs(sources, activeSource.sourceIndex)
-                                                    : 0;
-                                                setPlayheadMs(offsetMs + Math.round(event.currentTarget.currentTime * 1000));
-                                            }}
-                                            onError={() => {
-                                                if (activeSource) {
-                                                    setSources((current) => current.map((source) => source.sourceIndex === activeSource.sourceIndex
-                                                        ? { ...source, previewUnavailable: true }
-                                                        : source));
-                                                }
-                                                setIsPlaying(false);
-                                                if (activeSource) {
-                                                    setNotice({
-                                                        tone: 'warning',
-                                                        message: 'Браузер не смог показать превью. Таймлайн и экспорт остаются доступны через helper.'
-                                                    });
-                                                }
-                                            }}
-                                        />
-                                    ) : (
-                                        <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(42,45,54,0.55),rgba(4,5,8,1))] p-8 text-center">
-                                            <div className="max-w-[18rem]">
-                                                <p className="text-base font-medium text-zinc-100">
-                                                    {sourceUrl && sourcePreviewUnavailable
-                                                        ? 'Превью недоступно'
-                                                        : activeSourceNeedsLocalFile && activeSource
-                                                            ? 'Монтаж восстановлен'
-                                                        : helperNeedsAttention
-                                                            ? helperProblemTitle
-                                                            : 'Загрузите вертикальный исходник'}
-                                                </p>
-                                                {helperNeedsAttention && !sourceUrl ? (
-                                                    <ol className="mt-4 grid gap-2 text-left text-xs leading-5 text-zinc-300">
-                                                        {helperSteps.map((step, index) => (
-                                                            <li key={`preview-helper-step-${step}`} className="flex gap-2">
-                                                                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] text-zinc-100">
-                                                                    {index + 1}
-                                                                </span>
-                                                                <span>{step}</span>
-                                                            </li>
-                                                        ))}
-                                                    </ol>
-                                                ) : (
-                                                    <p className="mt-2 text-sm text-zinc-400">
-                                                        {sourceUrl && sourcePreviewUnavailable
-                                                            ? 'MOV/H.265 уже принят helper. Можно резать таймлайн и запускать экспорт без превью.'
-                                                            : activeSourceNeedsLocalFile && activeSource
-                                                                ? `Для продолжения привяжите локальный исходник: ${activeSource.name}. Нарезка уже восстановлена.`
-                                                            : 'После загрузки появятся просмотр и навигация по стыкам.'}
-                                                    </p>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
-                                </div>
-                            </div>
-
-                            <div className="w-full shrink-0 px-4 pb-4">
-                                <div className="mx-auto flex max-w-[360px] items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 backdrop-blur-sm 2xl:max-w-[400px]">
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            data-testid="preview-prev-cut"
-                                            type="button"
-                                            onClick={() => seekToNearestCut('prev')}
-                                            disabled={!sourceUrl}
-                                            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            <ArrowLeft size={17} />
-                                        </button>
-                                        <button
-                                            data-testid="preview-play-toggle"
-                                            type="button"
-                                            onClick={() => void togglePlayback()}
-                                            disabled={!sourceUrl || sourcePreviewUnavailable}
-                                            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white text-black transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            {isPlaying ? <Pause size={19} /> : <Play size={19} className="ml-0.5" />}
-                                        </button>
-                                        <button
-                                            data-testid="preview-next-cut"
-                                            type="button"
-                                            onClick={() => seekToNearestCut('next')}
-                                            disabled={!sourceUrl}
-                                            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                            <ArrowRight size={17} />
-                                        </button>
-                                    </div>
-
-                                    <div className="text-right">
-                                        <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">Пробел</p>
-                                        <p className="mt-0.5 text-sm text-zinc-100">{isPlaying ? 'Пауза' : 'Пуск'}</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-                </div>
-            </div>
-            {showHotkeyHelp && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md">
-                    <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-[#16171c] p-6 shadow-2xl text-zinc-100">
-                        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-                            <h3 className="text-base font-semibold text-zinc-100 font-sans">Горячие клавиши (Hotkeys Help)</h3>
-                            <button
-                                type="button"
-                                onClick={() => setShowHotkeyHelp(false)}
-                                className="text-zinc-400 hover:text-white text-lg font-bold"
-                            >
-                                &times;
-                            </button>
-                        </div>
-                        <div className="mt-4 space-y-3.5 text-xs text-zinc-300 max-h-[60vh] overflow-y-auto pr-1">
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Воспроизведение / Пауза</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Space</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Разрезать сегмент</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">C</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Удалить/Восстановить клип</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Del / Backspace</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Жесткое удаление</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Shift + Del</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Отменить действие (Undo)</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Z</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Увеличить масштаб</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">+</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Уменьшить масштаб</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">-</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Предыдущий стык</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">&larr;</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Следующий стык</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">&rarr;</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Назад на 1 кадр (33мс)</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">, (б)</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Вперед на 1 кадр (33мс)</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">. (ю)</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Назад на 1 секунду</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Shift + &larr;</kbd>
-                                </div>
-                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
-                                    <span className="font-medium">Вперед на 1 секунду</span>
-                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Shift + &rarr;</kbd>
-                                </div>
-                            </div>
-                            <div className="mt-4 pt-3 border-t border-zinc-800 text-[10px] text-zinc-400 leading-normal font-sans">
-                                <span className="font-bold text-zinc-300">Прилипание (Snap):</span> При перемещении или перетаскивании плейхеда, он автоматически прилипает к границам клипов при сближении менее чем на 150мс.
-                            </div>
-                        </div>
-                        <div className="mt-5 flex justify-end">
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => setShowHotkeyHelp(false)}
-                                className="!h-8 text-xs rounded-lg"
-                            >
-                                Закрыть
-                            </Button>
                         </div>
                     </div>
-                </div>
+                </section>
             )}
+
+            {/* V2 tabs rendering */}
+            <div className="flex-1 min-h-0 flex flex-col">
+                {activeMode === 'prepare' && (
+                    <PrepareMenu
+                        sources={sources}
+                        activeSourceIndex={activeSourceIndex}
+                        setActiveSourceIndex={setActiveSourceIndex}
+                        onSourcePicked={handleSourcePicked}
+                        exportResolution={exportResolution}
+                        setExportResolution={setExportResolution}
+                        exportQuality={exportQuality}
+                        setExportQuality={setExportQuality}
+                        exportFps={exportFps}
+                        setExportFps={setExportFps}
+                        exportAudioNormalize={exportAudioNormalize}
+                        setExportAudioNormalize={setExportAudioNormalize}
+                        checkHelper={checkHelper}
+                        normalizedStatusMessage={normalizedStatusMessage}
+                        statusMessageToneClass={statusMessageToneClass}
+                        exportBlockedReason={helperBlockReason}
+                        preflightIssues={preflightIssues}
+                        draft={draft}
+                        handleDiscardDraft={handleDiscardDraft}
+                        cacheBytes={helperHealth?.cache_bytes}
+                        isExporting={isExporting}
+                        handleCleanupCache={handleCleanupCache}
+                        handleCollectDiagnostics={handleCollectDiagnostics}
+                    />
+                )}
+
+                {activeMode === 'edit' && (
+                    <EditorWorkspace
+                        sources={sources}
+                        activeSourceIndex={activeSourceIndex}
+                        setActiveSourceIndex={setActiveSourceIndex}
+                        segments={segments}
+                        selectedSegmentIndex={selectedSegmentIndex}
+                        setSelectedSegmentIndex={setSelectedSegmentIndex}
+                        playheadMs={playheadMs}
+                        setPlayheadMs={setPlayheadMs}
+                        durationMs={durationMs}
+                        timelineViewport={timelineViewport}
+                        setTimelineViewport={setTimelineViewport}
+                        previewPanelWidth={previewPanelWidth}
+                        setPreviewPanelWidth={setPreviewPanelWidth}
+                        isPlaying={isPlaying}
+                        setIsPlaying={setIsPlaying}
+                        sourceUrl={sourceUrl}
+                        sourcePreviewUnavailable={sourcePreviewUnavailable}
+                        setSources={setSources}
+                        setNotice={setNotice}
+                        handleLoadedMetadata={handleLoadedMetadata}
+                        videoRef={videoRef}
+                        timelineScrollbarRef={timelineScrollbarRef}
+                        dragPlayheadRef={dragPlayheadRef}
+                        dragBoundaryIndexRef={dragBoundaryIndexRef}
+                        panViewportRef={panViewportRef}
+                        previewResizeRef={previewResizeRef}
+                        segmentRows={segmentRows}
+                        syncVideoTime={syncVideoTime}
+                        pushSegmentsToHistory={pushSegmentsToHistory}
+                        handleCut={handleCut}
+                        handleToggleDeleted={handleToggleDeleted}
+                        handleRestoreAll={handleRestoreAllDeleted}
+                        handleResetCuts={handleClearCuts}
+                        zoomIn={zoomIn}
+                        zoomOut={zoomOut}
+                        zoomFit={zoomFit}
+                        previewOpen={previewOpen}
+                        setPreviewOpen={setPreviewOpen}
+                        showHelp={showHotkeyHelp}
+                        setShowHelp={setShowHotkeyHelp}
+                    />
+                )}
+
+                {activeMode === 'export' && (
+                    <ExportMenu
+                        run={exportMenuRun}
+                        localRunSnapshot={localRunSnapshot}
+                        preflightIssues={preflightIssues}
+                        onStartRender={handleStartRender}
+                        onRetryUpload={handleRetryUpload}
+                        onRerender={handleRerender}
+                        onCancelItem={handleCancelItem}
+                        onManualReplace={handleManualReplace}
+                        onCommitRun={handleCommitRun}
+                        onCancelRun={handleCancelRun}
+                        onStartRun={handleStartRun}
+                        isExporting={isExporting}
+                        isCommitting={isCommitting}
+                    />
+                )}
+            </div>
         </div>
     );
 }

@@ -78,6 +78,67 @@ export type VideoExportManifest = {
     };
 };
 
+export type VideoExportSettings = NonNullable<VideoExportManifest['export_settings']>;
+
+export type VideoExportRunStatus =
+    | 'DRAFT'
+    | 'READY'
+    | 'RENDERING'
+    | 'UPLOADING'
+    | 'PARTIAL'
+    | 'FAILED'
+    | 'COMPLETED'
+    | 'CANCELLED';
+
+export type VideoExportRunItemStatus =
+    | 'PENDING'
+    | 'RENDERING'
+    | 'RENDERED'
+    | 'UPLOADING'
+    | 'UPLOADED'
+    | 'SKIPPED'
+    | 'FAILED'
+    | 'CANCELLED';
+
+export type VideoExportRunItemDetails = {
+    item_id: string;
+    serial_number: string;
+    segment_seq: number;
+    status: VideoExportRunItemStatus;
+    render_status: VideoExportRunItemStatus | null;
+    upload_status: VideoExportRunItemStatus | null;
+    file_url?: string | null;
+    error_message?: string | null;
+    checksum?: string | null;
+    updated_at?: string;
+    created_at?: string;
+};
+
+export type VideoExportRunDetails = {
+    run_id: string;
+    batch_id: string;
+    created_by_user_id?: string;
+    status: VideoExportRunStatus;
+    version: number;
+    render_manifest: VideoExportManifest;
+    export_settings?: VideoExportSettings | null;
+    committed_at?: string | null;
+    created_at: string;
+    updated_at: string;
+    items: VideoExportRunItemDetails[];
+};
+
+export type VideoExportRunListResponse = {
+    runs: VideoExportRunDetails[];
+};
+
+export type VideoExportRunMutationResponse = {
+    run: VideoExportRunDetails;
+    resumed?: boolean;
+};
+
+export type VideoExportManifestSlice = Pick<VideoExportManifest, 'segments' | 'outputs'>;
+
 export type VideoExportSessionDetails = VideoExportSessionSummary & {
     source_fingerprint: SourceFingerprint | null;
     render_manifest: VideoExportManifest | null;
@@ -222,6 +283,74 @@ export type NoticeTone = 'info' | 'warning' | 'error';
 export type InlineNotice = {
     tone: NoticeTone;
     message: string;
+};
+
+export type VideoToolSegmentRow = {
+    index: number;
+    segment: Segment;
+    isDeleted: boolean;
+    activeIndex: number | null;
+    displaySequence: string | null;
+    role: 'deleted' | 'intro' | 'clip';
+    item: VideoToolItem | null;
+    isUploaded: boolean;
+};
+
+export type VideoToolPanViewportState = {
+    source: 'timeline' | 'scrollbar';
+    startClientX: number;
+    startVisibleStartMs: number;
+};
+
+export type VideoToolPreviewResizeState = {
+    startClientX: number;
+    startWidth: number;
+};
+
+export type LocalVideoExportRunItemSnapshot = {
+    itemId: string;
+    serialNumber: string;
+    renderStatus: string;
+    renderProgress: number;
+    renderJobId: string;
+    uploadStatus: string;
+    uploadProgress: number;
+    uploadJobId: string;
+    errorMessage: string;
+};
+
+export type LocalVideoExportRunSnapshot = {
+    runId: string;
+    batchId: string;
+    status: string;
+    items: Record<string, LocalVideoExportRunItemSnapshot>;
+};
+
+export type DesktopVideoExportSource = {
+    fileId: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    checksumSha256: string;
+    cachePath: string;
+    sourceIndex: number;
+    role: SourceRole;
+    helperSourceId: string;
+    lastModified: number;
+    fingerprint: SourceFingerprint;
+};
+
+export type DesktopStartVideoExportRunPayload = {
+    batchId: string;
+    runId: string;
+    renderManifest: VideoExportManifest;
+    sources: DesktopVideoExportSource[];
+};
+
+export type DesktopVideoExportItemPayload = {
+    batchId: string;
+    runId: string;
+    itemId: string;
 };
 
 export type TimelineViewport = {

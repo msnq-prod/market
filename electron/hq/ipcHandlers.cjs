@@ -236,6 +236,13 @@ const registerIpcHandlers = ({
         await shell.openExternal(ensureHttpUrl(url));
         return { ok: true };
     });
+    ipcMain.handle('stones:start-video-export-run', async (_event, payload) => requireMediaWorkflowManager().startVideoExportRun(payload));
+    ipcMain.handle('stones:render-video-export-item', async (_event, payload) => requireMediaWorkflowManager().renderVideoExportItem(payload));
+    ipcMain.handle('stones:upload-video-export-item', async (_event, payload) => requireMediaWorkflowManager().uploadVideoExportItem(payload));
+    ipcMain.handle('stones:retry-video-export-item-upload', async (_event, runId, itemId) => requireMediaWorkflowManager().retryVideoExportItemUpload(runId, itemId));
+    ipcMain.handle('stones:rerender-video-export-item', async (_event, runId, itemId, manifestSlice) => requireMediaWorkflowManager().rerenderVideoExportItem(runId, itemId, manifestSlice));
+    ipcMain.handle('stones:cancel-video-export-item', async (_event, runId, itemId) => requireMediaWorkflowManager().cancelVideoExportItem(runId, itemId));
+    ipcMain.handle('stones:get-video-export-run-snapshot', async (_event, batchId) => requireMediaWorkflowManager().getVideoExportRunSnapshot(batchId));
 };
 
 module.exports = {

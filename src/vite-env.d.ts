@@ -181,6 +181,19 @@ interface StonesDesktopApi {
     retryMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs(): Promise<StonesMediaQueueSnapshot>;
+    startVideoExportRun(payload: import('./admin/pages/video-tool/types').DesktopStartVideoExportRunPayload): Promise<{
+        run?: import('./admin/pages/video-tool/types').LocalVideoExportRunSnapshot;
+    }>;
+    renderVideoExportItem(payload: import('./admin/pages/video-tool/types').DesktopVideoExportItemPayload): Promise<{ success: boolean }>;
+    uploadVideoExportItem(payload: import('./admin/pages/video-tool/types').DesktopVideoExportItemPayload): Promise<{ success: boolean }>;
+    retryVideoExportItemUpload(runId: string, itemId: string): Promise<{ success: boolean }>;
+    rerenderVideoExportItem(
+        runId: string,
+        itemId: string,
+        manifestSlice: import('./admin/pages/video-tool/types').VideoExportManifestSlice
+    ): Promise<{ success: boolean }>;
+    cancelVideoExportItem(runId: string, itemId: string): Promise<{ success: boolean }>;
+    getVideoExportRunSnapshot(batchId: string): Promise<import('./admin/pages/video-tool/types').LocalVideoExportRunSnapshot | null>;
     openExternal(url: string): Promise<{ ok: true }>;
 }
 

@@ -268,6 +268,29 @@ enum BatchVideoExportStatus {
   ABANDONED
 }
 
+enum BatchVideoExportRunStatus {
+  DRAFT
+  READY
+  RENDERING
+  UPLOADING
+  PARTIAL
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum BatchVideoExportItemStatus {
+  PENDING
+  RENDERING
+  RENDERED
+  UPLOADING
+  UPLOADED
+  FAILED_RENDER
+  FAILED_UPLOAD
+  CANCELLED
+  SKIPPED
+}
+
 enum TelegramNotificationJobStatus {
   PENDING
   PROCESSING
@@ -305,6 +328,7 @@ model User {
   accepted_collection_requests CollectionRequest[] @relation("CollectionRequestAcceptedBy")
   requested_video_jobs         VideoProcessingJob[] @relation("VideoProcessingRequestedBy")
   requested_video_exports      BatchVideoExportSession[] @relation("BatchVideoExportRequestedBy")
+  requested_video_runs         BatchVideoExportRun[] @relation("BatchVideoExportRunRequestedBy")
   created_qr_print_presets     QrPrintPreset[] @relation("QrPrintPresetCreatedBy")
   updated_qr_print_presets     QrPrintPreset[] @relation("QrPrintPresetUpdatedBy")
 
@@ -404,6 +428,7 @@ model Batch {
   items              Item[]
   video_processing_jobs VideoProcessingJob[]
   video_export_sessions BatchVideoExportSession[]
+  video_export_runs     BatchVideoExportRun[]
 
   @@index([owner_id])
   @@index([product_id])
@@ -438,6 +463,7 @@ model Item {
   product        Product? @relation(fields: [product_id], references: [id])
   ledger_entries Ledger[]
   order_assignments OrderItemAssignment[]
+  video_export_run_items BatchVideoExportItem[]
 
   @@unique([batch_id, temp_id])
   @@index([batch_id])
@@ -548,6 +574,52 @@ model BatchVideoExportSession {
   @@index([batch_id, created_at])
   @@index([status])
   @@map("batch_video_export_sessions")
+}
+
+model BatchVideoExportRun {
+  id                 String                    @id @default(uuid())
+  batch_id           String
+  created_by_user_id String
+  status             BatchVideoExportRunStatus @default(DRAFT)
+  version            Int
+  render_manifest    Json
+  export_settings    Json?
+  committed_at       DateTime?
+  created_at         DateTime                  @default(now())
+  updated_at         DateTime                  @updatedAt
+
+  batch             Batch                  @relation(fields: [batch_id], references: [id])
+  created_by_user   User                   @relation("BatchVideoExportRunRequestedBy", fields: [created_by_user_id], references: [id])
+  items             BatchVideoExportItem[]
+
+  @@unique([batch_id, version])
+  @@index([batch_id, created_at])
+  @@index([status])
+  @@map("batch_video_export_runs")
+}
+
+model BatchVideoExportItem {
+  id             String                     @id @default(uuid())
+  run_id         String
+  item_id        String?
+  serial_number  String
+  segment_seq    Int
+  status         BatchVideoExportItemStatus @default(PENDING)
+  render_status  String?
+  upload_status  String?
+  file_url       String?
+  error_message  String?                    @db.Text
+  checksum       String?
+  created_at     DateTime                   @default(now())
+  updated_at     DateTime                   @updatedAt
+
+  run  BatchVideoExportRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  item Item?               @relation(fields: [item_id], references: [id])
+
+  @@unique([run_id, serial_number])
+  @@index([run_id])
+  @@index([item_id])
+  @@map("batch_video_export_run_items")
 }
 
 model Ledger {
