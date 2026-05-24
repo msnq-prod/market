@@ -70,6 +70,12 @@ export type VideoExportManifest = {
         item_id: string;
     }>;
     intro_asset?: VideoExportIntroAsset | null;
+    export_settings?: {
+        resolution?: '1080p' | '720p';
+        quality?: 'high' | 'medium' | 'low';
+        fps?: 30 | 60;
+        audio_normalize?: boolean;
+    };
 };
 
 export type VideoExportSessionDetails = VideoExportSessionSummary & {
@@ -82,6 +88,7 @@ export type VideoExportSessionDetails = VideoExportSessionSummary & {
         relative_path: string;
         public_url: string;
         uploaded_at: string;
+        skipped?: boolean;
     }>;
     created_at: string;
     updated_at: string;
@@ -156,9 +163,15 @@ export type VideoToolDraft = {
     sessionVersion: number | null;
     pendingSerials: string[];
     introHelperSourceId: string | null;
+    exportSettings?: {
+        resolution?: '1080p' | '720p';
+        quality?: 'high' | 'medium' | 'low';
+        fps?: 30 | 60;
+        audio_normalize?: boolean;
+    };
 };
 
-export type ExportPhase = 'idle' | 'preparing' | 'retrying' | 'rendering' | 'uploading' | 'background_uploading' | 'completed' | 'cancelled' | 'error';
+export type ExportPhase = 'idle' | 'loading' | 'draft_ready' | 'preflight' | 'ready' | 'rendering' | 'uploading' | 'verifying' | 'completed' | 'failed' | 'paused_offline' | 'auth_required' | 'cancelled';
 export type HelperStatus = 'checking' | 'ready' | 'unavailable' | 'version_mismatch';
 
 export type HelperHealthPayload = {
@@ -168,6 +181,7 @@ export type HelperHealthPayload = {
     listen_hosts?: string[];
     storage_root?: string;
     free_bytes?: number;
+    cache_bytes?: number;
     allowed_origins?: string[];
     queued_jobs?: number;
     error?: string;
@@ -260,6 +274,24 @@ export type VideoToolState = {
     };
 };
 
+export type VideoToolEvent =
+    | 'INIT'
+    | 'SOURCE_ADDED'
+    | 'SEGMENT_SPLIT'
+    | 'EXPORT_REQUESTED'
+    | 'PREFLIGHT_FAILED'
+    | 'PREFLIGHT_PASSED'
+    | 'RENDER_STARTED'
+    | 'RENDER_DONE'
+    | 'UPLOAD_STARTED'
+    | 'UPLOAD_FAILED'
+    | 'VERIFY_STARTED'
+    | 'COMPLETE'
+    | 'OFFLINE_DETECTED'
+    | 'AUTH_EXPIRED'
+    | 'RETRY'
+    | 'CANCEL';
+
 export type VideoToolAction =
     | { type: 'data/loading' }
     | { type: 'data/loaded'; payload: VideoToolPayload }
@@ -268,7 +300,10 @@ export type VideoToolAction =
     | { type: 'timeline/set-segments'; segments: Segment[] }
     | { type: 'helper/status'; status: HelperStatus; issueMessage?: string }
     | { type: 'export/session'; session: VideoExportSessionDetails | null }
-    | { type: 'layout/preview-width'; width: number };
+    | { type: 'layout/preview-width'; width: number }
+    | { type: 'export/phase'; phase: ExportPhase; message?: string }
+    | { type: 'export/renderJobId'; jobId: string }
+    | { type: 'transition'; event: VideoToolEvent; message?: string };
 
 export type VideoToolSelectors = {
     activeSource: WorkingSource | null;

@@ -29,7 +29,7 @@ type VideoExportSessionPayload = {
         render_manifest: {
             outputs: Array<{ serial_number: string }>;
         } | null;
-        uploaded_manifest: Array<{ serial_number: string }>;
+        uploaded_manifest: Array<{ serial_number: string; skipped?: boolean; public_url?: string }>;
     };
     resumed?: boolean;
     duplicate?: boolean;
@@ -516,6 +516,101 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
     expect(cancelledToolResponse.ok()).toBeTruthy();
     const cancelledToolPayload = await cancelledToolResponse.json() as VideoToolPayload;
     expect(cancelledToolPayload.items[0]?.item_video_url).toBeNull();
+});
+
+test('API: video export plans support artifact replacement and skipped recovery before commit', async ({ request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const manifest = buildManifest(toolPayload);
+    const [firstOutput, secondOutput] = manifest.outputs;
+
+    const createPlanResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-plans`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            expected_count: toolPayload.batch.expected_output_count,
+            crossfade_ms: 200,
+            source_fingerprint: {
+                name: 'source-plan.mp4',
+                size: 256,
+                lastModified: 123456,
+                durationMs: 3000
+            },
+            render_manifest: manifest
+        }
+    });
+    expect(createPlanResponse.status()).toBe(201);
+    const createdPlan = await createPlanResponse.json() as VideoExportSessionPayload;
+
+    const firstArtifactResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-plans/${createdPlan.session.session_id}/artifacts`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            serial_number: firstOutput.serial_number,
+            file: {
+                name: `${firstOutput.serial_number}.mp4`,
+                mimeType: 'video/mp4',
+                buffer: makeFakeMp4(`${firstOutput.serial_number}-v1`)
+            }
+        }
+    });
+    expect(firstArtifactResponse.ok()).toBeTruthy();
+    const firstArtifactPayload = await firstArtifactResponse.json() as VideoExportSessionPayload;
+    expect(firstArtifactPayload.session.uploaded_count).toBe(1);
+
+    const replaceArtifactResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-plans/${createdPlan.session.session_id}/artifacts`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            serial_number: firstOutput.serial_number,
+            file: {
+                name: `${firstOutput.serial_number}.mp4`,
+                mimeType: 'video/mp4',
+                buffer: makeFakeMp4(`${firstOutput.serial_number}-v2`)
+            }
+        }
+    });
+    expect(replaceArtifactResponse.ok()).toBeTruthy();
+    const replaceArtifactPayload = await replaceArtifactResponse.json() as VideoExportSessionPayload;
+    expect(replaceArtifactPayload.duplicate).toBeFalsy();
+    expect(replaceArtifactPayload.session.uploaded_count).toBe(1);
+    expect(replaceArtifactPayload.session.uploaded_manifest).toHaveLength(1);
+
+    const skipArtifactResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-plans/${createdPlan.session.session_id}/skip`, {
+        headers: authHeaders(admin.accessToken),
+        data: { serial_number: secondOutput.serial_number }
+    });
+    expect(skipArtifactResponse.ok()).toBeTruthy();
+    const skipArtifactPayload = await skipArtifactResponse.json() as VideoExportSessionPayload;
+    expect(skipArtifactPayload.session.uploaded_count).toBe(2);
+    expect(skipArtifactPayload.session.uploaded_manifest.find((entry) => entry.serial_number === secondOutput.serial_number)?.skipped).toBeTruthy();
+
+    const restoreSkippedResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-plans/${createdPlan.session.session_id}/artifacts`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            serial_number: secondOutput.serial_number,
+            file: {
+                name: `${secondOutput.serial_number}.mp4`,
+                mimeType: 'video/mp4',
+                buffer: makeFakeMp4(`${secondOutput.serial_number}-restored`)
+            }
+        }
+    });
+    expect(restoreSkippedResponse.ok()).toBeTruthy();
+    const restoreSkippedPayload = await restoreSkippedResponse.json() as VideoExportSessionPayload;
+    expect(restoreSkippedPayload.session.uploaded_count).toBe(2);
+    expect(restoreSkippedPayload.session.uploaded_manifest.find((entry) => entry.serial_number === secondOutput.serial_number)?.skipped).toBeFalsy();
+
+    const commitPlanResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-plans/${createdPlan.session.session_id}/commit`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(commitPlanResponse.ok()).toBeTruthy();
+
+    const committedToolResponse = await request.get(`/api/batches/${toolPayload.batch.id}/video-tool`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(committedToolResponse.ok()).toBeTruthy();
+    const committedToolPayload = await committedToolResponse.json() as VideoToolPayload;
+    expect(committedToolPayload.items.every((item) => typeof item.item_video_url === 'string' && item.item_video_url.includes('/uploads/videos/exports/'))).toBeTruthy();
 });
 
 test('UI: обычный браузер показывает Desktop-only блокировку', async ({ page, request }) => {

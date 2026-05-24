@@ -936,8 +936,28 @@ export async function startVideoExportHelperServer(options = {}) {
         return { removed_jobs: removedJobs, removed_sources: removedSources };
     };
 
+    const getDirectorySize = async (dirPath) => {
+        let totalSize = 0;
+        try {
+            const files = await fsp.readdir(dirPath, { withFileTypes: true });
+            for (const file of files) {
+                const fullPath = path.join(dirPath, file.name);
+                if (file.isDirectory()) {
+                    totalSize += await getDirectorySize(fullPath);
+                } else if (file.isFile()) {
+                    const stat = await fsp.stat(fullPath);
+                    totalSize += stat.size;
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+        return totalSize;
+    };
+
     const getHealthInfo = async () => {
         const freeBytes = await getFreeBytes(storageRoot);
+        const cacheBytes = await getDirectorySize(storageRoot);
         await ensureBinaryExists(ffmpegPath);
         await ensureBinaryExists(ffprobePath);
 
@@ -953,6 +973,7 @@ export async function startVideoExportHelperServer(options = {}) {
             storage_root: storageRoot,
             allowed_origins: allowedOrigins,
             free_bytes: freeBytes,
+            cache_bytes: cacheBytes,
             cleanup_threshold_days: Math.round(cleanupMaxAgeMs / (24 * 60 * 60 * 1000)),
             queued_jobs: Array.from(jobs.values()).filter((job) => job.status === 'QUEUED' || job.status === 'PROCESSING').length
         };

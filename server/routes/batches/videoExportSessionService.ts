@@ -189,12 +189,26 @@ const normalizeVideoExportManifest = (
         return output;
     }).sort((left, right) => left.segment_seq - right.segment_seq);
 
+    if (parsed.export_settings) {
+        const { resolution, quality, fps } = parsed.export_settings;
+        if (resolution && !['1080p', '720p'].includes(resolution)) {
+            throw createHttpError('Недопустимое разрешение в настройках экспорта.', 400);
+        }
+        if (quality && !['high', 'medium', 'low'].includes(quality)) {
+            throw createHttpError('Недопустимое качество в настройках экспорта.', 400);
+        }
+        if (fps && ![30, 60].includes(fps)) {
+            throw createHttpError('Недопустимая частота кадров (FPS) в настройках экспорта.', 400);
+        }
+    }
+
     return {
         ...(parsed.manifest_version ? { manifest_version: parsed.manifest_version } : {}),
         ...(parsed.sources ? { sources: [...parsed.sources].sort((left, right) => left.source_index - right.source_index) } : {}),
         segments: sortedSegments,
         outputs,
-        ...(parsed.intro_asset ? { intro_asset: parsed.intro_asset } : {})
+        ...(parsed.intro_asset ? { intro_asset: parsed.intro_asset } : {}),
+        ...(parsed.export_settings ? { export_settings: parsed.export_settings } : {})
     };
 };
 
@@ -881,6 +895,294 @@ export const cancelVideoExportSession = async (batchId: string, sessionId: strin
             cancelled: true
         };
     });
+};
+
+export const uploadVideoExportArtifact = async (
+    batchId: string,
+    sessionId: string,
+    body: Record<string, unknown> | undefined,
+    uploadedFile: Express.Multer.File
+) => {
+    try {
+        const parsedChecksum = parseChecksumSha256(body?.checksum_sha256);
+        if (parsedChecksum) {
+            const actualChecksum = await sha256File(uploadedFile.path);
+            if (actualChecksum !== parsedChecksum) {
+                throw createHttpError('Контрольная сумма артефакта не совпадает с queued upload.', 400);
+            }
+        }
+
+        const serialNumber = typeof body?.serial_number === 'string'
+            ? body.serial_number.trim().toUpperCase()
+            : '';
+        if (!serialNumber) {
+            throw createHttpError('Не передан serial_number для артефакта.', 400);
+        }
+
+        const result = await withVideoExportBatchLock(batchId, async (tx) => {
+            await markStaleVideoExportSessions(tx, batchId);
+
+            const loadedSession = await loadVideoExportSession(tx, batchId, sessionId);
+            if (!loadedSession) {
+                throw createHttpError('Сессия экспорта не найдена.', 404);
+            }
+
+            if (loadedSession.batch.status !== 'RECEIVED') {
+                throw createHttpError('Загрузка артефактов доступна только для партии в статусе RECEIVED.', 400);
+            }
+
+            if (loadedSession.status === 'CANCELLED' || loadedSession.status === 'COMPLETED') {
+                throw createHttpError('Сессия экспорта закрыта и больше не принимает загрузки.', 409);
+            }
+
+            const manifest = parseVideoExportManifest(loadedSession.render_manifest);
+            if (!manifest) {
+                throw createHttpError('В сессии отсутствует render_manifest.', 400);
+            }
+
+            const outputBySerial = new Map(manifest.outputs.map((output) => [output.serial_number.toUpperCase(), output]));
+            const targetOutput = outputBySerial.get(serialNumber);
+            if (!targetOutput) {
+                throw createHttpError('serial_number не относится к текущей сессии экспорта.', 400);
+            }
+
+            const batchItem = loadedSession.batch.items.find((item) => item.id === targetOutput.item_id && item.serial_number?.toUpperCase() === serialNumber);
+            if (!batchItem || !batchItem.serial_number) {
+                throw createHttpError('serial_number не найден среди Item выбранной партии.', 400);
+            }
+
+            const uploadedManifest = parseUploadedVideoExportManifest(loadedSession.uploaded_manifest);
+            const existingEntryIndex = uploadedManifest.findIndex((entry) => entry.serial_number.toUpperCase() === serialNumber);
+
+            const outputDir = buildVideoExportPublicOutputDir(loadedSession.batch_id, loadedSession.version);
+            await fs.mkdir(outputDir, { recursive: true });
+
+            const fileName = buildVideoExportFilename(serialNumber);
+            const targetPath = path.join(outputDir, fileName);
+            await fs.rm(targetPath, { force: true });
+            await moveFileSafely(uploadedFile.path, targetPath);
+
+            const nextManifestEntry: UploadedVideoExportManifestEntry = {
+                serial_number: serialNumber,
+                item_id: batchItem.id,
+                file_name: fileName,
+                relative_path: buildVideoExportPublicRelativePath(loadedSession.batch_id, loadedSession.version, fileName),
+                public_url: buildVideoExportPublicUrl(loadedSession.batch_id, loadedSession.version, fileName),
+                uploaded_at: new Date().toISOString()
+            };
+            const nextManifest = existingEntryIndex >= 0
+                ? uploadedManifest.map((entry, index) => index === existingEntryIndex ? nextManifestEntry : entry)
+                : [...uploadedManifest, nextManifestEntry];
+            if (nextManifest.length > loadedSession.expected_count) {
+                throw createHttpError('Загружено больше финальных роликов, чем ожидает сессия.', 400);
+            }
+
+            await tx.batchVideoExportSession.update({
+                where: { id: loadedSession.id },
+                data: {
+                    status: 'UPLOADING',
+                    uploaded_count: nextManifest.length,
+                    uploaded_manifest: nextManifest as Prisma.InputJsonValue,
+                    error_message: null,
+                    started_at: loadedSession.started_at ?? new Date()
+                }
+            });
+
+            const updatedSession = await tx.batchVideoExportSession.findUniqueOrThrow({
+                where: { id: loadedSession.id },
+                include: buildVideoExportSessionInclude
+            });
+
+            return {
+                duplicate: false,
+                session: serializeVideoExportSessionDetails(updatedSession)
+            };
+        });
+
+        return result;
+    } finally {
+        await removeStagedVideoFile(uploadedFile);
+    }
+};
+
+export const skipVideoExportArtifact = async (
+    batchId: string,
+    sessionId: string,
+    serialNumberInput: string
+) => {
+    const serialNumber = serialNumberInput.trim().toUpperCase();
+    if (!serialNumber) {
+        throw createHttpError('Не передан serial_number для пропуска.', 400);
+    }
+
+    const result = await withVideoExportBatchLock(batchId, async (tx) => {
+        await markStaleVideoExportSessions(tx, batchId);
+
+        const loadedSession = await loadVideoExportSession(tx, batchId, sessionId);
+        if (!loadedSession) {
+            throw createHttpError('Сессия экспорта не найдена.', 404);
+        }
+
+        if (loadedSession.batch.status !== 'RECEIVED') {
+            throw createHttpError('Пропуск артефактов доступен только для партии в статусе RECEIVED.', 400);
+        }
+
+        if (loadedSession.status === 'CANCELLED' || loadedSession.status === 'COMPLETED') {
+            throw createHttpError('Сессия экспорта закрыта и больше не принимает изменений.', 409);
+        }
+
+        const manifest = parseVideoExportManifest(loadedSession.render_manifest);
+        if (!manifest) {
+            throw createHttpError('В сессии отсутствует render_manifest.', 400);
+        }
+
+        const outputBySerial = new Map(manifest.outputs.map((output) => [output.serial_number.toUpperCase(), output]));
+        const targetOutput = outputBySerial.get(serialNumber);
+        if (!targetOutput) {
+            throw createHttpError('serial_number не относится к текущей сессии экспорта.', 400);
+        }
+
+        const batchItem = loadedSession.batch.items.find((item) => item.id === targetOutput.item_id && item.serial_number?.toUpperCase() === serialNumber);
+        if (!batchItem || !batchItem.serial_number) {
+            throw createHttpError('serial_number не найден среди Item выбранной партии.', 400);
+        }
+
+        const uploadedManifest = parseUploadedVideoExportManifest(loadedSession.uploaded_manifest);
+        const existingEntry = uploadedManifest.find((entry) => entry.serial_number.toUpperCase() === serialNumber);
+        if (existingEntry) {
+            return {
+                duplicate: true,
+                session: serializeVideoExportSessionDetails(loadedSession)
+            };
+        }
+
+        const nextManifestEntry: UploadedVideoExportManifestEntry = {
+            serial_number: serialNumber,
+            item_id: batchItem.id,
+            file_name: '',
+            relative_path: '',
+            public_url: '',
+            uploaded_at: new Date().toISOString(),
+            skipped: true
+        };
+        const nextManifest = [...uploadedManifest, nextManifestEntry];
+        if (nextManifest.length > loadedSession.expected_count) {
+            throw createHttpError('Количество роликов превышает ожидаемое число.', 400);
+        }
+
+        await tx.batchVideoExportSession.update({
+            where: { id: loadedSession.id },
+            data: {
+                status: 'UPLOADING',
+                uploaded_count: nextManifest.length,
+                uploaded_manifest: nextManifest as Prisma.InputJsonValue,
+                error_message: null,
+                started_at: loadedSession.started_at ?? new Date()
+            }
+        });
+
+        const updatedSession = await tx.batchVideoExportSession.findUniqueOrThrow({
+            where: { id: loadedSession.id },
+            include: buildVideoExportSessionInclude
+        });
+
+        return {
+            duplicate: false,
+            session: serializeVideoExportSessionDetails(updatedSession)
+        };
+    });
+
+    return result;
+};
+
+export const commitVideoExportPlan = async (batchId: string, sessionId: string) => {
+    const beforeMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);
+
+    const result = await withVideoExportBatchLock(batchId, async (tx) => {
+        await markStaleVideoExportSessions(tx, batchId);
+
+        const loadedSession = await loadVideoExportSession(tx, batchId, sessionId);
+        if (!loadedSession) {
+            throw createHttpError('Сессия экспорта не найдена.', 404);
+        }
+
+        if (loadedSession.batch.status !== 'RECEIVED') {
+            throw createHttpError('Применение экспорта доступно только для партии в статусе RECEIVED.', 400);
+        }
+
+        if (loadedSession.status === 'CANCELLED') {
+            throw createHttpError('Сессия экспорта отменена.', 400);
+        }
+
+        if (loadedSession.status === 'COMPLETED') {
+            return {
+                session: serializeVideoExportSessionDetails(loadedSession),
+                version: loadedSession.version
+            };
+        }
+
+        const manifest = parseVideoExportManifest(loadedSession.render_manifest);
+        if (!manifest) {
+            throw createHttpError('В сессии отсутствует render_manifest.', 400);
+        }
+
+        const uploadedManifest = parseUploadedVideoExportManifest(loadedSession.uploaded_manifest);
+
+        if (uploadedManifest.length !== loadedSession.expected_count) {
+            throw createHttpError(`Загружено только ${uploadedManifest.length} из ${loadedSession.expected_count} роликов. Экспорт не завершен.`, 400);
+        }
+
+        // Full validation of all artifacts on disk
+        const outputDir = buildVideoExportPublicOutputDir(loadedSession.batch_id, loadedSession.version);
+        for (const entry of uploadedManifest) {
+            if (entry.skipped) {
+                continue;
+            }
+            const filePath = path.join(outputDir, entry.file_name);
+            const exists = await fs.stat(filePath).then((stat) => stat.isFile()).catch(() => false);
+            if (!exists) {
+                throw createHttpError(`Файл для серийного номера ${entry.serial_number} отсутствует на диске.`, 400);
+            }
+
+            const batchItem = loadedSession.batch.items.find((item) => item.id === entry.item_id && item.serial_number?.toUpperCase() === entry.serial_number.toUpperCase());
+            if (!batchItem) {
+                throw createHttpError(`Несовпадение серийного номера ${entry.serial_number} с товарами партии.`, 400);
+            }
+        }
+
+        // Atomically apply video URLs to all items
+        for (const entry of uploadedManifest) {
+            if (entry.skipped) {
+                continue;
+            }
+            await tx.item.update({
+                where: { id: entry.item_id },
+                data: {
+                    item_video_url: entry.public_url
+                }
+            });
+        }
+
+        const updatedSession = await tx.batchVideoExportSession.update({
+            where: { id: loadedSession.id },
+            data: {
+                status: 'COMPLETED',
+                finished_at: new Date()
+            },
+            include: buildVideoExportSessionInclude
+        });
+
+        return {
+            session: serializeVideoExportSessionDetails(updatedSession),
+            version: loadedSession.version
+        };
+    });
+
+    await cleanupOlderCompletedVideoExports(batchId, result.version);
+    const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);
+    await runTelegramSideEffect(() => queueBatchMediaReadyNotifications(prisma, beforeMediaSnapshot, afterMediaSnapshot));
+
+    return result;
 };
 
 export const serializeBatchVideoExport = serializeBatchVideoExportSession;

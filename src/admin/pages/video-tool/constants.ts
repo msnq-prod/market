@@ -35,14 +35,18 @@ export const TIMELINE_RULER_STEPS_MS = [
 
 export const exportPhaseLabel: Record<ExportPhase, string> = {
     idle: 'Ожидание',
-    preparing: 'Подготовка',
-    retrying: 'Дозагрузка',
-    rendering: 'Рендер',
-    uploading: 'Загрузка',
-    background_uploading: 'Фоновая загрузка',
+    loading: 'Загрузка данных',
+    draft_ready: 'Черновик готов',
+    preflight: 'Проверка (Preflight)',
+    ready: 'Готов к экспорту',
+    rendering: 'Рендеринг',
+    uploading: 'Загрузка роликов',
+    verifying: 'Проверка загрузки',
     completed: 'Готово',
-    cancelled: 'Отменено',
-    error: 'Ошибка'
+    failed: 'Ошибка',
+    paused_offline: 'Пауза: оффлайн',
+    auth_required: 'Требуется авторизация',
+    cancelled: 'Отменено'
 };
 
 export const sessionStatusLabel: Record<string, string> = {

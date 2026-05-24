@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Scissors, Trash2, Upload, RefreshCw, Play, Pause, HardDriveDownload, HardDrive, Ban, Minus, Plus, Maximize2, RotateCcw, Clipboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, AlertTriangle, CheckCircle2, HelpCircle } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { DesktopStatusCenter } from '../../components/DesktopStatusCenter';
 import {
@@ -32,8 +32,24 @@ import {
     buildRenderManifest,
     createSourceFromFingerprint,
     createSourcesFromManifest,
-    hydrateSegmentsFromManifest
-} from './manifest';
+    hydrateSegmentsFromManifest,
+    appendInitialSourceSegment,
+    areSegmentsEqual,
+    cloneSegments,
+    createFirstSourceSegments,
+    deleteSegmentAt,
+    getSourceForGlobalMs,
+    getSourceTimelineStartMs,
+    getTotalSourceDurationMs,
+    isSourceBoundaryBetween,
+    moveBoundary,
+    normalizeSegments,
+    padSequence,
+    splitSegmentAt,
+    toggleSegmentDeletedAt,
+    clamp
+} from './engine/index.ts';
+import { runPreflight, type PreflightIssue } from './engine/preflight';
 import {
     VIDEO_EXPORT_HELPER_URL_CANDIDATES,
     buildHelperIssueMessage,
@@ -43,6 +59,7 @@ import {
     revokeObjectUrl
 } from './videoHelperClient';
 import { useVideoToolHotkeys } from './useVideoToolHotkeys';
+import { ReviewQCStep } from './components/ReviewQCStep';
 import {
     cancelVideoExportSession,
     createVideoExportSession,
@@ -50,32 +67,20 @@ import {
     fetchVideoToolPayload,
     retryTailVideoExportSession,
     uploadVideoExportFile,
-    uploadVideoExportIntroFile
+    uploadVideoExportIntroFile,
+    createVideoExportPlan,
+    uploadVideoExportPlanArtifact,
+    commitVideoExportPlan
 } from './videoExportClient';
 import {
-    appendInitialSourceSegment,
-    areSegmentsEqual,
     buildRulerMarks,
-    clamp,
     clampVisibleDuration,
     clampVisibleStart,
-    cloneSegments,
-    createFirstSourceSegments,
-    deleteSegmentAt,
     formatDuration,
-    getSourceForGlobalMs,
-    getSourceTimelineStartMs,
     getTimelineMinVisibleDuration,
-    getTotalSourceDurationMs,
     getVisibleWindowStyle,
-    isSourceBoundaryBetween,
-    moveBoundary,
-    normalizeSegments,
-    padSequence,
     readStoredPreviewPanelWidth,
-    sleep,
-    splitSegmentAt,
-    toggleSegmentDeletedAt
+    sleep
 } from './timelineUtils';
 import { videoToolReducer } from './videoToolReducer';
 import type {
@@ -126,7 +131,8 @@ const normalizeDesktopDraft = (batchId: string, value: unknown): VideoToolDraft 
         sessionId: draft.sessionId ?? null,
         sessionVersion: draft.sessionVersion ?? null,
         pendingSerials: Array.isArray(draft.pendingSerials) ? draft.pendingSerials : [],
-        introHelperSourceId: draft.introHelperSourceId ?? null
+        introHelperSourceId: draft.introHelperSourceId ?? null,
+        exportSettings: draft.exportSettings
     };
 };
 
@@ -222,12 +228,19 @@ export function VideoToolController() {
     const segmentHistoryRef = useRef<Segment[][]>([]);
     const sourceObjectUrlsRef = useRef<Set<string>>(new Set());
 
+    const [controllerState, dispatchVideoTool] = useReducer(videoToolReducer, undefined, createInitialVideoToolState);
     const [data, setData] = useState<VideoToolPayload | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [helperStatus, setHelperStatus] = useState<HelperStatus>('checking');
+    const helperStatus = controllerState.helper.status;
+    const setHelperStatus = useCallback((status: HelperStatus, issueMessage?: string) => {
+        dispatchVideoTool({ type: 'helper/status', status, issueMessage });
+    }, []);
     const [helperHealth, setHelperHealth] = useState<HelperHealthPayload | null>(null);
-    const [helperIssueMessage, setHelperIssueMessage] = useState('');
+    const helperIssueMessage = controllerState.helper.issueMessage;
+    const setHelperIssueMessage = useCallback((issueMessage: string) => {
+        dispatchVideoTool({ type: 'helper/status', status: controllerState.helper.status, issueMessage });
+    }, [controllerState.helper.status]);
     const [helperAccessRequesting, setHelperAccessRequesting] = useState(false);
     const [helperBaseUrl, setHelperBaseUrl] = useState(() => (
         isStonesDesktop() ? DESKTOP_VIDEO_HELPER_URL : VIDEO_EXPORT_HELPER_URL
@@ -242,14 +255,26 @@ export function VideoToolController() {
     const [playheadMs, setPlayheadMs] = useState(0);
     const [draft, setDraft] = useState<VideoToolDraft | null>(null);
     const [session, setSession] = useState<VideoExportSessionDetails | null>(null);
+    const USE_API_V2 = true;
+    const [isCommitting, setIsCommitting] = useState(false);
     const [pendingSerials, setPendingSerials] = useState<string[]>([]);
-    const [_renderJobId, setRenderJobId] = useState('');
-    const [exportPhase, setExportPhase] = useState<ExportPhase>('idle');
+    const exportPhase = controllerState.export.phase;
+    const setExportPhase = useCallback((phase: ExportPhase) => {
+        dispatchVideoTool({ type: 'export/phase', phase });
+    }, []);
+    const setRenderJobId = useCallback((jobId: string) => {
+        dispatchVideoTool({ type: 'export/renderJobId', jobId });
+    }, []);
     const [exportMessage, setExportMessage] = useState('');
     const [renderProgress, setRenderProgress] = useState({ processed: 0, total: 0 });
     const [notice, setNotice] = useState<InlineNotice | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [controllerState, dispatchVideoTool] = useReducer(videoToolReducer, undefined, createInitialVideoToolState);
+    const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
+    const [showHotkeyHelp, setShowHotkeyHelp] = useState(false);
+    const [exportResolution, setExportResolution] = useState<'1080p' | '720p'>('1080p');
+    const [exportQuality, setExportQuality] = useState<'high' | 'medium' | 'low'>('high');
+    const [exportFps, setExportFps] = useState<30 | 60>(30);
+    const [exportAudioNormalize, setExportAudioNormalize] = useState(true);
     const previewPanelWidth = controllerState.layout.previewPanelWidth;
     const setPreviewPanelWidth = useCallback((nextWidth: number | ((current: number) => number)) => {
         const resolvedWidth = typeof nextWidth === 'function' ? nextWidth(previewPanelWidth) : nextWidth;
@@ -267,6 +292,13 @@ export function VideoToolController() {
     });
 
     const expectedOutputCount = data?.batch.expected_output_count ?? 0;
+    const isQcPhase = Boolean(
+        USE_API_V2 &&
+        session &&
+        session.status !== 'CANCELLED' &&
+        session.status !== 'COMPLETED' &&
+        session.uploaded_count === session.expected_count
+    );
     const durationMs = getTotalSourceDurationMs(sources);
     const activeSource = sources.find((source) => source.sourceIndex === activeSourceIndex) ?? sources[0] ?? null;
     const sourceUrl = activeSource?.previewUrl ?? '';
@@ -377,6 +409,7 @@ export function VideoToolController() {
         });
         setExportPhase('idle');
         setExportMessage('');
+        setPreflightIssues([]);
     }, [pushSegmentsToHistory]);
     const restorePreviousSegments = useCallback(() => {
         const previous = segmentHistoryRef.current.pop();
@@ -526,14 +559,37 @@ export function VideoToolController() {
             { isPanning: true }
         );
     }, [durationMs, timelineClientXToMs, updateTimelineViewport, visibleDurationMs, visibleStartMs, zoomTimelineTo]);
+    const getSnappedMs = useCallback((targetMs: number) => {
+        if (segments.length === 0) return targetMs;
+        const boundaries = new Set<number>([0, durationMs]);
+        segments.forEach((seg) => {
+            boundaries.add(seg.startMs);
+            boundaries.add(seg.endMs);
+        });
+
+        let closest = targetMs;
+        let minDiff = 150; // 150ms snapping threshold
+
+        for (const boundary of boundaries) {
+            const diff = Math.abs(boundary - targetMs);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closest = boundary;
+            }
+        }
+        return closest;
+    }, [segments, durationMs]);
+
     const seekTimelineAtClientX = useCallback((clientX: number) => {
         if (!timelineRef.current || !durationMs) {
             return;
         }
 
         const rect = timelineRef.current.getBoundingClientRect();
-        syncVideoTime(timelineClientXToMs(clientX, rect));
-    }, [durationMs, syncVideoTime, timelineClientXToMs]);
+        const nextMs = timelineClientXToMs(clientX, rect);
+        const snappedMs = getSnappedMs(nextMs);
+        syncVideoTime(snappedMs);
+    }, [durationMs, syncVideoTime, timelineClientXToMs, getSnappedMs]);
     const togglePlayback = useCallback(async () => {
         if (!videoRef.current || !sourceUrl || sourcePreviewUnavailable) {
             return;
@@ -562,6 +618,15 @@ export function VideoToolController() {
             return;
         }
 
+        const applyLoadedExportSettings = (settings?: any) => {
+            if (settings) {
+                if (settings.resolution) setExportResolution(settings.resolution);
+                if (settings.quality) setExportQuality(settings.quality);
+                if (settings.fps) setExportFps(settings.fps);
+                if (settings.audio_normalize !== undefined) setExportAudioNormalize(settings.audio_normalize);
+            }
+        };
+
         setLoading(true);
         setError('');
         setNotice(null);
@@ -579,6 +644,7 @@ export function VideoToolController() {
                 const latestSession = await fetchVideoExportSession(batchId, latestSessionId);
                 if (latestSession) {
                     setSession(latestSession);
+                    applyLoadedExportSettings(latestSession.render_manifest?.export_settings);
                     const manifestSources = createSourcesFromManifest(latestSession.render_manifest).map((source) => {
                         const draftSource = existingDraft?.sources.find((entry) =>
                             entry.sourceIndex === source.sourceIndex
@@ -645,6 +711,7 @@ export function VideoToolController() {
                 setSegments(normalizeSegments(existingDraft.segments));
                 setPendingSerials(existingDraft.pendingSerials);
                 setIntroHelperSourceId(existingDraft.introHelperSourceId || '');
+                applyLoadedExportSettings(existingDraft.exportSettings);
             }
         } catch (loadError) {
             console.error(loadError);
@@ -928,7 +995,7 @@ export function VideoToolController() {
             renderManifest = null;
         }
 
-        const nextDraft: VideoToolDraft & { renderManifest?: VideoExportManifest | null } = {
+        const nextDraft: VideoToolDraft & { renderManifest?: VideoExportManifest | null; exportSettings?: Record<string, unknown> } = {
             version: 2,
             batchId,
             sources: sources.map((source) => ({
@@ -950,7 +1017,13 @@ export function VideoToolController() {
             sessionVersion: session?.version || null,
             pendingSerials,
             introHelperSourceId: introHelperSourceId || null,
-            renderManifest
+            renderManifest,
+            exportSettings: {
+                resolution: exportResolution,
+                quality: exportQuality,
+                fps: exportFps,
+                audio_normalize: exportAudioNormalize
+            }
         };
         if (isDesktopApp) {
             void getStonesDesktop()?.saveVideoDraft(nextDraft).catch((draftError) => {
@@ -960,7 +1033,7 @@ export function VideoToolController() {
             localStorage.setItem(draftKeyFor(batchId), JSON.stringify(nextDraft));
         }
         setDraft(nextDraft);
-    }, [batchId, data, introHelperSourceId, isDesktopApp, pendingSerials, segments, session?.session_id, session?.version, sources]);
+    }, [batchId, data, introHelperSourceId, isDesktopApp, pendingSerials, segments, session?.session_id, session?.version, sources, exportResolution, exportQuality, exportFps, exportAudioNormalize]);
 
     useEffect(() => {
         setPreviewPanelWidth((current) => clampPreviewPanelWidth(current));
@@ -991,7 +1064,8 @@ export function VideoToolController() {
             if (dragPlayheadRef.current && timelineRef.current && durationMs && visibleDurationMs) {
                 const rect = timelineRef.current.getBoundingClientRect();
                 const nextMs = timelineClientXToMs(event.clientX, rect);
-                syncVideoTime(nextMs);
+                const snappedMs = getSnappedMs(nextMs);
+                syncVideoTime(snappedMs);
                 return;
             }
 
@@ -1044,7 +1118,7 @@ export function VideoToolController() {
             window.removeEventListener('pointermove', handlePointerMove);
             window.removeEventListener('pointerup', handlePointerUp);
         };
-    }, [clampPreviewPanelWidth, durationMs, segments, setPreviewPanelWidth, syncVideoTime, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
+    }, [clampPreviewPanelWidth, durationMs, getSnappedMs, segments, setPreviewPanelWidth, syncVideoTime, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
 
     const timelineCuts = useMemo(
         () => segments.slice(1).map((segment) => segment.startMs),
@@ -1311,12 +1385,19 @@ export function VideoToolController() {
             throw new Error('Невозможно создать export-session без данных партии и source fingerprint.');
         }
 
-        const nextSession = await createVideoExportSession(data.batch.id, manifest, data.batch.expected_output_count, {
-            name: sources[0].name,
-            size: sources[0].size,
-            lastModified: sources[0].lastModified,
-            durationMs: sources[0].durationMs
-        }, CROSSFADE_MS);
+        const nextSession = USE_API_V2
+            ? await createVideoExportPlan(data.batch.id, manifest, data.batch.expected_output_count, {
+                name: sources[0].name,
+                size: sources[0].size,
+                lastModified: sources[0].lastModified,
+                durationMs: sources[0].durationMs
+            }, CROSSFADE_MS)
+            : await createVideoExportSession(data.batch.id, manifest, data.batch.expected_output_count, {
+                name: sources[0].name,
+                size: sources[0].size,
+                lastModified: sources[0].lastModified,
+                durationMs: sources[0].durationMs
+            }, CROSSFADE_MS);
         setSession(nextSession);
         const uploadedSerialSet = new Set(nextSession.uploaded_manifest.map((entry) => entry.serial_number));
         const nextPendingSerials = manifest.outputs
@@ -1359,7 +1440,7 @@ export function VideoToolController() {
         const isAppendingCurrentSession = manifest.outputs.length > (session?.render_manifest?.outputs.length ?? 0);
 
         if (canRetryTail && !isAppendingCurrentSession) {
-            setExportPhase('retrying');
+            setExportPhase('rendering');
             setExportMessage('Подготовка retry-tail для отсутствующих роликов...');
             return retryTailSession();
         }
@@ -1617,7 +1698,9 @@ export function VideoToolController() {
             }
 
             const fileBlob = await fileResponse.blob();
-            const updatedSession = await uploadVideoExportFile(data.batch.id, sessionId, serialNumber, fileBlob);
+            const updatedSession = USE_API_V2
+                ? await uploadVideoExportPlanArtifact(data.batch.id, sessionId, serialNumber, fileBlob)
+                : await uploadVideoExportFile(data.batch.id, sessionId, serialNumber, fileBlob);
             setSession(updatedSession);
             nextPending = nextPending.filter((item) => item !== serialNumber);
             setPendingSerials(nextPending);
@@ -1640,8 +1723,170 @@ export function VideoToolController() {
             });
         } catch (cancelError) {
             console.error(cancelError);
-            setExportPhase('error');
+            setExportPhase('failed');
             setExportMessage(cancelError instanceof Error ? cancelError.message : 'Не удалось отменить export-session.');
+        }
+    };
+
+    const isExporting = Boolean(
+        activeVideoWorkflow ||
+        ['rendering', 'uploading', 'verifying'].includes(exportPhase)
+    );
+
+    const formatBytes = useCallback((bytes?: number | null) => {
+        if (bytes === undefined || bytes === null) return 'Неизвестно';
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }, []);
+
+    const handleCleanupCache = async () => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        if (isExporting) {
+            setNotice({
+                tone: 'warning',
+                message: 'Невозможно очистить кэш во время активного экспорта.'
+            });
+            return;
+        }
+
+        try {
+            setExportMessage('Очистка кэша локального helper...');
+            const result = await desktop.cleanupVideoHelper();
+            setExportMessage('');
+            setNotice({
+                tone: 'info',
+                message: `Кэш успешно очищен. Удалено источников: ${result.removed_sources || 0}, задач: ${result.removed_jobs || 0}.`
+            });
+            await checkHelper();
+        } catch (err) {
+            setExportMessage('');
+            setNotice({
+                tone: 'error',
+                message: err instanceof Error ? err.message : 'Не удалось очистить кэш.'
+            });
+        }
+    };
+
+    const handleCollectDiagnostics = async () => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        try {
+            setExportMessage('Сбор отчета диагностики...');
+            const nextDiagnostics = await desktop.getDesktopDiagnostics();
+            const workflowSnapshot = await desktop.getMediaWorkflowSnapshot();
+            const queueSnapshot = await desktop.getMediaQueueSnapshot();
+            
+            const payload = {
+                diagnostics: nextDiagnostics,
+                queue: nextDiagnostics.queue,
+                queueJobs: queueSnapshot.jobs,
+                workflows: workflowSnapshot,
+                batchDiagnosticsLog: {
+                    status: 'video-tool',
+                    batchId: batchId,
+                    serialNumber: session?.session_id || 'none'
+                }
+            };
+            
+            const result = await desktop.exportDiagnosticsMarkdown(payload);
+            setExportMessage('');
+            setNotice({
+                tone: 'info',
+                message: `Отчет успешно сохранен: ${result.path}`
+            });
+        } catch (err) {
+            setExportMessage('');
+            setNotice({
+                tone: 'error',
+                message: err instanceof Error ? err.message : 'Не удалось экспортировать диагностику.'
+            });
+        }
+    };
+
+    void formatBytes;
+    void handleCleanupCache;
+    void handleCollectDiagnostics;
+
+    const handleRefreshSession = async () => {
+        if (!session?.session_id) return;
+        try {
+            const latestSession = await fetchVideoExportSession(batchId, session.session_id);
+            if (latestSession) {
+                setSession(latestSession);
+            }
+        } catch (error) {
+            console.error('Failed to refresh session:', error);
+        }
+    };
+
+    const handleCommitSession = async () => {
+        if (!data || !session) return;
+        setIsCommitting(true);
+        try {
+            const updatedSession = await commitVideoExportPlan(data.batch.id, session.session_id);
+            setSession(updatedSession);
+            setExportPhase('completed');
+            setExportMessage('Экспорт успешно применен к товарам партии!');
+            
+            // Update items locally
+            setData((current) => current ? {
+                ...current,
+                batch: {
+                    ...current.batch,
+                    video_export: updatedSession
+                },
+                items: current.items.map((item) => {
+                    const uploadedEntry = updatedSession.uploaded_manifest.find((entry) => entry.item_id === item.id);
+                    return uploadedEntry
+                        ? { ...item, item_video_url: uploadedEntry.public_url }
+                        : item;
+                })
+            } : current);
+
+            clearSavedDraft();
+            setDraft(null);
+            setPendingSerials([]);
+        } catch (err) {
+            console.error(err);
+            setError(err instanceof Error ? err.message : 'Не удалось применить экспорт.');
+        } finally {
+            setIsCommitting(false);
+        }
+    };
+
+    const handleDiscardSession = async () => {
+        await handleCancelSession();
+    };
+
+    const handleRestoreAllDeleted = () => {
+        applySegmentEdit((current) => current.map((seg) => ({ ...seg, deleted: false })));
+        setNotice({ tone: 'info', message: 'Все удаленные фрагменты успешно восстановлены.' });
+    };
+
+    const handleClearCuts = () => {
+        if (sources.length === 0) return;
+        applySegmentEdit(() => {
+            let next = createFirstSourceSegments(sources[0]);
+            for (let i = 1; i < sources.length; i++) {
+                next = appendInitialSourceSegment(next, sources[i], sources.slice(0, i + 1));
+            }
+            return next;
+        });
+        setSelectedSegmentIndex(0);
+        setPlayheadMs(0);
+        setNotice({ tone: 'info', message: 'Нарезка сброшена. Шкала объединена.' });
+    };
+
+    const handleResetSource = () => {
+        if (confirm('Вы уверены, что хотите сбросить все источники и черновик? Это действие необратимо.')) {
+            handleDiscardDraft();
+            setSources([]);
+            setSegments([]);
+            setNotice({ tone: 'info', message: 'Все источники и черновик очищены.' });
         }
     };
 
@@ -1694,7 +1939,7 @@ export function VideoToolController() {
             sources: stagedSources
         });
 
-        setExportPhase('background_uploading');
+        setExportPhase('uploading');
         setExportMessage(`Экспорт передан в фон: ${workflow.id.slice(0, 8)}. Прогресс и восстановление доступны в Status Center.`);
         setNotice({
             tone: 'info',
@@ -1711,25 +1956,50 @@ export function VideoToolController() {
         }
 
         if (activeVideoWorkflow) {
-            setExportPhase('background_uploading');
+            setExportPhase('uploading');
             setExportMessage(videoWorkflowStatusText || 'Видео уже обрабатывается в фоне.');
             openDesktopStatusCenter(activeVideoWorkflow.id);
             return;
         }
 
         if (exportBlockedReason) {
-            setExportPhase('error');
+            setExportPhase('failed');
             setExportMessage(exportBlockedReason);
             return;
         }
 
         try {
             setError('');
-            setExportPhase('preparing');
-            setExportMessage('Подготовка исходника и export-session...');
+            setExportPhase('preflight');
+            setExportMessage('Выполняется проверка готовности к экспорту (preflight)...');
             setRenderProgress({ processed: 0, total: 0 });
 
-            const manifest = buildRenderManifest(segments, sources, data.items);
+            const preflight = runPreflight({
+                helperStatus,
+                helperHealth,
+                sources,
+                segments,
+                items: data.items,
+                expectedOutputCount
+            });
+            setPreflightIssues(preflight.issues);
+
+            if (!preflight.passed) {
+                setExportPhase('failed');
+                setExportMessage('Префлайт-проверка выявила блокирующие проблемы. Экспорт отменен.');
+                return;
+            }
+
+            const baseManifest = buildRenderManifest(segments, sources, data.items);
+            const manifest: VideoExportManifest = {
+                ...baseManifest,
+                export_settings: {
+                    resolution: exportResolution,
+                    quality: exportQuality,
+                    fps: exportFps,
+                    audio_normalize: exportAudioNormalize
+                }
+            };
             if (isDesktopApp) {
                 await startDesktopExportWorkflow(manifest);
                 return;
@@ -1753,7 +2023,7 @@ export function VideoToolController() {
             }
 
             if (pending.length !== manifest.outputs.length) {
-                setExportPhase('retrying');
+                setExportPhase('rendering');
                 setExportMessage(`Дозагрузка хвоста: осталось ${pending.length} из ${manifest.outputs.length} роликов.`);
             }
 
@@ -1773,7 +2043,7 @@ export function VideoToolController() {
             const uploadResult = await uploadPendingFiles(renderJob.jobId, nextSession.session_id, pending);
 
             if (uploadResult?.backgroundQueued) {
-                setExportPhase('background_uploading');
+                setExportPhase('uploading');
                 setExportMessage(`Загрузка продолжается в фоне: ${uploadResult.total} MP4 в очереди. Можно перейти в другие разделы, прогресс виден в Status Center.`);
                 setNotice({
                     tone: 'info',
@@ -1821,7 +2091,7 @@ export function VideoToolController() {
             }
         } catch (exportError) {
             console.error(exportError);
-            setExportPhase('error');
+            setExportPhase('failed');
             setExportMessage(exportError instanceof Error ? exportError.message : 'Не удалось завершить экспорт.');
         }
     };
@@ -1911,7 +2181,7 @@ export function VideoToolController() {
     const normalizedStatusMessage = statusMessage === 'Load failed'
         ? 'Не удалось загрузить исходник.'
         : statusMessage;
-    const statusMessageToneClass = error || session?.error_message || exportPhase === 'error'
+    const statusMessageToneClass = error || session?.error_message || exportPhase === 'failed'
         ? 'border-red-500/30 bg-red-500/10 text-red-100'
         : exportPhase === 'completed'
             ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100'
@@ -2144,7 +2414,7 @@ export function VideoToolController() {
                 <div
                     className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[grid-template-columns] duration-300 lg:grid lg:overflow-hidden"
                     style={{
-                        gridTemplateColumns: `${sidebarOpen ? 'minmax(176px,196px)' : '0px'} minmax(0,1fr) ${previewOpen ? `${previewPanelWidth}px` : '0px'}`
+                        gridTemplateColumns: `${sidebarOpen ? 'minmax(176px,196px)' : '0px'} minmax(0,1fr) ${(!isQcPhase && previewOpen) ? `${previewPanelWidth}px` : '0px'}`
                     }}
                 >
                         <aside className={`${sidebarOpen ? 'min-h-0 overflow-hidden border-r border-zinc-800 bg-[#17181c] p-2.5' : 'pointer-events-none min-h-0 overflow-hidden border-r-0 p-0 opacity-0'}`}>
@@ -2253,6 +2523,58 @@ export function VideoToolController() {
                                 </section>
 
                                 <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
+                                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Настройки экспорта</p>
+                                    <div className="mt-3 space-y-3.5 font-sans">
+                                        <div className="flex flex-col gap-1">
+                                            <label className="text-[10px] text-zinc-400">Разрешение видео</label>
+                                            <select
+                                                value={exportResolution}
+                                                onChange={(e) => setExportResolution(e.target.value as '1080p' | '720p')}
+                                                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-zinc-700"
+                                            >
+                                                <option value="1080p">1080p (Full HD)</option>
+                                                <option value="720p">720p (HD)</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <label className="text-[10px] text-zinc-400">Качество (Quality preset)</label>
+                                            <select
+                                                value={exportQuality}
+                                                onChange={(e) => setExportQuality(e.target.value as 'high' | 'medium' | 'low')}
+                                                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-zinc-700"
+                                            >
+                                                <option value="high">Высокое (crf 20)</option>
+                                                <option value="medium">Среднее (crf 23)</option>
+                                                <option value="low">Низкое (crf 26)</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <label className="text-[10px] text-zinc-400">Частота кадров (FPS)</label>
+                                            <select
+                                                value={exportFps}
+                                                onChange={(e) => setExportFps(Number(e.target.value) as 30 | 60)}
+                                                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-zinc-700"
+                                            >
+                                                <option value="30">30 FPS</option>
+                                                <option value="60">60 FPS</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="flex items-center justify-between gap-2 pt-1">
+                                            <span className="text-[10px] text-zinc-400 font-sans">Нормализация звука</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={exportAudioNormalize}
+                                                onChange={(e) => setExportAudioNormalize(e.target.checked)}
+                                                className="h-3.5 w-3.5 rounded border-zinc-800 bg-zinc-950 accent-emerald-500"
+                                            />
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Статус</p>
                                         <button
@@ -2271,6 +2593,25 @@ export function VideoToolController() {
                                     <p data-testid="blocking-status" className="mt-1.5 text-[10px] text-zinc-500">
                                         {exportBlockedReason || 'Готово к экспорту'}
                                     </p>
+
+                                    {preflightIssues.length > 0 && (
+                                        <div className="mt-3 space-y-1.5 border-t border-zinc-800 pt-3">
+                                            <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Результаты preflight-проверки:</p>
+                                            {preflightIssues.map((issue, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className={`rounded-lg border px-2.5 py-2 text-[10px] leading-relaxed ${
+                                                        issue.type === 'blocker'
+                                                            ? 'border-red-500/30 bg-red-500/10 text-red-200'
+                                                            : 'border-amber-400/25 bg-amber-500/10 text-amber-200'
+                                                    }`}
+                                                >
+                                                    <span className="font-semibold">{issue.type === 'blocker' ? 'Блокировщик: ' : 'Предупреждение: '}</span>
+                                                    {issue.message}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
 
                                     {helperNeedsAttention && (
                                         <div
@@ -2414,7 +2755,7 @@ export function VideoToolController() {
                                         <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                             Загружено: {session ? `${session.uploaded_count}/${session.expected_count}` : `0/${expectedOutputCount}`}
                                         </div>
-                                        {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading' || exportPhase === 'background_uploading') && (
+                                        {(renderProgress.total > 0 || exportPhase === 'rendering' || exportPhase === 'uploading' || exportPhase === 'verifying') && (
                                             <div className="rounded-lg bg-zinc-950/80 px-2 py-1.5">
                                                 {exportPhaseLabel[exportPhase]}: {renderProgress.total ? `${renderProgress.processed}/${renderProgress.total}` : '—'}
                                             </div>
@@ -2437,11 +2778,59 @@ export function VideoToolController() {
                                     </div>
                                 </section>
 
+                                {isDesktopApp && (
+                                    <section className="rounded-2xl border border-zinc-800 bg-[#101115] p-3">
+                                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Управление и отчеты</p>
+                                        <div className="mt-3 space-y-3 font-sans text-xs">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="text-zinc-400">Локальный кэш:</span>
+                                                <span className="font-mono font-medium text-zinc-200" data-testid="cache-size">
+                                                    {formatBytes(helperHealth?.cache_bytes)}
+                                                </span>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                    type="button"
+                                                    data-testid="cleanup-cache-button"
+                                                    disabled={isExporting}
+                                                    onClick={() => void handleCleanupCache()}
+                                                    className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-200 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                                    title={isExporting ? 'Нельзя очистить кэш во время экспорта' : 'Очистить кэш исходников и рендеров'}
+                                                >
+                                                    <HardDrive size={12} />
+                                                    Очистить кэш
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    data-testid="collect-diagnostics-button"
+                                                    onClick={() => void handleCollectDiagnostics()}
+                                                    className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-2 text-[10px] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
+                                                    title="Экспортировать отчет диагностики в Downloads"
+                                                >
+                                                    <Clipboard size={12} />
+                                                    Собрать отчет
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </section>
+                                )}
+
                             </div>
                         </aside>
 
                     <section className="relative min-h-0 bg-[#131418] p-2.5">
-                        <div className={`grid h-full min-h-0 gap-2.5 ${segments.length === 0 ? 'grid-rows-[minmax(0,1fr)_minmax(250px,0.6fr)]' : 'grid-rows-[auto_minmax(280px,1fr)]'}`}>
+                        {isQcPhase ? (
+                            <ReviewQCStep
+                                batchId={batchId}
+                                session={session!}
+                                items={data?.items || []}
+                                onCommit={handleCommitSession}
+                                onCancel={handleDiscardSession}
+                                isCommitting={isCommitting}
+                                onRefresh={handleRefreshSession}
+                            />
+                        ) : (
+                            <div className={`grid h-full min-h-0 gap-2.5 ${segments.length === 0 ? 'grid-rows-[minmax(0,1fr)_minmax(250px,0.6fr)]' : 'grid-rows-[auto_minmax(280px,1fr)]'}`}>
                             <section className={`flex min-h-0 flex-col overflow-hidden ${segments.length > 0 ? 'max-h-[40vh]' : ''}`}>
                                 <div className={`min-h-0 flex-1 ${segments.length === 0 ? 'overflow-hidden' : 'overflow-y-auto pr-1'}`}>
                                     {segments.length === 0 ? (
@@ -2457,25 +2846,47 @@ export function VideoToolController() {
                                         <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-2 2xl:grid-cols-3">
                                             {segmentRows.map((row) => {
                                                 const { index, segment, item, isDeleted, isUploaded, role, displaySequence } = row;
+                                                const duration = segment.endMs - segment.startMs;
+                                                const isTooShort = !isDeleted && role !== 'intro' && duration < 1500;
+                                                const isMissing = !isDeleted && role !== 'intro' && !isUploaded;
+
                                                 const cardTitle = isDeleted
                                                     ? 'Удалённый фрагмент'
                                                     : role === 'intro'
                                                         ? 'Интро'
                                                         : item?.serial_number || `Клип ${displaySequence}`;
-                                                const badgeClass = isDeleted
-                                                    ? 'bg-red-400/15 text-red-100'
-                                                    : role === 'intro'
-                                                        ? 'bg-white/[0.06] text-gray-100'
-                                                        : isUploaded
-                                                            ? 'bg-emerald-400/15 text-emerald-100'
-                                                            : 'bg-zinc-800 text-zinc-400';
-                                                const badgeLabel = isDeleted
-                                                    ? 'Удалён'
-                                                    : role === 'intro'
-                                                        ? 'Интро'
-                                                        : isUploaded
-                                                            ? 'Готов'
-                                                            : 'Клип';
+
+                                                let badgeClass = 'bg-zinc-800 text-zinc-400';
+                                                let badgeLabel = 'Клип';
+                                                if (isDeleted) {
+                                                    badgeClass = 'bg-zinc-800/40 text-zinc-500';
+                                                    badgeLabel = 'Удалён';
+                                                } else if (role === 'intro') {
+                                                    badgeClass = 'bg-white/[0.06] text-gray-100';
+                                                    badgeLabel = 'Интро';
+                                                } else if (isTooShort) {
+                                                    badgeClass = 'bg-amber-500/15 text-amber-300';
+                                                    badgeLabel = 'Короткий';
+                                                } else if (isUploaded) {
+                                                    badgeClass = 'bg-emerald-500/15 text-emerald-300';
+                                                    badgeLabel = 'Готов';
+                                                } else if (isMissing) {
+                                                    badgeClass = 'bg-rose-500/10 text-rose-300';
+                                                    badgeLabel = 'Ожидает';
+                                                }
+
+                                                let cardClasses = 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-600';
+                                                if (isDeleted) {
+                                                    cardClasses = 'border-zinc-800/40 bg-zinc-950/10 opacity-40 hover:opacity-50';
+                                                } else if (index === selectedSegmentIndex) {
+                                                    cardClasses = 'border-emerald-400/80 bg-emerald-400/10';
+                                                } else if (isTooShort) {
+                                                    cardClasses = 'border-amber-500/50 bg-amber-500/5 hover:border-amber-400';
+                                                } else if (isUploaded) {
+                                                    cardClasses = 'border-emerald-500/30 bg-emerald-500/3 hover:border-emerald-500/50';
+                                                } else if (role === 'intro') {
+                                                    cardClasses = 'border-white/12 bg-white/[0.06] hover:border-white/20';
+                                                }
 
                                                 return (
                                                     <button
@@ -2487,19 +2898,16 @@ export function VideoToolController() {
                                                             setSelectedSegmentIndex(index);
                                                             syncVideoTime(segment.startMs);
                                                         }}
-                                                        className={`flex min-h-[96px] w-full flex-col items-start gap-2.5 rounded-2xl border px-3.5 py-3 text-left transition ${
-                                                            isDeleted
-                                                                ? 'border-red-400/35 bg-red-500/10 hover:border-red-300/50'
-                                                                : index === selectedSegmentIndex
-                                                                ? 'border-emerald-400/50 bg-emerald-400/10'
-                                                                : role === 'intro'
-                                                                    ? 'border-white/12 bg-white/[0.06]'
-                                                                    : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-600'
-                                                        }`}
+                                                        className={`flex min-h-[96px] w-full flex-col items-start gap-2.5 rounded-2xl border px-3.5 py-3 text-left transition ${cardClasses}`}
                                                     >
                                                         <div className="flex w-full items-start justify-between gap-3">
                                                             <div className="min-w-0">
-                                                                <p className="text-base font-semibold text-zinc-100">{displaySequence || '×××'}</p>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="text-base font-semibold text-zinc-100">{displaySequence || '×××'}</span>
+                                                                    {isDeleted && <Trash2 size={12} className="text-zinc-500" />}
+                                                                    {isTooShort && <AlertTriangle size={12} className="text-amber-400" />}
+                                                                    {isUploaded && <CheckCircle2 size={12} className="text-emerald-400" />}
+                                                                </div>
                                                                 <p className="mt-1 text-[11px] text-zinc-500">{formatDuration(segment.endMs - segment.startMs)}</p>
                                                             </div>
                                                             <span className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] ${badgeClass}`}>
@@ -2566,7 +2974,7 @@ export function VideoToolController() {
                                             aria-label="Экспорт"
                                             size="sm"
                                             onClick={() => void handleExport()}
-                                            disabled={Boolean(exportBlockedReason) || exportPhase === 'preparing' || exportPhase === 'rendering' || exportPhase === 'uploading'}
+                                            disabled={Boolean(exportBlockedReason) || exportPhase === 'preflight' || exportPhase === 'rendering' || exportPhase === 'uploading'}
                                             variant="primary"
                                             className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40"
                                         >
@@ -2585,6 +2993,49 @@ export function VideoToolController() {
                                                 Отменить
                                             </Button>
                                         )}
+                                        <Button
+                                            aria-label="Восстановить все"
+                                            size="sm"
+                                            onClick={handleRestoreAllDeleted}
+                                            disabled={sources.length === 0}
+                                            variant="secondary"
+                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
+                                        >
+                                            <RotateCcw size={14} />
+                                            Восстановить всё
+                                        </Button>
+                                        <Button
+                                            aria-label="Сбросить нарезку"
+                                            size="sm"
+                                            onClick={handleClearCuts}
+                                            disabled={sources.length === 0}
+                                            variant="secondary"
+                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-40"
+                                        >
+                                            <Scissors size={14} />
+                                            Сбросить нарезку
+                                        </Button>
+                                        <Button
+                                            aria-label="Сбросить всё"
+                                            size="sm"
+                                            onClick={handleResetSource}
+                                            disabled={sources.length === 0}
+                                            variant="danger"
+                                            className="!h-8 !min-h-0 rounded-lg px-2.5 py-0 text-[11px] shadow-none disabled:opacity-40"
+                                        >
+                                            <Trash2 size={14} />
+                                            Очистить всё
+                                        </Button>
+                                        <Button
+                                            aria-label="Помощь"
+                                            size="sm"
+                                            onClick={() => setShowHotkeyHelp(true)}
+                                            variant="secondary"
+                                            className="!h-8 !min-h-0 rounded-lg border-zinc-700 bg-zinc-900 px-2.5 py-0 text-[11px] text-zinc-100 shadow-none hover:border-zinc-500 hover:bg-zinc-800"
+                                        >
+                                            <HelpCircle size={14} />
+                                            Помощь
+                                        </Button>
                                         <span
                                             data-testid="clip-counter"
                                             className="ml-1 rounded-full border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-zinc-200"
@@ -2682,7 +3133,7 @@ export function VideoToolController() {
                                             })}
 
                                             {segmentRows.map((row) => {
-                                                const { index, segment, isDeleted, role, item, displaySequence } = row;
+                                                const { index, segment, isDeleted, isUploaded, role, item, displaySequence } = row;
                                                 const visibleSegmentStartMs = Math.max(segment.startMs, visibleStartMs);
                                                 const visibleSegmentEndMs = Math.min(segment.endMs, visibleEndMs);
                                                 if (visibleSegmentEndMs <= visibleSegmentStartMs || visibleDurationMs <= 0) {
@@ -2695,6 +3146,9 @@ export function VideoToolController() {
                                                     return null;
                                                 }
 
+                                                const duration = segment.endMs - segment.startMs;
+                                                const isTooShort = !isDeleted && role !== 'intro' && duration < 1500;
+
                                                 const showSequence = widthPercent >= 3.2;
                                                 const showSecondaryLabel = widthPercent >= 10;
                                                 const label = isDeleted
@@ -2703,19 +3157,24 @@ export function VideoToolController() {
                                                         ? 'Интро'
                                                         : item?.serial_number || `Клип ${displaySequence}`;
 
+                                                let timelineClasses = 'border-white/16 bg-white/[0.12] text-white hover:bg-white/[0.16]';
+                                                if (isDeleted) {
+                                                    timelineClasses = 'border-zinc-800/40 bg-zinc-950/20 text-zinc-500 opacity-40 hover:opacity-50';
+                                                } else if (index === selectedSegmentIndex) {
+                                                    timelineClasses = 'border-emerald-300/80 bg-emerald-400/18 text-white';
+                                                } else if (isTooShort) {
+                                                    timelineClasses = 'border-amber-500/80 bg-amber-500/20 text-amber-100 hover:bg-amber-500/25';
+                                                } else if (isUploaded) {
+                                                    timelineClasses = 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/20';
+                                                } else if (role === 'intro') {
+                                                    timelineClasses = 'border-white/12 bg-white/[0.06] text-gray-100 hover:bg-white/[0.08]';
+                                                }
+
                                                 return (
                                                     <button
                                                         key={`video-segment-${segment.sequence}`}
                                                         type="button"
-                                                        className={`absolute bottom-4 top-4 overflow-hidden rounded-lg border px-2 text-left transition ${
-                                                            isDeleted
-                                                                ? 'border-red-300/45 bg-red-500/25 text-red-50 hover:bg-red-500/30'
-                                                                : index === selectedSegmentIndex
-                                                                ? 'border-emerald-300/70 bg-emerald-400/18 text-white'
-                                                                : role === 'intro'
-                                                                    ? 'border-white/12 bg-white/[0.06] text-gray-100'
-                                                                    : 'border-white/16 bg-white/[0.12] text-white hover:bg-white/[0.16]'
-                                                        }`}
+                                                        className={`absolute bottom-4 top-4 overflow-hidden rounded-lg border px-2 text-left transition ${timelineClasses}`}
                                                         style={style}
                                                         onClick={() => {
                                                             setSelectedSegmentIndex(index);
@@ -2723,8 +3182,11 @@ export function VideoToolController() {
                                                         }}
                                                     >
                                                         {showSequence && (
-                                                            <div className="truncate pt-2 text-[11px] font-semibold uppercase tracking-[0.16em]">
-                                                                {displaySequence || 'DEL'}
+                                                            <div className="flex items-center gap-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.16em]">
+                                                                <span>{displaySequence || 'DEL'}</span>
+                                                                {isDeleted && <Trash2 size={10} className="text-zinc-500" />}
+                                                                {isTooShort && <AlertTriangle size={10} className="text-amber-400" />}
+                                                                {isUploaded && <CheckCircle2 size={10} className="text-emerald-400" />}
                                                             </div>
                                                         )}
                                                         {showSecondaryLabel && (
@@ -2827,6 +3289,7 @@ export function VideoToolController() {
                                 </div>
                             </section>
                         </div>
+                        )}
                     </section>
 
                     <section className={`${previewOpen ? 'relative min-h-0 border-l border-zinc-800 bg-[#121317] p-3' : 'pointer-events-none relative min-h-0 border-l-0 bg-[#121317] p-0 opacity-0'}`}>
@@ -2982,6 +3445,91 @@ export function VideoToolController() {
                     </section>
                 </div>
             </div>
+            {showHotkeyHelp && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md">
+                    <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-[#16171c] p-6 shadow-2xl text-zinc-100">
+                        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                            <h3 className="text-base font-semibold text-zinc-100 font-sans">Горячие клавиши (Hotkeys Help)</h3>
+                            <button
+                                type="button"
+                                onClick={() => setShowHotkeyHelp(false)}
+                                className="text-zinc-400 hover:text-white text-lg font-bold"
+                            >
+                                &times;
+                            </button>
+                        </div>
+                        <div className="mt-4 space-y-3.5 text-xs text-zinc-300 max-h-[60vh] overflow-y-auto pr-1">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Воспроизведение / Пауза</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Space</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Разрезать сегмент</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">C</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Удалить/Восстановить клип</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Del / Backspace</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Жесткое удаление</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Shift + Del</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Отменить действие (Undo)</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Z</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Увеличить масштаб</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">+</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Уменьшить масштаб</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">-</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Предыдущий стык</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">&larr;</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Следующий стык</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">&rarr;</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Назад на 1 кадр (33мс)</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">, (б)</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Вперед на 1 кадр (33мс)</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">. (ю)</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Назад на 1 секунду</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Shift + &larr;</kbd>
+                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-800/50 pb-2">
+                                    <span className="font-medium">Вперед на 1 секунду</span>
+                                    <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-200">Shift + &rarr;</kbd>
+                                </div>
+                            </div>
+                            <div className="mt-4 pt-3 border-t border-zinc-800 text-[10px] text-zinc-400 leading-normal font-sans">
+                                <span className="font-bold text-zinc-300">Прилипание (Snap):</span> При перемещении или перетаскивании плейхеда, он автоматически прилипает к границам клипов при сближении менее чем на 150мс.
+                            </div>
+                        </div>
+                        <div className="mt-5 flex justify-end">
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setShowHotkeyHelp(false)}
+                                className="!h-8 text-xs rounded-lg"
+                            >
+                                Закрыть
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

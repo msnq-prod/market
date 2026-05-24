@@ -1,5 +1,5 @@
 import type { VideoToolDraft } from './types';
-import { normalizeSegments } from './timelineUtils';
+import { normalizeSegments } from './engine/index.ts';
 
 export const draftKeyFor = (batchId: string) => `video-tool-draft:${batchId}`;
 

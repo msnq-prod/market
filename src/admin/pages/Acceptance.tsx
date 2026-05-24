@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Download, PackageCheck, QrCode, Search, Video } from 'lucide-react';
+import { Camera, Download, PackageCheck, QrCode, Search, Video, RefreshCw, X, FileText } from 'lucide-react';
 import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 import {
@@ -9,6 +9,11 @@ import {
     getBatchStatusMeta,
     getItemStatusMeta
 } from '../../../shared/domain/policy';
+import {
+    getStonesDesktop,
+    isStonesDesktop,
+    type StonesMediaWorkflow
+} from '../../utils/desktop';
 
 type BatchItem = {
     id: string;
@@ -116,6 +121,23 @@ const videoExportClass: Record<string, string> = {
 
 const activeVideoProcessingStatuses = new Set(['QUEUED', 'PROCESSING']);
 const activeVideoExportStatuses = new Set(['OPEN', 'UPLOADING']);
+
+const workflowPhaseLabel: Record<string, string> = {
+    queued: 'В очереди',
+    converting: 'Конвертация',
+    uploading: 'Загрузка',
+    verifying: 'Проверка',
+    preparing_session: 'Подготовка session',
+    importing_sources: 'Импорт source',
+    rendering_intro: 'Сборка intro',
+    rendering_outputs: 'Рендер',
+    uploading_outputs: 'Загрузка MP4',
+    paused_offline: 'Пауза: нет связи',
+    auth_required: 'Нужен вход',
+    failed: 'Ошибка',
+    completed: 'Готово',
+    cancelled: 'Отменено'
+};
 const isPublicPassportItem = (batchStatus: string, itemStatus: string) =>
     (batchStatus === 'RECEIVED' || batchStatus === 'FINISHED') && itemStatus !== 'REJECTED';
 
@@ -161,6 +183,74 @@ export function Acceptance() {
     const [updatingBatchId, setUpdatingBatchId] = useState('');
     const [receivingBatchId, setReceivingBatchId] = useState('');
     const [receivedCount, setReceivedCount] = useState('');
+    const [workflows, setWorkflows] = useState<StonesMediaWorkflow[]>([]);
+
+    useEffect(() => {
+        const desktop = getStonesDesktop();
+        if (!isStonesDesktop() || !desktop) {
+            return;
+        }
+
+        void desktop.getMediaWorkflowSnapshot().then((snapshot) => {
+            setWorkflows(snapshot.workflows);
+        });
+
+        const unsubscribe = desktop.subscribeMediaWorkflows((snapshot) => {
+            setWorkflows(snapshot.workflows);
+        });
+
+        return () => {
+            unsubscribe();
+        };
+    }, []);
+
+    const handleRetryWorkflow = async (workflowId: string) => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        setError('');
+        try {
+            await desktop.retryMediaWorkflow(workflowId);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось повторить workflow.');
+        }
+    };
+
+    const handleCancelWorkflow = async (workflowId: string) => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        setError('');
+        try {
+            await desktop.cancelMediaWorkflow(workflowId);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось отменить workflow.');
+        }
+    };
+
+    const handleCollectDiagnosticsForWorkflow = async (workflow: StonesMediaWorkflow) => {
+        const desktop = getStonesDesktop();
+        if (!desktop) return;
+        setError('');
+        try {
+            const nextDiagnostics = await desktop.getDesktopDiagnostics();
+            const queueSnapshot = await desktop.getMediaQueueSnapshot();
+            
+            const payload = {
+                diagnostics: nextDiagnostics,
+                queue: nextDiagnostics.queue,
+                queueJobs: queueSnapshot.jobs,
+                workflows: { workflows: [workflow], counts: {} },
+                batchDiagnosticsLog: {
+                    status: 'acceptance',
+                    batchId: workflow.batchId,
+                    serialNumber: workflow.sessionId || 'none'
+                }
+            };
+            const result = await desktop.exportDiagnosticsMarkdown(payload);
+            setError(`[Инфо] Отчет сохранен в: ${result.path}`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось экспортировать отчет.');
+        }
+    };
 
     const loadBatches = async (showSpinner = true) => {
         if (showSpinner) {
@@ -266,6 +356,9 @@ export function Acceptance() {
     const hasActiveVideoExport = Boolean(
         selectedBatch?.video_export && activeVideoExportStatuses.has(selectedBatch.video_export.status)
     );
+    const activeWorkflow = useMemo(() => {
+        return workflows.find((w) => w.batchId === selectedBatch?.id);
+    }, [workflows, selectedBatch]);
     const canFinalize = Boolean(
         selectedBatch
         && canFinalizeBatch(selectedBatch.status)
@@ -452,6 +545,15 @@ export function Acceptance() {
                                                 <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
                                                     Media: {counts.fullyReady}/{counts.total}
                                                 </span>
+                                                {(() => {
+                                                    const batchWorkflow = workflows.find((w) => w.batchId === batch.id);
+                                                    if (!batchWorkflow) return null;
+                                                    return (
+                                                        <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-200 animate-pulse">
+                                                            Рендер: {batchWorkflow.progress.completed}/{batchWorkflow.progress.total}
+                                                        </span>
+                                                    );
+                                                })()}
                                             </div>
                                         </button>
                                     );
@@ -560,6 +662,74 @@ export function Acceptance() {
                                     <InfoTile title="Media полностью" value={`${mediaStats.fullyReady}/${mediaStats.total}`} note="Готово к переводу на склад" />
                                     <InfoTile title="Позиции в партии" value={`${mediaStats.total}`} note="Все экземпляры текущей партии" />
                                 </div>
+
+                                {activeWorkflow && (
+                                    <div className="border-t border-white/6 px-6 py-5">
+                                        <h4 className="text-sm font-semibold text-white uppercase tracking-wider">Фоновый экспорт видео (Desktop Workflow)</h4>
+                                        <div className="mt-3 rounded-2xl border border-zinc-800 bg-[#101115] p-4 space-y-4">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium text-white">
+                                                        {activeWorkflow.summary?.title || 'Экспорт видеороликов'}
+                                                    </p>
+                                                    <p className="mt-1 text-xs text-gray-400">
+                                                        Статус: <span className="font-semibold text-blue-300">{workflowPhaseLabel[activeWorkflow.phase] || activeWorkflow.phase}</span>
+                                                    </p>
+                                                    <p className="mt-1 text-xs text-gray-500">
+                                                        Обработано: {activeWorkflow.progress.completed} из {activeWorkflow.progress.total} видеороликов
+                                                        {activeWorkflow.summary?.currentSerial ? ` (сейчас: ${activeWorkflow.summary.currentSerial})` : ''}
+                                                    </p>
+                                                    {activeWorkflow.lastError && (
+                                                        <p className="mt-2 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-200">
+                                                            Ошибка: {activeWorkflow.lastError}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <div className="flex shrink-0 flex-wrap gap-2 justify-end">
+                                                    {['failed', 'auth_required', 'paused_offline'].includes(activeWorkflow.phase) && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => void handleRetryWorkflow(activeWorkflow.id)}
+                                                            className="h-9 text-xs"
+                                                        >
+                                                            <RefreshCw size={12} className="mr-1" />
+                                                            Повторить
+                                                        </Button>
+                                                    )}
+                                                    {!['completed', 'cancelled'].includes(activeWorkflow.phase) && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => void handleCancelWorkflow(activeWorkflow.id)}
+                                                            className="h-9 text-xs text-red-300 hover:text-red-100 hover:bg-red-950/20"
+                                                        >
+                                                            <X size={12} className="mr-1" />
+                                                            Отменить
+                                                        </Button>
+                                                    )}
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => void handleCollectDiagnosticsForWorkflow(activeWorkflow)}
+                                                        className="h-9 text-xs"
+                                                    >
+                                                        <FileText size={12} className="mr-1" />
+                                                        Отчет
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                            <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                                                <div
+                                                    className="h-full bg-blue-400 transition-[width] duration-300"
+                                                    style={{
+                                                        width: `${activeWorkflow.progress.total > 0 ? Math.round((activeWorkflow.progress.completed / activeWorkflow.progress.total) * 100) : 0}%`
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
 
                                 {canFinalizeBatch(selectedBatch.status) && (
                                     <div className="border-t border-white/6 px-6 py-5">

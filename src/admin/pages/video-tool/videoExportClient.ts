@@ -102,3 +102,58 @@ export const cancelVideoExportSession = async (batchId: string, sessionId: strin
 
     return payload.session as VideoExportSessionDetails;
 };
+
+export const createVideoExportPlan = async (
+    batchId: string,
+    manifest: VideoExportManifest,
+    expectedCount: number,
+    sourceFingerprint: NonNullable<VideoExportManifest['sources']>[number]['fingerprint'],
+    crossfadeMs: number
+) => {
+    const response = await authFetch(`/api/batches/${batchId}/video-export-plans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            expected_count: expectedCount,
+            crossfade_ms: crossfadeMs,
+            source_fingerprint: sourceFingerprint,
+            render_manifest: manifest
+        })
+    });
+    const payload = await response.json().catch(() => ({ error: 'Не удалось создать план экспорта.' }));
+    if (!response.ok || !payload.session) {
+        throw new Error(payload.error || 'Не удалось создать план экспорта.');
+    }
+
+    return payload.session as VideoExportSessionDetails;
+};
+
+export const uploadVideoExportPlanArtifact = async (batchId: string, sessionId: string, serialNumber: string, file: Blob) => {
+    const form = new FormData();
+    form.append('file', file, `${serialNumber}.mp4`);
+    form.append('serial_number', serialNumber);
+
+    const response = await authFetch(`/api/batches/${batchId}/video-export-plans/${sessionId}/artifacts`, {
+        method: 'POST',
+        body: form
+    });
+    const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить артефакт на сервер.' }));
+    if (!response.ok || !payload.session) {
+        throw new Error(payload.error || 'Не удалось загрузить артефакт на сервер.');
+    }
+
+    return payload.session as VideoExportSessionDetails;
+};
+
+export const commitVideoExportPlan = async (batchId: string, sessionId: string) => {
+    const response = await authFetch(`/api/batches/${batchId}/video-export-plans/${sessionId}/commit`, {
+        method: 'POST'
+    });
+    const payload = await response.json().catch(() => ({ error: 'Не удалось закоммитить результаты экспорта.' }));
+    if (!response.ok || !payload.session) {
+        throw new Error(payload.error || 'Не удалось закоммитить результаты экспорта.');
+    }
+
+    return payload.session as VideoExportSessionDetails;
+};
+
