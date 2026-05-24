@@ -27,6 +27,7 @@ import {
     type StonesMediaWorkflowSnapshot
 } from '../../utils/desktop';
 import { apiFetch } from '../../utils/apiFetch';
+import { getBufferedClientLogs } from '../../utils/clientLogger';
 import { runBatchCreationDiagnostics, type BatchDiagnosticsLog } from '../services/batchDiagnostics';
 
 type StatusTone = 'ok' | 'warning' | 'error' | 'checking' | 'offline';
@@ -570,6 +571,7 @@ export function DesktopStatusCenter() {
     const [downloadingUpdate, setDownloadingUpdate] = useState(false);
     const [actionError, setActionError] = useState('');
     const [exportedDiagnosticsPath, setExportedDiagnosticsPath] = useState('');
+    const [exportedLogsPath, setExportedLogsPath] = useState('');
     const [batchDiagnosticsLog, setBatchDiagnosticsLog] = useState<BatchDiagnosticsLog>({
         status: 'idle',
         steps: [],
@@ -915,6 +917,30 @@ export function DesktopStatusCenter() {
         batchDiagnosticsLog
     }), [batchDiagnosticsLog, diagnostics, queue.jobs, update, videoUploadGroups, workflowSnapshot]);
 
+    const buildStatusCenterLogsPayload = useCallback((nextDiagnostics: StonesDesktopDiagnostics | null = diagnostics) => ({
+        diagnostics: nextDiagnostics,
+        update: update || nextDiagnostics?.update || null,
+        queue: nextDiagnostics?.queue || diagnostics?.queue || null,
+        workflows: workflowSnapshot,
+        queueGroups: videoUploadGroups.map((group) => ({
+            id: group.id,
+            title: group.title,
+            total: group.total,
+            done: group.done,
+            active: group.active,
+            failed: group.failed,
+            blockedAuth: group.blockedAuth,
+            serialNumbers: group.jobs.map((job) => job.summary?.serialNumber).filter(Boolean)
+        })),
+        queueJobs: queue.jobs,
+        batchDiagnosticsLog,
+        clientLogs: getBufferedClientLogs(),
+        ui: {
+            route: location.pathname,
+            activeTab
+        }
+    }), [activeTab, batchDiagnosticsLog, diagnostics, location.pathname, queue.jobs, update, videoUploadGroups, workflowSnapshot]);
+
     const exportDiagnostics = useCallback(async () => {
         if (!desktop) {
             return;
@@ -925,10 +951,28 @@ export function DesktopStatusCenter() {
             const result = await desktop.exportDiagnosticsMarkdown(buildDiagnosticsExportPayload(nextDiagnostics));
             setDiagnostics(nextDiagnostics);
             setExportedDiagnosticsPath(result.path);
+            setExportedLogsPath('');
         } catch (error) {
             setActionError(error instanceof Error ? error.message : 'Не удалось экспортировать диагностику.');
         }
     }, [buildDiagnosticsExportPayload, desktop]);
+
+    const exportStatusCenterLogs = useCallback(async () => {
+        if (!desktop) {
+            return;
+        }
+
+        setActionError('');
+        try {
+            const nextDiagnostics = await desktop.getDesktopDiagnostics();
+            const result = await desktop.exportStatusCenterLogs(buildStatusCenterLogsPayload(nextDiagnostics));
+            setDiagnostics(nextDiagnostics);
+            setExportedLogsPath(result.path);
+            setExportedDiagnosticsPath('');
+        } catch (error) {
+            setActionError(error instanceof Error ? error.message : 'Не удалось сохранить логи.');
+        }
+    }, [buildStatusCenterLogsPayload, desktop]);
 
     const runBatchDiagnostics = useCallback(async () => {
         if (!desktop) {
@@ -937,6 +981,7 @@ export function DesktopStatusCenter() {
 
         setActionError('');
         setExportedDiagnosticsPath('');
+        setExportedLogsPath('');
         setBatchDiagnosticsLog({
             status: 'running',
             startedAt: new Date().toISOString(),
@@ -1513,9 +1558,22 @@ export function DesktopStatusCenter() {
                                         <Download size={16} />
                                         Экспортировать диагностику .md
                                     </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void exportStatusCenterLogs()}
+                                        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 text-sm font-semibold text-gray-200 transition hover:bg-white/5"
+                                    >
+                                        <Download size={16} />
+                                        Сохранить все логи .json
+                                    </button>
                                     {exportedDiagnosticsPath ? (
                                         <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs leading-5 text-emerald-100">
                                             Отчет сохранен: {exportedDiagnosticsPath}
+                                        </p>
+                                    ) : null}
+                                    {exportedLogsPath ? (
+                                        <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs leading-5 text-emerald-100">
+                                            Логи сохранены: {exportedLogsPath}
                                         </p>
                                     ) : null}
                                     <pre className="max-h-[420px] overflow-auto rounded-2xl border border-white/8 bg-black/30 p-3 text-[11px] leading-5 text-gray-300">

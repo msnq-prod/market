@@ -221,6 +221,7 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
             }),
             getAdminAutoLoginCredentials: async () => ({ email: 'admin@stones.com', password: 'admin123' }),
             syncAuthToken: async () => ({ ok: true }),
+            exportStatusCenterLogs: async () => ({ success: true, path: '/tmp/zagarami-status-center-logs.json' }),
             getVideoHelperStatus: async () => ({ embedded: true, ok: true }),
             cleanupVideoHelper: async () => ({ success: true }),
             showVideoHelperStorage: async () => ({ success: true }),

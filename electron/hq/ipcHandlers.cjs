@@ -155,6 +155,7 @@ const registerIpcHandlers = ({
     ipcMain.handle('stones:check-hq-update', async () => updatesRuntime.checkAndTrack());
     ipcMain.handle('stones:download-hq-update', async () => updatesRuntime.downloadAndTrack());
     ipcMain.handle('stones:export-diagnostics-markdown', async (_event, payload) => diagnosticsRuntime.exportMarkdown(payload));
+    ipcMain.handle('stones:export-status-center-logs', async (_event, payload) => diagnosticsRuntime.exportLogs(payload));
     ipcMain.handle('stones:get-admin-auto-login-credentials', async () => ({ ...config.DESKTOP_ADMIN_AUTO_LOGIN }));
     ipcMain.handle('stones:sync-auth-token', async (_event, token) => {
         const accessToken = ensureOptionalString(token) || null;

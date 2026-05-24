@@ -95,6 +95,12 @@ const buildDiagnosticsMarkdown = (payload) => {
     ].filter((line) => line !== '').join('\n');
 };
 
+const buildStatusCenterLogsPayload = (payload) => ({
+    exportedAt: new Date().toISOString(),
+    source: 'status-center',
+    ...payload
+});
+
 const createDiagnosticsRuntime = ({
     app,
     dialog,
@@ -230,6 +236,15 @@ const createDiagnosticsRuntime = ({
                 fsp.writeFile(jsonPath, `${JSON.stringify(payload || {}, null, 2)}\n`, 'utf8')
             ]);
             return { success: true, path: filePath, jsonPath };
+        },
+        async exportLogs(payload) {
+            const downloadsPath = app.getPath('downloads');
+            await fsp.mkdir(downloadsPath, { recursive: true });
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const baseName = sanitizeDownloadFilenamePart(`ZAGARAMI-status-center-logs-${timestamp}`);
+            const filePath = path.join(downloadsPath, `${baseName}.json`);
+            await fsp.writeFile(filePath, `${JSON.stringify(buildStatusCenterLogsPayload(payload), null, 2)}\n`, 'utf8');
+            return { success: true, path: filePath };
         },
         async selectBatchDiagnosticsMediaFolder() {
             const result = await dialog.showOpenDialog(getMainWindow() || undefined, {

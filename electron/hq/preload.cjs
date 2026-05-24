@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     getDesktopDiagnostics: () => ipcRenderer.invoke('stones:get-desktop-diagnostics'),
     checkHqUpdate: () => ipcRenderer.invoke('stones:check-hq-update'),
     downloadHqUpdate: () => ipcRenderer.invoke('stones:download-hq-update'),
+    exportStatusCenterLogs: (payload) => ipcRenderer.invoke('stones:export-status-center-logs', payload),
     getAdminAutoLoginCredentials: () => ipcRenderer.invoke('stones:get-admin-auto-login-credentials'),
     syncAuthToken: (accessToken) => ipcRenderer.invoke('stones:sync-auth-token', accessToken),
     getVideoHelperStatus: () => ipcRenderer.invoke('stones:get-video-helper-status'),

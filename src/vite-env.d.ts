@@ -100,6 +100,7 @@ interface StonesDesktopApi {
     }>;
     checkHqUpdate(): Promise<StonesHqUpdateInfo>;
     downloadHqUpdate(): Promise<StonesHqUpdateDownloadResult>;
+    exportStatusCenterLogs(payload: unknown): Promise<{ success: true; path: string }>;
     getAdminAutoLoginCredentials(): Promise<{ email: string; password: string }>;
     syncAuthToken(accessToken: string | null): Promise<{ ok: true }>;
     getVideoHelperStatus(): Promise<{

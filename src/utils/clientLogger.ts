@@ -12,7 +12,9 @@ const CLIENT_LOG_ENDPOINT = '/api/client-logs'
 const FLUSH_INTERVAL_MS = 3000
 const MAX_BATCH_SIZE = 20
 const MAX_MESSAGE_LENGTH = 4000
+const MAX_RECENT_LOGS = 200
 const queue: ClientLogEntry[] = []
+const recentLogs: ClientLogEntry[] = []
 const originalConsole = {
   debug: console.debug.bind(console),
   info: console.info.bind(console),
@@ -144,8 +146,17 @@ export const logClientEvent = (level: ClientLogLevel, message: string, extra?: R
   }
 
   queue.push(entry)
+  recentLogs.push(entry)
+  if (recentLogs.length > MAX_RECENT_LOGS) {
+    recentLogs.shift()
+  }
   scheduleFlush()
 }
+
+export const getBufferedClientLogs = () => recentLogs.map((entry) => ({
+  ...entry,
+  extra: entry.extra ? sanitize(entry.extra) as Record<string, unknown> : entry.extra,
+}))
 
 const normalizeConsoleArgs = (args: unknown[]) => {
   const error = args.find((value) => value instanceof Error)

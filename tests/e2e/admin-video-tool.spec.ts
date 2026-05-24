@@ -85,6 +85,7 @@ async function installDesktopVideoMock(page: Page, batchId: string) {
             getDesktopDiagnostics: async () => ({ app: {}, network: {}, helper: { embedded: true, ok: true }, queue: { counts: {}, activeJobs: 0, failedJobs: 0 } }),
             checkHqUpdate: async () => ({ updateAvailable: false }),
             downloadHqUpdate: async () => ({ updateAvailable: false, downloaded: false, opened: false }),
+            exportStatusCenterLogs: async () => ({ success: true, path: '/tmp/status-center-logs.json' }),
             getAdminAutoLoginCredentials: async () => ({ email: 'admin@stones.com', password: 'admin123' }),
             syncAuthToken: async () => ({ ok: true }),
             getVideoHelperStatus: async () => ({ embedded: true, ok: true, protocol_version: 'stones-video-export-helper-v3' }),
