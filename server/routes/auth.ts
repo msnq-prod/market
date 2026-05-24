@@ -1,7 +1,6 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
@@ -27,9 +26,10 @@ import {
     shouldBlockWeakSharedPassword,
     writeSecurityAuditLog
 } from '../services/security.ts';
+import { logDomainEvent } from '../services/logger.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const WEAK_PASSWORD_BLOCK_MESSAGE = 'В этом окружении использование тестового общего пароля запрещено. Обратитесь к администратору для смены пароля.';
 const LOCAL_RATE_LIMIT_MULTIPLIER = IS_LOCAL_AUTH_ENVIRONMENT ? 20 : 1;
@@ -190,6 +190,10 @@ router.post('/register', registerRateLimit, async (req: AuthRequest, res) => {
         await revokeExistingBrowserSession(req);
         const refreshSession = await createRefreshSession(prisma, req, user.id);
         setRefreshSessionCookie(req, res, refreshSession);
+        logDomainEvent('api', 'auth-register-success', {
+            user_id: user.id,
+            role: user.role
+        });
 
         res.status(201).json(buildAuthResponse(user));
     } catch (_error) {
@@ -260,6 +264,10 @@ router.post('/login', loginRateLimit, async (req: AuthRequest, res) => {
         await revokeExistingBrowserSession(req);
         const refreshSession = await createRefreshSession(prisma, req, user.id);
         setRefreshSessionCookie(req, res, refreshSession);
+        logDomainEvent('api', 'auth-login-success', {
+            user_id: user.id,
+            role: user.role
+        });
 
         res.json(buildAuthResponse(user));
     } catch (_error) {
@@ -349,6 +357,10 @@ router.post('/refresh', refreshRateLimit, async (req: AuthRequest, res) => {
         }
 
         setRefreshSessionCookie(req, res, rotationResult);
+        logDomainEvent('api', 'auth-refresh-success', {
+            user_id: dbUser.id,
+            role: dbUser.role
+        });
         res.json({
             accessToken: issueAccessToken(dbUser),
             accessTokenTtlSeconds: getAccessTokenTtlSeconds()
@@ -369,6 +381,8 @@ router.post('/logout', async (req: AuthRequest, res) => {
     } finally {
         clearRefreshSessionCookie(req, res);
     }
+
+    logDomainEvent('api', 'auth-logout', {});
 
     res.sendStatus(204);
 });

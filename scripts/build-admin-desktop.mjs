@@ -44,6 +44,32 @@ const getPackageVersion = async () => {
         : '0.0.0';
 };
 
+const updatePackageVersion = async () => {
+    const packageJsonPath = path.join(projectRoot, 'package.json');
+    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+
+    const now = new Date();
+    const month = now.getMonth() + 1;
+    const day = now.getDate();
+    const prefix = `1.${month}.${day}`;
+
+    let newVersion = `${prefix}-1`;
+    const currentVersion = typeof packageJson.version === 'string' ? packageJson.version.trim() : '';
+
+    if (currentVersion.startsWith(`${prefix}-`)) {
+        const parts = currentVersion.split('-');
+        const currentSeq = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(currentSeq)) {
+            newVersion = `${prefix}-${currentSeq + 1}`;
+        }
+    }
+
+    packageJson.version = newVersion;
+    await fs.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n', 'utf8');
+    console.log(`[admin:desktop:dist] Updated package.json version from ${currentVersion} to ${newVersion}`);
+    return newVersion;
+};
+
 const getMacAppPath = async (outputDir, arch) => {
     const candidates = arch === 'arm64'
         ? [
@@ -92,24 +118,21 @@ const createDmg = async ({ appPath, dmgPath, volumeName }) => {
 
 const buildDmgArtifacts = async ({ outputDir, appVersion }) => {
     const targets = [
-        { arch: 'arm64', versioned: `ZAGARAMI-HQ-${appVersion}-arm64.dmg`, stable: 'ZAGARAMI-HQ-arm64.dmg' },
-        { arch: 'x64', versioned: `ZAGARAMI-HQ-${appVersion}-x64.dmg`, stable: 'ZAGARAMI-HQ.dmg' }
+        { arch: 'arm64', versioned: `ZAGARAMI-HQ-${appVersion}-arm64.dmg` },
+        { arch: 'x64', versioned: `ZAGARAMI-HQ-${appVersion}-x64.dmg` }
     ];
 
     for (const target of targets) {
         const appPath = await getMacAppPath(outputDir, target.arch);
         const versionedDmgPath = path.join(outputDir, target.versioned);
-        const stableDmgPath = path.join(outputDir, target.stable);
 
         console.log(`[admin:desktop:dist] creating DMG for ${target.arch}...`);
         await createDmg({
             appPath,
-            dmgPath: stableDmgPath,
+            dmgPath: versionedDmgPath,
             volumeName: `${appDisplayName} ${appVersion}-${target.arch}`
         });
-
-        await fs.copyFile(stableDmgPath, versionedDmgPath);
-        console.log(`[admin:desktop:dist] ✓ ${target.stable}`);
+        console.log(`[admin:desktop:dist] ✓ ${target.versioned}`);
     }
 };
 
@@ -133,13 +156,13 @@ const getFileMetadata = async (filePath) => {
 };
 
 const writeUpdateManifest = async ({ outputDir, appVersion, updateBaseUrl }) => {
-    const stableFiles = {
-        x64: 'ZAGARAMI-HQ.dmg',
-        arm64: 'ZAGARAMI-HQ-arm64.dmg'
+    const versionedFiles = {
+        x64: `ZAGARAMI-HQ-${appVersion}-x64.dmg`,
+        arm64: `ZAGARAMI-HQ-${appVersion}-arm64.dmg`
     };
     const files = {};
 
-    for (const [arch, fileName] of Object.entries(stableFiles)) {
+    for (const [arch, fileName] of Object.entries(versionedFiles)) {
         const filePath = path.join(outputDir, fileName);
         const metadata = await getFileMetadata(filePath);
         files[arch] = {
@@ -184,10 +207,10 @@ const run = (command, args) => new Promise((resolve, reject) => {
 });
 
 const main = async () => {
+    const appVersion = await updatePackageVersion();
     const apiOrigin = normalizeApiOrigin(process.env.STONES_HQ_API_ORIGIN);
     const updateBaseUrl = getUpdateBaseUrl(apiOrigin);
     const baseConfig = JSON.parse(await fs.readFile(builderConfigPath, 'utf8'));
-    const appVersion = await getPackageVersion();
     const outputDir = path.join(
         projectRoot,
         typeof baseConfig?.directories?.output === 'string' ? baseConfig.directories.output : 'dist-electron-hq'

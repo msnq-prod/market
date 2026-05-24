@@ -1,4 +1,5 @@
 import { authFetch } from '../../utils/authFetch';
+import { apiFetch } from '../../utils/apiFetch';
 import type { StonesBatchDiagnosticsMediaFile } from '../../utils/desktop';
 
 const PHOTO_COUNT = 10;
@@ -188,7 +189,7 @@ const waitForHelperJob = async (jobId: string, prefix: '/intro-jobs' | '/render-
 const loginWithPasswordCandidates = async (email: string, passwords: string[]) => {
     let lastError = 'Не удалось войти.';
     for (const password of passwords) {
-        const response = await fetch('/auth/login', {
+        const response = await apiFetch('/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
@@ -314,7 +315,7 @@ export async function runBatchCreationDiagnostics(
         }, (result) => ({ role: result.role }));
 
         const catalog = await runStep('catalog', 'Создание локации Луна и шаблона', async () => {
-            const categoriesResponse = await fetch('/api/categories');
+            const categoriesResponse = await apiFetch('/api/categories');
             const categories = await readJson<Array<{ id: string }>>(categoriesResponse, 'Не удалось загрузить категории.');
             const categoryId = categories[0]?.id;
             if (!categoryId) {
@@ -363,7 +364,7 @@ export async function runBatchCreationDiagnostics(
         }, (result) => result);
 
         const requestPayload = await runStep('collection-request', 'Создание партии с автоприёмкой', async () => {
-            const response = await fetch('/api/collection-requests', {
+            const response = await apiFetch('/api/collection-requests', {
                 method: 'POST',
                 headers: authHeaders(admin.accessToken),
                 body: JSON.stringify({
@@ -384,7 +385,7 @@ export async function runBatchCreationDiagnostics(
         emit({ batchId });
 
         const photoTool = await runStep('photo-tool-load', 'Загрузка Photo Tool', async () => {
-            const response = await fetch(`/api/batches/${batchId}/photo-tool`, {
+            const response = await apiFetch(`/api/batches/${batchId}/photo-tool`, {
                 headers: { Authorization: `Bearer ${admin.accessToken}` }
             });
             return readJson<PhotoToolPayload>(response, 'Не удалось загрузить Photo Tool.');
@@ -403,7 +404,7 @@ export async function runBatchCreationDiagnostics(
             }
             form.append('manifest', JSON.stringify(manifest));
             form.append('base_photo_state_token', photoTool.batch.photo_state_token);
-            const response = await fetch(`/api/batches/${batchId}/photo-tool/apply`, {
+            const response = await apiFetch(`/api/batches/${batchId}/photo-tool/apply`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${admin.accessToken}` },
                 body: form
@@ -412,7 +413,7 @@ export async function runBatchCreationDiagnostics(
         }, (result) => ({ photoReady: result.items.filter((item) => item.item_photo_url).length }));
 
         const videoTool = await runStep('video-tool-load', 'Загрузка Video Tool', async () => {
-            const response = await fetch(`/api/batches/${batchId}/video-tool`, {
+            const response = await apiFetch(`/api/batches/${batchId}/video-tool`, {
                 headers: { Authorization: `Bearer ${admin.accessToken}` }
             });
             return readJson<VideoToolPayload>(response, 'Не удалось загрузить Video Tool.');
@@ -431,7 +432,7 @@ export async function runBatchCreationDiagnostics(
 
         const manifest = buildEqualSegments(helperSource.duration_ms, videoTool.items);
         const session = await runStep('video-session', 'Создание export-session', async () => {
-            const response = await fetch(`/api/batches/${batchId}/video-export-sessions`, {
+            const response = await apiFetch(`/api/batches/${batchId}/video-export-sessions`, {
                 method: 'POST',
                 headers: authHeaders(admin.accessToken),
                 body: JSON.stringify({
@@ -461,7 +462,7 @@ export async function runBatchCreationDiagnostics(
             }
             const form = new FormData();
             form.append('file', await fileResponse.blob(), 'intro.mp4');
-            const uploadResponse = await fetch(`/api/batches/${batchId}/video-export-sessions/${session.session.session_id}/intro-file`, {
+            const uploadResponse = await apiFetch(`/api/batches/${batchId}/video-export-sessions/${session.session.session_id}/intro-file`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${admin.accessToken}` },
                 body: form
@@ -492,7 +493,7 @@ export async function runBatchCreationDiagnostics(
                 const form = new FormData();
                 form.append('file', await fileResponse.blob(), `${output.serial_number}.mp4`);
                 form.append('serial_number', output.serial_number);
-                const uploadResponse = await fetch(`/api/batches/${batchId}/video-export-sessions/${session.session.session_id}/files`, {
+                const uploadResponse = await apiFetch(`/api/batches/${batchId}/video-export-sessions/${session.session.session_id}/files`, {
                     method: 'POST',
                     headers: { Authorization: `Bearer ${admin.accessToken}` },
                     body: form
@@ -505,7 +506,7 @@ export async function runBatchCreationDiagnostics(
         }, (result) => result?.session);
 
         const finalItems = await runStep('items-check', 'Проверка item media', async () => {
-            const response = await fetch(`/api/items/batch/${batchId}`, {
+            const response = await apiFetch(`/api/items/batch/${batchId}`, {
                 headers: { Authorization: `Bearer ${admin.accessToken}` }
             });
             const items = await readJson<BatchItem[]>(response, 'Не удалось загрузить items партии.');
@@ -521,7 +522,7 @@ export async function runBatchCreationDiagnostics(
 
         const firstSerial = finalItems[0].serial_number || '';
         await runStep('public-check', 'Проверка QR и clone', async () => {
-            const publicResponse = await fetch(`/api/public/items/${encodeURIComponent(firstSerial)}`);
+            const publicResponse = await apiFetch(`/api/public/items/${encodeURIComponent(firstSerial)}`);
             const publicPayload = await readJson<{ clone_url: string; location_name: string | null; has_photo: boolean; has_video: boolean }>(
                 publicResponse,
                 'Не удалось загрузить публичный паспорт.'
@@ -529,7 +530,7 @@ export async function runBatchCreationDiagnostics(
             if (!publicPayload.has_photo || !publicPayload.has_video || !String(publicPayload.location_name || '').includes('Луна')) {
                 throw new Error('Публичный паспорт не содержит ожидаемые данные Луна/photo/video.');
             }
-            const qrResponse = await fetch(`/api/public/items/${encodeURIComponent(firstSerial)}/qr`);
+            const qrResponse = await apiFetch(`/api/public/items/${encodeURIComponent(firstSerial)}/qr`);
             if (!qrResponse.ok || !String(qrResponse.headers.get('content-type') || '').includes('image/png')) {
                 throw new Error(`QR endpoint вернул HTTP ${qrResponse.status}.`);
             }

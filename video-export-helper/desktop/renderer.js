@@ -161,6 +161,28 @@ document.getElementById('open-storage-button').addEventListener('click', () => {
     void window.helperDesktop.showStorage();
 });
 
+document.getElementById('save-logs-button').addEventListener('click', async () => {
+    statusLine.textContent = 'Сбор и отправка логов...';
+    statusLine.className = 'small';
+    
+    try {
+        const result = await window.helperDesktop.saveLogs();
+        if (result.success) {
+            let message = `Логи сохранены в Загрузки: ${result.fileName}.`;
+            if (result.uploaded) {
+                message += ' И отправлены на сервер!';
+            } else {
+                message += ` Ошибка отправки на сервер: ${result.uploadError || 'unknown'}.`;
+            }
+            statusLine.textContent = message;
+            statusLine.className = 'small status-ready';
+        }
+    } catch (error) {
+        statusLine.textContent = error instanceof Error ? error.message : 'Не удалось сохранить логи.';
+        statusLine.className = 'small status-error';
+    }
+});
+
 document.getElementById('check-update-button').addEventListener('click', () => {
     void checkUpdate();
 });
@@ -174,3 +196,33 @@ window.helperDesktop.onUpdateCheckRequested(() => {
 });
 
 void loadStatus();
+
+window.addEventListener('error', (event) => {
+    try {
+        const errorInfo = {
+            message: event.message,
+            name: event.error ? event.error.name : 'Error',
+            source: event.filename,
+            lineno: event.lineno,
+            colno: event.colno,
+            stack: event.error ? event.error.stack : ''
+        };
+        void window.helperDesktop.reportRendererError(errorInfo);
+    } catch (e) {
+        console.error('Failed to report error to main process', e);
+    }
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+    try {
+        const reason = event.reason;
+        const errorInfo = {
+            message: reason instanceof Error ? reason.message : String(reason),
+            name: reason instanceof Error ? reason.name : 'UnhandledRejection',
+            stack: reason instanceof Error ? reason.stack : ''
+        };
+        void window.helperDesktop.reportRendererError(errorInfo);
+    } catch (e) {
+        console.error('Failed to report unhandled rejection to main process', e);
+    }
+});

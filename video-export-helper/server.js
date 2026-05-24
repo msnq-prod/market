@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import multer from 'multer';
+import * as Sentry from '@sentry/node';
 
 const execFileAsync = promisify(execFile);
 
@@ -64,11 +65,24 @@ const formatDiagnosticValue = (value) => {
     return normalized ? normalized.replace(/\s+/g, '_') : null;
 };
 
-const logDiagnostic = (component, fields) => {
-    if (!VIDEO_PIPELINE_DIAGNOSTICS) {
-        return;
-    }
+const recentLogs = [];
+const MAX_RECENT_LOGS = 1000;
 
+export const appendToRecentLogs = (message) => {
+    try {
+        recentLogs.push({
+            timestamp: new Date().toISOString(),
+            message
+        });
+        if (recentLogs.length > MAX_RECENT_LOGS) {
+            recentLogs.shift();
+        }
+    } catch {
+        // Ignore logging errors
+    }
+};
+
+const logDiagnostic = (component, fields) => {
     const payload = Object.entries({ component, ...fields })
         .map(([key, value]) => {
             const formatted = formatDiagnosticValue(value);
@@ -78,7 +92,11 @@ const logDiagnostic = (component, fields) => {
         .join(' ');
 
     if (payload) {
-        console.log(`[${component}]`, payload);
+        const fullMessage = `[${component}] ${payload}`;
+        appendToRecentLogs(fullMessage);
+        if (VIDEO_PIPELINE_DIAGNOSTICS) {
+            console.log(`[${component}]`, payload);
+        }
     }
 };
 
@@ -716,6 +734,34 @@ const renderOutputFile = async (
 };
 
 export async function startVideoExportHelperServer(options = {}) {
+    const helperVersion = resolveHelperVersion(
+        typeof options.helperVersion === 'string'
+            ? options.helperVersion
+            : await readPackageVersion()
+    );
+
+    const sentryDsn = options.sentryDsn || process.env.STONES_HELPER_SENTRY_DSN || '';
+    const sentryEnv = options.sentryEnv || process.env.STONES_HELPER_SENTRY_ENVIRONMENT || 'production';
+    let serverSentryInitialized = false;
+
+    if (sentryDsn && !Sentry.getClient()) {
+        try {
+            Sentry.init({
+                dsn: sentryDsn,
+                environment: sentryEnv,
+                release: helperVersion,
+                tracesSampleRate: 0,
+                sendDefaultPii: false
+            });
+            serverSentryInitialized = true;
+            console.log('[video-export-helper-server] Sentry initialized successfully');
+        } catch (error) {
+            console.error('[video-export-helper-server] Failed to initialize Sentry', error);
+        }
+    } else if (Sentry.getClient()) {
+        serverSentryInitialized = true;
+    }
+
     const app = express();
     const port = Number.parseInt(String(options.port || process.env.VIDEO_EXPORT_HELPER_PORT || DEFAULT_PORT), 10) || DEFAULT_PORT;
     const host = typeof options.host === 'string' ? options.host : DEFAULT_HOST;
@@ -728,11 +774,6 @@ export async function startVideoExportHelperServer(options = {}) {
     const cleanupMaxAgeMs = Number(options.cleanupMaxAgeMs || process.env.VIDEO_EXPORT_HELPER_CLEANUP_MAX_AGE_MS || DEFAULT_CLEANUP_MAX_AGE_MS);
     const minFreeBytes = Number(options.minFreeBytes || process.env.VIDEO_EXPORT_HELPER_MIN_FREE_BYTES || DEFAULT_MIN_FREE_BYTES);
     const maxSourceDurationMs = Number(options.maxSourceDurationMs || process.env.VIDEO_EXPORT_HELPER_MAX_SOURCE_DURATION_MS || DEFAULT_MAX_SOURCE_DURATION_MS);
-    const helperVersion = resolveHelperVersion(
-        typeof options.helperVersion === 'string'
-            ? options.helperVersion
-            : await readPackageVersion()
-    );
     const { ffmpegStaticPath, ffprobeStaticPath } = await resolveBundledBinaryPaths();
     const ffmpegPath = resolveExecutablePath(options.ffmpegPath || process.env.VIDEO_EXPORT_HELPER_FFMPEG_BIN || ffmpegStaticPath || 'ffmpeg');
     const ffprobePath = resolveExecutablePath(options.ffprobePath || process.env.VIDEO_EXPORT_HELPER_FFPROBE_BIN || ffprobeStaticPath || 'ffprobe');
@@ -998,6 +1039,9 @@ export async function startVideoExportHelperServer(options = {}) {
         } catch (error) {
             outputState.status = 'FAILED';
             outputState.error_message = error instanceof Error ? error.message : 'Не удалось отрендерить intro.';
+            if (serverSentryInitialized) {
+                Sentry.captureException(error);
+            }
             await updateJob(jobId, {
                 status: 'FAILED',
                 outputs: [...job.outputs],
@@ -1090,6 +1134,9 @@ export async function startVideoExportHelperServer(options = {}) {
             } catch (error) {
                 outputState.status = 'FAILED';
                 outputState.error_message = error instanceof Error ? error.message : 'Не удалось отрендерить файл.';
+                if (serverSentryInitialized) {
+                    Sentry.captureException(error);
+                }
                 stopScheduling = true;
                 firstFailureMessage = firstFailureMessage || outputState.error_message;
                 await updateJob(jobId, {
@@ -1239,6 +1286,15 @@ export async function startVideoExportHelperServer(options = {}) {
             files: 1,
             fileSize: 1024 * 1024 * 1024
         }
+    });
+
+    app.use((req, res, next) => {
+        const start = Date.now();
+        res.on('finish', () => {
+            const duration = Date.now() - start;
+            appendToRecentLogs(`[server] HTTP ${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
+        });
+        next();
     });
 
     app.use(express.json({ limit: '2mb' }));
@@ -1663,6 +1719,10 @@ export async function startVideoExportHelperServer(options = {}) {
     app.use((error, _req, res, _next) => {
         console.error('[video-export-helper] request failed', error);
 
+        if (serverSentryInitialized) {
+            Sentry.captureException(error);
+        }
+
         const statusCode = error instanceof multer.MulterError
             ? 400
             : typeof error?.statusCode === 'number'
@@ -1709,6 +1769,7 @@ export async function startVideoExportHelperServer(options = {}) {
         ffprobePath,
         getHealthInfo,
         cleanupOldAssets,
+        getRecentLogs: () => recentLogs,
         stop: async () => {
             await Promise.all(servers.map(({ server: currentServer }) => new Promise((resolve, reject) => {
                 try {

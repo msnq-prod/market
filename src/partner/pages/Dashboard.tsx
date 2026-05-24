@@ -5,6 +5,10 @@ import { Activity, AlertTriangle, CheckCheck, Loader2, Package, Truck, Wallet } 
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
 import { Button, EmptyState, MetricTile, Panel, StatusPill, type PartnerTone } from '../components/ui';
+import {
+    getBatchStatusMeta,
+    getCollectionWorkflowStatusMeta
+} from '../../../shared/domain/policy';
 
 type Batch = {
     id: string;
@@ -46,43 +50,6 @@ type CollectionRequest = {
         media_ready_count: number;
         missing_media_count: number;
     };
-};
-
-const requestStatusLabels: Record<string, string> = {
-    OPEN: 'Открыт',
-    IN_PROGRESS: 'В работе',
-    IN_TRANSIT: 'В доставке',
-    RECEIVED: 'Получен',
-    IN_STOCK: 'На складе',
-    CANCELLED: 'Отменен'
-};
-
-const requestStatusTone: Record<string, PartnerTone> = {
-    OPEN: 'blue',
-    IN_PROGRESS: 'amber',
-    IN_TRANSIT: 'blue',
-    RECEIVED: 'violet',
-    IN_STOCK: 'emerald',
-    CANCELLED: 'red'
-};
-
-const batchStatusLabels: Record<string, string> = {
-    OPEN: 'Открыта',
-    IN_PROGRESS: 'В работе',
-    IN_TRANSIT: 'В доставке',
-    RECEIVED: 'Получена',
-    IN_STOCK: 'На складе',
-    CANCELLED: 'Отменена',
-    TRANSIT: 'В доставке',
-    FINISHED: 'На складе'
-};
-
-const batchStatusTone: Record<string, PartnerTone> = {
-    TRANSIT: 'amber',
-    RECEIVED: 'violet',
-    FINISHED: 'emerald',
-    ERROR: 'red',
-    CANCELLED: 'red'
 };
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
@@ -267,8 +234,8 @@ export function Dashboard() {
                                         </p>
                                     </div>
                                     <StatusPill
-                                        label={batchStatusLabels[batch.status] || batch.status}
-                                        tone={batchStatusTone[batch.status] || 'muted'}
+                                        label={getBatchStatusMeta(batch.status).label}
+                                        tone={getBatchStatusMeta(batch.status).tone as PartnerTone}
                                     />
                                 </div>
                             </article>
@@ -318,8 +285,8 @@ function RequestSection({
                                     <div className="flex flex-wrap items-center gap-2">
                                         <h3 className="font-semibold text-white">{getProductName(request)}</h3>
                                         <StatusPill
-                                            label={requestStatusLabels[request.status] || request.status}
-                                            tone={requestStatusTone[request.status] || 'muted'}
+                                            label={getCollectionWorkflowStatusMeta(request.status).label}
+                                            tone={getCollectionWorkflowStatusMeta(request.status).tone as PartnerTone}
                                         />
                                     </div>
                                     <p className="text-sm text-gray-400">

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Location, User, Product } from './data/db';
+import { apiFetch } from './utils/apiFetch';
 import { authFetch } from './utils/authFetch';
 import { clearAuthSession, logoutSession } from './utils/session';
 
@@ -71,7 +72,14 @@ export const useStore = create<AppState>((set) => ({
     }),
     clearCart: () => set({ cart: [] }),
     setActiveView: (view) => set({ activeView: view }),
-    setUser: (user) => set({ user, authLoading: false }),
+    setUser: (user) => {
+        if (user?.id) {
+            localStorage.setItem('userId', user.id);
+        } else {
+            localStorage.removeItem('userId');
+        }
+        set({ user, authLoading: false });
+    },
     logout: () => {
         logoutSession();
         set({ user: null, authLoading: false });
@@ -80,7 +88,7 @@ export const useStore = create<AppState>((set) => ({
     fetchLocations: async () => {
         set({ isLoading: true });
         try {
-            const res = await fetch('/api/locations');
+            const res = await apiFetch('/api/locations');
             if (!res.ok) throw new Error('API error');
             const data = await res.json();
             set({ locations: data, isLoading: false });
@@ -109,6 +117,7 @@ export const useStore = create<AppState>((set) => ({
             }
 
             const user = await response.json() as User;
+            localStorage.setItem('userId', user.id);
             set({ user, authLoading: false });
         } catch (error) {
             console.error('Failed to hydrate session:', error);

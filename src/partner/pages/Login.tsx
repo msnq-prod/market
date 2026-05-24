@@ -3,10 +3,12 @@ import { useTexture } from '@react-three/drei';
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import * as THREE from 'three';
+import { apiFetch } from '../../utils/apiFetch';
 import { getStonesDesktop, isStonesDesktop } from '../../utils/desktop';
 import { persistAuthSession } from '../../utils/session';
 import { hasWebGLSupport } from '../../utils/webgl';
 import { partnerControlClassName } from '../components/ui';
+import { isAdminWorkspaceRole, isPartnerRole } from '../../../shared/domain/policy';
 
 type LoginPortal = 'partner' | 'admin';
 
@@ -121,10 +123,9 @@ export function Login({ portal = 'partner' }: LoginProps) {
         setLoading(true);
 
         try {
-            const response = await fetch('/auth/login', {
+            const response = await apiFetch('/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
                 body: JSON.stringify({ email: nextEmail, password: nextPassword }),
             });
 
@@ -134,8 +135,8 @@ export function Login({ portal = 'partner' }: LoginProps) {
                 throw new Error(data.error || 'Ошибка входа');
             }
 
-            const isStaff = data.role === 'ADMIN' || data.role === 'MANAGER' || data.role === 'SALES_MANAGER';
-            const isFranchisee = data.role === 'FRANCHISEE';
+            const isStaff = isAdminWorkspaceRole(data.role);
+            const isFranchisee = isPartnerRole(data.role);
 
             if (isAdminPortal && !isStaff) {
                 throw new Error(deniedMessage);
@@ -148,7 +149,8 @@ export function Login({ portal = 'partner' }: LoginProps) {
             persistAuthSession({
                 accessToken: data.accessToken,
                 role: data.role,
-                name: data.name
+                name: data.name,
+                userId: data.user?.id || null
             });
 
             if (isStaff) {

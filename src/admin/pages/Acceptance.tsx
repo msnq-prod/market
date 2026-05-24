@@ -3,6 +3,12 @@ import { Link } from 'react-router-dom';
 import { Camera, Download, PackageCheck, QrCode, Search, Video } from 'lucide-react';
 import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
+import {
+    canFinalizeBatch,
+    canReceiveBatch,
+    getBatchStatusMeta,
+    getItemStatusMeta
+} from '../../../shared/domain/policy';
 
 type BatchItem = {
     id: string;
@@ -72,40 +78,6 @@ type BatchView = {
         }>;
     } | null;
     items: BatchItem[];
-};
-
-const statusLabel: Record<string, string> = {
-    TRANSIT: 'В пути',
-    RECEIVED: 'Принята',
-    FINISHED: 'Завершена',
-    ERROR: 'Ошибка'
-};
-
-const statusClass: Record<string, string> = {
-    TRANSIT: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
-    RECEIVED: 'bg-violet-500/15 text-violet-200 border border-violet-500/30',
-    FINISHED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
-    ERROR: 'bg-red-500/15 text-red-200 border border-red-500/30'
-};
-
-const itemStatusLabel: Record<string, string> = {
-    NEW: 'Новый',
-    REJECTED: 'Отклонен',
-    STOCK_HQ: 'На складе HQ',
-    STOCK_ONLINE: 'Готов к продаже',
-    ON_CONSIGNMENT: 'На консигнации',
-    SOLD_ONLINE: 'Продан онлайн',
-    ACTIVATED: 'Активирован'
-};
-
-const itemStatusClass: Record<string, string> = {
-    NEW: 'border-white/8 bg-white/[0.04] text-gray-400',
-    REJECTED: 'border-red-500/30 bg-red-500/15 text-red-200',
-    STOCK_HQ: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
-    STOCK_ONLINE: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
-    ON_CONSIGNMENT: 'border-amber-500/30 bg-amber-500/15 text-amber-200',
-    SOLD_ONLINE: 'border-blue-500/30 bg-blue-500/15 text-blue-200',
-    ACTIVATED: 'border-violet-500/30 bg-violet-500/15 text-violet-200'
 };
 
 const videoProcessingLabel: Record<string, string> = {
@@ -219,7 +191,7 @@ export function Acceptance() {
     }, []);
 
     const relevantBatches = useMemo(
-        () => batches.filter((batch) => batch.status === 'TRANSIT' || batch.status === 'RECEIVED'),
+        () => batches.filter((batch) => canReceiveBatch(batch.status) || canFinalizeBatch(batch.status)),
         [batches]
     );
 
@@ -233,7 +205,7 @@ export function Acceptance() {
 
         const exists = relevantBatches.some((batch) => batch.id === selectedBatchId);
         if (!selectedBatchId || !exists) {
-            const nextBatch = relevantBatches.find((batch) => batch.status === 'TRANSIT') || relevantBatches[0];
+            const nextBatch = relevantBatches.find((batch) => canReceiveBatch(batch.status)) || relevantBatches[0];
             setSelectedBatchId(nextBatch.id);
         }
     }, [relevantBatches, selectedBatchId]);
@@ -296,7 +268,7 @@ export function Acceptance() {
     );
     const canFinalize = Boolean(
         selectedBatch
-        && selectedBatch.status === 'RECEIVED'
+        && canFinalizeBatch(selectedBatch.status)
         && !hasActiveVideoJob
         && !hasActiveVideoExport
         && missingMediaCount === 0
@@ -404,8 +376,8 @@ export function Acceptance() {
             )}
 
             <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-4">
-                <MetricCard title="В пути" value={relevantBatches.filter((batch) => batch.status === 'TRANSIT').length} />
-                <MetricCard title="Приняты" value={relevantBatches.filter((batch) => batch.status === 'RECEIVED').length} />
+                <MetricCard title="В пути" value={relevantBatches.filter((batch) => canReceiveBatch(batch.status)).length} />
+                <MetricCard title="Приняты" value={relevantBatches.filter((batch) => canFinalizeBatch(batch.status)).length} />
                 <MetricCard title="Фото готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_photo_url)).length, 0)} />
                 <MetricCard title="Видео готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_video_url)).length, 0)} />
             </section>
@@ -466,8 +438,8 @@ export function Acceptance() {
                                                     <p className="truncate font-semibold text-white">{productName}</p>
                                                     <p className="mt-1 truncate font-mono text-xs text-gray-500">{batch.id}</p>
                                                 </div>
-                                                <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClass[batch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                    {statusLabel[batch.status] || batch.status}
+                                                <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBatchStatusMeta(batch.status).className}`}>
+                                                    {getBatchStatusMeta(batch.status).label}
                                                 </span>
                                             </div>
                                             <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
@@ -506,8 +478,8 @@ export function Acceptance() {
                                                         ? getDefaultTranslationValue(selectedBatch.product.translations, 'name')
                                                         : 'Партия без карточки товара'}
                                                 </h2>
-                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${statusClass[selectedBatch.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                    {statusLabel[selectedBatch.status] || selectedBatch.status}
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(selectedBatch.status).className}`}>
+                                                    {getBatchStatusMeta(selectedBatch.status).label}
                                                 </span>
                                                 {selectedBatch.video_export && (
                                                     <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoExportClass[selectedBatch.video_export.status] || 'bg-gray-700 text-gray-200'}`}>
@@ -529,7 +501,7 @@ export function Acceptance() {
                                         </div>
 
                                         <div className="flex flex-wrap gap-2 lg:justify-end">
-                                            {selectedBatch.status === 'TRANSIT' && (
+                                            {canReceiveBatch(selectedBatch.status) && (
                                                 <Button
                                                     onClick={() => setReceivingBatchId(selectedBatch.id)}
                                                     disabled={updatingBatchId === selectedBatch.id}
@@ -538,7 +510,7 @@ export function Acceptance() {
                                                 </Button>
                                             )}
 
-                                            {selectedBatch.status === 'RECEIVED' && (
+                                            {canFinalizeBatch(selectedBatch.status) && (
                                                 <>
                                                     <Button
                                                         variant="ghost"
@@ -589,7 +561,7 @@ export function Acceptance() {
                                     <InfoTile title="Позиции в партии" value={`${mediaStats.total}`} note="Все экземпляры текущей партии" />
                                 </div>
 
-                                {selectedBatch.status === 'RECEIVED' && (
+                                {canFinalizeBatch(selectedBatch.status) && (
                                     <div className="border-t border-white/6 px-6 py-5">
                                         <div className="grid gap-4 lg:grid-cols-3">
                                             <NoticeCard
@@ -610,7 +582,7 @@ export function Acceptance() {
                                                 tone={canFinalize ? 'success' : 'warning'}
                                             />
                                         </div>
-                                        {selectedBatch.status === 'RECEIVED' && (
+                                        {canFinalizeBatch(selectedBatch.status) && (
                                             <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-gray-400">
                                                 <span>Публичные QR: {printableItemIds.length}</span>
                                                 <button
@@ -644,7 +616,7 @@ export function Acceptance() {
                                         <div key={item.id} className="flex flex-col gap-4 px-6 py-4 transition hover:bg-white/[0.025] xl:flex-row xl:items-center xl:justify-between">
                                             <div className="min-w-0 space-y-2">
                                                 <div className="flex flex-wrap items-center gap-2">
-                                                    {selectedBatch.status === 'RECEIVED' && (
+                                                    {canFinalizeBatch(selectedBatch.status) && (
                                                         <input
                                                             type="checkbox"
                                                             checked={selectedQrItemIds.includes(item.id)}
@@ -654,8 +626,8 @@ export function Acceptance() {
                                                         />
                                                     )}
                                                     <p className="font-semibold text-white">{item.serial_number || item.temp_id}</p>
-                                                    <span className={`rounded-full border px-2.5 py-1 text-xs ${itemStatusClass[item.status] || 'border-white/8 bg-white/[0.04] text-gray-300'}`}>
-                                                        {itemStatusLabel[item.status] || item.status}
+                                                    <span className={`rounded-full border px-2.5 py-1 text-xs ${getItemStatusMeta(item.status).className}`}>
+                                                        {getItemStatusMeta(item.status).label}
                                                     </span>
                                                     {isPublicPassportItem(selectedBatch.status, item.status) ? (
                                                         <span className="rounded-full border border-blue-500/30 bg-blue-500/15 px-2.5 py-1 text-xs text-blue-200">

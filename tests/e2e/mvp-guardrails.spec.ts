@@ -10,10 +10,11 @@ type LoginPayload = {
 const ADMIN_EMAIL = 'admin@stones.com';
 const MANAGER_EMAIL = 'manager@stones.com';
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
-const DEFAULT_PASSWORD = 'Partner123';
+const MANAGER_PASSWORD = 'partner123';
+const PARTNER_PASSWORD = 'Partner123';
 const ADMIN_PASSWORD = 'admin123';
 const TINY_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9swrYccAAAAASUVORK5CYII=',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
     'base64'
 );
 
@@ -46,7 +47,7 @@ test('API guardrails: removed /api/user and uploads require authentication', asy
     });
     expect(unauthenticatedUpload.status()).toBe(401);
 
-    const partner = await login(request, PARTNER_EMAIL, DEFAULT_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const currentUserResponse = await request.get('/api/user', {
         headers: {
             Authorization: `Bearer ${partner.accessToken}`
@@ -76,7 +77,7 @@ test('API guardrails: removed /api/user and uploads require authentication', asy
 });
 
 test('API guardrails: upload strips dangerous extensions, blocks active markup, and serves uploads with nosniff', async ({ request }) => {
-    const partner = await login(request, PARTNER_EMAIL, DEFAULT_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
 
     const disguisedImageUpload = await request.post('/api/upload/photo', {
         headers: {
@@ -92,7 +93,7 @@ test('API guardrails: upload strips dangerous extensions, blocks active markup, 
     });
     expect(disguisedImageUpload.ok()).toBeTruthy();
     const disguisedPayload = await disguisedImageUpload.json() as { url?: string };
-    expect(disguisedPayload.url || '').toMatch(/\/uploads\/photos\/.+\.png$/);
+    expect(disguisedPayload.url || '').toMatch(/\/uploads\/photos\/.+\.jpg$/);
     expect(disguisedPayload.url || '').not.toContain('.svg');
 
     const uploadedFileResponse = await request.get(disguisedPayload.url || '');
@@ -118,7 +119,7 @@ test('API guardrails: upload strips dangerous extensions, blocks active markup, 
 });
 
 test('API guardrails: manager cannot create admin or read orders queue', async ({ request }) => {
-    const manager = await login(request, MANAGER_EMAIL, DEFAULT_PASSWORD);
+    const manager = await login(request, MANAGER_EMAIL, MANAGER_PASSWORD);
 
     const createAdminResponse = await request.post('/api/users', {
         headers: authHeaders(manager.accessToken),

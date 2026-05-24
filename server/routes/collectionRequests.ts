@@ -1,10 +1,9 @@
 import express from 'express';
 import crypto from 'crypto';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { authenticateToken } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
-    COLLECTION_STATUSES,
     HQ_IMMEDIATE_BATCH_OWNER_EMAIL,
     HQ_IMMEDIATE_BATCH_OWNER_MARKER,
     HQ_IMMEDIATE_BATCH_OWNER_NAME,
@@ -22,9 +21,11 @@ import {
     queueCollectionRequestCreatedNotification,
     runTelegramSideEffect
 } from '../services/telegramNotifications.ts';
+import { logDomainEvent } from '../services/logger.ts';
+import { canMoveCollectionRequest, isPartnerRole } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const REQUEST_INCLUDE = Prisma.validator<Prisma.CollectionRequestInclude>()({
     created_by_user: {
@@ -196,13 +197,13 @@ router.get('/', async (req: AuthRequest, res) => {
             deleted_at: null
         };
 
-        if (COLLECTION_STATUSES.has(statusQuery)) {
+        if (canMoveCollectionRequest(statusQuery)) {
             where.status = statusQuery as RequestRecord['status'];
         }
 
         if (isStaffRole(req.user.role)) {
             // staff sees all requests
-        } else if (req.user.role === 'FRANCHISEE') {
+        } else if (isPartnerRole(req.user.role)) {
             where.OR = [
                 {
                     status: 'OPEN',
@@ -288,7 +289,7 @@ router.post('/', async (req: AuthRequest, res) => {
                 select: { id: true, role: true }
             });
 
-            if (!targetUser || targetUser.role !== 'FRANCHISEE') {
+            if (!targetUser || !isPartnerRole(targetUser.role)) {
                 return res.status(400).json({ error: 'Назначить можно только существующего партнера.' });
             }
 
@@ -410,6 +411,12 @@ router.post('/', async (req: AuthRequest, res) => {
             creatorName: created.created_by_user?.name || req.user!.id,
             targetUserId: created.target_user_id
         }));
+        logDomainEvent('api', 'collection-request-created', {
+            entity_type: 'collection_request',
+            entity_id: created.id,
+            user_id: req.user.id,
+            status: created.status
+        });
         res.status(201).json(await withMetrics(created));
     } catch (error) {
         console.error(error);
@@ -475,7 +482,7 @@ router.patch('/:id', async (req: AuthRequest, res) => {
                     select: { id: true, role: true }
                 });
 
-                if (!targetUser || targetUser.role !== 'FRANCHISEE') {
+                if (!targetUser || !isPartnerRole(targetUser.role)) {
                     return res.status(400).json({ error: 'Назначить можно только существующего партнера.' });
                 }
 
@@ -484,7 +491,7 @@ router.patch('/:id', async (req: AuthRequest, res) => {
         }
 
         if (typeof status === 'string') {
-            if (!COLLECTION_STATUSES.has(status)) {
+            if (!canMoveCollectionRequest(status)) {
                 return res.status(400).json({ error: 'Недопустимый статус заказа.' });
             }
 
@@ -595,7 +602,7 @@ router.delete('/:id', async (req: AuthRequest, res) => {
 router.post('/:id/ack', async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
-        if (req.user.role !== 'FRANCHISEE') return res.sendStatus(403);
+        if (!isPartnerRole(req.user.role)) return res.sendStatus(403);
 
         const existing = await prisma.collectionRequest.findFirst({
             where: {
@@ -634,6 +641,12 @@ router.post('/:id/ack', async (req: AuthRequest, res) => {
             partnerUserId: req.user!.id,
             partnerName: updated.accepted_by_user?.name || updated.target_user?.name || req.user!.id
         }));
+        logDomainEvent('api', 'collection-request-acknowledged', {
+            entity_type: 'collection_request',
+            entity_id: updated.id,
+            user_id: req.user.id,
+            status: updated.status
+        });
         res.json(await withMetrics(updated));
     } catch (error) {
         console.error(error);
@@ -644,7 +657,7 @@ router.post('/:id/ack', async (req: AuthRequest, res) => {
 router.post('/:id/complete', async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
-        if (req.user.role !== 'FRANCHISEE') return res.sendStatus(403);
+        if (!isPartnerRole(req.user.role)) return res.sendStatus(403);
 
         const {
             gps_lat,
@@ -762,6 +775,13 @@ router.post('/:id/complete', async (req: AuthRequest, res) => {
             collectedDate: safeCollectedDate,
             collectedTime: safeCollectedTime
         }));
+        logDomainEvent('api', 'collection-request-completed', {
+            entity_type: 'collection_request',
+            entity_id: created.id,
+            batch_id: batchId,
+            user_id: req.user.id,
+            status: created.status
+        });
         res.json(await withMetrics(created));
     } catch (error) {
         console.error(error);

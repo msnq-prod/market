@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
     readonly VITE_VIDEO_EXPORT_HELPER_URL?: string;
     readonly VITE_VIDEO_HELPER_DOWNLOAD_URL?: string;
+    readonly VITE_SENTRY_DSN_FRONTEND?: string;
+    readonly VITE_SENTRY_ENVIRONMENT?: string;
 }
 
 interface ImportMeta {
@@ -147,6 +149,22 @@ interface StonesDesktopApi {
         size: number;
         checksumSha256: string;
     }>;
+    stageVideoSourceStart(fileMeta: {
+        stagedSourceId?: string;
+        name: string;
+        mimeType: string;
+        size: number;
+    }): Promise<{ fileId: string }>;
+    stageVideoSourceChunk(stagedSourceId: string, chunk: ArrayBuffer): Promise<{ ok: true }>;
+    stageVideoSourceFinish(stagedSourceId: string): Promise<{
+        stagedSourceId: string;
+        cachePath: string;
+        size: number;
+        checksumSha256: string;
+    }>;
+    saveVideoDraft(payload: unknown): Promise<unknown>;
+    getVideoDraft(batchId: string): Promise<unknown>;
+    discardVideoDraft?(batchId: string): Promise<{ ok: true }>;
     getMediaQueueSnapshot(): Promise<StonesMediaQueueSnapshot>;
     getMediaWorkflowSnapshot(): Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue(callback: (snapshot: StonesMediaQueueSnapshot) => void): () => void;
@@ -156,6 +174,7 @@ interface StonesDesktopApi {
     enqueueVideoRenderUpload(payload: unknown): Promise<StonesMediaQueueJob>;
     startPhotoApplyWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
     startVideoExportWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
+    startVideoWorkflow?(batchId: string): Promise<StonesMediaWorkflow>;
     retryMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     cancelMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
@@ -220,8 +239,7 @@ type StonesMediaWorkflowPhase =
     | 'importing_sources'
     | 'rendering_intro'
     | 'rendering_outputs'
-    | 'queueing_uploads'
-    | 'verifying_uploads'
+    | 'uploading_outputs'
     | 'paused_offline'
     | 'auth_required'
     | 'failed'

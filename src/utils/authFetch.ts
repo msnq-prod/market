@@ -1,4 +1,5 @@
 import { syncDesktopAuthToken } from './desktop';
+import { fetchWithLogging } from './apiFetch';
 
 type AuthFetchInput = Parameters<typeof fetch>[0];
 type AuthFetchInit = Parameters<typeof fetch>[1];
@@ -19,7 +20,7 @@ const withAuthHeader = (init: AuthFetchInit, accessToken: string | null): Reques
 
 const tryRefreshToken = async (): Promise<string | null> => {
     try {
-        const refreshRes = await fetch('/auth/refresh', {
+        const refreshRes = await fetchWithLogging('/auth/refresh', {
             method: 'POST',
             credentials: 'include'
         });
@@ -38,7 +39,7 @@ const tryRefreshToken = async (): Promise<string | null> => {
 
 export const authFetch = async (input: AuthFetchInput, init?: AuthFetchInit): Promise<Response> => {
     const initialToken = localStorage.getItem('accessToken');
-    let response = await fetch(input, withAuthHeader(init, initialToken));
+    let response = await fetchWithLogging(input, withAuthHeader(init, initialToken));
 
     if (response.status !== 401) {
         return response;
@@ -49,6 +50,6 @@ export const authFetch = async (input: AuthFetchInput, init?: AuthFetchInit): Pr
         return response;
     }
 
-    response = await fetch(input, withAuthHeader(init, nextToken));
+    response = await fetchWithLogging(input, withAuthHeader(init, nextToken));
     return response;
 };

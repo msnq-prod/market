@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import bcrypt from 'bcryptjs';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import path from 'path';
 import fs from 'fs';
 import { authenticateToken, requireRole } from './middleware/auth.ts';
@@ -38,9 +38,17 @@ import {
     queueProductPublicationNotification,
     runTelegramSideEffect
 } from './services/telegramNotifications.ts';
+import {
+    ADMIN_ONLY_ROLES,
+    HQ_STAFF_ROLES,
+    canManageUserRole,
+    isHqStaffRole
+} from '../shared/domain/policy.ts';
 import { setNewOrderNotificationAdapter, setOrderStatusNotificationAdapter } from './services/orderNotifications.ts';
+import { createErrorLoggingMiddleware, createRequestLoggingMiddleware, initServerObservability, logDomainEvent } from './services/logger.ts';
+import { prisma } from './services/prisma.ts';
 
-const prisma = new PrismaClient();
+initServerObservability('api');
 setNewOrderNotificationAdapter(async (payload) => {
     await runTelegramSideEffect(() => queueSalesOrderCreatedNotification(prisma, payload));
 });
@@ -226,16 +234,7 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json());
-
-// Request logging middleware
-app.use((req, res, next) => {
-    const start = Date.now();
-    res.on('finish', () => {
-        const duration = Date.now() - start;
-        console.log(`${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
-    });
-    next();
-});
+app.use(createRequestLoggingMiddleware('api'));
 
 // Static media (uploaded files and pre-bundled location images)
 app.use('/uploads', express.static(uploadDir, {
@@ -266,6 +265,38 @@ app.use('/api/orders', ordersRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/qr-print-presets', qrPrintPresetRoutes);
+app.use('/api/client-logs', express.json({ limit: '256kb' }), (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const entries = Array.isArray((body as { entries?: unknown[] }).entries)
+        ? (body as { entries: unknown[] }).entries
+        : [];
+
+    for (const entry of entries) {
+        if (!entry || typeof entry !== 'object') {
+            continue;
+        }
+
+        const normalized = entry as {
+            level?: 'debug' | 'info' | 'warn' | 'error';
+            message?: string;
+            request_id?: string | null;
+            route?: string | null;
+            user_id?: string | null;
+            extra?: unknown;
+        };
+        logDomainEvent('api', 'client-log', {
+            source: 'frontend',
+            level: normalized.level || 'info',
+            message: normalized.message || 'client-log',
+            request_id: normalized.request_id || null,
+            route: normalized.route || null,
+            user_id: normalized.user_id || null,
+            extra: normalized.extra ?? null
+        }, normalized.level || 'info');
+    }
+
+    res.status(202).json({ ok: true, accepted: entries.length });
+});
 
 app.use('/api/upload', uploadRoutes);
 
@@ -396,7 +427,7 @@ app.get('/api/admin/dashboard-summary', authenticateToken, async (req: AuthReque
 
 // Admin user list for HQ screens
 app.get('/api/users', authenticateToken, async (req: AuthRequest, res) => {
-    if (!req.user || !['ADMIN', 'MANAGER'].includes(req.user.role)) {
+    if (!req.user || !isHqStaffRole(req.user.role)) {
         return res.sendStatus(403);
     }
 
@@ -427,7 +458,7 @@ app.get('/api/users', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
-    if (!req.user || !['ADMIN', 'MANAGER'].includes(req.user.role)) {
+    if (!req.user || !isHqStaffRole(req.user.role)) {
         return res.sendStatus(403);
     }
 
@@ -442,9 +473,6 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
     const safeEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     const safePassword = typeof password === 'string' ? password : '';
     const safeRole = typeof role === 'string' ? role.trim() : '';
-    const allowedRoles = req.user.role === 'ADMIN'
-        ? new Set(['ADMIN', 'MANAGER', 'SALES_MANAGER', 'FRANCHISEE'])
-        : new Set(['SALES_MANAGER', 'FRANCHISEE']);
 
     if (!safeName) {
         return res.status(400).json({ error: 'Укажите имя пользователя.' });
@@ -471,7 +499,7 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
         return res.status(400).json({ error: 'В этом окружении использование тестового общего пароля запрещено.' });
     }
 
-    if (!allowedRoles.has(safeRole)) {
+    if (!canManageUserRole(req.user.role, safeRole)) {
         return res.status(403).json({ error: 'Недостаточно прав для создания пользователя с этой ролью.' });
     }
 
@@ -514,7 +542,7 @@ app.post('/api/users', authenticateToken, async (req: AuthRequest, res) => {
     }
 });
 
-app.patch('/api/users/:id/telegram', authenticateToken, requireRole(['ADMIN']), async (req: AuthRequest, res) => {
+app.patch('/api/users/:id/telegram', authenticateToken, requireRole(ADMIN_ONLY_ROLES), async (req: AuthRequest, res) => {
     const safeChatId = typeof req.body?.telegram_chat_id === 'string' ? req.body.telegram_chat_id.trim() : '';
     const rawUsername = typeof req.body?.telegram_username === 'string' ? req.body.telegram_username.trim() : '';
     const normalizedChatId = safeChatId || null;
@@ -611,7 +639,7 @@ app.get('/api/categories', async (_req, res) => {
 // ===== ADMIN API =====
 
 // Create location
-app.post('/api/locations', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
+app.post('/api/locations', authenticateToken, requireRole(HQ_STAFF_ROLES), async (req: AuthRequest, res) => {
     try {
         const {
             lat, lng, image, translations
@@ -644,7 +672,7 @@ app.post('/api/locations', authenticateToken, requireRole(['ADMIN', 'MANAGER']),
 });
 
 // Update location
-app.put('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+app.put('/api/locations/:id', authenticateToken, requireRole(HQ_STAFF_ROLES), async (req, res) => {
     try {
         const { id } = req.params;
         const {
@@ -686,7 +714,7 @@ app.put('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER'
 });
 
 // Delete location
-app.delete('/api/locations/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
+app.delete('/api/locations/:id', authenticateToken, requireRole(HQ_STAFF_ROLES), async (req: AuthRequest, res) => {
     try {
         const { id } = req.params;
         const existing = await prisma.location.findFirst({
@@ -763,7 +791,7 @@ app.get('/api/products', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 // Create product
-app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
+app.post('/api/products', authenticateToken, requireRole(HQ_STAFF_ROLES), async (req: AuthRequest, res) => {
     try {
         const {
             price,
@@ -849,7 +877,7 @@ app.post('/api/products', authenticateToken, requireRole(['ADMIN', 'MANAGER']), 
 });
 
 // Update product
-app.put('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req: AuthRequest, res) => {
+app.put('/api/products/:id', authenticateToken, requireRole(HQ_STAFF_ROLES), async (req: AuthRequest, res) => {
     try {
         const { id } = req.params;
         const {
@@ -1016,7 +1044,7 @@ app.patch('/api/products/:id/publish', authenticateToken, async (req: AuthReques
 });
 
 // Delete product
-app.delete('/api/products/:id', authenticateToken, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, requireRole(HQ_STAFF_ROLES), async (req, res) => {
     try {
         const { id } = req.params;
         const deleted = await prisma.$transaction((tx) => softDeleteProduct(tx, id));
@@ -1068,6 +1096,8 @@ if (fs.existsSync(distIndexPath)) {
         res.sendFile(distIndexPath);
     });
 }
+
+app.use(createErrorLoggingMiddleware('api'));
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);

@@ -41,30 +41,12 @@ const PARTNER_EMAIL = 'yakutia.partner@stones.com';
 const PARTNER_PASSWORD = 'Partner123';
 const E2E_REQUEST_NOTE = '[e2e] admin-video-tool';
 
-const randomKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
 const authHeaders = (token: string) => ({
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json'
 });
 
 const makeFakeMp4 = (label: string) => Buffer.from(`fake-mp4-${label}`, 'utf8');
-
-async function login(request: APIRequestContext, email: string, password: string): Promise<LoginPayload> {
-    const response = await request.post('/auth/login', {
-        data: { email, password }
-    });
-    expect(response.ok()).toBeTruthy();
-    return await response.json() as LoginPayload;
-}
-
-async function setAdminSession(page: Page, loginPayload: LoginPayload) {
-    await page.addInitScript((payload) => {
-        localStorage.setItem('accessToken', payload.accessToken);
-        localStorage.setItem('userRole', payload.role);
-        localStorage.setItem('userName', payload.name);
-    }, loginPayload);
-}
 
 async function seekTimelineToRatio(page: Page, ratio: number) {
     const timeline = page.getByTestId('timeline-region');
@@ -87,6 +69,121 @@ async function seekTimelineToRatio(page: Page, ratio: number) {
             clientY
         }));
     }, ratio);
+}
+
+async function installDesktopVideoMock(page: Page, batchId: string) {
+    await page.addInitScript((mockBatchId) => {
+        const getDrafts = () => JSON.parse(window.localStorage.getItem('__desktopVideoDrafts') || '{}');
+        const setDrafts = (drafts: Record<string, unknown>) => window.localStorage.setItem('__desktopVideoDrafts', JSON.stringify(drafts));
+        const getWorkflows = () => JSON.parse(window.localStorage.getItem('__desktopVideoWorkflows') || '[]');
+        const setWorkflows = (workflows: unknown[]) => window.localStorage.setItem('__desktopVideoWorkflows', JSON.stringify(workflows));
+
+        window.stonesDesktop = {
+            isDesktop: true,
+            getAppInfo: async () => ({ version: 'test', platform: 'darwin', mode: 'development', apiOrigin: window.location.origin }),
+            getNetworkStatus: async () => ({ online: true, apiReachable: true, checkedAt: new Date().toISOString() }),
+            getDesktopDiagnostics: async () => ({ app: {}, network: {}, helper: { embedded: true, ok: true }, queue: { counts: {}, activeJobs: 0, failedJobs: 0 } }),
+            checkHqUpdate: async () => ({ updateAvailable: false }),
+            downloadHqUpdate: async () => ({ updateAvailable: false, downloaded: false, opened: false }),
+            getAdminAutoLoginCredentials: async () => ({ email: 'admin@stones.com', password: 'admin123' }),
+            syncAuthToken: async () => ({ ok: true }),
+            getVideoHelperStatus: async () => ({ embedded: true, ok: true, protocol_version: 'stones-video-export-helper-v3' }),
+            cleanupVideoHelper: async () => ({ success: true }),
+            showVideoHelperStorage: async () => ({ success: true }),
+            selectBatchDiagnosticsMediaFolder: async () => ({ cancelled: true, files: [], diagnostics: [] }),
+            exportDiagnosticsMarkdown: async () => ({ success: true, path: '/tmp/diagnostics.md' }),
+            stageMediaQueueFileStart: async () => ({ fileId: crypto.randomUUID() }),
+            stageMediaQueueFileChunk: async () => ({ ok: true }),
+            stageMediaQueueFileFinish: async (fileId: string) => ({ fileId, size: 10, checksumSha256: `sha-${fileId}` }),
+            stageVideoSourceStart: async () => ({ fileId: crypto.randomUUID() }),
+            stageVideoSourceChunk: async () => ({ ok: true }),
+            stageVideoSourceFinish: async (stagedSourceId: string) => ({
+                stagedSourceId,
+                cachePath: `/tmp/${stagedSourceId}.bin`,
+                size: 10,
+                checksumSha256: `sha-${stagedSourceId}`
+            }),
+            saveVideoDraft: async (payload: { batchId: string }) => {
+                const drafts = getDrafts();
+                drafts[payload.batchId] = payload;
+                setDrafts(drafts);
+                return payload;
+            },
+            getVideoDraft: async (draftBatchId: string) => getDrafts()[draftBatchId] || null,
+            discardVideoDraft: async (draftBatchId: string) => {
+                const drafts = getDrafts();
+                delete drafts[draftBatchId];
+                setDrafts(drafts);
+                return { ok: true };
+            },
+            getMediaQueueSnapshot: async () => ({ jobs: [], counts: {} }),
+            getMediaWorkflowSnapshot: async () => ({ workflows: [], counts: {} }),
+            subscribeMediaQueue: () => () => undefined,
+            subscribeMediaWorkflows: () => () => undefined,
+            enqueuePhotoToolApply: async () => ({}),
+            enqueueVideoIntroUpload: async () => ({}),
+            enqueueVideoRenderUpload: async () => ({}),
+            startPhotoApplyWorkflow: async () => ({}),
+            startVideoExportWorkflow: async (payload: Record<string, unknown>) => {
+                const workflows = getWorkflows();
+                const id = `workflow-${workflows.length + 1}`;
+                workflows.push({ id, payload });
+                setWorkflows(workflows);
+                return { id, kind: 'VIDEO_EXPORT_WORKFLOW', batchId: mockBatchId, phase: 'queued' };
+            },
+            retryMediaWorkflow: async () => ({ workflows: [], counts: {} }),
+            cancelMediaWorkflow: async () => ({ workflows: [], counts: {} }),
+            retryMediaQueueJob: async () => ({ jobs: [], counts: {} }),
+            cancelMediaQueueJob: async () => ({ jobs: [], counts: {} }),
+            clearCompletedMediaQueueJobs: async () => ({ jobs: [], counts: {} }),
+            openExternal: async () => ({ ok: true })
+        };
+    }, batchId);
+
+    await page.route('**/desktop-helper/health', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, protocol_version: 'stones-video-export-helper-v3', helper_version: 'test' })
+        });
+    });
+
+    await page.route('**/desktop-helper/sources', async (route) => {
+        const postData = route.request().postDataBuffer()?.toString('utf8') ?? '';
+        const match = postData.match(/source-(\d+)\.mp4/);
+        const sourceNumber = Number(match?.[1] || 1);
+        await route.fulfill({
+            status: 201,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                source_id: `source-${sourceNumber}`,
+                duration_ms: 8000,
+                has_audio: true,
+                fingerprint: {
+                    name: `source-${sourceNumber}.mp4`,
+                    size: 10,
+                    lastModified: 123456 + sourceNumber,
+                    durationMs: 8000
+                }
+            })
+        });
+    });
+}
+
+async function login(request: APIRequestContext, email: string, password: string): Promise<LoginPayload> {
+    const response = await request.post('/auth/login', {
+        data: { email, password }
+    });
+    expect(response.ok()).toBeTruthy();
+    return await response.json() as LoginPayload;
+}
+
+async function setAdminSession(page: Page, loginPayload: LoginPayload) {
+    await page.addInitScript((payload) => {
+        localStorage.setItem('accessToken', payload.accessToken);
+        localStorage.setItem('userRole', payload.role);
+        localStorage.setItem('userName', payload.name);
+    }, loginPayload);
 }
 
 function buildManifest(payload: VideoToolPayload) {
@@ -420,160 +517,70 @@ test('API: video export session enforces ACL, session lifecycle and duplicate up
     expect(cancelledToolPayload.items[0]?.item_video_url).toBeNull();
 });
 
-test('UI: admin saves intro and appends no-intro source after partial upload', async ({ page, request }) => {
+test('UI: обычный браузер показывает Desktop-only блокировку', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+
+    await setAdminSession(page, admin);
+    await page.goto(`/admin/video-tool/${toolPayload.batch.id}`);
+
+    await expect(page.getByText('Откройте Desktop app')).toBeVisible();
+    await expect(page.getByText('Browser helper больше не используется.')).toBeVisible();
+    await expect(page.getByTestId('source-input')).toHaveCount(0);
+});
+
+test('UI: desktop mock восстанавливает 5 staged исходников после reload', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 5);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+    await installDesktopVideoMock(page, batchId);
+
+    await page.goto(`/admin/video-tool/${batchId}`);
+    await expect(page.getByTestId('video-tool-heading')).toBeVisible();
+
+    for (let index = 1; index <= 5; index += 1) {
+        await page.getByTestId(index === 1 ? 'source-input' : 'append-source-input').setInputFiles({
+            name: `source-${index}.mp4`,
+            mimeType: 'video/mp4',
+            buffer: makeFakeMp4(`source-${index}`),
+            lastModified: 123456 + index
+        });
+    }
+
+    await expect(page.getByTestId('source-list')).toContainText('source-5.mp4');
+    await expect(page.getByText('5 видео')).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByTestId('video-tool-heading')).toBeVisible();
+    await expect(page.getByTestId('source-list')).toContainText('source-1.mp4');
+    await expect(page.getByTestId('source-list')).toContainText('source-5.mp4');
+    await expect(page.getByText('Нужен локальный файл для продолжения.')).toHaveCount(0);
+});
+
+test('UI: desktop workflow сохраняет partial export и append source после reload', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
     const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
     const batchId = toolPayload.batch.id;
-    const renderJobs: Array<{
-        outputsCount: number;
-        sources: Array<{ source_index: number; source_id: string }>;
-    }> = [];
 
     await setAdminSession(page, admin);
-
-    await page.route('http://127.0.0.1:3012/health', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                ok: true,
-                ffmpeg: true,
-                ffprobe: true,
-                helper_version: '1.0.0',
-                protocol_version: 'stones-video-export-helper-v3',
-                storage_root: '/tmp/stones-helper',
-                free_bytes: 1024 * 1024 * 1024 * 10,
-                allowed_origins: ['http://127.0.0.1:5273'],
-                queued_jobs: 0
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/sources', async (route) => {
-        const postData = route.request().postDataBuffer()?.toString('utf8') ?? '';
-        const isSecondSource = postData.includes('source-2.mp4');
-        const isIntroSource = postData.includes('intro.mp4');
-        await route.fulfill({
-            status: 201,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                source_id: isIntroSource ? `intro-source-${randomKey()}` : isSecondSource ? `tail-source-${randomKey()}` : `source-${randomKey()}`,
-                duration_ms: isIntroSource ? 2000 : 8000,
-                has_audio: true,
-                fingerprint: {
-                    name: isIntroSource ? 'intro.mp4' : isSecondSource ? 'source-2.mp4' : 'source.mp4',
-                    size: 10,
-                    lastModified: isSecondSource ? 654321 : 123456,
-                    durationMs: isIntroSource ? 2000 : 8000
-                }
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs', async (route) => {
-        await route.fulfill({
-            status: 202,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'intro-job-1',
-                status: 'QUEUED',
-                processed_count: 0,
-                total_count: 1
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs/intro-job-1', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'intro-job-1',
-                status: 'COMPLETED',
-                processed_count: 1,
-                total_count: 1
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs/intro-job-1/file', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'video/mp4',
-            body: makeFakeMp4('intro-output')
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs/intro-job-1/cleanup', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ success: true })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs', async (route) => {
-        const payload = route.request().postDataJSON() as {
-            outputs: unknown[];
-            sources: Array<{ source_index: number; source_id: string }>;
-        };
-        renderJobs.push({
-            outputsCount: payload.outputs.length,
-            sources: payload.sources
-        });
-
-        await route.fulfill({
-            status: 202,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'job-1',
-                status: 'QUEUED',
-                processed_count: 0,
-                total_count: payload.outputs.length
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs/job-1', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'job-1',
-                status: 'COMPLETED',
-                processed_count: renderJobs.at(-1)?.outputsCount ?? 0,
-                total_count: renderJobs.at(-1)?.outputsCount ?? 0,
-                outputs: []
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs/job-1/files/**', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'video/mp4',
-            body: makeFakeMp4('helper-output')
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs/job-1/cleanup', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ success: true })
-        });
-    });
+    await installDesktopVideoMock(page, batchId);
 
     await page.goto(`/admin/video-tool/${batchId}`);
     await expect(page.getByTestId('video-tool-heading')).toBeVisible();
 
     await page.getByTestId('source-input').setInputFiles({
-        name: 'source.mp4',
+        name: 'source-1.mp4',
         mimeType: 'video/mp4',
-        buffer: makeFakeMp4('source'),
-        lastModified: 123456
+        buffer: makeFakeMp4('source-1'),
+        lastModified: 123457
     });
     await expect(page.getByTestId('clip-card-000')).toBeVisible();
     await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 0 / 2');
@@ -583,8 +590,9 @@ test('UI: admin saves intro and appends no-intro source after partial upload', a
     await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 1 / 2');
 
     await page.getByTestId('action-export').click();
-    await expect(page.getByText('Частичная выгрузка готова: 1/2. Можно добавить ещё видео.')).toBeVisible({ timeout: 15000 });
-    expect(renderJobs[0]?.outputsCount).toBe(1);
+    await expect(page.getByText(/Экспорт передан в фон/)).toBeVisible();
+    let workflows = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__desktopVideoWorkflows') || '[]'));
+    expect(workflows[0]?.payload?.renderManifest?.outputs).toHaveLength(1);
 
     await page.reload();
     await expect(page.getByTestId('draft-banner')).toBeVisible();
@@ -594,174 +602,39 @@ test('UI: admin saves intro and appends no-intro source after partial upload', a
         name: 'source-2.mp4',
         mimeType: 'video/mp4',
         buffer: makeFakeMp4('source-2'),
-        lastModified: 654321
+        lastModified: 123458
     });
     await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 2 / 2');
     await expect(page.getByTestId('source-list')).toContainText('без интро');
     await expect(page.getByTestId('source-boundary-1')).toBeVisible();
 
     await page.getByTestId('action-export').click();
-    await expect(page.getByText('Экспорт завершён: все финальные ролики загружены.')).toBeVisible({ timeout: 15000 });
-    expect(renderJobs[1]?.outputsCount).toBe(1);
-    expect(renderJobs[1]?.sources).toHaveLength(2);
-    expect(renderJobs[1]?.sources[0]?.source_index).toBe(0);
-    expect(renderJobs[1]?.sources[1]?.source_index).toBe(2);
+    await expect(page.getByText(/Экспорт передан в фон/)).toBeVisible();
+    workflows = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__desktopVideoWorkflows') || '[]'));
+    expect(workflows[1]?.payload?.renderManifest?.outputs).toHaveLength(2);
+    expect(workflows[1]?.payload?.sources).toHaveLength(2);
+    expect(workflows[1]?.payload?.sources[0]?.sourceIndex).toBe(0);
+    expect(workflows[1]?.payload?.sources[1]?.sourceIndex).toBe(1);
 });
 
-test('UI: export works with deleted fragments that leave source timeline gaps', async ({ page, request }) => {
+test('UI: desktop workflow экспортирует deleted fragments как timeline gaps', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
     const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
     const batchId = toolPayload.batch.id;
-    const renderJobs: Array<{
-        outputsCount: number;
-        segments: Array<{ start_ms: number; end_ms: number }>;
-    }> = [];
-    let renderStatusPoll = 0;
 
     await setAdminSession(page, admin);
-
-    await page.route('http://127.0.0.1:3012/health', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                ok: true,
-                ffmpeg: true,
-                ffprobe: true,
-                helper_version: '1.0.0',
-                protocol_version: 'stones-video-export-helper-v3',
-                storage_root: '/tmp/stones-helper',
-                free_bytes: 1024 * 1024 * 1024 * 10,
-                allowed_origins: ['http://127.0.0.1:5273'],
-                queued_jobs: 0
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/sources', async (route) => {
-        await route.fulfill({
-            status: 201,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                source_id: `source-${randomKey()}`,
-                duration_ms: 8000,
-                has_audio: true,
-                fingerprint: {
-                    name: 'source.mp4',
-                    size: 10,
-                    lastModified: 123456,
-                    durationMs: 8000
-                }
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs', async (route) => {
-        await route.fulfill({
-            status: 202,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'intro-gap',
-                status: 'QUEUED',
-                processed_count: 0,
-                total_count: 1
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs/intro-gap', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'intro-gap',
-                status: 'COMPLETED',
-                processed_count: 1,
-                total_count: 1
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs/intro-gap/file', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'video/mp4',
-            body: makeFakeMp4('intro-gap')
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/intro-jobs/intro-gap/cleanup', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ success: true })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs', async (route) => {
-        const payload = route.request().postDataJSON() as {
-            outputs: unknown[];
-            segments: Array<{ start_ms: number; end_ms: number }>;
-        };
-        renderJobs.push({
-            outputsCount: payload.outputs.length,
-            segments: payload.segments
-        });
-
-        await route.fulfill({
-            status: 202,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'job-gap',
-                status: 'QUEUED',
-                processed_count: 0,
-                total_count: payload.outputs.length
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs/job-gap', async (route) => {
-        renderStatusPoll += 1;
-        const isCompleted = renderStatusPoll > 1;
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                job_id: 'job-gap',
-                status: isCompleted ? 'COMPLETED' : 'PROCESSING',
-                processed_count: isCompleted ? renderJobs.at(-1)?.outputsCount ?? 0 : 1,
-                total_count: renderJobs.at(-1)?.outputsCount ?? 0,
-                outputs: []
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs/job-gap/files/**', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'video/mp4',
-            body: makeFakeMp4('helper-output-gap')
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/render-jobs/job-gap/cleanup', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ success: true })
-        });
-    });
+    await installDesktopVideoMock(page, batchId);
 
     await page.goto(`/admin/video-tool/${batchId}`);
     await expect(page.getByTestId('video-tool-heading')).toBeVisible();
 
     await page.getByTestId('source-input').setInputFiles({
-        name: 'source.mp4',
+        name: 'source-1.mp4',
         mimeType: 'video/mp4',
         buffer: makeFakeMp4('source-gap'),
-        lastModified: 123456
+        lastModified: 123457
     });
     await expect(page.getByTestId('clip-card-000')).toBeVisible();
 
@@ -780,14 +653,16 @@ test('UI: export works with deleted fragments that leave source timeline gaps', 
     await expect(page.getByTestId('action-delete')).toHaveAttribute('aria-label', 'Вернуть фрагмент');
 
     await page.getByTestId('action-export').click();
-    await expect(page.getByText('Экспорт завершён: все финальные ролики загружены.')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/Экспорт передан в фон/)).toBeVisible();
 
-    expect(renderJobs[0]?.outputsCount).toBe(2);
-    expect(renderJobs[0]?.segments).toHaveLength(3);
-    expect((renderJobs[0]?.segments[2]?.start_ms ?? 0)).toBeGreaterThan(renderJobs[0]?.segments[1]?.end_ms ?? 0);
+    const workflows = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__desktopVideoWorkflows') || '[]'));
+    const segments = workflows[0]?.payload?.renderManifest?.segments ?? [];
+    expect(workflows[0]?.payload?.renderManifest?.outputs).toHaveLength(2);
+    expect(segments).toHaveLength(3);
+    expect(segments[2]?.start_ms ?? 0).toBeGreaterThan(segments[1]?.end_ms ?? 0);
 });
 
-test('UI: keyboard shortcuts stay active when focus is on tool controls', async ({ page, request }) => {
+test('UI: desktop hotkeys работают при фокусе на controls', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
@@ -795,51 +670,16 @@ test('UI: keyboard shortcuts stay active when focus is on tool controls', async 
     const batchId = toolPayload.batch.id;
 
     await setAdminSession(page, admin);
-
-    await page.route('http://127.0.0.1:3012/health', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                ok: true,
-                ffmpeg: true,
-                ffprobe: true,
-                helper_version: '1.0.0',
-                protocol_version: 'stones-video-export-helper-v3',
-                storage_root: '/tmp/stones-helper',
-                free_bytes: 1024 * 1024 * 1024 * 10,
-                allowed_origins: ['http://127.0.0.1:5273'],
-                queued_jobs: 0
-            })
-        });
-    });
-
-    await page.route('http://127.0.0.1:3012/sources', async (route) => {
-        await route.fulfill({
-            status: 201,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                source_id: `source-${randomKey()}`,
-                duration_ms: 8000,
-                has_audio: true,
-                fingerprint: {
-                    name: 'source.mp4',
-                    size: 10,
-                    lastModified: 123456,
-                    durationMs: 8000
-                }
-            })
-        });
-    });
+    await installDesktopVideoMock(page, batchId);
 
     await page.goto(`/admin/video-tool/${batchId}`);
     await expect(page.getByTestId('video-tool-heading')).toBeVisible();
 
     await page.getByTestId('source-input').setInputFiles({
-        name: 'source.mp4',
+        name: 'source-1.mp4',
         mimeType: 'video/mp4',
         buffer: makeFakeMp4('source-hotkeys'),
-        lastModified: 123456
+        lastModified: 123457
     });
     await expect(page.getByTestId('clip-card-000')).toBeVisible();
 

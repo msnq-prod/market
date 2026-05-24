@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
     Activity,
+    BadgeInfo,
     Download,
     HardDrive,
     Info,
@@ -24,6 +26,7 @@ import {
     type StonesMediaWorkflow,
     type StonesMediaWorkflowSnapshot
 } from '../../utils/desktop';
+import { apiFetch } from '../../utils/apiFetch';
 import { runBatchCreationDiagnostics, type BatchDiagnosticsLog } from '../services/batchDiagnostics';
 
 type StatusTone = 'ok' | 'warning' | 'error' | 'checking' | 'offline';
@@ -36,6 +39,13 @@ type OpenStatusCenterDetail = {
     };
 };
 
+type WebStatusSnapshot = {
+    online: boolean;
+    apiReachable: boolean;
+    checkedAt: string | null;
+    apiError: string;
+};
+
 const emptyQueue: StonesMediaQueueSnapshot = {
     jobs: [],
     counts: {}
@@ -44,6 +54,13 @@ const emptyQueue: StonesMediaQueueSnapshot = {
 const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = {
     workflows: [],
     counts: {}
+};
+
+const emptyWebStatus: WebStatusSnapshot = {
+    online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    apiReachable: false,
+    checkedAt: null,
+    apiError: ''
 };
 
 const statusToneClass: Record<StatusTone, string> = {
@@ -80,8 +97,7 @@ const workflowPhaseLabel: Record<string, string> = {
     importing_sources: 'Импорт source',
     rendering_intro: 'Сборка intro',
     rendering_outputs: 'Рендер',
-    queueing_uploads: 'Постановка upload',
-    verifying_uploads: 'Проверка upload',
+    uploading_outputs: 'Загрузка MP4',
     paused_offline: 'Пауза: нет связи',
     auth_required: 'Нужен вход',
     failed: 'Ошибка',
@@ -237,6 +253,27 @@ type BackgroundProgress = {
 };
 
 const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+
+const roleLabel: Record<string, string> = {
+    ADMIN: 'Админ',
+    MANAGER: 'Менеджер HQ',
+    SALES_MANAGER: 'Продажи',
+    FRANCHISEE: 'Партнер',
+    USER: 'Пользователь'
+};
+
+const formatCheckedAt = (value: string | null | undefined) => {
+    if (!value) {
+        return 'Не проверялось';
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return 'Не проверялось';
+    }
+
+    return date.toLocaleString();
+};
 
 const getPhotoWorkflowStagePercent = (phase: StonesMediaWorkflow['phase']) => {
     if (phase === 'completed') {
@@ -518,10 +555,13 @@ function VideoUploadGroupCard({
 }
 
 export function DesktopStatusCenter() {
+    const location = useLocation();
     const desktop = getStonesDesktop();
+    const isDesktopRuntime = isStonesDesktop() && Boolean(desktop);
     const [open, setOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<StatusTab>('overview');
     const [diagnostics, setDiagnostics] = useState<StonesDesktopDiagnostics | null>(null);
+    const [webStatus, setWebStatus] = useState<WebStatusSnapshot>(emptyWebStatus);
     const [queue, setQueue] = useState<StonesMediaQueueSnapshot>(emptyQueue);
     const [workflowSnapshot, setWorkflowSnapshot] = useState<StonesMediaWorkflowSnapshot>(emptyWorkflowSnapshot);
     const [update, setUpdate] = useState<StonesHqUpdateInfo | StonesHqUpdateDownloadResult | null>(null);
@@ -535,6 +575,8 @@ export function DesktopStatusCenter() {
         steps: [],
         mediaDiagnostics: []
     });
+    const currentRole = localStorage.getItem('userRole') || '';
+    const currentRoleLabel = roleLabel[currentRole] || currentRole || 'Не определена';
 
     const queueCounts = useMemo(() => getQueueCounts(queue), [queue]);
     const workflows = workflowSnapshot.workflows;
@@ -646,6 +688,15 @@ export function DesktopStatusCenter() {
     }, [queue.jobs, videoUploadGroups, workflows]);
 
     const headerSummary = useMemo(() => {
+        if (!isDesktopRuntime) {
+            if (!webStatus.online) {
+                return 'Web: offline';
+            }
+            if (!webStatus.apiReachable) {
+                return 'Web: API недоступен';
+            }
+            return `${currentRoleLabel} · API доступен`;
+        }
         if (!diagnostics) {
             return 'Проверяем приложение';
         }
@@ -680,10 +731,10 @@ export function DesktopStatusCenter() {
             return `Доступна ${updateVersion}`;
         }
         return 'Все системы в норме';
-    }, [activeVideoUploads, activeWorkflowCount, diagnostics, failedWorkflowCount, queueCounts.active, queueCounts.blockedAuth, queueCounts.failed, queueCounts.stuck, updateAvailable, updateVersion]);
+    }, [activeVideoUploads, activeWorkflowCount, currentRoleLabel, diagnostics, failedWorkflowCount, isDesktopRuntime, queueCounts.active, queueCounts.blockedAuth, queueCounts.failed, queueCounts.stuck, updateAvailable, updateVersion, webStatus.apiReachable, webStatus.online]);
 
     const refresh = useCallback(async () => {
-        if (!desktop) {
+        if (!desktop || !isDesktopRuntime) {
             return;
         }
 
@@ -703,7 +754,35 @@ export function DesktopStatusCenter() {
         } finally {
             setRefreshing(false);
         }
-    }, [desktop]);
+    }, [desktop, isDesktopRuntime]);
+
+    const refreshWebStatus = useCallback(async () => {
+        if (isDesktopRuntime) {
+            return;
+        }
+
+        const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+        try {
+            const response = await apiFetch('/healthz', {
+                method: 'GET',
+                cache: 'no-store'
+            });
+            const payload = await response.json().catch(() => null) as { status?: string; error?: string } | null;
+            setWebStatus({
+                online,
+                apiReachable: response.ok && payload?.status === 'ok',
+                checkedAt: new Date().toISOString(),
+                apiError: response.ok ? '' : payload?.error || `HTTP ${response.status}`
+            });
+        } catch (error) {
+            setWebStatus({
+                online,
+                apiReachable: false,
+                checkedAt: new Date().toISOString(),
+                apiError: error instanceof Error ? error.message : 'Healthcheck недоступен'
+            });
+        }
+    }, [isDesktopRuntime]);
 
     const checkUpdate = useCallback(async () => {
         if (!desktop) {
@@ -897,7 +976,7 @@ export function DesktopStatusCenter() {
     }, [desktop, refresh]);
 
     useEffect(() => {
-        if (!isStonesDesktop() || !desktop) {
+        if (!isDesktopRuntime || !desktop) {
             return;
         }
 
@@ -910,7 +989,7 @@ export function DesktopStatusCenter() {
         const openListener = (event: Event) => {
             const detail = event instanceof CustomEvent ? event.detail as OpenStatusCenterDetail | undefined : undefined;
             setOpen(true);
-            setActiveTab(detail?.tab || 'diagnostics');
+            setActiveTab(detail?.tab || (detail?.focus ? 'queue' : 'diagnostics'));
             void refresh();
         };
         window.addEventListener('stones:open-status-center', openListener);
@@ -922,19 +1001,67 @@ export function DesktopStatusCenter() {
             window.clearInterval(updateTimer);
             window.removeEventListener('stones:open-status-center', openListener);
         };
-    }, [checkUpdate, desktop, refresh]);
+    }, [checkUpdate, desktop, isDesktopRuntime, refresh]);
 
-    if (!isStonesDesktop()) {
-        return null;
-    }
+    useEffect(() => {
+        if (isDesktopRuntime) {
+            return;
+        }
+
+        void refreshWebStatus();
+        const syncOnlineStatus = () => {
+            setWebStatus((current) => ({
+                ...current,
+                online: navigator.onLine
+            }));
+            void refreshWebStatus();
+        };
+        const openListener = () => {
+            setOpen(true);
+            setActiveTab('overview');
+            void refreshWebStatus();
+        };
+
+        const refreshTimer = window.setInterval(() => void refreshWebStatus(), 30000);
+        window.addEventListener('online', syncOnlineStatus);
+        window.addEventListener('offline', syncOnlineStatus);
+        window.addEventListener('stones:open-status-center', openListener);
+
+        return () => {
+            window.clearInterval(refreshTimer);
+            window.removeEventListener('online', syncOnlineStatus);
+            window.removeEventListener('offline', syncOnlineStatus);
+            window.removeEventListener('stones:open-status-center', openListener);
+        };
+    }, [isDesktopRuntime, refreshWebStatus]);
 
     const tabs: Array<{ id: StatusTab; label: string; icon: ReactNode }> = [
         { id: 'overview', label: 'Обзор', icon: <Activity size={14} /> },
-        { id: 'queue', label: 'Загрузки', icon: <UploadCloud size={14} /> },
-        { id: 'helper', label: 'Видео helper', icon: <Video size={14} /> },
-        { id: 'updates', label: 'Обновления', icon: <Download size={14} /> },
-        { id: 'diagnostics', label: 'Диагностика', icon: <Download size={14} /> }
+        ...(isDesktopRuntime ? [
+            { id: 'queue' as StatusTab, label: 'Загрузки', icon: <UploadCloud size={14} /> },
+            { id: 'helper' as StatusTab, label: 'Видео helper', icon: <Video size={14} /> },
+            { id: 'updates' as StatusTab, label: 'Обновления', icon: <Download size={14} /> },
+            { id: 'diagnostics' as StatusTab, label: 'Диагностика', icon: <Download size={14} /> }
+        ] : [])
     ];
+
+    const triggerTone: StatusTone = !isDesktopRuntime
+        ? !webStatus.checkedAt
+            ? 'checking'
+            : !webStatus.online
+                ? 'offline'
+                : !webStatus.apiReachable
+                    ? 'warning'
+                    : 'ok'
+        : !diagnostics
+            ? 'checking'
+            : queueCounts.failed > 0 || !diagnostics.helper.ok
+                ? 'error'
+                : !diagnostics.network.apiReachable
+                    ? 'warning'
+                    : queueCounts.active > 0 || refreshing
+                        ? 'checking'
+                        : 'ok';
 
     return (
         <>
@@ -942,17 +1069,7 @@ export function DesktopStatusCenter() {
                 <button
                     type="button"
                     onClick={() => setOpen(true)}
-                    className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition ${statusToneClass[
-                        !diagnostics
-                            ? 'checking'
-                            : queueCounts.failed > 0 || !diagnostics.helper.ok
-                            ? 'error'
-                            : !diagnostics.network.apiReachable
-                                ? 'warning'
-                                : queueCounts.active > 0 || refreshing
-                                    ? 'checking'
-                                    : 'ok'
-                    ]}`}
+                    className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition ${statusToneClass[triggerTone]}`}
                 >
                     {refreshing ? <LoaderCircle size={15} className="animate-spin" /> : <Activity size={15} />}
                     <span className="text-left">
@@ -960,7 +1077,7 @@ export function DesktopStatusCenter() {
                         <span className="block text-[10px] font-normal opacity-75">{headerSummary}</span>
                     </span>
                 </button>
-                {backgroundProgress.map((item) => (
+                {isDesktopRuntime && backgroundProgress.map((item) => (
                     <MiniProgressStrip key={item.key} item={item} />
                 ))}
             </div>
@@ -978,8 +1095,12 @@ export function DesktopStatusCenter() {
                             <div className="flex items-start justify-between gap-3">
                                 <div>
                                     <p className="text-xs uppercase tracking-[0.22em] text-gray-500">ZAGARAMI admin</p>
-                                    <h2 className="mt-1 text-xl font-semibold text-white">Desktop Status Center</h2>
-                                    <p className="mt-1 text-sm text-gray-400">Сеть, helper, загрузки, обновления и диагностика приложения.</p>
+                                    <h2 className="mt-1 text-xl font-semibold text-white">Status Center</h2>
+                                    <p className="mt-1 text-sm text-gray-400">
+                                        {isDesktopRuntime
+                                            ? 'Сеть, helper, загрузки, обновления и диагностика приложения.'
+                                            : 'Состояние web-сессии, API и текущего рабочего контекста.'}
+                                    </p>
                                 </div>
                                 <button
                                     type="button"
@@ -992,26 +1113,47 @@ export function DesktopStatusCenter() {
                             </div>
 
                             <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                                <StatusBadge tone={networkTone}>
+                                <StatusBadge tone={isDesktopRuntime ? networkTone : (webStatus.apiReachable ? 'ok' : webStatus.online ? 'warning' : 'offline')}>
                                     <Wifi size={13} />
-                                    {diagnostics?.network.apiReachable ? 'API доступен' : 'API недоступен'}
+                                    {isDesktopRuntime
+                                        ? diagnostics?.network.apiReachable ? 'API доступен' : 'API недоступен'
+                                        : webStatus.apiReachable ? 'API доступен' : 'API недоступен'}
                                 </StatusBadge>
-                                <StatusBadge tone={helperTone}>
-                                    <Video size={13} />
-                                    {diagnostics?.helper.ok ? 'Helper готов' : 'Helper ошибка'}
-                                </StatusBadge>
-                                <StatusBadge tone={queueTone}>
-                                    <UploadCloud size={13} />
-                                    {queueCounts.blockedAuth > 0 ? `Нужен вход: ${queueCounts.blockedAuth}` : queueCounts.failed > 0 ? `Ошибки загрузки: ${queueCounts.failed}` : queueCounts.stuck > 0 ? `Stuck: ${queueCounts.stuck}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : 'Очередь чистая'}
-                                </StatusBadge>
-                                <StatusBadge tone={workflowTone}>
-                                    <Activity size={13} />
-                                    {(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Нужен вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Offline: ${diagnostics?.workflows?.blockedOffline}` : failedWorkflowCount > 0 ? `Workflow ошибки: ${failedWorkflowCount}` : (diagnostics?.workflows?.stuck || 0) > 0 ? `Stuck: ${diagnostics?.workflows?.stuck}` : activeWorkflowCount > 0 ? `Workflow: ${activeWorkflowCount}` : 'Workflow чисты'}
-                                </StatusBadge>
-                                <StatusBadge tone={updateTone}>
-                                    <Download size={13} />
-                                    {updateLabel}
-                                </StatusBadge>
+                                {isDesktopRuntime ? (
+                                    <>
+                                        <StatusBadge tone={helperTone}>
+                                            <Video size={13} />
+                                            {diagnostics?.helper.ok ? 'Helper готов' : 'Helper ошибка'}
+                                        </StatusBadge>
+                                        <StatusBadge tone={queueTone}>
+                                            <UploadCloud size={13} />
+                                            {queueCounts.blockedAuth > 0 ? `Нужен вход: ${queueCounts.blockedAuth}` : queueCounts.failed > 0 ? `Ошибки загрузки: ${queueCounts.failed}` : queueCounts.stuck > 0 ? `Stuck: ${queueCounts.stuck}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : 'Очередь чистая'}
+                                        </StatusBadge>
+                                        <StatusBadge tone={workflowTone}>
+                                            <Activity size={13} />
+                                            {(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Нужен вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Offline: ${diagnostics?.workflows?.blockedOffline}` : failedWorkflowCount > 0 ? `Workflow ошибки: ${failedWorkflowCount}` : (diagnostics?.workflows?.stuck || 0) > 0 ? `Stuck: ${diagnostics?.workflows?.stuck}` : activeWorkflowCount > 0 ? `Workflow: ${activeWorkflowCount}` : 'Workflow чисты'}
+                                        </StatusBadge>
+                                        <StatusBadge tone={updateTone}>
+                                            <Download size={13} />
+                                            {updateLabel}
+                                        </StatusBadge>
+                                    </>
+                                ) : (
+                                    <>
+                                        <StatusBadge tone="ok">
+                                            <BadgeInfo size={13} />
+                                            {currentRoleLabel}
+                                        </StatusBadge>
+                                        <StatusBadge tone="checking">
+                                            <Info size={13} />
+                                            {location.pathname}
+                                        </StatusBadge>
+                                        <StatusBadge tone="warning">
+                                            <HardDrive size={13} />
+                                            Desktop-фон недоступен
+                                        </StatusBadge>
+                                    </>
+                                )}
                             </div>
                         </header>
 
@@ -1044,59 +1186,94 @@ export function DesktopStatusCenter() {
 
                             {activeTab === 'overview' ? (
                                 <div className="grid gap-3">
-                                    <StatusCard
-                                        icon={<Server size={18} />}
-                                        title="Backend API"
-                                        value={diagnostics?.network.apiReachable ? 'Доступен' : 'Недоступен'}
-                                        detail={diagnostics?.network.error || diagnostics?.app.apiOrigin}
-                                        tone={networkTone}
-                                    />
-                                    <StatusCard
-                                        icon={<Video size={18} />}
-                                        title="Видео helper"
-                                        value={diagnostics?.helper.ok ? 'Встроенный helper готов' : 'Требует внимания'}
-                                        detail={diagnostics?.helper.startup_error ? `Startup: ${diagnostics.helper.startup_error}` : diagnostics?.helper.error ? `Runtime: ${diagnostics.helper.error}` : diagnostics?.helper.helper_version}
-                                        tone={helperTone}
-                                    />
-                                    <StatusCard
-                                        icon={<Activity size={18} />}
-                                        title="Media workflows"
-                                        value={(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Ожидает вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Пауза offline: ${diagnostics?.workflows?.blockedOffline}` : activeWorkflowCount > 0 ? `В работе: ${activeWorkflowCount}` : failedWorkflowCount > 0 ? `Workflow с ошибкой: ${failedWorkflowCount}` : 'Фоновых workflow нет'}
-                                        detail="Photo Tool и Video Tool продолжают работу после закрытия страницы и поднимаются после перезапуска HQ."
-                                        tone={workflowTone}
-                                    />
-                                    <StatusCard
-                                        icon={<UploadCloud size={18} />}
-                                        title="Media uploads"
-                                        value={queueCounts.blockedAuth > 0 ? `Ожидает вход: ${queueCounts.blockedAuth}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : queueCounts.failed > 0 ? `Ошибок: ${queueCounts.failed}` : 'Очередь без активных задач'}
-                                        detail="Photo Tool и Video Tool загружают медиа через локальную очередь."
-                                        tone={queueTone}
-                                    />
-                                    <StatusCard
-                                        icon={<HardDrive size={18} />}
-                                        title="Обновления"
-                                        value={updateLabel}
-                                        detail={isUpdateNotConfigured ? 'Manifest обновлений не опубликован.' : updateError || 'Проверка обновлений работает отдельно от API.'}
-                                        tone={updateTone}
-                                    />
-                                    <StatusCard
-                                        icon={<TestTube2 size={18} />}
-                                        title="Диагностика партии"
-                                        value={batchDiagnosticsLog.status === 'success' ? 'Последняя проверка успешна' : batchDiagnosticsLog.status === 'failed' ? 'Есть ошибка проверки' : batchDiagnosticsLog.status === 'running' ? 'Выполняется' : 'Готова к запуску'}
-                                        detail={batchDiagnosticsLog.batchId || 'Проверяет заказ, партию, фото, видео, QR и clone.'}
-                                        tone={batchDiagnosticsLog.status === 'failed' ? 'error' : batchDiagnosticsLog.status === 'running' ? 'checking' : 'ok'}
-                                    />
-                                    <StatusCard
-                                        icon={<HardDrive size={18} />}
-                                        title="Локальный render"
-                                        value="Медиа/PDF собираются на Mac"
-                                        detail="Сервер остается источником данных и файлов."
-                                        tone="ok"
-                                    />
+                                    {isDesktopRuntime ? (
+                                        <>
+                                            <StatusCard
+                                                icon={<Server size={18} />}
+                                                title="Backend API"
+                                                value={diagnostics?.network.apiReachable ? 'Доступен' : 'Недоступен'}
+                                                detail={diagnostics?.network.error || diagnostics?.app.apiOrigin}
+                                                tone={networkTone}
+                                            />
+                                            <StatusCard
+                                                icon={<Video size={18} />}
+                                                title="Видео helper"
+                                                value={diagnostics?.helper.ok ? 'Встроенный helper готов' : 'Требует внимания'}
+                                                detail={diagnostics?.helper.startup_error ? `Startup: ${diagnostics.helper.startup_error}` : diagnostics?.helper.error ? `Runtime: ${diagnostics.helper.error}` : diagnostics?.helper.helper_version}
+                                                tone={helperTone}
+                                            />
+                                            <StatusCard
+                                                icon={<Activity size={18} />}
+                                                title="Media workflows"
+                                                value={(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Ожидает вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Пауза offline: ${diagnostics?.workflows?.blockedOffline}` : activeWorkflowCount > 0 ? `В работе: ${activeWorkflowCount}` : failedWorkflowCount > 0 ? `Workflow с ошибкой: ${failedWorkflowCount}` : 'Фоновых workflow нет'}
+                                                detail="Photo Tool и Video Tool продолжают работу после закрытия страницы и поднимаются после перезапуска HQ."
+                                                tone={workflowTone}
+                                            />
+                                            <StatusCard
+                                                icon={<UploadCloud size={18} />}
+                                                title="Media uploads"
+                                                value={queueCounts.blockedAuth > 0 ? `Ожидает вход: ${queueCounts.blockedAuth}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : queueCounts.failed > 0 ? `Ошибок: ${queueCounts.failed}` : 'Очередь без активных задач'}
+                                                detail="Photo Tool и Video Tool загружают медиа через локальную очередь."
+                                                tone={queueTone}
+                                            />
+                                            <StatusCard
+                                                icon={<HardDrive size={18} />}
+                                                title="Обновления"
+                                                value={updateLabel}
+                                                detail={isUpdateNotConfigured ? 'Manifest обновлений не опубликован.' : updateError || 'Проверка обновлений работает отдельно от API.'}
+                                                tone={updateTone}
+                                            />
+                                            <StatusCard
+                                                icon={<TestTube2 size={18} />}
+                                                title="Диагностика партии"
+                                                value={batchDiagnosticsLog.status === 'success' ? 'Последняя проверка успешна' : batchDiagnosticsLog.status === 'failed' ? 'Есть ошибка проверки' : batchDiagnosticsLog.status === 'running' ? 'Выполняется' : 'Готова к запуску'}
+                                                detail={batchDiagnosticsLog.batchId || 'Проверяет заказ, партию, фото, видео, QR и clone.'}
+                                                tone={batchDiagnosticsLog.status === 'failed' ? 'error' : batchDiagnosticsLog.status === 'running' ? 'checking' : 'ok'}
+                                            />
+                                            <StatusCard
+                                                icon={<HardDrive size={18} />}
+                                                title="Локальный render"
+                                                value="Медиа/PDF собираются на Mac"
+                                                detail="Сервер остается источником данных и файлов."
+                                                tone="ok"
+                                            />
+                                        </>
+                                    ) : (
+                                        <>
+                                            <StatusCard
+                                                icon={<Server size={18} />}
+                                                title="Backend API"
+                                                value={webStatus.apiReachable ? 'Доступен' : 'Недоступен'}
+                                                detail={webStatus.apiError || `Последняя проверка: ${formatCheckedAt(webStatus.checkedAt)}`}
+                                                tone={webStatus.apiReachable ? 'ok' : webStatus.online ? 'warning' : 'offline'}
+                                            />
+                                            <StatusCard
+                                                icon={<BadgeInfo size={18} />}
+                                                title="Текущая роль"
+                                                value={currentRoleLabel}
+                                                detail="Права и маршруты зависят от активной сессии."
+                                                tone="ok"
+                                            />
+                                            <StatusCard
+                                                icon={<Info size={18} />}
+                                                title="Текущий раздел"
+                                                value={location.pathname}
+                                                detail="Показывает, где именно открыта админка."
+                                                tone="checking"
+                                            />
+                                            <StatusCard
+                                                icon={<HardDrive size={18} />}
+                                                title="Режим запуска"
+                                                value="Обычный браузер"
+                                                detail="Фоновые desktop-очереди, helper и локальные workflow доступны только в HQ desktop app."
+                                                tone="warning"
+                                            />
+                                        </>
+                                    )}
                                 </div>
                             ) : null}
 
-                            {activeTab === 'queue' ? (
+                            {isDesktopRuntime && activeTab === 'queue' ? (
                                 <div className="space-y-3">
                                     <div className="space-y-2">
                                         <div>
@@ -1158,7 +1335,7 @@ export function DesktopStatusCenter() {
                                 </div>
                             ) : null}
 
-                            {activeTab === 'helper' ? (
+                            {isDesktopRuntime && activeTab === 'helper' ? (
                                 <div className="space-y-3">
                                     <StatusCard
                                         icon={<Video size={18} />}
@@ -1197,7 +1374,7 @@ export function DesktopStatusCenter() {
                                 </div>
                             ) : null}
 
-                            {activeTab === 'updates' ? (
+                            {isDesktopRuntime && activeTab === 'updates' ? (
                                 <div className="space-y-3">
                                     <StatusCard
                                         icon={<Download size={18} />}
@@ -1246,7 +1423,7 @@ export function DesktopStatusCenter() {
                                 </div>
                             ) : null}
 
-                            {activeTab === 'diagnostics' ? (
+                            {isDesktopRuntime && activeTab === 'diagnostics' ? (
                                 <div className="space-y-3">
                                     <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
                                         <div className="flex items-start gap-3">

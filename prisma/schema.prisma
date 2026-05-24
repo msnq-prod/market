@@ -634,11 +634,17 @@ model AuditLog {
   user_id   String?
   action    String
   details   Json?
+  request_id String?
+  entity_type String?
+  entity_id String?
+  actor_role String?
   timestamp DateTime @default(now())
 
   user User? @relation(fields: [user_id], references: [id])
 
   @@index([user_id])
+  @@index([request_id])
+  @@index([entity_type, entity_id])
   @@map("audit_logs")
 }
 

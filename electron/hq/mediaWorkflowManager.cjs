@@ -12,8 +12,8 @@ const ACTIVE_VIDEO_PHASES = new Set([
     'importing_sources',
     'rendering_intro',
     'rendering_outputs',
-    'queueing_uploads',
-    'verifying_uploads',
+    'uploading_outputs',
+    'verifying',
     'paused_offline',
     'auth_required'
 ]);
@@ -30,6 +30,7 @@ const IMAGE_CONVERT_EXTENSIONS = new Set(['.heic', '.heif']);
 const RETRY_DELAY_MS = 3_000;
 const VERIFY_DELAY_MS = 1_200;
 const HELPER_BASE_URL = 'http://127.0.0.1:3012';
+const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 const VIDEO_EXPORT_CROSSFADE_MS = 200;
 const STATE_VERSION = 2;
 const EVENT_BUFFER_SIZE = 10;
@@ -213,7 +214,7 @@ const buildWorkflowSnapshot = (workflow) => {
 };
 
 class MediaWorkflowManager extends EventEmitter {
-    constructor({ rootDir, stagedFilesDir, mediaQueue, getApiOrigin, getAccessToken }) {
+    constructor({ rootDir, stagedFilesDir, mediaQueue, getApiOrigin, getAccessToken, getAppOrigin }) {
         super();
         this.rootDir = rootDir;
         this.stagedFilesDir = stagedFilesDir;
@@ -221,6 +222,7 @@ class MediaWorkflowManager extends EventEmitter {
         this.mediaQueue = mediaQueue;
         this.getApiOrigin = getApiOrigin;
         this.getAccessToken = getAccessToken;
+        this.getAppOrigin = getAppOrigin || getApiOrigin;
         this.workflows = [];
         this.processing = false;
         this.persistPromise = Promise.resolve();
@@ -243,8 +245,54 @@ class MediaWorkflowManager extends EventEmitter {
             const parsed = JSON.parse(raw);
             const workflows = Array.isArray(parsed?.workflows) ? parsed.workflows : [];
             this.workflows = workflows.filter(isRecord).map((workflow) => this.normalizeLoadedWorkflow(workflow));
+            await this.validateLoadedVideoSources();
         } catch {
             this.workflows = [];
+        }
+    }
+
+    async validateLoadedVideoSources() {
+        let changed = false;
+        for (const workflow of this.workflows) {
+            if (workflow.kind !== 'VIDEO_EXPORT_WORKFLOW' || TERMINAL_PHASES.has(workflow.phase)) {
+                continue;
+            }
+
+            for (const source of workflow.sources) {
+                if (!source.cachePath) {
+                    continue;
+                }
+
+                const exists = await fsp.stat(source.cachePath).then((stat) => stat.isFile()).catch(() => false);
+                if (!exists) {
+                    workflow.phase = 'failed';
+                    workflow.lastError = 'local_cache_missing';
+                    workflow.blockingReason = 'local_cache_missing';
+                    workflow.nextAttemptAt = 0;
+                    workflow.updatedAt = nowIso();
+                    appendEvent(workflow, 'failed', { reason: 'local_cache_missing' });
+                    changed = true;
+                    break;
+                }
+
+                if (source.checksumSha256) {
+                    const actualChecksum = await sha256File(source.cachePath).catch(() => '');
+                    if (actualChecksum && actualChecksum !== source.checksumSha256) {
+                        workflow.phase = 'failed';
+                        workflow.lastError = 'local_cache_missing';
+                        workflow.blockingReason = 'local_cache_missing';
+                        workflow.nextAttemptAt = 0;
+                        workflow.updatedAt = nowIso();
+                        appendEvent(workflow, 'failed', { reason: 'local_cache_checksum_mismatch' });
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            await this.persist();
         }
     }
 
@@ -397,7 +445,7 @@ class MediaWorkflowManager extends EventEmitter {
             checksumSha256: source.checksumSha256 || '',
             lastModified: Number(source.lastModified || 0) || 0,
             fileId: source.fileId,
-            cachePath: fileCachePathFor(this.stagedFilesDir, source.fileId),
+            cachePath: source.cachePath || fileCachePathFor(this.stagedFilesDir, source.fileId),
             fingerprint: source.fingerprint || null
         }));
         const outputs = Array.isArray(payload.renderManifest?.outputs) ? payload.renderManifest.outputs : [];
@@ -558,7 +606,18 @@ class MediaWorkflowManager extends EventEmitter {
 
     async helperRequest(pathname, init = {}, fallbackMessage = 'Helper недоступен.') {
         try {
-            const response = await fetch(`${HELPER_BASE_URL}${pathname}`, init);
+            const method = String(init.method || 'GET').toUpperCase();
+            const headers = new Headers(init.headers || {});
+
+            if (method !== 'GET' && method !== 'HEAD') {
+                headers.set('Origin', this.getAppOrigin());
+                headers.set('X-Stones-Video-Helper-Version', HELPER_PROTOCOL_VERSION);
+            }
+
+            const response = await fetch(`${HELPER_BASE_URL}${pathname}`, {
+                ...init,
+                headers
+            });
             return await parseJsonResponse(response, fallbackMessage);
         } catch (error) {
             throw normalizeFailure(error, fallbackMessage);
@@ -1041,7 +1100,7 @@ class MediaWorkflowManager extends EventEmitter {
             workflow.uploadJobIds[serialNumber] = queuedJob.id;
         }
 
-        workflow.phase = 'queueing_uploads';
+        workflow.phase = 'uploading_outputs';
         workflow.updatedAt = nowIso();
         await this.markChanged();
     }
@@ -1169,7 +1228,7 @@ class MediaWorkflowManager extends EventEmitter {
         workflow.updatedAt = nowIso();
         await this.markChanged();
         if (hasActiveJobs) {
-            workflow.phase = 'verifying_uploads';
+            workflow.phase = 'verifying';
             workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
             await this.markChanged();
             return false;
@@ -1267,7 +1326,7 @@ class MediaWorkflowManager extends EventEmitter {
                 }
 
                 if (Object.keys(workflow.uploadJobIds).length > 0) {
-                    await this.setWorkflowPhase(workflow, 'verifying_uploads', { nextAttemptAt: Date.now() + VERIFY_DELAY_MS, lastError: '' });
+                    await this.setWorkflowPhase(workflow, 'verifying', { nextAttemptAt: Date.now() + VERIFY_DELAY_MS, lastError: '' });
                     return;
                 }
 
@@ -1276,11 +1335,11 @@ class MediaWorkflowManager extends EventEmitter {
                 return;
             }
 
-            if (workflow.phase === 'queueing_uploads') {
-                await this.setWorkflowPhase(workflow, 'verifying_uploads', { nextAttemptAt: Date.now() + VERIFY_DELAY_MS, lastError: '' });
+            if (workflow.phase === 'uploading_outputs') {
+                await this.setWorkflowPhase(workflow, 'verifying', { nextAttemptAt: Date.now() + VERIFY_DELAY_MS, lastError: '' });
             }
 
-            if (workflow.phase === 'verifying_uploads') {
+            if (workflow.phase === 'verifying') {
                 await this.verifyQueuedUploads(workflow);
             }
         } catch (error) {

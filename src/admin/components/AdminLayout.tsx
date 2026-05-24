@@ -1,6 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { DesktopStatusCenter } from './DesktopStatusCenter';
+import { isAdminRole, isAdminWorkspaceRole, isHqStaffRole, isPartnerRole, isSalesStaffRole } from '../../../shared/domain/policy';
 
 const pageMeta: Record<string, { title: string; description: string }> = {
     '/admin': {
@@ -61,9 +62,8 @@ export function AdminLayout() {
     const location = useLocation();
     const token = localStorage.getItem('accessToken');
     const role = localStorage.getItem('userRole');
-    const isHqStaff = role === 'ADMIN' || role === 'MANAGER';
-    const isSalesManager = role === 'SALES_MANAGER';
-    const isStaff = isHqStaff || isSalesManager;
+    const isSalesManager = isSalesStaffRole(role) && !isAdminRole(role);
+    const isStaff = isAdminWorkspaceRole(role);
     const isDev = import.meta.env.DEV;
     const hasAdminAccess = isStaff || isDev;
     const salesRoutes = new Set([
@@ -81,13 +81,13 @@ export function AdminLayout() {
     }
 
     if (!hasAdminAccess) {
-        if (role === 'FRANCHISEE') {
+        if (isPartnerRole(role)) {
             return <Navigate to="/partner/dashboard" replace />;
         }
         return <Navigate to="/" replace />;
     }
 
-    if (adminOnlyRoutes.has(location.pathname) && role !== 'ADMIN') {
+    if (adminOnlyRoutes.has(location.pathname) && !isAdminRole(role)) {
         return <Navigate to="/admin" replace />;
     }
 
@@ -95,7 +95,7 @@ export function AdminLayout() {
         return <Navigate to="/admin/orders" replace />;
     }
 
-    if (role === 'MANAGER' && salesRoutes.has(location.pathname)) {
+    if (isHqStaffRole(role) && !isAdminRole(role) && salesRoutes.has(location.pathname)) {
         return <Navigate to="/admin" replace />;
     }
 

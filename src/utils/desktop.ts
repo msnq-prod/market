@@ -138,8 +138,7 @@ export type StonesMediaWorkflowPhase =
     | 'importing_sources'
     | 'rendering_intro'
     | 'rendering_outputs'
-    | 'queueing_uploads'
-    | 'verifying_uploads'
+    | 'uploading_outputs'
     | 'paused_offline'
     | 'auth_required'
     | 'failed'
@@ -238,6 +237,12 @@ export type StonesDesktopApi = {
     stageMediaQueueFileStart: (fileMeta: { fileId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
     stageMediaQueueFileChunk: (fileId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
     stageMediaQueueFileFinish: (fileId: string) => Promise<{ fileId: string; size: number; checksumSha256: string }>;
+    stageVideoSourceStart: (fileMeta: { stagedSourceId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
+    stageVideoSourceChunk: (stagedSourceId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
+    stageVideoSourceFinish: (stagedSourceId: string) => Promise<{ stagedSourceId: string; cachePath: string; size: number; checksumSha256: string }>;
+    saveVideoDraft: (payload: unknown) => Promise<unknown>;
+    getVideoDraft: (batchId: string) => Promise<unknown>;
+    discardVideoDraft?: (batchId: string) => Promise<{ ok: true }>;
     getMediaQueueSnapshot: () => Promise<StonesMediaQueueSnapshot>;
     getMediaWorkflowSnapshot: () => Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue: (callback: (snapshot: StonesMediaQueueSnapshot) => void) => () => void;
@@ -247,6 +252,7 @@ export type StonesDesktopApi = {
     enqueueVideoRenderUpload: (payload: unknown) => Promise<StonesMediaQueueJob>;
     startPhotoApplyWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
     startVideoExportWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
+    startVideoWorkflow?: (batchId: string) => Promise<StonesMediaWorkflow>;
     retryMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     cancelMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
@@ -300,6 +306,36 @@ export const stageDesktopFile = async (file: File) => {
 };
 
 export const stageFileForMediaQueue = stageDesktopFile;
+
+export const stageDesktopVideoSourceFile = async (file: File) => {
+    const desktop = window.stonesDesktop;
+    if (!desktop) {
+        throw new Error('Desktop staging недоступен.');
+    }
+
+    const { fileId } = await desktop.stageVideoSourceStart({
+        name: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        size: file.size
+    });
+    const reader = file.stream().getReader();
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+
+            const chunk = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+            await desktop.stageVideoSourceChunk(fileId, chunk);
+        }
+    } finally {
+        reader.releaseLock();
+    }
+
+    return desktop.stageVideoSourceFinish(fileId);
+};
 
 export const waitForMediaQueueJob = (jobId: string) => new Promise<StonesMediaQueueJob>((resolve, reject) => {
     const desktop = window.stonesDesktop;

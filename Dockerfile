@@ -20,13 +20,25 @@ COPY package*.json ./
 COPY prisma ./prisma
 
 RUN --mount=type=cache,target=/tmp/.npm \
-    npm ci --prefer-offline --no-audit --no-fund
+    sh -lc 'attempt=1; \
+    while [ "$attempt" -le 4 ]; do \
+        npm ci --prefer-offline --no-audit --no-fund && exit 0; \
+        echo "npm ci failed on attempt $attempt, retrying..."; \
+        rm -rf node_modules; \
+        attempt=$((attempt + 1)); \
+        sleep 5; \
+    done; \
+    exit 1'
 RUN npx prisma generate
 
 FROM deps AS builder
 
 ARG VITE_VIDEO_HELPER_DOWNLOAD_URL=""
+ARG VITE_SENTRY_DSN_FRONTEND=""
+ARG VITE_SENTRY_ENVIRONMENT="production"
 ENV VITE_VIDEO_HELPER_DOWNLOAD_URL=${VITE_VIDEO_HELPER_DOWNLOAD_URL}
+ENV VITE_SENTRY_DSN_FRONTEND=${VITE_SENTRY_DSN_FRONTEND}
+ENV VITE_SENTRY_ENVIRONMENT=${VITE_SENTRY_ENVIRONMENT}
 
 COPY . .
 RUN npm run typecheck \
@@ -37,7 +49,7 @@ FROM deps AS prod-deps
 
 RUN --mount=type=cache,target=/tmp/.npm \
     npm prune --omit=dev --no-audit --no-fund \
-    && npm uninstall electron electron-builder ffmpeg-static ffprobe-static --no-save --no-audit --no-fund \
+    && npm uninstall electron electron-builder --no-save --no-audit --no-fund \
     && npx prisma generate \
     && find node_modules -type f -name '*.map' -delete
 
@@ -48,7 +60,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     npm_config_cache=/tmp/.npm
 
-RUN apk add --no-cache openssl ffmpeg su-exec
+RUN apk add --no-cache openssl su-exec
 
 COPY package*.json ./
 COPY prisma ./prisma
@@ -67,3 +79,7 @@ EXPOSE 3001
 
 ENTRYPOINT ["/bin/sh", "./docker/entrypoint.sh"]
 CMD ["node", "build/server/index.js"]
+
+FROM runtime AS video-runtime
+
+RUN apk add --no-cache ffmpeg

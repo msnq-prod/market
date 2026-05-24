@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { apiFetch } from '../../utils/apiFetch';
 
 interface TranslationModalProps {
     isOpen: boolean;
@@ -38,7 +39,7 @@ export function TranslationModal({ isOpen, onClose, baseData, onSave, type }: Tr
         if (isOpen) {
             setSaveError('');
             setIsSaving(false);
-            fetch('/api/languages')
+            apiFetch('/api/languages')
                 .then(res => res.json())
                 .then((data: Language[]) => {
                     const defaultLanguage = data.find((language) => language.is_default) || null;

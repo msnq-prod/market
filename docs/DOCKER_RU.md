@@ -89,6 +89,9 @@ Production compose рассчитан на один сервер и один п�
 - `app`
 - `video-processor`
 - `telegram-worker`
+- `loki`
+- `promtail`
+- `grafana`
 
 Наружу публикуются только:
 
@@ -131,6 +134,15 @@ cp .env.production.example .env.production
 - `STONES_HELPER_UPDATE_BASE_URL` — опциональный base URL для update manifest и DMG, по умолчанию `${STONES_HELPER_ALLOWED_ORIGIN}/uploads/downloads`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL` — опционально, если нужен внешний URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
 - `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` — опционально, если нужен отдельный arm64 URL вместо same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
+- `LOG_LEVEL`
+- `LOG_PRETTY`
+- `LOG_SLOW_QUERY_MS`
+- `LOG_PAYLOAD_MAX_BYTES`
+- `LOG_REDACT_FIELDS`
+- `SENTRY_DSN_BACKEND` — DSN backend SDK; можно указывать внешний self-hosted Sentry/Sentry-compatible endpoint
+- `SENTRY_DSN_FRONTEND` — DSN, который пробрасывается в frontend build как `VITE_SENTRY_DSN_FRONTEND`
+- `SENTRY_ENVIRONMENT`
+- `GRAFANA_ADMIN_PASSWORD`
 
 Инварианты:
 
@@ -218,6 +230,8 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail
 - открыть витрину;
 - открыть `/admin/login`;
 - открыть `/partner/login`;
+- открыть Grafana на `127.0.0.1:3002`;
+- проверить, что в Loki видны логи `app`, `video-processor`, `telegram-worker`.
 - открыть хотя бы один `clone` URL;
 - проверить HQ video flow и QR при необходимости.
 

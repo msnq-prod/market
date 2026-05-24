@@ -213,11 +213,15 @@ npm run ops:backup
 - `GET /healthz` должен возвращать `200`
 - `docker compose ps` не должен показывать restarting/unhealthy
 - логи смотреть через `docker compose logs`
+- structured logs агрегируются в `Loki`
+- dashboards доступны в `Grafana` на `127.0.0.1:3002`
 
 ### Что проверять регулярно
 
 - свободное место на диске;
 - размер `stones_mysql_data`;
+- наличие событий `request-finish`, `db-query`, `video-job-failed`, `telegram-job-failed`, `acl-deny` в Loki;
+- корректность `x-request-id` между frontend/browser logs и backend logs.
 - размер `stones_uploads`;
 - размер `ops/backups/mysql/`;
 - свежесть последнего backup.

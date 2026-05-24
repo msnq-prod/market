@@ -1,8 +1,10 @@
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import fs from 'fs/promises';
+import { createRequire } from 'module';
 import path from 'path';
 import { promisify } from 'util';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import {
     buildVideoJobPublicOutputDir,
     buildVideoJobPublicRelativePath,
@@ -18,9 +20,15 @@ import {
     type VideoResultManifestEntry
 } from './services/videoProcessing.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
+import { initServerObservability, logDomainEvent } from './services/logger.ts';
+import { prisma } from './services/prisma.ts';
 
-const prisma = new PrismaClient();
+initServerObservability('video-processor');
+const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
+const ffmpegBinary = (require('ffmpeg-static') as string | null) ?? 'ffmpeg';
+const ffprobeModule = require('ffprobe-static') as { path?: string | null } | null;
+const ffprobeBinary = ffprobeModule?.path ?? 'ffprobe';
 
 type ClaimedVideoJob = Prisma.VideoProcessingJobGetPayload<{
     include: {
@@ -142,8 +150,20 @@ const safeRemove = async (targetPath: string) => {
     await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
 };
 
+const resolveBinaryPath = (binary: 'ffmpeg' | 'ffprobe') => {
+    const configuredPath = binary === 'ffmpeg'
+        ? process.env.FFMPEG_PATH || ffmpegBinary
+        : process.env.FFPROBE_PATH || ffprobeBinary;
+
+    if (configuredPath && existsSync(configuredPath)) {
+        return configuredPath;
+    }
+
+    return binary;
+};
+
 const runBinary = async (binary: string, args: string[]) => {
-    return execFileAsync(binary, args, {
+    return execFileAsync(resolveBinaryPath(binary as 'ffmpeg' | 'ffprobe'), args, {
         maxBuffer: 16 * 1024 * 1024
     });
 };
@@ -614,6 +634,13 @@ const processJob = async (job: ClaimedVideoJob, config: VideoProcessorRuntimeCon
             safeRemove(path.join(path.dirname(workDir))),
             ...completedOlderJobs.map((completedJob) => safeRemove(buildVideoJobPublicOutputDir(job.batch_id, completedJob.version)))
         ]);
+        logDomainEvent('video-processor', 'video-job-completed', {
+            job_id: job.id,
+            entity_type: 'video_processing_job',
+            entity_id: job.id,
+            batch_id: job.batch_id,
+            output_count: completedManifest.length
+        });
         logDiagnostic({
             event: 'summary',
             stage: 'job',
@@ -645,6 +672,14 @@ const processJob = async (job: ClaimedVideoJob, config: VideoProcessorRuntimeCon
             job_concurrency: config.jobConcurrency,
             ffmpeg_threads: config.ffmpegThreads
         });
+        logDomainEvent('video-processor', 'video-job-failed', {
+            job_id: job.id,
+            entity_type: 'video_processing_job',
+            entity_id: job.id,
+            batch_id: job.batch_id,
+            processed_output_count: processedOutputs,
+            error
+        }, 'warn');
         throw Object.assign(error instanceof Error ? error : new Error('Неизвестная ошибка обработки видео.'), {
             processedOutputs
         });
@@ -695,6 +730,7 @@ const main = async () => {
     ensureVideoProcessingDirectories();
     await assertBinaryExists('ffprobe');
     await assertBinaryExists('ffmpeg');
+    log(`Using ffprobe=${resolveBinaryPath('ffprobe')} ffmpeg=${resolveBinaryPath('ffmpeg')}`);
     log(
         `Started with poll=${config.pollIntervalMs}ms workers=${config.workerCount} jobConcurrency=${config.jobConcurrency} ffmpegThreads=${config.ffmpegThreads}`
     );

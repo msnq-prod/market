@@ -1,7 +1,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls as DreiOrbitControls } from '@react-three/drei'
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Navigate, Routes, Route, useLocation } from 'react-router-dom'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { Earth } from './components/Earth'
@@ -20,6 +20,7 @@ import { Products } from './admin/pages/Products'
 import { Brandbook } from './admin/pages/Brandbook'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
+import { logReactError, logRouteChange } from './utils/clientLogger'
 
 const VideoTool = React.lazy(() => import('./admin/pages/VideoTool').then((module) => ({ default: module.VideoTool })))
 
@@ -442,6 +443,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
+    logReactError(error, errorInfo)
   }
 
   render() {
@@ -451,6 +453,16 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
     return this.props.children;
   }
+}
+
+function RouteChangeTracker() {
+  const location = useLocation()
+
+  useEffect(() => {
+    logRouteChange(`${location.pathname}${location.search}`)
+  }, [location.pathname, location.search])
+
+  return null
 }
 
 const INITIAL_CAMERA_POSITION: [number, number, number] = [
@@ -597,6 +609,7 @@ import { TelegramBots } from './admin/pages/TelegramBots'
 function App() {
   return (
     <BrowserRouter>
+        <RouteChangeTracker />
         <Routes>
         <Route path="/" element={<MainApp />} />
         <Route path="/clone/:serialNumber" element={<DigitalClone />} />

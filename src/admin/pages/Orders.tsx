@@ -3,6 +3,12 @@ import { PencilLine, RefreshCw, Save, Search, Trash2, Truck, X } from 'lucide-re
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
 import type { OrderHistory, OrderStatus, ReturnReason } from '../../data/db';
+import {
+    getOrderStatusMeta,
+    isClosedOrderStatus,
+    isCustomerEditableOrderStatus,
+    isReturnOrderStatus
+} from '../../../shared/domain/policy';
 
 type OrderFilter = 'ACTIVE' | 'NEW' | 'IN_PROGRESS' | 'PACKED' | 'DELIVERY' | 'RETURNS' | 'CLOSED';
 
@@ -14,30 +20,6 @@ type OrderEditForm = {
     contact_email: string;
     comment: string;
     internal_note: string;
-};
-
-const orderStatusLabels: Record<OrderStatus, string> = {
-    NEW: 'НОВАЯ',
-    IN_PROGRESS: 'В РАБОТЕ',
-    PACKED: 'УПАКОВАН',
-    SHIPPED: 'ОТПРАВЛЕН',
-    RECEIVED: 'ПОЛУЧЕН',
-    RETURN_REQUESTED: 'ВОЗВРАТ ЗАПРОШЕН',
-    RETURN_IN_TRANSIT: 'ВОЗВРАТ В ПУТИ',
-    RETURNED: 'ВОЗВРАЩЁН',
-    CANCELLED: 'ОТМЕНЁН'
-};
-
-const orderStatusClasses: Record<OrderStatus, string> = {
-    NEW: 'bg-white/[0.06] text-gray-100 border border-white/12',
-    IN_PROGRESS: 'bg-amber-500/20 text-amber-100 border border-amber-500/40',
-    PACKED: 'bg-white/[0.06] text-gray-100 border border-white/12',
-    SHIPPED: 'bg-white/[0.06] text-gray-100 border border-white/12',
-    RECEIVED: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40',
-    RETURN_REQUESTED: 'bg-orange-500/20 text-orange-100 border border-orange-500/40',
-    RETURN_IN_TRANSIT: 'bg-rose-500/20 text-rose-100 border border-rose-500/40',
-    RETURNED: 'bg-fuchsia-500/20 text-fuchsia-100 border border-fuchsia-500/40',
-    CANCELLED: 'bg-red-500/20 text-red-200 border border-red-500/40'
 };
 
 const filterLabels: Record<OrderFilter, string> = {
@@ -69,9 +51,6 @@ const formatOrderDate = (value: string): string => {
 };
 
 const comparableValue = (value: string | null | undefined): string => value?.trim() || '';
-const isClosed = (status: OrderStatus): boolean => status === 'RECEIVED' || status === 'RETURNED' || status === 'CANCELLED';
-const isReturnFlow = (status: OrderStatus): boolean => status === 'RETURN_REQUESTED' || status === 'RETURN_IN_TRANSIT' || status === 'RETURNED';
-
 const shortAddress = (value: string | null | undefined): string => {
     if (!value) return 'Адрес не указан';
     if (value.length <= 56) return value;
@@ -93,7 +72,7 @@ const createEditForm = (order: SalesOrder | null): OrderEditForm => ({
 
 const buildOrderPatchPayload = (order: SalesOrder, form: OrderEditForm) => {
     const payload: Partial<OrderEditForm> = {};
-    const allowCustomerEdits = order.status === 'NEW' || order.status === 'IN_PROGRESS' || order.status === 'PACKED';
+    const allowCustomerEdits = isCustomerEditableOrderStatus(order.status);
 
     if (allowCustomerEdits && comparableValue(order.delivery_address) !== comparableValue(form.delivery_address)) {
         payload.delivery_address = form.delivery_address;
@@ -211,9 +190,9 @@ export function Orders() {
         if (filter === 'IN_PROGRESS') return searchedOrders.filter((order) => order.status === 'IN_PROGRESS');
         if (filter === 'PACKED') return searchedOrders.filter((order) => order.status === 'PACKED');
         if (filter === 'DELIVERY') return searchedOrders.filter((order) => order.status === 'SHIPPED');
-        if (filter === 'RETURNS') return searchedOrders.filter((order) => isReturnFlow(order.status));
-        if (filter === 'CLOSED') return searchedOrders.filter((order) => isClosed(order.status));
-        return searchedOrders.filter((order) => !isClosed(order.status));
+        if (filter === 'RETURNS') return searchedOrders.filter((order) => isReturnOrderStatus(order.status));
+        if (filter === 'CLOSED') return searchedOrders.filter((order) => isClosedOrderStatus(order.status));
+        return searchedOrders.filter((order) => !isClosedOrderStatus(order.status));
     }, [filter, searchedOrders]);
 
     const selectedOrder = useMemo(() => (
@@ -250,17 +229,17 @@ export function Orders() {
     }, [isEditing, selectedOrder]);
 
     const summary = useMemo(() => ({
-        active: searchedOrders.filter((order) => !isClosed(order.status)).length,
+        active: searchedOrders.filter((order) => !isClosedOrderStatus(order.status)).length,
         fresh: searchedOrders.filter((order) => order.status === 'NEW').length,
         inWork: searchedOrders.filter((order) => order.status === 'IN_PROGRESS').length,
         delivery: searchedOrders.filter((order) => order.status === 'PACKED' || order.status === 'SHIPPED').length,
-        returns: searchedOrders.filter((order) => isReturnFlow(order.status)).length,
-        closed: searchedOrders.filter((order) => isClosed(order.status)).length
+        returns: searchedOrders.filter((order) => isReturnOrderStatus(order.status)).length,
+        closed: searchedOrders.filter((order) => isClosedOrderStatus(order.status)).length
     }), [searchedOrders]);
 
     const hasFormChanges = selectedOrder ? Object.keys(buildOrderPatchPayload(selectedOrder, form)).length > 0 : false;
     const shipmentChanged = comparableValue(selectedOrder?.shipment?.tracking_number) !== comparableValue(trackingNumber);
-    const customerFieldsLocked = selectedOrder ? !(selectedOrder.status === 'NEW' || selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'PACKED') : false;
+    const customerFieldsLocked = selectedOrder ? !isCustomerEditableOrderStatus(selectedOrder.status) : false;
 
     const replaceOrder = (updated: SalesOrder) => {
         setOrders((prev) => prev.map((order) => order.id === updated.id ? updated : order));
@@ -517,8 +496,10 @@ export function Orders() {
                     ) : (
                         <div className="space-y-3">
                             {filteredOrders.map((order) => (
-                                <div
+                                <button
+                                    type="button"
                                     key={order.id}
+                                    onClick={() => handleSelectOrder(order)}
                                     className={`w-full rounded-2xl border p-4 text-left transition-colors ${selectedOrder?.id === order.id
                                         ? 'border-white/16 bg-white/[0.055]'
                                         : 'border-white/6 bg-[#0f1217]'
@@ -529,8 +510,8 @@ export function Orders() {
                                             <div className="text-sm font-medium text-white">Заказ #{order.id.slice(0, 8)}</div>
                                             <div className="mt-1 text-xs text-gray-500">{formatOrderDate(order.created_at)}</div>
                                         </div>
-                                        <span className={`px-2.5 py-1 rounded-full text-[11px] font-medium ${orderStatusClasses[order.status]}`}>
-                                            {orderStatusLabels[order.status]}
+                                        <span className={`px-2.5 py-1 rounded-full text-[11px] font-medium ${getOrderStatusMeta(order.status).className}`}>
+                                            {getOrderStatusMeta(order.status).label}
                                         </span>
                                     </div>
 
@@ -542,15 +523,11 @@ export function Orders() {
                                     )}
                                     <div className="mt-3 flex items-center justify-between">
                                         <span className="font-mono text-sm text-white">{formatRub(order.total)}</span>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleSelectOrder(order)}
-                                            className="rounded-lg border border-white/10 bg-[#1b1e24] px-3 py-1.5 text-xs font-medium text-white hover:bg-white/[0.07]"
-                                        >
+                                        <span className="rounded-lg border border-white/10 bg-[#1b1e24] px-3 py-1.5 text-xs font-medium text-white">
                                             Открыть
-                                        </button>
+                                        </span>
                                     </div>
-                                </div>
+                                </button>
                             ))}
                         </div>
                     )}
@@ -567,8 +544,8 @@ export function Orders() {
                                 <div className="space-y-3">
                                     <div className="flex flex-wrap items-center gap-3">
                                         <h2 className="text-2xl font-semibold text-white">Заказ #{selectedOrder.id.slice(0, 8)}</h2>
-                                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${orderStatusClasses[selectedOrder.status]}`}>
-                                            {orderStatusLabels[selectedOrder.status]}
+                                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getOrderStatusMeta(selectedOrder.status).className}`}>
+                                            {getOrderStatusMeta(selectedOrder.status).label}
                                         </span>
                                     </div>
 
@@ -752,7 +729,7 @@ export function Orders() {
                                         multiline
                                     />
 
-                                    {(selectedOrder.status === 'SHIPPED' || isReturnFlow(selectedOrder.status)) && (
+                                    {(selectedOrder.status === 'SHIPPED' || isReturnOrderStatus(selectedOrder.status)) && (
                                         <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
                                             <span className="text-xs uppercase tracking-wider text-gray-500">Причина возврата</span>
                                             <select
@@ -865,7 +842,7 @@ export function Orders() {
                                         <div key={event.id} className="relative pl-6">
                                             <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-blue-500 ring-4 ring-[#0f1217]" />
                                             <div className="flex flex-wrap items-center justify-between gap-3">
-                                                <div className="text-sm font-medium text-white">{orderStatusLabels[event.to_status]}</div>
+                                                <div className="text-sm font-medium text-white">{getOrderStatusMeta(event.to_status).label}</div>
                                                 <div className="text-xs text-gray-500">{formatOrderDate(event.created_at)}</div>
                                             </div>
                                             <div className="mt-1 text-xs text-gray-500">

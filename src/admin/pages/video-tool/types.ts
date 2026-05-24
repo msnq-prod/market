@@ -1,3 +1,5 @@
+import type { Dispatch } from 'react';
+
 export type HelperRequestInit = RequestInit & {
     targetAddressSpace?: 'local';
 };
@@ -130,6 +132,9 @@ export type WorkingSource = SourceFingerprint & {
     role: SourceRole;
     file: File | null;
     helperSourceId: string;
+    stagedSourceId?: string | null;
+    cachePath?: string | null;
+    checksumSha256?: string | null;
     previewUrl: string;
     previewUnavailable: boolean;
 };
@@ -142,6 +147,9 @@ export type VideoToolDraft = {
         role: SourceRole;
         fingerprint: SourceFingerprint;
         helperSourceId: string | null;
+        stagedSourceId?: string | null;
+        cachePath?: string | null;
+        checksumSha256?: string | null;
     }>;
     segments: Segment[];
     sessionId: string | null;
@@ -207,4 +215,70 @@ export type TimelineViewport = {
     visibleStartMs: number;
     visibleDurationMs: number;
     isPanning: boolean;
+};
+
+export type VideoToolState = {
+    data: {
+        payload: VideoToolPayload | null;
+        loading: boolean;
+        error: string;
+    };
+    sources: {
+        items: WorkingSource[];
+        activeSourceIndex: number;
+        introHelperSourceId: string;
+    };
+    timeline: {
+        segments: Segment[];
+        selectedSegmentIndex: number;
+        playheadMs: number;
+        viewport: TimelineViewport;
+        isPlaying: boolean;
+    };
+    helper: {
+        status: HelperStatus;
+        health: HelperHealthPayload | null;
+        issueMessage: string;
+        baseUrl: string;
+        diagnostics: HelperDiagnosticEntry[];
+        accessRequesting: boolean;
+        diagnosticCopied: boolean;
+    };
+    export: {
+        session: VideoExportSessionDetails | null;
+        pendingSerials: string[];
+        renderJobId: string;
+        phase: ExportPhase;
+        message: string;
+        notice: InlineNotice | null;
+    };
+    layout: {
+        previewPanelWidth: number;
+    };
+    workflow: {
+        snapshot: unknown;
+    };
+};
+
+export type VideoToolAction =
+    | { type: 'data/loading' }
+    | { type: 'data/loaded'; payload: VideoToolPayload }
+    | { type: 'data/error'; error: string }
+    | { type: 'sources/set'; sources: WorkingSource[] }
+    | { type: 'timeline/set-segments'; segments: Segment[] }
+    | { type: 'helper/status'; status: HelperStatus; issueMessage?: string }
+    | { type: 'export/session'; session: VideoExportSessionDetails | null }
+    | { type: 'layout/preview-width'; width: number };
+
+export type VideoToolSelectors = {
+    activeSource: WorkingSource | null;
+    activeSegments: Segment[];
+    activeProductCount: number;
+    canExport: boolean;
+};
+
+export type VideoToolController = {
+    state: VideoToolState;
+    selectors: VideoToolSelectors;
+    dispatch: Dispatch<VideoToolAction>;
 };

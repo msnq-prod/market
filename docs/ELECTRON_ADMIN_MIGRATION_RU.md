@@ -218,10 +218,19 @@ Electron уже используется для helper:
 electron/
   hq/
     main.cjs
+    appConfig.cjs
+    localServer.cjs
+    helperRuntime.cjs
+    updates.cjs
+    diagnostics.cjs
+    ipcHandlers.cjs
+    windows.cjs
     preload.cjs
     electron-builder.json
     assets/
 ```
+
+`main.cjs` должен оставаться bootstrap-слоем: lifecycle приложения, single instance, создание окна и graceful shutdown. Runtime-логика shell выносится в отдельные модули без изменения `window.stonesDesktop`.
 
 Добавить scripts:
 

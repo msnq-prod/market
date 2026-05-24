@@ -390,8 +390,9 @@ test('UI e2e: HQ открывает QR-сервис из товаров по к�
 
     await setSession(page, admin);
     await page.goto('/admin/products');
-    await expect(page.getByRole('heading', { name: 'Товары-шаблоны' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Товары' })).toBeVisible();
 
+    await page.getByRole('button', { name: /Карьер «Мирный», Якутия/ }).click();
     await page.getByTestId('product-expand-prod-yak-001').click();
 
     const [printPage] = await Promise.all([
@@ -399,7 +400,7 @@ test('UI e2e: HQ открывает QR-сервис из товаров по к�
         page.getByTestId(`product-batch-qr-${batchId}`).click()
     ]);
     await printPage.waitForURL(/\/admin\/qr\/print/);
-    await expect(printPage.getByText(`Партия: ${batchId}`)).toBeVisible();
+    await expect(printPage.getByRole('button').filter({ hasText: batchId })).toBeVisible();
     await printPage.close();
 });
 

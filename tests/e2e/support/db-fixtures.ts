@@ -50,7 +50,12 @@ const getSeededFranchisee = async () => {
     return franchisee;
 };
 
-async function createCatalogFixtureBase(name: string, description: string, isPublished: boolean): Promise<CatalogFixtureBase> {
+async function createCatalogFixtureBase(
+    name: string,
+    description: string,
+    isPublished: boolean,
+    locationName = 'E2E локация'
+): Promise<CatalogFixtureBase> {
     const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
     const categoryId = `e2e-cat-${suffix}`;
     const locationId = `e2e-loc-${suffix}`;
@@ -82,13 +87,13 @@ async function createCatalogFixtureBase(name: string, description: string, isPub
                 create: [
                     {
                         language_id: EN_LANGUAGE_ID,
-                        name: 'E2E локация',
+                        name: locationName,
                         country: 'Россия',
                         description: 'Локация для автотестов',
                     },
                     {
                         language_id: RU_LANGUAGE_ID,
-                        name: 'E2E локация',
+                        name: locationName,
                         country: 'Россия',
                         description: 'Локация для автотестов',
                     },
@@ -257,8 +262,9 @@ export async function createFinalizeReadyFixture() {
 export async function createWarehouseFixture() {
     const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
     const productName = `Склад E2E ${suffix}`;
+    const locationName = `Склад E2E локация ${suffix}`;
     const description = `Складской товар ${suffix}`;
-    const base = await createCatalogFixtureBase(productName, description, true);
+    const base = await createCatalogFixtureBase(productName, description, true, locationName);
     const firstBatchId = `e2e-wh-batch-a-${suffix}`;
     const secondBatchId = `e2e-wh-batch-b-${suffix}`;
     const updatedTempId = `EDIT-${suffix}`;
@@ -370,7 +376,7 @@ export async function createWarehouseFixture() {
 
     return {
         productName,
-        locationName: 'E2E локация',
+        locationName,
         serialFamily: buildFixtureSerialNumber(serialProduct, collectedDate, 1).slice(0, -3),
         firstBatchId,
         secondBatchId,

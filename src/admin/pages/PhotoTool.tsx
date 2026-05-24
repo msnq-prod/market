@@ -1508,7 +1508,7 @@ export function PhotoTool() {
                                         tone={activePhotoWorkflow ? 'warning' : batchPhotoWorkflow.phase === 'completed' ? 'success' : 'default'}
                                     />
                                 )}
-                                {isDesktopApp && <DesktopStatusCenter />}
+                                <DesktopStatusCenter />
                             </div>
 
                             <button

@@ -2,29 +2,20 @@ import { Prisma, PrismaClient, OrderStatus, ReturnReason, SalesChannel } from '@
 import { sendNewOrderCreatedNotification, sendOrderStatusChangedNotification } from './orderNotifications.ts';
 import { fetchCdekOrderSnapshot, mapCdekSnapshotToOrderProgress } from './cdek.ts';
 import { runTelegramSideEffect, syncTelegramLowStockNotifications } from './telegramNotifications.ts';
+import { logDomainEvent } from './logger.ts';
+import {
+    SALES_HISTORY_ORDER_STATUSES,
+    canTransitionOrder,
+    getOrderProgression,
+    isCustomerEditableOrderStatus,
+    isAdminRole,
+    isReturnOrderStatus,
+    isSalesHistoryOrderStatus,
+    isSalesStaffRole as isSalesStaff
+} from '../../shared/domain/policy.ts';
 
 export type SalesDbClient = PrismaClient | Prisma.TransactionClient;
 
-const SALES_STAFF_ROLES = new Set(['ADMIN', 'SALES_MANAGER']);
-const CUSTOMER_EDITABLE_STATUSES = new Set<OrderStatus>([
-    OrderStatus.NEW,
-    OrderStatus.IN_PROGRESS,
-    OrderStatus.PACKED
-]);
-const CLOSED_ORDER_STATUSES = new Set<OrderStatus>([
-    OrderStatus.RECEIVED,
-    OrderStatus.RETURNED,
-    OrderStatus.CANCELLED
-]);
-const SALES_HISTORY_STATUSES = new Set<OrderStatus>([
-    OrderStatus.RECEIVED,
-    OrderStatus.RETURNED
-]);
-const RETURNABLE_STATUSES = new Set<OrderStatus>([
-    OrderStatus.SHIPPED,
-    OrderStatus.RETURN_REQUESTED,
-    OrderStatus.RETURN_IN_TRANSIT
-]);
 const CUSTOMER_EDITABLE_FIELDS = [
     'delivery_address',
     'contact_phone',
@@ -128,7 +119,6 @@ type StatusTransitionMeta = {
 const createHttpError = (message: string, statusCode: number) => Object.assign(new Error(message), { statusCode });
 const hasOwn = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 const toNumber = (value: Prisma.Decimal | null | undefined) => Number(value || 0);
-const isSalesStaff = (role?: string) => SALES_STAFF_ROLES.has(role || '');
 const toNullableString = (value: unknown): string | null => {
     if (value == null) return null;
     if (typeof value !== 'string') {
@@ -400,7 +390,7 @@ const createStatusEvent = async (
 };
 
 const assertOrderAssignee = (actor: SalesActor, order: SalesOrderRecord) => {
-    if (actor.role === 'ADMIN') {
+    if (isAdminRole(actor.role)) {
         return;
     }
 
@@ -414,74 +404,9 @@ const ensureTransitionAllowed = (currentStatus: OrderStatus, nextStatus: OrderSt
         return;
     }
 
-    const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
-        [OrderStatus.NEW]: [OrderStatus.IN_PROGRESS, OrderStatus.CANCELLED],
-        [OrderStatus.IN_PROGRESS]: [OrderStatus.PACKED, OrderStatus.CANCELLED],
-        [OrderStatus.PACKED]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
-        [OrderStatus.SHIPPED]: [OrderStatus.RECEIVED, OrderStatus.RETURN_REQUESTED],
-        [OrderStatus.RECEIVED]: [],
-        [OrderStatus.RETURN_REQUESTED]: [OrderStatus.RETURN_IN_TRANSIT],
-        [OrderStatus.RETURN_IN_TRANSIT]: [OrderStatus.RETURNED],
-        [OrderStatus.RETURNED]: [],
-        [OrderStatus.CANCELLED]: []
-    };
-
-    if (!allowedTransitions[currentStatus].includes(nextStatus)) {
+    if (!canTransitionOrder(currentStatus, nextStatus)) {
         throw createHttpError('Недопустимый переход статуса заказа.', 400);
     }
-};
-
-const getOrderProgression = (currentStatus: OrderStatus, targetStatus: OrderStatus): OrderStatus[] => {
-    if (currentStatus === targetStatus) {
-        return [];
-    }
-
-    const primaryChain: OrderStatus[] = [
-        OrderStatus.NEW,
-        OrderStatus.IN_PROGRESS,
-        OrderStatus.PACKED,
-        OrderStatus.SHIPPED,
-        OrderStatus.RECEIVED
-    ];
-    const returnChain: OrderStatus[] = [
-        OrderStatus.SHIPPED,
-        OrderStatus.RETURN_REQUESTED,
-        OrderStatus.RETURN_IN_TRANSIT,
-        OrderStatus.RETURNED
-    ];
-
-    if (primaryChain.includes(targetStatus)) {
-        const currentIndex = primaryChain.indexOf(currentStatus);
-        const targetIndex = primaryChain.indexOf(targetStatus);
-        return currentIndex >= 0 && targetIndex > currentIndex
-            ? primaryChain.slice(currentIndex + 1, targetIndex + 1)
-            : [];
-    }
-
-    if (returnChain.includes(targetStatus)) {
-        if (currentStatus === OrderStatus.PACKED) {
-            return [OrderStatus.SHIPPED, ...getOrderProgression(OrderStatus.SHIPPED, targetStatus)];
-        }
-        if (currentStatus === OrderStatus.IN_PROGRESS) {
-            return [OrderStatus.PACKED, OrderStatus.SHIPPED, ...getOrderProgression(OrderStatus.SHIPPED, targetStatus)];
-        }
-        if (currentStatus === OrderStatus.NEW) {
-            return [
-                OrderStatus.IN_PROGRESS,
-                OrderStatus.PACKED,
-                OrderStatus.SHIPPED,
-                ...getOrderProgression(OrderStatus.SHIPPED, targetStatus)
-            ];
-        }
-
-        const currentIndex = returnChain.indexOf(currentStatus);
-        const targetIndex = returnChain.indexOf(targetStatus);
-        return currentIndex >= 0 && targetIndex > currentIndex
-            ? returnChain.slice(currentIndex + 1, targetIndex + 1)
-            : [];
-    }
-
-    return [];
 };
 
 const reserveItemsForOrder = async (db: SalesDbClient, order: SalesOrderRecord) => {
@@ -714,6 +639,13 @@ export const createCustomerOrder = async (
         itemCount: created.items.reduce((sum, item) => sum + item.quantity, 0),
         createdAt: created.created_at.toISOString()
     });
+    logDomainEvent('api', 'sales-order-created', {
+        entity_type: 'order',
+        entity_id: created.id,
+        user_id: actor.id,
+        total: toNumber(created.total),
+        item_count: created.items.reduce((sum, item) => sum + item.quantity, 0)
+    });
 
     return created;
 };
@@ -738,7 +670,7 @@ export const updateSalesOrderFields = async (
             continue;
         }
 
-        if (!CUSTOMER_EDITABLE_STATUSES.has(order.status)) {
+        if (!isCustomerEditableOrderStatus(order.status)) {
             throw createHttpError('Данные клиента на этом этапе доступны только для чтения.', 400);
         }
 
@@ -757,6 +689,12 @@ export const updateSalesOrderFields = async (
         where: { id: order.id },
         data,
         include: salesOrderInclude
+    });
+    logDomainEvent('api', 'sales-order-updated', {
+        entity_type: 'order',
+        entity_id: updated.id,
+        user_id: actor.id,
+        fields: Object.keys(data)
     });
 
     return updated;
@@ -869,6 +807,13 @@ export const transitionSalesOrderStatus = async (
         total: toNumber(updated.total),
         happenedAt: getLatestStatusEventTimestamp(updated)
     });
+    logDomainEvent('api', 'sales-order-status-changed', {
+        entity_type: 'order',
+        entity_id: updated.id,
+        user_id: actor.id,
+        from_status: existing.status,
+        to_status: updated.status
+    });
     await runTelegramSideEffect(() => syncTelegramLowStockNotifications(db, getOrderProductIds(updated)));
 
     return updated;
@@ -915,7 +860,7 @@ export const syncSalesOrderShipment = async (
         }
 
         const progression = mappedProgress.targetStatus
-            ? getOrderProgression(current.status, mappedProgress.targetStatus as OrderStatus)
+            ? getOrderProgression(current.status, mappedProgress.targetStatus) as OrderStatus[]
             : [];
         const appliedTransitions: Array<{
             fromStatus: string | null;
@@ -992,6 +937,13 @@ export const upsertSalesOrderShipment = async (
             throw createHttpError('Заказ не найден.', 404);
         }
 
+        logDomainEvent('api', 'sales-order-shipment-upserted', {
+            entity_type: 'order',
+            entity_id: updated.id,
+            user_id: actor.id,
+            tracking_number: trackingNumber
+        });
+
         return updated;
     });
 };
@@ -1017,6 +969,10 @@ export const softDeleteSalesOrder = async (db: PrismaClient, orderId: string) =>
             deleted_at: new Date()
         }
     });
+    logDomainEvent('api', 'sales-order-soft-deleted', {
+        entity_type: 'order',
+        entity_id: existing.id
+    }, 'warn');
 };
 
 export const listSalesCustomers = async (db: PrismaClient, searchQuery = '') => {
@@ -1337,7 +1293,7 @@ export const listSalesHistory = async (db: PrismaClient, searchQuery = '') => {
     const where: Prisma.OrderWhereInput = {
         deleted_at: null,
         status: {
-            in: [...SALES_HISTORY_STATUSES]
+            in: [...SALES_HISTORY_ORDER_STATUSES] as OrderStatus[]
         }
     };
 
@@ -1367,5 +1323,5 @@ export const listSalesHistory = async (db: PrismaClient, searchQuery = '') => {
 
 export const getSalesOrderStatus = parseOrderStatus;
 export const isSalesStaffRole = isSalesStaff;
-export const isClosedOrderStatus = (status: OrderStatus) => CLOSED_ORDER_STATUSES.has(status);
-export const isReturnableOrderStatus = (status: OrderStatus) => RETURNABLE_STATUSES.has(status);
+export const isClosedOrderStatus = (status: OrderStatus) => isSalesHistoryOrderStatus(status) || status === OrderStatus.CANCELLED;
+export const isReturnableOrderStatus = (status: OrderStatus) => isReturnOrderStatus(status) || status === OrderStatus.SHIPPED;

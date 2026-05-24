@@ -3,6 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Search
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
 import type { SalesInventoryDetail, SalesInventoryDetailItem, SalesInventoryItemBucket, SalesInventoryRow } from '../../data/db';
+import { getItemStatusMeta, getOrderStatusMeta } from '../../../shared/domain/policy';
 
 type StockFilter = 'ALL' | 'FREE' | 'OUT' | 'RESERVED' | 'SOLD' | 'LOW';
 type PublicationFilter = 'ALL' | 'PUBLISHED' | 'HIDDEN';
@@ -54,28 +55,6 @@ const bucketToneClasses: Record<SalesInventoryItemBucket, string> = {
     RESERVED: 'text-amber-200 bg-amber-500/10 border-amber-400/20',
     SOLD: 'text-blue-200 bg-blue-500/10 border-blue-400/20',
     OTHER: 'text-gray-300 bg-white/[0.04] border-white/8'
-};
-
-const itemStatusLabels: Record<string, string> = {
-    NEW: 'Новый',
-    REJECTED: 'Отклонен',
-    STOCK_HQ: 'Склад HQ',
-    STOCK_ONLINE: 'Онлайн',
-    ON_CONSIGNMENT: 'На реализации',
-    SOLD_ONLINE: 'Продан онлайн',
-    ACTIVATED: 'Активирован'
-};
-
-const orderStatusLabels: Record<string, string> = {
-    NEW: 'Новая',
-    IN_PROGRESS: 'В работе',
-    PACKED: 'Упакован',
-    SHIPPED: 'Отправлен',
-    RECEIVED: 'Получен',
-    RETURN_REQUESTED: 'Возврат запрошен',
-    RETURN_IN_TRANSIT: 'Возврат в пути',
-    RETURNED: 'Возвращен',
-    CANCELLED: 'Отменен'
 };
 
 const formatProductCode = (row: Pick<SalesInventoryRow, 'country_code' | 'location_code' | 'item_code'>) => (
@@ -677,7 +656,7 @@ function InventoryItemRow({ item }: { item: SalesInventoryDetailItem }) {
                 ) : null}
             </div>
             <div className="mt-1 text-gray-500">
-                temp {item.temp_id} · seq {item.item_seq ?? '—'} · {itemStatusLabels[item.status] || item.status}
+                temp {item.temp_id} · seq {item.item_seq ?? '—'} · {getItemStatusMeta(item.status).label}
             </div>
             <div className="mt-1 text-gray-500">
                 batch {shortId(item.batch.id)} · {item.batch.status}
@@ -685,7 +664,7 @@ function InventoryItemRow({ item }: { item: SalesInventoryDetailItem }) {
             </div>
             {item.order_assignment ? (
                 <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-500/10 px-2 py-1 text-amber-100">
-                    Резерв: заказ {shortId(item.order_assignment.order_id)} · {orderStatusLabels[item.order_assignment.order_status] || item.order_assignment.order_status}
+                    Резерв: заказ {shortId(item.order_assignment.order_id)} · {getOrderStatusMeta(item.order_assignment.order_status).label}
                     {buyerLabel ? ` · ${buyerLabel}` : ''}
                 </div>
             ) : null}

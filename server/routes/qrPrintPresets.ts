@@ -1,7 +1,9 @@
 import express from 'express';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { authenticateToken, requireRole } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
+import { HQ_STAFF_ROLES } from '../../shared/domain/policy.ts';
+import { prisma } from '../services/prisma.ts';
 
 type QrSide = 'left' | 'right';
 type QrFieldKey = 'productName' | 'locationName' | 'coordinates' | 'collectionTime' | 'serialNumber' | 'customText';
@@ -33,7 +35,6 @@ type QrPrintSettings = {
 };
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const FIELD_KEYS: QrFieldKey[] = [
     'productName',
@@ -217,7 +218,7 @@ const findDuplicatePreset = (name: string, excludeId?: string) => prisma.qrPrint
     select: { id: true }
 });
 
-router.use(authenticateToken, requireRole(['ADMIN', 'MANAGER']));
+router.use(authenticateToken, requireRole(HQ_STAFF_ROLES));
 
 router.get('/', async (_req, res) => {
     try {

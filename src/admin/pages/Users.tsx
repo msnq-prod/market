@@ -2,8 +2,10 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { MessageSquare, RefreshCw, User as UserIcon, UserPlus, X } from 'lucide-react';
 import { formatRub } from '../../utils/currency';
 import { authFetch } from '../../utils/authFetch';
+import { isAdminRole } from '../../../shared/domain/policy';
+import type { UserRole as DomainUserRole } from '../../../shared/domain/policy';
 
-type UserRole = 'ADMIN' | 'MANAGER' | 'SALES_MANAGER' | 'FRANCHISEE' | string;
+type UserRole = DomainUserRole | string;
 
 type UserRow = {
     id: string;
@@ -65,8 +67,8 @@ const formatDateTime = (value?: string | null) => {
 
 export function Users() {
     const currentRole = localStorage.getItem('userRole');
-    const canCreateAdmin = currentRole === 'ADMIN';
-    const canEditTelegram = currentRole === 'ADMIN';
+    const canCreateAdmin = isAdminRole(currentRole);
+    const canEditTelegram = isAdminRole(currentRole);
 
     const [users, setUsers] = useState<UserRow[]>([]);
     const [loading, setLoading] = useState(true);
@@ -461,17 +463,19 @@ export function Users() {
 }
 
 function roleColor(role: string) {
-    if (role === 'ADMIN') return 'bg-purple-900/50 text-purple-400';
-    if (role === 'MANAGER') return 'bg-cyan-900/50 text-cyan-400';
-    if (role === 'SALES_MANAGER') return 'bg-orange-900/50 text-orange-300';
-    if (role === 'FRANCHISEE') return 'bg-blue-900/50 text-blue-400';
-    return 'bg-gray-700 text-gray-300';
+    return {
+        ADMIN: 'bg-purple-900/50 text-purple-400',
+        MANAGER: 'bg-cyan-900/50 text-cyan-400',
+        SALES_MANAGER: 'bg-orange-900/50 text-orange-300',
+        FRANCHISEE: 'bg-blue-900/50 text-blue-400'
+    }[role] || 'bg-gray-700 text-gray-300';
 }
 
 function roleLabel(role: string) {
-    if (role === 'ADMIN') return 'АДМИН';
-    if (role === 'MANAGER') return 'МЕНЕДЖЕР';
-    if (role === 'SALES_MANAGER') return 'ПРОДАЖИ';
-    if (role === 'FRANCHISEE') return 'ПАРТНЕР';
-    return role;
+    return {
+        ADMIN: 'АДМИН',
+        MANAGER: 'МЕНЕДЖЕР',
+        SALES_MANAGER: 'ПРОДАЖИ',
+        FRANCHISEE: 'ПАРТНЕР'
+    }[role] || role;
 }

@@ -1,6 +1,5 @@
 import express from 'express';
 import multer from 'multer';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken, requireRole } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
 import {
@@ -16,9 +15,11 @@ import {
     createRateLimitMiddleware,
     writeSecurityAuditLog
 } from '../services/security.ts';
+import { logDomainEvent } from '../services/logger.ts';
+import { prisma } from '../services/prisma.ts';
+import { HQ_STAFF_ROLES, PARTNER_ROLES } from '../../shared/domain/policy.ts';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 const uploadRateLimitMax = IS_LOCAL_AUTH_ENVIRONMENT ? 300 : 30;
 
 const uploadRateLimit = createRateLimitMiddleware({
@@ -40,7 +41,7 @@ const uploadRateLimit = createRateLimitMiddleware({
     }
 });
 
-router.use(authenticateToken, requireRole(['ADMIN', 'MANAGER', 'FRANCHISEE']), uploadRateLimit);
+router.use(authenticateToken, requireRole([...HQ_STAFF_ROLES, ...PARTNER_ROLES]), uploadRateLimit);
 
 const getUploadErrorStatusCode = (error: unknown) => {
     if (error instanceof multer.MulterError) {
@@ -78,6 +79,13 @@ router.post('/photo', async (req: AuthRequest, res) => {
 
         await normalizeSharedUploadedFiles([req.file], 'photo');
         const stored = await finalizeSharedUploadedFile(req.file, 'photo');
+        logDomainEvent('api', 'upload-photo-success', {
+            entity_type: 'upload',
+            entity_id: stored.filename,
+            user_id: req.user?.id,
+            kind: stored.kind,
+            url: stored.url
+        });
 
         res.json({ url: stored.url });
     } catch (error) {
@@ -95,6 +103,13 @@ router.post('/video', async (req: AuthRequest, res) => {
 
         await normalizeSharedUploadedFiles([req.file], 'video');
         const stored = await finalizeSharedUploadedFile(req.file, 'video');
+        logDomainEvent('api', 'upload-video-success', {
+            entity_type: 'upload',
+            entity_id: stored.filename,
+            user_id: req.user?.id,
+            kind: stored.kind,
+            url: stored.url
+        });
 
         res.json({ url: stored.url });
     } catch (error) {
@@ -119,6 +134,13 @@ router.post('/', async (req: AuthRequest, res) => {
 
         const [file] = await normalizeSharedUploadedFiles(files);
         const stored = await finalizeSharedUploadedFile(file);
+        logDomainEvent('api', 'upload-generic-success', {
+            entity_type: 'upload',
+            entity_id: stored.filename,
+            user_id: req.user?.id,
+            kind: stored.kind,
+            url: stored.url
+        });
 
         res.json({ url: stored.url });
     } catch (error) {
