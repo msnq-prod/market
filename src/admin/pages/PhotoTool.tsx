@@ -47,6 +47,7 @@ type PhotoToolPayload = {
 };
 
 type SortMode = 'name' | 'date';
+type PhotoToolStep = 'quality' | 'assign' | 'export';
 
 type PersistedPhoto = {
     id: string;
@@ -83,10 +84,18 @@ type DraftPhotoMeta = {
     last_modified: number | null;
 };
 
+type PhotoExportSettings = {
+    format: 'jpeg';
+    quality: number;
+    maxWidth: number;
+    maxHeight: number;
+};
+
 type PhotoToolDraft = {
-    version: 1;
+    version: 2;
     batch_id: string;
     base_photo_state_token: string;
+    photo_export_settings: PhotoExportSettings;
     sort_mode: SortMode;
     sort_descending: boolean;
     assignment_descending: boolean;
@@ -100,6 +109,7 @@ type RestoredDraftState = {
     sortMode: SortMode;
     sortDescending: boolean;
     assignmentDescending: boolean;
+    photoExportSettings: PhotoExportSettings;
     warningMessage: string;
 };
 
@@ -115,7 +125,14 @@ type PhotoImportProgress = {
     total: number;
 };
 
-const PHOTO_TOOL_DRAFT_VERSION = 1;
+type PhotoSizeEstimate = {
+    status: 'idle' | 'estimating' | 'ready' | 'unavailable';
+    bytesPerPhoto: number | null;
+    batchBytes: number | null;
+    message: string;
+};
+
+const PHOTO_TOOL_DRAFT_VERSION = 2;
 const PHOTO_TOOL_DRAFT_DB = 'stones-photo-tool-drafts';
 const PHOTO_TOOL_DRAFT_STORE = 'photo-files';
 const PHOTO_TOOL_ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.avif,.tif,.tiff,.bmp,.heic,.heif';
@@ -124,6 +141,32 @@ const PHOTO_TOOL_RAW_EXTENSIONS = new Set(['arw', 'cr2', 'cr3', 'dng', 'nef', 'o
 const PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS = new Set(['heic', 'heif']);
 const PHOTO_TOOL_ALLOWED_FORMAT_LABEL = 'JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP, HEIC/HEIF';
 const PHOTO_TOOL_THUMBNAIL_MAX_SIZE = 160;
+const DEFAULT_PHOTO_EXPORT_SETTINGS: PhotoExportSettings = {
+    format: 'jpeg',
+    quality: 80,
+    maxWidth: 1200,
+    maxHeight: 1200
+};
+const PHOTO_EXPORT_PRESETS: Array<{ id: string; title: string; description: string; settings: PhotoExportSettings }> = [
+    {
+        id: 'light',
+        title: 'Легкий',
+        description: '1200px / q80',
+        settings: { format: 'jpeg', quality: 80, maxWidth: 1200, maxHeight: 1200 }
+    },
+    {
+        id: 'standard',
+        title: 'Стандарт',
+        description: '1600px / q88',
+        settings: { format: 'jpeg', quality: 88, maxWidth: 1600, maxHeight: 1600 }
+    },
+    {
+        id: 'max',
+        title: 'Максимум',
+        description: '2048px / q92',
+        settings: { format: 'jpeg', quality: 92, maxWidth: 2048, maxHeight: 2048 }
+    }
+];
 const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = { workflows: [], counts: {} };
 const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed']);
 
@@ -189,11 +232,75 @@ const canPreviewPhotoInBrowser = (photo: WorkingPhoto) => (
 
 const isHeicLikeFile = (file: File) => PHOTO_TOOL_PREVIEW_UNRELIABLE_EXTENSIONS.has(getFileExtension(file.name));
 
+const clampInteger = (value: unknown, fallback: number, min: number, max: number) => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(max, Math.max(min, parsed));
+};
+
+const normalizePhotoExportSettings = (value: unknown): PhotoExportSettings => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return { ...DEFAULT_PHOTO_EXPORT_SETTINGS };
+    }
+
+    const settings = value as Partial<PhotoExportSettings>;
+    return {
+        format: 'jpeg',
+        quality: clampInteger(settings.quality, DEFAULT_PHOTO_EXPORT_SETTINGS.quality, 40, 95),
+        maxWidth: clampInteger(settings.maxWidth, DEFAULT_PHOTO_EXPORT_SETTINGS.maxWidth, 800, 4096),
+        maxHeight: clampInteger(settings.maxHeight, DEFAULT_PHOTO_EXPORT_SETTINGS.maxHeight, 800, 4096)
+    };
+};
+
+const formatBytes = (value: number | null) => {
+    if (!value || value <= 0) {
+        return '—';
+    }
+
+    if (value < 1024 * 1024) {
+        return `${Math.max(1, Math.round(value / 1024))} KB`;
+    }
+
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+};
+
 const buildJpegFileName = (fileName: string) => {
     const dotIndex = fileName.lastIndexOf('.');
     const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName || 'photo';
 
     return `${baseName}.jpg`;
+};
+
+const estimateConvertedPhotoSize = async (photo: WorkingPhoto | null, settings: PhotoExportSettings) => {
+    if (!photo || photo.source !== 'local' || !canPreviewPhotoInBrowser(photo) || typeof createImageBitmap === 'undefined') {
+        return null;
+    }
+
+    let bitmap: ImageBitmap | null = null;
+    try {
+        bitmap = await createImageBitmap(photo.file);
+        const scale = Math.min(1, settings.maxWidth / bitmap.width, settings.maxHeight / bitmap.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) {
+            return null;
+        }
+
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob(resolve, 'image/jpeg', settings.quality / 100);
+        });
+        return blob?.size ?? null;
+    } catch {
+        return null;
+    } finally {
+        bitmap?.close();
+    }
 };
 
 const convertHeicFileToJpeg = async (file: File) => {
@@ -404,6 +511,7 @@ const buildDraftPhotoMeta = (photo: WorkingPhoto): DraftPhotoMeta => ({
 });
 
 const buildBaselineSignature = (payload: PhotoToolPayload) => JSON.stringify({
+    photo_export_settings: DEFAULT_PHOTO_EXPORT_SETTINGS,
     sort_mode: 'name',
     sort_descending: false,
     assignment_descending: false,
@@ -428,8 +536,10 @@ const buildCurrentSignature = (
     photos: WorkingPhoto[],
     sortMode: SortMode,
     sortDescending: boolean,
-    assignmentDescending: boolean
+    assignmentDescending: boolean,
+    photoExportSettings: PhotoExportSettings
 ) => JSON.stringify({
+    photo_export_settings: photoExportSettings,
     sort_mode: sortMode,
     sort_descending: sortDescending,
     assignment_descending: assignmentDescending,
@@ -564,6 +674,7 @@ const readDraftMetadata = (batchId: string): PhotoToolDraft | null => {
     try {
         const parsed = JSON.parse(raw) as PhotoToolDraft;
         if (parsed?.version !== PHOTO_TOOL_DRAFT_VERSION || parsed.batch_id !== batchId || !Array.isArray(parsed.photos)) {
+            localStorage.removeItem(draftKeyFor(batchId));
             return null;
         }
 
@@ -587,6 +698,7 @@ const restoreDraftState = async (batchId: string, payload: PhotoToolPayload): Pr
             sortMode: 'name',
             sortDescending: false,
             assignmentDescending: false,
+            photoExportSettings: { ...DEFAULT_PHOTO_EXPORT_SETTINGS },
             warningMessage: 'Старый черновик удален: данные партии уже изменились.'
         };
     }
@@ -632,6 +744,7 @@ const restoreDraftState = async (batchId: string, payload: PhotoToolPayload): Pr
             sortMode: draft.sort_mode,
             sortDescending: draft.sort_descending,
             assignmentDescending: draft.assignment_descending,
+            photoExportSettings: normalizePhotoExportSettings(draft.photo_export_settings),
             warningMessage: missingLocalFiles > 0
                 ? 'Черновик восстановлен частично: часть локальных файлов недоступна.'
                 : 'Восстановлен несохраненный черновик photo-tool.'
@@ -651,6 +764,14 @@ export function PhotoTool() {
     const [sortMode, setSortMode] = useState<SortMode>('name');
     const [sortDescending, setSortDescending] = useState(false);
     const [assignmentDescending, setAssignmentDescending] = useState(false);
+    const [photoExportSettings, setPhotoExportSettings] = useState<PhotoExportSettings>(() => ({ ...DEFAULT_PHOTO_EXPORT_SETTINGS }));
+    const [activeStep, setActiveStep] = useState<PhotoToolStep>('quality');
+    const [sizeEstimate, setSizeEstimate] = useState<PhotoSizeEstimate>({
+        status: 'idle',
+        bytesPerPhoto: null,
+        batchBytes: null,
+        message: 'Загрузите локальное фото для оценки веса.'
+    });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
@@ -660,6 +781,8 @@ export function PhotoTool() {
     const [importProgress, setImportProgress] = useState<PhotoImportProgress | null>(null);
     const [workflowSnapshot, setWorkflowSnapshot] = useState<StonesMediaWorkflowSnapshot>(emptyWorkflowSnapshot);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const itemFileInputRef = useRef<HTMLInputElement | null>(null);
+    const replacementItemSeqRef = useRef<number | null>(null);
     const photosRef = useRef<WorkingPhoto[]>([]);
     const activePhotoIdRef = useRef('');
     const assignmentDraftRef = useRef<AssignmentDraft | null>(null);
@@ -684,6 +807,22 @@ export function PhotoTool() {
                 ...(focusWorkflowId ? { focus: { type: 'workflow', id: focusWorkflowId } } : {})
             }
         }));
+    }, []);
+
+    const applyPhotoExportSettings = useCallback((nextSettings: Partial<PhotoExportSettings>, options?: { silent?: boolean }) => {
+        setPhotoExportSettings((current) => normalizePhotoExportSettings({
+            ...current,
+            ...nextSettings
+        }));
+        if (!options?.silent) {
+            setError('');
+            setSuccessMessage('');
+        }
+    }, []);
+
+    const openItemFilePicker = useCallback((itemSeq: number) => {
+        replacementItemSeqRef.current = itemSeq;
+        itemFileInputRef.current?.click();
     }, []);
 
     useEffect(() => {
@@ -736,6 +875,7 @@ export function PhotoTool() {
             const nextSortMode = restoredDraft?.sortMode || 'name';
             const nextSortDescending = restoredDraft?.sortDescending || false;
             const nextAssignmentDescending = restoredDraft?.assignmentDescending || false;
+            const nextPhotoExportSettings = restoredDraft?.photoExportSettings || { ...DEFAULT_PHOTO_EXPORT_SETTINGS };
 
             photosRef.current.forEach((photo) => {
                 if (photo.source === 'local') {
@@ -748,7 +888,8 @@ export function PhotoTool() {
                     nextPhotos,
                     nextSortMode,
                     nextSortDescending,
-                    nextAssignmentDescending
+                    nextAssignmentDescending,
+                    nextPhotoExportSettings
                 );
             draftFileSignatureRef.current = restoredDraft?.photos.length ? buildDraftFileSignature(nextPhotos) : '';
             setData(typedPayload);
@@ -759,6 +900,8 @@ export function PhotoTool() {
             setSortMode(nextSortMode);
             setSortDescending(nextSortDescending);
             setAssignmentDescending(nextAssignmentDescending);
+            applyPhotoExportSettings(nextPhotoExportSettings, { silent: true });
+            setActiveStep(restoredDraft ? 'assign' : 'quality');
             if (options?.successMessage || restoredDraft?.warningMessage) {
                 setSuccessMessage(options?.successMessage || restoredDraft?.warningMessage || '');
             }
@@ -836,8 +979,8 @@ export function PhotoTool() {
     const { missingItemSeqs, assignedCount, unassignedCount, extraPhotoCount } = photoMetrics;
     const canSave = Boolean(data) && missingItemSeqs.length === 0 && itemSeqs.length > 0;
     const currentSignature = useMemo(
-        () => buildCurrentSignature(photos, sortMode, sortDescending, assignmentDescending),
-        [assignmentDescending, photos, sortDescending, sortMode]
+        () => buildCurrentSignature(photos, sortMode, sortDescending, assignmentDescending, photoExportSettings),
+        [assignmentDescending, photoExportSettings, photos, sortDescending, sortMode]
     );
     const hasUnsavedChanges = Boolean(data) && currentSignature !== baselineSignatureRef.current;
     const activePhotoState = useMemo(() => {
@@ -853,6 +996,43 @@ export function PhotoTool() {
     }, [activePhotoId, photos]);
     const { resolvedActiveIndex, prevPhoto, activePhoto, nextPhoto } = activePhotoState;
     const isImportingPhotos = importProgress !== null;
+
+    useEffect(() => {
+        let cancelled = false;
+        setSizeEstimate({
+            status: 'estimating',
+            bytesPerPhoto: null,
+            batchBytes: null,
+            message: 'Считаем примерный вес...'
+        });
+
+        void estimateConvertedPhotoSize(activePhoto, photoExportSettings).then((bytesPerPhoto) => {
+            if (cancelled) {
+                return;
+            }
+
+            if (!bytesPerPhoto) {
+                setSizeEstimate({
+                    status: 'unavailable',
+                    bytesPerPhoto: null,
+                    batchBytes: null,
+                    message: 'Точный расчет доступен для локального фото с превью.'
+                });
+                return;
+            }
+
+            setSizeEstimate({
+                status: 'ready',
+                bytesPerPhoto,
+                batchBytes: bytesPerPhoto * Math.max(itemSeqs.length, 1),
+                message: 'Оценка по активному локальному фото.'
+            });
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activePhoto, itemSeqs.length, photoExportSettings]);
 
     const clearAssignmentDraft = (photoId?: string) => {
         setAssignmentDraft((current) => {
@@ -1065,12 +1245,74 @@ export function PhotoTool() {
         const nextPhotos = fillMissingAssignments(reordered, itemSeqs, assignmentDescending);
         clearAssignmentDraft();
         applyNextPhotos(nextPhotos, localPhotos[0]?.id || activePhotoId);
+        setActiveStep('assign');
         setImportProgress(null);
 
         if (statusMessages.length > 0) {
             setError(`Добавлено фото: ${acceptedFiles.length}. ${statusMessages.join(' ')}`);
         } else {
             setSuccessMessage(`Добавлено фото: ${acceptedFiles.length}.`);
+        }
+    };
+
+    const handleReplaceItemPhoto = async (itemSeq: number, fileList: FileList | null) => {
+        const sourceFile = fileList?.[0];
+        if (!sourceFile || importProgress) {
+            return;
+        }
+
+        setError('');
+        setSuccessMessage('');
+        setImportProgress({
+            stage: 'checking',
+            currentFileName: sourceFile.name,
+            current: 1,
+            total: 1
+        });
+
+        try {
+            const extension = getFileExtension(sourceFile.name);
+            if (PHOTO_TOOL_RAW_EXTENSIONS.has(extension)) {
+                throw new Error('DNG/RAW пока не поддерживается для паспорта. Экспортируйте фото в HEIC/JPEG/PNG.');
+            }
+            if (!PHOTO_TOOL_ALLOWED_EXTENSIONS.has(extension)) {
+                throw new Error(`Поддерживаются только фото: ${PHOTO_TOOL_ALLOWED_FORMAT_LABEL}.`);
+            }
+
+            let normalizedFile = sourceFile;
+            if (isHeicLikeFile(sourceFile)) {
+                setImportProgress({
+                    stage: 'converting',
+                    currentFileName: sourceFile.name,
+                    current: 1,
+                    total: 1
+                });
+                normalizedFile = await convertHeicFileToJpeg(sourceFile).catch(() => sourceFile);
+            }
+
+            setImportProgress({
+                stage: 'adding',
+                currentFileName: normalizedFile.name,
+                current: 1,
+                total: 1
+            });
+            const localPhoto = {
+                ...(await createLocalPhoto(normalizedFile)),
+                assigned_item_seq: itemSeq
+            };
+            const nextPhotos = [...buildPhotosWithPendingDraft(photos), localPhoto].map((photo) => (
+                photo.id !== localPhoto.id && photo.assigned_item_seq === itemSeq
+                    ? { ...photo, assigned_item_seq: null }
+                    : photo
+            ));
+            clearAssignmentDraft();
+            applyNextPhotos(nextPhotos, localPhoto.id);
+            setActiveStep('export');
+            setSuccessMessage(`Фото для позиции ${padItemSeq(itemSeq)} заменено.`);
+        } catch (replaceError) {
+            setError(replaceError instanceof Error ? replaceError.message : 'Не удалось заменить фото.');
+        } finally {
+            setImportProgress(null);
         }
     };
 
@@ -1252,6 +1494,7 @@ export function PhotoTool() {
                     items: workflowItems,
                     manifest: queuedManifest,
                     basePhotoStateToken: data.batch.photo_state_token,
+                    photoExportSettings,
                     files: stagedFiles
                 });
                 window.dispatchEvent(new CustomEvent('stones:open-status-center', {
@@ -1263,6 +1506,7 @@ export function PhotoTool() {
 
             formData.append('manifest', JSON.stringify(manifest));
             formData.append('base_photo_state_token', data.batch.photo_state_token);
+            formData.append('photo_export_settings', JSON.stringify(photoExportSettings));
 
             const response = await authFetch(`/api/batches/${batchId}/photo-tool/apply`, {
                 method: 'POST',
@@ -1310,7 +1554,7 @@ export function PhotoTool() {
                 ? `persisted:${activePhoto.assigned_item_seq}`
                 : activePhotoId;
 
-            baselineSignatureRef.current = buildCurrentSignature(nextPhotos, sortMode, sortDescending, assignmentDescending);
+            baselineSignatureRef.current = buildCurrentSignature(nextPhotos, sortMode, sortDescending, assignmentDescending, photoExportSettings);
             draftFileSignatureRef.current = '';
             setData(typedPayload);
             applyNextPhotos(nextPhotos, preferredActiveId);
@@ -1348,6 +1592,7 @@ export function PhotoTool() {
             version: PHOTO_TOOL_DRAFT_VERSION,
             batch_id: batchId,
             base_photo_state_token: data.batch.photo_state_token,
+            photo_export_settings: photoExportSettings,
             sort_mode: sortMode,
             sort_descending: sortDescending,
             assignment_descending: assignmentDescending,
@@ -1362,7 +1607,7 @@ export function PhotoTool() {
         return () => {
             window.clearTimeout(timeoutId);
         };
-    }, [activePhotoId, assignmentDescending, batchId, data, hasUnsavedChanges, photos, sortDescending, sortMode]);
+    }, [activePhotoId, assignmentDescending, batchId, data, hasUnsavedChanges, photoExportSettings, photos, sortDescending, sortMode]);
 
     useEffect(() => {
         if (!data || !hasUnsavedChanges) {
@@ -1560,6 +1805,25 @@ export function PhotoTool() {
                                         });
                                     }}
                                 />
+                                <input
+                                    ref={itemFileInputRef}
+                                    data-testid="photo-item-replace-input"
+                                    type="file"
+                                    accept={PHOTO_TOOL_ACCEPT}
+                                    className="hidden"
+                                    onChange={(event) => {
+                                        const input = event.currentTarget;
+                                        const itemSeq = replacementItemSeqRef.current;
+                                        replacementItemSeqRef.current = null;
+                                        if (itemSeq != null) {
+                                            void handleReplaceItemPhoto(itemSeq, input.files).finally(() => {
+                                                input.value = '';
+                                            });
+                                        } else {
+                                            input.value = '';
+                                        }
+                                    }}
+                                />
 	                                <Button
 	                                    variant="secondary"
 	                                    onClick={() => fileInputRef.current?.click()}
@@ -1673,8 +1937,41 @@ export function PhotoTool() {
                                 </div>
                             )}
 
+                            <PhotoToolStepNav activeStep={activeStep} onChange={setActiveStep} />
+
                             <div className="min-h-0 flex-1 px-4 py-4 xl:px-8 xl:py-6">
-                                <div className="grid grid-rows-[auto_auto] gap-4">
+                                {activeStep === 'quality' ? (
+                                    <PhotoQualityPanel
+                                        settings={photoExportSettings}
+                                        estimate={sizeEstimate}
+                                        onApplySettings={applyPhotoExportSettings}
+                                    />
+                                ) : activeStep === 'export' && data ? (
+                                    <PhotoExportGrid
+                                        items={data.items}
+                                        photos={photos}
+                                        onActivatePhoto={(photoId) => {
+                                            activatePhoto(photoId, 0);
+                                            setActiveStep('assign');
+                                        }}
+                                        onReplace={openItemFilePicker}
+                                        onReupload={(itemSeq) => {
+                                            const photo = photos.find((entry) => entry.assigned_item_seq === itemSeq);
+                                            if (photo?.source === 'local') {
+                                                setSuccessMessage(`Позиция ${padItemSeq(itemSeq)} будет загружена заново при сохранении.`);
+                                                return;
+                                            }
+                                            openItemFilePicker(itemSeq);
+                                        }}
+                                        onClear={(itemSeq) => {
+                                            const photo = photos.find((entry) => entry.assigned_item_seq === itemSeq);
+                                            if (photo) {
+                                                commitAssignmentChange(photo.id, '', photo.id);
+                                            }
+                                        }}
+                                    />
+                                ) : (
+                                    <div className="grid grid-rows-[auto_auto] gap-4">
                                     <section className="relative h-[560px] max-h-[calc(100svh-260px)] min-h-[460px] overflow-hidden rounded-[30px] bg-[#090b0f] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.35)]">
                                         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.07),_transparent_52%),linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_22%,_transparent_78%,_rgba(255,255,255,0.03))]" />
                                         <div className="relative flex h-full items-center justify-center px-5 py-6 xl:px-8 xl:py-8">
@@ -1738,13 +2035,237 @@ export function PhotoTool() {
                                             accent="default"
                                         />
                                     </section>
-                                </div>
+                                    </div>
+                                )}
                             </div>
                         </main>
                     </div>
                 </div>
             </div>
         </MotionConfig>
+    );
+}
+
+function PhotoToolStepNav({ activeStep, onChange }: { activeStep: PhotoToolStep; onChange: (step: PhotoToolStep) => void }) {
+    const steps: Array<{ id: PhotoToolStep; label: string; description: string; testId: string }> = [
+        { id: 'quality', label: 'Качество', description: 'Сжатие и размер', testId: 'photo-step-quality' },
+        { id: 'assign', label: 'Назначение', description: 'Карусель и номера', testId: 'photo-step-assign' },
+        { id: 'export', label: 'Экспорт', description: 'Плитки товаров', testId: 'photo-step-export' }
+    ];
+
+    return (
+        <nav className="border-b border-white/5 bg-[#101318] px-4 py-3 xl:px-8">
+            <div className="grid gap-2 sm:grid-cols-3">
+                {steps.map((step) => (
+                    <button
+                        key={step.id}
+                        type="button"
+                        data-testid={step.testId}
+                        onClick={() => onChange(step.id)}
+                        className={`rounded-2xl px-4 py-3 text-left transition ${activeStep === step.id
+                            ? 'bg-sky-400 text-[#061018] shadow-[0_14px_34px_rgba(56,189,248,0.18)]'
+                            : 'bg-white/[0.04] text-white/62 hover:bg-white/[0.08] hover:text-white'
+                        }`}
+                    >
+                        <p className="text-sm font-semibold">{step.label}</p>
+                        <p className={`mt-1 text-xs ${activeStep === step.id ? 'text-[#061018]/65' : 'text-white/36'}`}>{step.description}</p>
+                    </button>
+                ))}
+            </div>
+        </nav>
+    );
+}
+
+function PhotoQualityPanel({
+    settings,
+    estimate,
+    onApplySettings
+}: {
+    settings: PhotoExportSettings;
+    estimate: PhotoSizeEstimate;
+    onApplySettings: (settings: Partial<PhotoExportSettings>) => void;
+}) {
+    const activePreset = PHOTO_EXPORT_PRESETS.find((preset) =>
+        preset.settings.quality === settings.quality
+        && preset.settings.maxWidth === settings.maxWidth
+        && preset.settings.maxHeight === settings.maxHeight
+    )?.id || '';
+
+    return (
+        <section className="grid gap-5 rounded-[30px] bg-[#11151b] p-5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)] xl:grid-cols-[minmax(0,1.2fr)_360px] xl:p-7">
+            <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-sky-100/45">Финальные фотографии</p>
+                <h2 className="mt-3 text-2xl font-semibold text-white">Качество экспорта</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/50">
+                    Эти настройки применяются к фото при сохранении в паспорт товара. Формат v1: JPEG.
+                </p>
+
+                <div className="mt-6 grid gap-3 md:grid-cols-3">
+                    {PHOTO_EXPORT_PRESETS.map((preset) => (
+                        <button
+                            key={preset.id}
+                            type="button"
+                            data-testid={`photo-preset-${preset.id}`}
+                            onClick={() => onApplySettings(preset.settings)}
+                            className={`rounded-3xl border px-4 py-4 text-left transition ${activePreset === preset.id
+                                ? 'border-sky-300/70 bg-sky-400/16 text-sky-50'
+                                : 'border-white/8 bg-white/[0.035] text-white/70 hover:bg-white/[0.07]'
+                            }`}
+                        >
+                            <p className="text-sm font-semibold">{preset.title}</p>
+                            <p className="mt-2 text-xs text-white/45">{preset.description}</p>
+                        </button>
+                    ))}
+                </div>
+
+                <div className="mt-6 grid gap-3 md:grid-cols-3">
+                    <PhotoNumberField
+                        testId="photo-quality-input"
+                        label="Сжатие"
+                        value={settings.quality}
+                        min={40}
+                        max={95}
+                        suffix="%"
+                        onChange={(quality) => onApplySettings({ quality })}
+                    />
+                    <PhotoNumberField
+                        testId="photo-max-width-input"
+                        label="Ширина"
+                        value={settings.maxWidth}
+                        min={800}
+                        max={4096}
+                        suffix="px"
+                        onChange={(maxWidth) => onApplySettings({ maxWidth })}
+                    />
+                    <PhotoNumberField
+                        testId="photo-max-height-input"
+                        label="Высота"
+                        value={settings.maxHeight}
+                        min={800}
+                        max={4096}
+                        suffix="px"
+                        onChange={(maxHeight) => onApplySettings({ maxHeight })}
+                    />
+                </div>
+            </div>
+
+            <aside data-testid="photo-size-estimate" className="rounded-[28px] bg-[#0b0e13] p-5 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
+                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/35">Примерный вес</p>
+                <div className="mt-5 grid gap-3">
+                    <WorkspaceStat label="На фото" value={formatBytes(estimate.bytesPerPhoto)} accent={estimate.status === 'ready' ? 'success' : 'default'} />
+                    <WorkspaceStat label="Партия" value={formatBytes(estimate.batchBytes)} accent={estimate.status === 'ready' ? 'success' : 'default'} />
+                    <WorkspaceStat label="Статус" value={estimate.message} accent={estimate.status === 'unavailable' ? 'warning' : 'default'} />
+                </div>
+            </aside>
+        </section>
+    );
+}
+
+function PhotoNumberField({
+    testId,
+    label,
+    value,
+    min,
+    max,
+    suffix,
+    onChange
+}: {
+    testId: string;
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    suffix: string;
+    onChange: (value: number) => void;
+}) {
+    return (
+        <label className="rounded-3xl bg-white/[0.04] px-4 py-4 text-sm text-white/72">
+            <span className="text-xs font-semibold uppercase tracking-[0.24em] text-white/35">{label}</span>
+            <span className="mt-3 flex items-center gap-2">
+                <input
+                    data-testid={testId}
+                    type="number"
+                    min={min}
+                    max={max}
+                    value={value}
+                    onChange={(event) => onChange(clampInteger(event.currentTarget.value, value, min, max))}
+                    className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-white outline-none focus:border-sky-300/70"
+                />
+                <span className="text-xs text-white/38">{suffix}</span>
+            </span>
+        </label>
+    );
+}
+
+function PhotoExportGrid({
+    items,
+    photos,
+    onActivatePhoto,
+    onReplace,
+    onReupload,
+    onClear
+}: {
+    items: PhotoToolItem[];
+    photos: WorkingPhoto[];
+    onActivatePhoto: (photoId: string) => void;
+    onReplace: (itemSeq: number) => void;
+    onReupload: (itemSeq: number) => void;
+    onClear: (itemSeq: number) => void;
+}) {
+    const photoByItemSeq = new Map(photos.flatMap((photo) =>
+        photo.assigned_item_seq == null ? [] : [[photo.assigned_item_seq, photo] as const]
+    ));
+
+    return (
+        <section data-testid="photo-export-grid" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {items.map((item) => {
+                const photo = photoByItemSeq.get(item.item_seq) || null;
+                return (
+                    <article
+                        key={item.id}
+                        data-testid={`photo-export-tile-${item.item_seq}`}
+                        className="overflow-hidden rounded-[28px] bg-[#11151b] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]"
+                    >
+                        <button
+                            type="button"
+                            disabled={!photo}
+                            onClick={() => photo && onActivatePhoto(photo.id)}
+                            className="relative block h-56 w-full bg-[#090b0f] text-left disabled:cursor-default"
+                        >
+                            {photo ? (
+                                <PhotoPreview photo={photo} className="h-full w-full object-cover" compact />
+                            ) : (
+                                <div className="flex h-full flex-col items-center justify-center text-white/35">
+                                    <FileImage size={28} />
+                                    <p className="mt-3 text-sm">Фото не назначено</p>
+                                </div>
+                            )}
+                            <span className="absolute left-3 top-3 rounded-full bg-black/65 px-3 py-1 text-xs font-semibold text-white">
+                                {padItemSeq(item.item_seq)}
+                            </span>
+                        </button>
+                        <div className="p-4">
+                            <p className="text-sm font-semibold text-white">Товар {padItemSeq(item.item_seq)}</p>
+                            <p className="mt-1 truncate text-xs text-white/42">{item.serial_number || item.temp_id}</p>
+                            <p className={`mt-3 text-xs font-semibold ${photo ? 'text-emerald-200' : 'text-amber-200'}`}>
+                                {photo ? `${photo.source === 'local' ? 'Новое фото' : 'Сохраненное фото'}: ${photo.name}` : 'Нет назначения'}
+                            </p>
+                            <div className="mt-4 grid grid-cols-3 gap-2">
+                                <button type="button" data-testid={`photo-export-replace-${item.item_seq}`} onClick={() => onReplace(item.item_seq)} className="rounded-xl bg-sky-400 px-3 py-2 text-xs font-semibold text-[#061018] transition hover:bg-sky-300">
+                                    Заменить
+                                </button>
+                                <button type="button" data-testid={`photo-export-reupload-${item.item_seq}`} onClick={() => onReupload(item.item_seq)} className="rounded-xl bg-white/[0.07] px-3 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.12]">
+                                    Заново
+                                </button>
+                                <button type="button" data-testid={`photo-export-clear-${item.item_seq}`} onClick={() => onClear(item.item_seq)} disabled={!photo} className="rounded-xl bg-red-500/12 px-3 py-2 text-xs font-semibold text-red-100 transition hover:bg-red-500/18 disabled:opacity-40">
+                                    Снять
+                                </button>
+                            </div>
+                        </div>
+                    </article>
+                );
+            })}
+        </section>
     );
 }
 

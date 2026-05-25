@@ -13,6 +13,18 @@ import { resolveProjectPath } from '../utils/projectPaths.ts';
 
 export type SharedUploadKind = 'photo' | 'video';
 
+export type PhotoUploadNormalizationOptions = {
+    format?: 'jpeg';
+    quality?: number;
+    maxWidth?: number;
+    maxHeight?: number;
+};
+
+export type SharedUploadNormalizationOptions = {
+    photo?: PhotoUploadNormalizationOptions;
+    photoPreNormalized?: boolean;
+};
+
 type SharedUploadMetadata = {
     extension: string;
     kind: SharedUploadKind;
@@ -87,6 +99,12 @@ const SAFE_UPLOAD_CONTENT_TYPES = new Map<string, string>([
 const ACTIVE_CONTENT_MARKERS = ['<!doctype', '<body', '<html', '<iframe', '<script', '<svg', '<?xml'];
 const UPLOAD_MAX_FILE_SIZE_BYTES = 300 * 1024 * 1024;
 const UPLOAD_SNIFF_BYTES = 4096;
+const DEFAULT_PHOTO_NORMALIZATION_OPTIONS: Required<PhotoUploadNormalizationOptions> = {
+    format: 'jpeg',
+    quality: 80,
+    maxWidth: 1200,
+    maxHeight: 1200
+};
 
 const parseBooleanEnv = (value: string | undefined) =>
     typeof value === 'string' && ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
@@ -282,8 +300,14 @@ const isHeicLikeExtension = (extension: string) => extension === '.heic' || exte
 const shouldUseAppleSiliconHeicFastPath = (sourceExtension: string) =>
     APPLE_SILICON_HEIC_FAST_PATH && isHeicLikeExtension(sourceExtension);
 
-const normalizeHeicToJpegWithSips = async (filePath: string) => {
+const normalizePhotoOptions = (options?: PhotoUploadNormalizationOptions): Required<PhotoUploadNormalizationOptions> => ({
+    ...DEFAULT_PHOTO_NORMALIZATION_OPTIONS,
+    ...(options || {})
+});
+
+const normalizeHeicToJpegWithSips = async (filePath: string, options?: PhotoUploadNormalizationOptions) => {
     const targetPath = `${filePath}.jpg`;
+    const normalizedOptions = normalizePhotoOptions(options);
 
     try {
         await execFileAsync('/usr/bin/sips', ['-s', 'format', 'jpeg', filePath, '--out', targetPath]);
@@ -294,18 +318,42 @@ const normalizeHeicToJpegWithSips = async (filePath: string) => {
         }
     }
 
+    const resizedPath = `${targetPath}.normalized.jpg`;
+    await sharp(targetPath, { animated: false })
+        .rotate()
+        .resize({
+            width: normalizedOptions.maxWidth,
+            height: normalizedOptions.maxHeight,
+            fit: 'inside',
+            withoutEnlargement: true
+        })
+        .jpeg({ quality: normalizedOptions.quality, mozjpeg: true })
+        .toFile(resizedPath);
+    await fsp.rm(targetPath, { force: true });
+    await moveFileSafely(resizedPath, targetPath);
     await fsp.rm(filePath, { force: true });
 
     return targetPath;
 };
 
-const normalizePhotoToJpeg = async (filePath: string, sourceExtension: string) => {
+const normalizePhotoToJpeg = async (
+    filePath: string,
+    sourceExtension: string,
+    options?: PhotoUploadNormalizationOptions
+) => {
     const targetPath = `${filePath}.jpg`;
+    const normalizedOptions = normalizePhotoOptions(options);
 
     try {
         await sharp(filePath, { animated: false })
             .rotate()
-            .jpeg({ quality: 90, mozjpeg: true })
+            .resize({
+                width: normalizedOptions.maxWidth,
+                height: normalizedOptions.maxHeight,
+                fit: 'inside',
+                withoutEnlargement: true
+            })
+            .jpeg({ quality: normalizedOptions.quality, mozjpeg: true })
             .toFile(targetPath);
     } catch (sharpError) {
         if (!isHeicLikeExtension(sourceExtension)) {
@@ -316,31 +364,31 @@ const normalizePhotoToJpeg = async (filePath: string, sourceExtension: string) =
         const converted = await heicConvert({
             buffer: sourceBuffer,
             format: 'JPEG',
-            quality: 0.9
+            quality: normalizedOptions.quality / 100
         });
         const convertedBuffer = converted instanceof ArrayBuffer
             ? Buffer.from(new Uint8Array(converted))
             : Buffer.from(converted);
-        await fsp.writeFile(targetPath, convertedBuffer);
+        const convertedPath = `${filePath}.converted.jpg`;
+        await fsp.writeFile(convertedPath, convertedBuffer);
+        try {
+            await sharp(convertedPath, { animated: false })
+                .rotate()
+                .resize({
+                    width: normalizedOptions.maxWidth,
+                    height: normalizedOptions.maxHeight,
+                    fit: 'inside',
+                    withoutEnlargement: true
+                })
+                .jpeg({ quality: normalizedOptions.quality, mozjpeg: true })
+                .toFile(targetPath);
+        } finally {
+            await fsp.rm(convertedPath, { force: true });
+        }
     }
 
     await fsp.rm(filePath, { force: true });
     return targetPath;
-};
-
-const canUseJpegFastPath = async (filePath: string, sourceExtension: string) => {
-    if (sourceExtension !== '.jpg') {
-        return false;
-    }
-
-    try {
-        const metadata = await sharp(filePath, { animated: false }).metadata();
-        return metadata.format === 'jpeg'
-            && (metadata.pages ?? 1) <= 1
-            && (metadata.orientation == null || metadata.orientation === 1);
-    } catch {
-        return false;
-    }
 };
 
 const readUploadSnippet = async (filePath: string) => {
@@ -401,10 +449,14 @@ const finalizeNormalizedUpload = async (
     return file;
 };
 
-const normalizeSingleUploadedPhoto = async (file: MutableUploadedFile, metadata: SharedUploadMetadata) => {
+const normalizeSingleUploadedPhoto = async (
+    file: MutableUploadedFile,
+    metadata: SharedUploadMetadata,
+    options?: PhotoUploadNormalizationOptions
+) => {
     activePhotoConversionTasks += 1;
-    let usedFastPath = false;
     let converter = 'sharp';
+    const normalizedOptions = normalizePhotoOptions(options);
     try {
         const normalizedFile = await runDiagnosticStage(
             'photo_convert',
@@ -414,38 +466,33 @@ const normalizeSingleUploadedPhoto = async (file: MutableUploadedFile, metadata:
                 active_tasks: activePhotoConversionTasks,
                 converter: shouldUseAppleSiliconHeicFastPath(metadata.extension) ? 'sips' : 'sharp',
                 heic_concurrency: shouldUseAppleSiliconHeicFastPath(metadata.extension) ? HEIC_APPLE_SILICON_CONCURRENCY : null,
+                quality: normalizedOptions.quality,
+                max_width: normalizedOptions.maxWidth,
+                max_height: normalizedOptions.maxHeight,
                 platform: process.platform,
                 arch: process.arch
             },
             async () => {
-                const normalizedPath = `${file.path}.jpg`;
-                usedFastPath = await canUseJpegFastPath(file.path, metadata.extension);
-                if (usedFastPath) {
-                    converter = 'rename';
-                    await moveFileSafely(file.path, normalizedPath);
-                    return finalizeNormalizedUpload(file, metadata, normalizedPath);
-                }
-
                 if (shouldUseAppleSiliconHeicFastPath(metadata.extension)) {
                     try {
                         converter = 'sips';
-                        return finalizeNormalizedUpload(file, metadata, await normalizeHeicToJpegWithSips(file.path));
+                        return finalizeNormalizedUpload(file, metadata, await normalizeHeicToJpegWithSips(file.path, normalizedOptions));
                     } catch {
                         converter = 'heic-convert';
                     }
                 }
 
                 converter = isHeicLikeExtension(metadata.extension) ? 'heic-convert' : 'sharp';
-                return finalizeNormalizedUpload(file, metadata, await normalizePhotoToJpeg(file.path, metadata.extension));
+                return finalizeNormalizedUpload(file, metadata, await normalizePhotoToJpeg(file.path, metadata.extension, normalizedOptions));
             },
             (result) => ({
-                used_fast_path: usedFastPath,
+                used_fast_path: false,
                 size_bytes: result.size,
                 active_tasks: activePhotoConversionTasks,
                 converter
             }),
             () => ({
-                used_fast_path: usedFastPath,
+                used_fast_path: false,
                 active_tasks: activePhotoConversionTasks,
                 converter
             })
@@ -467,6 +514,16 @@ const normalizeSingleUploadedVideo = async (file: MutableUploadedFile, metadata:
         await moveFileSafely(file.path, normalizedPath);
     }
 
+    return finalizeNormalizedUpload(file, metadata, normalizedPath);
+};
+
+const finalizePreNormalizedPhoto = async (file: MutableUploadedFile, metadata: SharedUploadMetadata) => {
+    if (metadata.extension !== '.jpg') {
+        throw createUploadValidationError('Предварительно подготовленные photo-tool файлы должны быть JPEG.');
+    }
+
+    const normalizedPath = `${file.path}.jpg`;
+    await moveFileSafely(file.path, normalizedPath);
     return finalizeNormalizedUpload(file, metadata, normalizedPath);
 };
 
@@ -592,7 +649,8 @@ export const cleanupSharedUploadedFiles = async (files: Array<Express.Multer.Fil
 
 export const normalizeSharedUploadedFiles = async (
     files: Express.Multer.File[] | undefined,
-    expectedKind?: SharedUploadKind
+    expectedKind?: SharedUploadKind,
+    options?: SharedUploadNormalizationOptions
 ) => {
     if (!files || files.length === 0) {
         return [];
@@ -619,6 +677,10 @@ export const normalizeSharedUploadedFiles = async (
         preparedFiles.push({ file, metadata });
     }
 
+    if (options?.photoPreNormalized && preparedFiles.every(({ metadata }) => metadata.kind === 'photo')) {
+        return Promise.all(preparedFiles.map(({ file, metadata }) => finalizePreNormalizedPhoto(file, metadata)));
+    }
+
     if (preparedFiles.every(({ metadata }) => metadata.kind === 'photo')) {
         const hasOnlyAppleSiliconHeicFiles = preparedFiles.every(({ metadata }) =>
             shouldUseAppleSiliconHeicFastPath(metadata.extension)
@@ -641,7 +703,7 @@ export const normalizeSharedUploadedFiles = async (
             () => mapWithConcurrency(
                 preparedFiles,
                 photoBatchConcurrency,
-                async ({ file, metadata }) => normalizeSingleUploadedPhoto(file, metadata)
+                async ({ file, metadata }) => normalizeSingleUploadedPhoto(file, metadata, options?.photo)
             ),
             () => ({
                 event: 'summary',
@@ -668,7 +730,7 @@ export const normalizeSharedUploadedFiles = async (
     for (const { file, metadata } of preparedFiles) {
         normalizedFiles.push(
             metadata.kind === 'photo'
-                ? await normalizeSingleUploadedPhoto(file, metadata)
+                ? await normalizeSingleUploadedPhoto(file, metadata, options?.photo)
                 : await normalizeSingleUploadedVideo(file, metadata)
         );
     }

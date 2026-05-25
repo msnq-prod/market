@@ -5,6 +5,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 
 const heicConvert = require('heic-convert');
+const sharp = require('sharp');
 
 const ACTIVE_VIDEO_PHASES = new Set([
     'queued',
@@ -35,6 +36,12 @@ const VIDEO_EXPORT_CROSSFADE_MS = 200;
 const STATE_VERSION = 2;
 const EVENT_BUFFER_SIZE = 10;
 const WORKFLOW_STUCK_MS = 10 * 60_000;
+const DEFAULT_PHOTO_EXPORT_SETTINGS = {
+    format: 'jpeg',
+    quality: 80,
+    maxWidth: 1200,
+    maxHeight: 1200
+};
 
 const nowIso = () => new Date().toISOString();
 const createId = () => crypto.randomUUID();
@@ -123,6 +130,26 @@ const parseJsonResponse = async (response, fallbackMessage) => {
 const createWorkflowHash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fileCachePathFor = (rootDir, fileId) => path.join(rootDir, `${fileId}.bin`);
 const isLikelyOfflineError = (message) => /Failed to fetch|fetch failed|network|ECONNREFUSED|ECONNRESET|ENOTFOUND|timed out|timeout|socket hang up|offline/i.test(String(message || ''));
+const clampInteger = (value, fallback, min, max) => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(max, Math.max(min, parsed));
+};
+const normalizePhotoExportSettings = (value) => {
+    if (!isRecord(value)) {
+        return { ...DEFAULT_PHOTO_EXPORT_SETTINGS };
+    }
+
+    return {
+        format: 'jpeg',
+        quality: clampInteger(value.quality, DEFAULT_PHOTO_EXPORT_SETTINGS.quality, 40, 95),
+        maxWidth: clampInteger(value.maxWidth, DEFAULT_PHOTO_EXPORT_SETTINGS.maxWidth, 800, 4096),
+        maxHeight: clampInteger(value.maxHeight, DEFAULT_PHOTO_EXPORT_SETTINGS.maxHeight, 800, 4096)
+    };
+};
 
 const toOfflineError = (message) => {
     const error = new Error(message || 'Сеть недоступна.');
@@ -316,6 +343,7 @@ class MediaWorkflowManager extends EventEmitter {
         } else {
             nextWorkflow.items = Array.isArray(workflow.items) ? workflow.items : [];
             nextWorkflow.files = Array.isArray(workflow.files) ? workflow.files : [];
+            nextWorkflow.photoExportSettings = normalizePhotoExportSettings(workflow.photoExportSettings);
         }
 
         return nextWorkflow;
@@ -378,10 +406,12 @@ class MediaWorkflowManager extends EventEmitter {
     }
 
     async startPhotoApplyWorkflow(payload) {
+        const photoExportSettings = normalizePhotoExportSettings(payload.photoExportSettings);
         const manifestHash = createWorkflowHash({
             batchId: payload.batchId,
             basePhotoStateToken: payload.basePhotoStateToken,
-            items: payload.items
+            items: payload.items,
+            photoExportSettings
         });
         const duplicate = this.findActiveBatchWorkflow('PHOTO_APPLY_WORKFLOW', payload.batchId);
         if (duplicate) {
@@ -414,6 +444,7 @@ class MediaWorkflowManager extends EventEmitter {
             },
             manifestHash,
             basePhotoStateToken: payload.basePhotoStateToken,
+            photoExportSettings,
             items: Array.isArray(payload.items) ? payload.items : [],
             files
         };
@@ -672,29 +703,70 @@ class MediaWorkflowManager extends EventEmitter {
         await this.markChanged();
     }
 
-    async normalizePhotoFiles(workflow) {
-        let changed = false;
-        for (const file of workflow.files) {
-            const extension = path.extname(file.originalName).toLowerCase();
-            if (!IMAGE_CONVERT_EXTENSIONS.has(extension) || file.convertedPath) {
-                continue;
+    async normalizePhotoFileToJpeg(file, settings) {
+        const sourceExtension = path.extname(file.originalName).toLowerCase();
+        const targetPath = `${file.cachePath}.jpg`;
+
+        try {
+            await sharp(file.cachePath, { animated: false })
+                .rotate()
+                .resize({
+                    width: settings.maxWidth,
+                    height: settings.maxHeight,
+                    fit: 'inside',
+                    withoutEnlargement: true
+                })
+                .jpeg({ quality: settings.quality, mozjpeg: true })
+                .toFile(targetPath);
+        } catch (sharpError) {
+            if (!IMAGE_CONVERT_EXTENSIONS.has(sourceExtension)) {
+                throw sharpError;
             }
 
             const sourceBuffer = await fsp.readFile(file.cachePath);
             const converted = await heicConvert({
                 buffer: sourceBuffer,
                 format: 'JPEG',
-                quality: 0.92
+                quality: settings.quality / 100
             });
             const convertedBuffer = converted instanceof ArrayBuffer
                 ? Buffer.from(new Uint8Array(converted))
                 : Buffer.from(converted);
-            const convertedPath = `${file.cachePath}.jpg`;
+            const convertedPath = `${file.cachePath}.converted.jpg`;
             await fsp.writeFile(convertedPath, convertedBuffer);
-            file.convertedPath = convertedPath;
-            file.uploadName = `${path.parse(file.originalName).name || 'photo'}.jpg`;
-            file.mimeType = 'image/jpeg';
-            file.checksumSha256 = await sha256File(convertedPath);
+            try {
+                await sharp(convertedPath, { animated: false })
+                    .rotate()
+                    .resize({
+                        width: settings.maxWidth,
+                        height: settings.maxHeight,
+                        fit: 'inside',
+                        withoutEnlargement: true
+                    })
+                    .jpeg({ quality: settings.quality, mozjpeg: true })
+                    .toFile(targetPath);
+            } finally {
+                await safeRemove(convertedPath);
+            }
+        }
+
+        const stat = await fsp.stat(targetPath);
+        file.convertedPath = targetPath;
+        file.uploadName = `${path.parse(file.originalName).name || 'photo'}.jpg`;
+        file.mimeType = 'image/jpeg';
+        file.size = stat.size;
+        file.checksumSha256 = await sha256File(targetPath);
+    }
+
+    async normalizePhotoFiles(workflow) {
+        let changed = false;
+        const settings = normalizePhotoExportSettings(workflow.photoExportSettings);
+        for (const file of workflow.files) {
+            if (file.convertedPath) {
+                continue;
+            }
+
+            await this.normalizePhotoFileToJpeg(file, settings);
             changed = true;
         }
 
@@ -765,6 +837,8 @@ class MediaWorkflowManager extends EventEmitter {
             }
             form.append('manifest', JSON.stringify(this.buildPhotoManifest(workflow)));
             form.append('base_photo_state_token', workflow.basePhotoStateToken);
+            form.append('photo_export_settings', JSON.stringify(normalizePhotoExportSettings(workflow.photoExportSettings)));
+            form.append('photo_pre_normalized', '1');
             form.append('queue_job_id', workflow.id);
 
             const payload = await this.apiRequest(`/api/batches/${encodeURIComponent(workflow.batchId)}/photo-tool/apply`, {

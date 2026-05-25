@@ -52,6 +52,64 @@ async function setAdminSession(page: Page, loginPayload: LoginPayload) {
     }, loginPayload);
 }
 
+async function installDesktopPhotoMock(page: Page) {
+    await page.addInitScript(() => {
+        const stagedFiles: Record<string, { chunks: number; size: number }> = {};
+        Object.defineProperty(window, 'stonesDesktop', {
+            configurable: true,
+            value: {
+                isDesktop: true,
+                getAppInfo: async () => ({ version: 'e2e', platform: 'darwin', mode: 'development', apiOrigin: 'http://127.0.0.1:3101' }),
+                getNetworkStatus: async () => ({ online: true, apiReachable: true, checkedAt: new Date().toISOString() }),
+                getDesktopDiagnostics: async () => ({
+                    app: { version: 'e2e', platform: 'darwin', mode: 'development', apiOrigin: 'http://127.0.0.1:3101' },
+                    network: { online: true, apiReachable: true, checkedAt: new Date().toISOString() },
+                    helper: { embedded: true, ok: true },
+                    queue: { counts: {}, activeJobs: 0, failedJobs: 0 },
+                    workflows: { counts: {}, active: 0, failed: 0, offline: 0, authRequired: 0 }
+                }),
+                syncAuthToken: async () => ({ ok: true }),
+                getMediaQueueSnapshot: async () => ({ jobs: [], counts: {} }),
+                subscribeMediaQueue: () => () => undefined,
+                getMediaWorkflowSnapshot: async () => ({ workflows: [], counts: {} }),
+                subscribeMediaWorkflows: () => () => undefined,
+                stageMediaQueueFileStart: async () => {
+                    const fileId = crypto.randomUUID();
+                    stagedFiles[fileId] = { chunks: 0, size: 0 };
+                    return { fileId };
+                },
+                stageMediaQueueFileChunk: async (fileId: string, chunk: ArrayBuffer) => {
+                    stagedFiles[fileId].chunks += 1;
+                    stagedFiles[fileId].size += chunk.byteLength;
+                    return { ok: true };
+                },
+                stageMediaQueueFileFinish: async (fileId: string) => ({
+                    fileId,
+                    size: stagedFiles[fileId].size,
+                    checksumSha256: `sha-${fileId}`
+                }),
+                startPhotoApplyWorkflow: async (payload: Record<string, unknown>) => {
+                    window.localStorage.setItem('__photoWorkflowPayload', JSON.stringify(payload));
+                    return {
+                        id: 'photo-workflow-e2e',
+                        kind: 'PHOTO_APPLY_WORKFLOW',
+                        batchId: payload.batchId,
+                        phase: 'queued',
+                        progress: { completed: 0, total: 2 },
+                        routePath: `/admin/photo-tool/${payload.batchId}`,
+                        sessionId: null,
+                        sessionVersion: null,
+                        lastError: null,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        uploadState: null
+                    };
+                }
+            }
+        });
+    });
+}
+
 async function createReceivedBatchWithSerials(
     request: APIRequestContext,
     admin: LoginPayload,
@@ -131,6 +189,55 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
         }
     });
     expect(incompleteManifestResponse.status()).toBe(400);
+
+    const invalidSettingsResponse = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            base_photo_state_token: toolPayload.batch.photo_state_token,
+            photo_export_settings: JSON.stringify({
+                format: 'webp',
+                quality: 80,
+                maxWidth: 1200,
+                maxHeight: 1200
+            }),
+            manifest: JSON.stringify([])
+        }
+    });
+    expect(invalidSettingsResponse.status()).toBe(400);
+    await expect(invalidSettingsResponse.json()).resolves.toMatchObject({
+        error: 'photo_export_settings.format поддерживает только jpeg.'
+    });
+
+    const invalidPreNormalizedResponse = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            base_photo_state_token: toolPayload.batch.photo_state_token,
+            photo_pre_normalized: '1',
+            manifest: JSON.stringify([
+                {
+                    item_id: toolPayload.items[0].id,
+                    item_seq: toolPayload.items[0].item_seq,
+                    source: 'upload',
+                    file_index: 0
+                },
+                {
+                    item_id: toolPayload.items[1].id,
+                    item_seq: toolPayload.items[1].item_seq,
+                    source: 'existing',
+                    existing_url: '/uploads/photos/missing.png'
+                }
+            ]),
+            files: {
+                name: 'unsafe.jpg',
+                mimeType: 'image/jpeg',
+                buffer: TINY_PNG
+            }
+        }
+    });
+    expect(invalidPreNormalizedResponse.status()).toBe(400);
+    await expect(invalidPreNormalizedResponse.json()).resolves.toMatchObject({
+        error: 'photo_pre_normalized разрешен только для queued photo-tool upload с checksum.'
+    });
 
     const dngUploadResponse = await request.post('/api/upload/photo', {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
@@ -244,6 +351,12 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
         headers: { Authorization: `Bearer ${admin.accessToken}` },
         multipart: {
             base_photo_state_token: appliedPayload.batch.photo_state_token,
+            photo_export_settings: JSON.stringify({
+                format: 'jpeg',
+                quality: 80,
+                maxWidth: 1200,
+                maxHeight: 1200
+            }),
             manifest: JSON.stringify([
                 {
                     item_id: toolPayload.items[0].id,
@@ -317,6 +430,10 @@ test('UI: admin resolves duplicate item numbers and saves photo assignments', as
     await setAdminSession(page, admin);
     await page.goto(`/admin/photo-tool/${batchId}`);
     await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await expect(page.getByTestId('photo-step-quality')).toBeVisible();
+    await page.getByTestId('photo-preset-standard').click();
+    await expect(page.getByTestId('photo-quality-input')).toHaveValue('88');
+    await expect(page.getByTestId('photo-max-width-input')).toHaveValue('1600');
 
     await page.getByTestId('photo-upload-input').setInputFiles([
         {
@@ -354,9 +471,35 @@ test('UI: admin resolves duplicate item numbers and saves photo assignments', as
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('002');
     await expect(page.getByTestId('photo-assignment-input-next')).toHaveValue('001');
+    await page.getByTestId('photo-step-export').click();
+    await expect(page.getByTestId('photo-export-grid')).toBeVisible();
+    await expect(page.getByTestId('photo-export-tile-1')).toBeVisible();
+    await expect(page.getByTestId('photo-export-tile-2')).toBeVisible();
+    await page.getByTestId('photo-export-reupload-1').click();
+    await expect(page.getByText('Позиция 001 будет загружена заново при сохранении.')).toBeVisible();
+    await page.getByTestId('photo-export-replace-1').click();
+    await page.getByTestId('photo-item-replace-input').setInputFiles({
+        name: 'replacement-1.png',
+        mimeType: 'image/png',
+        buffer: TINY_PNG,
+        lastModified: new Date('2026-04-01T10:03:00.000Z').getTime()
+    });
+    await expect(page.getByTestId('photo-export-tile-1')).toContainText('replacement-1.png');
+
+    let observedPhotoExportSettings = false;
+    await page.route('**/api/batches/*/photo-tool/apply', async (route) => {
+        const postData = route.request().postData() || '';
+        observedPhotoExportSettings = postData.includes('photo_export_settings')
+            && postData.includes('"format":"jpeg"')
+            && postData.includes('"quality":88')
+            && postData.includes('"maxWidth":1600')
+            && postData.includes('"maxHeight":1600');
+        await route.continue();
+    });
 
     await page.getByTestId('photo-save').click();
     await expect(page.getByText('Назначения фото сохранены.')).toBeVisible();
+    expect(observedPhotoExportSettings).toBeTruthy();
 
     const reloadedResponse = await request.get(`/api/batches/${batchId}/photo-tool`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }
@@ -366,6 +509,48 @@ test('UI: admin resolves duplicate item numbers and saves photo assignments', as
 
     expect(reloadedPayload.items).toHaveLength(2);
     expect(reloadedPayload.items.every((item) => typeof item.item_photo_url === 'string' && item.item_photo_url.includes('/uploads/photos/'))).toBeTruthy();
+});
+
+test('UI: desktop photo workflow receives export settings', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page);
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await page.getByTestId('photo-preset-max').click();
+
+    await page.getByTestId('photo-upload-input').setInputFiles([
+        {
+            name: 'desktop-1.png',
+            mimeType: 'image/png',
+            buffer: TINY_PNG,
+            lastModified: new Date('2026-04-04T10:00:00.000Z').getTime()
+        },
+        {
+            name: 'desktop-2.png',
+            mimeType: 'image/png',
+            buffer: TINY_PNG,
+            lastModified: new Date('2026-04-04T10:01:00.000Z').getTime()
+        }
+    ]);
+
+    await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
+    await page.getByTestId('photo-save').click();
+    await expect(page.getByText(/Сохранение передано в фон/)).toBeVisible();
+
+    const payload = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__photoWorkflowPayload') || '{}'));
+    expect(payload.photoExportSettings).toMatchObject({
+        format: 'jpeg',
+        quality: 92,
+        maxWidth: 2048,
+        maxHeight: 2048
+    });
+    expect(payload.files).toHaveLength(2);
 });
 
 test('UI: hotkeys navigate carousel, stage assignment numbers and remove binding with Delete', async ({ page, request }) => {
@@ -460,6 +645,20 @@ test('UI: restores photo draft after reload and rejects stale save after externa
     await page.getByTestId('photo-reverse-assignment').click();
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('002');
     await page.waitForTimeout(2000);
+
+    const draftBeforeReload = await page.evaluate((currentBatchId) => {
+        const raw = window.localStorage.getItem(`photo-tool-draft:${currentBatchId}`);
+        return raw ? JSON.parse(raw) : null;
+    }, batchId);
+    expect(draftBeforeReload).toMatchObject({
+        version: 2,
+        photo_export_settings: {
+            format: 'jpeg',
+            quality: 80,
+            maxWidth: 1200,
+            maxHeight: 1200
+        }
+    });
 
     await page.reload();
     await expect(page.getByText('Восстановлен несохраненный черновик photo-tool.')).toBeVisible();
