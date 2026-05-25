@@ -34,6 +34,8 @@ const buildDiagnosticsMarkdown = (payload) => {
     const queue = payload?.queue || {};
     const queueJobs = Array.isArray(payload?.queueJobs) ? payload.queueJobs : [];
     const workflows = Array.isArray(payload?.workflows?.workflows) ? payload.workflows.workflows : [];
+    const videoTool = payload?.videoTool || {};
+    const helperDiagnostics = Array.isArray(videoTool.helperDiagnostics) ? videoTool.helperDiagnostics : [];
     const batchSteps = Array.isArray(batchLog.steps) ? batchLog.steps : [];
 
     return [
@@ -56,6 +58,21 @@ const buildDiagnosticsMarkdown = (payload) => {
             counts: diagnostics.queue?.counts ?? queue.counts
         }),
         renderMarkdownSection('Workflows', diagnostics.workflows || {}),
+        renderMarkdownSection('Video Tool', {
+            batchId: videoTool.batchId,
+            pageOrigin: videoTool.pageOrigin,
+            helperStatus: videoTool.helperStatus,
+            helperIssueMessage: videoTool.helperIssueMessage,
+            helperBaseUrl: videoTool.helperBaseUrl,
+            helperUrlCandidates: videoTool.helperUrlCandidates,
+            helperAllowedOrigins: videoTool.helperHealth?.allowed_origins
+        }),
+        '### Проверки helper из Video Tool',
+        '',
+        helperDiagnostics.length
+            ? helperDiagnostics.map((entry) => `- ${entry.url || 'helper'} ${entry.mode || 'standard'}: ${entry.status || 'unknown'}${entry.httpStatus ? ` [HTTP ${entry.httpStatus}]` : ''}${entry.detail ? ` (${entry.detail})` : ''}`).join('\n')
+            : 'Нет проверок.',
+        '',
         '## Проверка создания партии',
         '',
         `- status: ${batchLog.status || 'не запускалась'}`,

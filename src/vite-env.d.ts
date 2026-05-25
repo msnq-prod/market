@@ -70,6 +70,9 @@ interface StonesDesktopApi {
             storage_root?: string;
             free_bytes?: number;
             allowed_origins?: string[];
+            page_origin?: string;
+            expected_port?: number;
+            discovered_port?: number;
             queued_jobs?: number;
             startup_error?: string;
             error?: string;
@@ -112,6 +115,9 @@ interface StonesDesktopApi {
         storage_root?: string;
         free_bytes?: number;
         allowed_origins?: string[];
+        page_origin?: string;
+        expected_port?: number;
+        discovered_port?: number;
         queued_jobs?: number;
         startup_error?: string;
         error?: string;
@@ -122,6 +128,27 @@ interface StonesDesktopApi {
         removed_jobs?: number;
         removed_bytes?: number;
         health?: unknown;
+    }>;
+    importVideoSource(payload: {
+        stagedSourceId: string;
+        cachePath: string;
+        originalName: string;
+        mimeType: string;
+        size: number;
+        lastModified: number;
+    }): Promise<{
+        source_id: string;
+        duration_ms: number;
+        has_audio: boolean;
+        video_codec?: string;
+        format_name?: string;
+        preview_url?: string;
+        fingerprint: {
+            name: string;
+            size: number;
+            lastModified: number;
+            durationMs: number;
+        };
     }>;
     showVideoHelperStorage(): Promise<{ success: true }>;
     exportDiagnosticsMarkdown(payload: unknown): Promise<{ success: true; path: string; jsonPath?: string }>;
@@ -181,6 +208,19 @@ interface StonesDesktopApi {
     retryMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs(): Promise<StonesMediaQueueSnapshot>;
+    startVideoExportRun(payload: import('./admin/pages/video-tool/types').DesktopStartVideoExportRunPayload): Promise<{
+        run?: import('./admin/pages/video-tool/types').LocalVideoExportRunSnapshot;
+    }>;
+    renderVideoExportItem(payload: import('./admin/pages/video-tool/types').DesktopVideoExportItemPayload): Promise<{ success: boolean }>;
+    uploadVideoExportItem(payload: import('./admin/pages/video-tool/types').DesktopVideoExportItemPayload): Promise<{ success: boolean }>;
+    retryVideoExportItemUpload(runId: string, itemId: string): Promise<{ success: boolean }>;
+    rerenderVideoExportItem(
+        runId: string,
+        itemId: string,
+        manifestSlice: import('./admin/pages/video-tool/types').VideoExportManifestSlice
+    ): Promise<{ success: boolean }>;
+    cancelVideoExportItem(runId: string, itemId: string): Promise<{ success: boolean }>;
+    getVideoExportRunSnapshot(batchId: string): Promise<import('./admin/pages/video-tool/types').LocalVideoExportRunSnapshot | null>;
     openExternal(url: string): Promise<{ ok: true }>;
 }
 

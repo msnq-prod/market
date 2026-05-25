@@ -25,8 +25,7 @@ const createLocalServerRuntime = ({
     getMimeType,
     proxyPrefixes,
     desktopHelperPrefix,
-    helperPort,
-    getHelperError
+    getHelperProxyStatus
 }) => {
     let localServer = null;
     let localServerUrl = '';
@@ -75,7 +74,35 @@ const createLocalServerRuntime = ({
         req.pipe(proxy);
     };
 
-    const proxyDesktopHelperRequest = (req, res) => {
+    const getRequestPageOrigin = (req) => {
+        if (localServerUrl) {
+            return localServerUrl;
+        }
+
+        if (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)) {
+            return req.headers.origin;
+        }
+
+        const host = typeof req.headers.host === 'string' ? req.headers.host : '';
+        return host ? `http://${host}` : '';
+    };
+
+    const proxyDesktopHelperRequest = async (req, res) => {
+        const pageOrigin = getRequestPageOrigin(req);
+        const proxyStatus = await getHelperProxyStatus(pageOrigin);
+        if (!proxyStatus?.ok || !proxyStatus.port) {
+            res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+                error: proxyStatus?.helperIssueMessage || 'Встроенный video helper недоступен.',
+                pageOrigin: proxyStatus?.pageOrigin || '',
+                allowed_origins: proxyStatus?.allowed_origins || [],
+                expected_port: proxyStatus?.expected_port || null,
+                discovered_port: proxyStatus?.discovered_port || null
+            }));
+            return;
+        }
+
+        const helperPort = proxyStatus.port;
         const requestUrl = new URL(req.url || '/', `http://127.0.0.1:${helperPort}`);
         const helperPathname = requestUrl.pathname === desktopHelperPrefix
             ? '/'
@@ -88,7 +115,8 @@ const createLocalServerRuntime = ({
             path: `${helperPathname}${requestUrl.search}`,
             headers: {
                 ...req.headers,
-                host: `127.0.0.1:${helperPort}`
+                host: `127.0.0.1:${helperPort}`,
+                ...(pageOrigin ? { origin: pageOrigin } : {})
             }
         }, (proxyRes) => {
             res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
@@ -103,7 +131,11 @@ const createLocalServerRuntime = ({
 
             res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({
-                error: getHelperError() || 'Встроенный video helper недоступен.'
+                error: proxyStatus.helperIssueMessage || 'Встроенный video helper недоступен.',
+                pageOrigin: proxyStatus.pageOrigin || '',
+                allowed_origins: proxyStatus.allowed_origins || [],
+                expected_port: proxyStatus.expected_port || null,
+                discovered_port: proxyStatus.discovered_port || null
             }));
         });
 
@@ -162,7 +194,7 @@ const createLocalServerRuntime = ({
                 const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
 
                 if (isDesktopHelperRequest(requestUrl.pathname)) {
-                    proxyDesktopHelperRequest(req, res);
+                    void proxyDesktopHelperRequest(req, res);
                     return;
                 }
 

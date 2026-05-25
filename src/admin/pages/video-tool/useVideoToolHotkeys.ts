@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { TIMELINE_ZOOM_STEP } from './constants';
 import type { Segment } from './types';
 import { isEditableHotkeyTarget } from './videoHelperClient';
-import { splitSegmentAt, toggleSegmentDeletedAt } from './timelineUtils';
+import { splitSegmentAt, toggleSegmentDeletedAt } from './engine/index.ts';
 
 type UseVideoToolHotkeysOptions = {
     applySegmentEdit: (updater: (current: Segment[]) => Segment[]) => void;
@@ -80,17 +80,38 @@ export const useVideoToolHotkeys = ({
                 return;
             }
 
+            if (normalizedKey === ',' || normalizedKey === 'б' || normalizedKey === '<') {
+                event.preventDefault();
+                syncVideoTime(Math.max(0, playheadMs - 33));
+                return;
+            }
+
+            if (normalizedKey === '.' || normalizedKey === 'ю' || normalizedKey === '>') {
+                event.preventDefault();
+                syncVideoTime(Math.min(durationMs, playheadMs + 33));
+                return;
+            }
+
             if (event.key === 'ArrowLeft') {
                 event.preventDefault();
-                const previousCut = [...timelineCuts].reverse().find((cutMs) => cutMs < playheadMs - 1);
-                syncVideoTime(previousCut ?? 0);
+                if (event.shiftKey) {
+                    syncVideoTime(Math.max(0, playheadMs - 1000));
+                } else {
+                    const previousCut = [...timelineCuts].reverse().find((cutMs) => cutMs < playheadMs - 1);
+                    syncVideoTime(previousCut ?? 0);
+                }
                 return;
             }
 
             if (event.key === 'ArrowRight') {
                 event.preventDefault();
-                const nextCut = timelineCuts.find((cutMs) => cutMs > playheadMs + 1);
-                syncVideoTime(nextCut ?? durationMs);
+                if (event.shiftKey) {
+                    syncVideoTime(Math.min(durationMs, playheadMs + 1000));
+                } else {
+                    const nextCut = timelineCuts.find((cutMs) => cutMs > playheadMs + 1);
+                    syncVideoTime(nextCut ?? durationMs);
+                }
+                return;
             }
         };
 

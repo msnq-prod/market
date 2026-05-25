@@ -79,6 +79,17 @@ const ensurePayloadWithStrings = (payload, requiredFields = [], optionalFields =
     return nextPayload;
 };
 
+const ensureVideoSourceImportPayload = (payload) => {
+    const safePayload = ensurePayloadWithStrings(payload, ['cachePath', 'originalName'], ['stagedSourceId', 'mimeType']);
+    const size = Number(payload.size);
+    const lastModified = Number(payload.lastModified);
+    return {
+        ...safePayload,
+        size: Number.isFinite(size) && size >= 0 ? size : 0,
+        lastModified: Number.isFinite(lastModified) && lastModified >= 0 ? lastModified : 0
+    };
+};
+
 const buildWorkflowFromDraft = (batchId, draft, mediaQueueRoot) => ({
     batchId,
     batchLabel: batchId,
@@ -171,6 +182,15 @@ const registerIpcHandlers = ({
     });
     ipcMain.handle('stones:get-video-helper-status', async () => helperRuntime.getStatus());
     ipcMain.handle('stones:cleanup-video-helper', async () => helperRuntime.cleanupOldAssets());
+    ipcMain.handle('stones:import-video-source', async (_event, payload) => {
+        const safePayload = ensureVideoSourceImportPayload(payload);
+        return helperRuntime.importSourceFile({
+            sourcePath: safePayload.cachePath,
+            originalName: safePayload.originalName,
+            lastModified: safePayload.lastModified,
+            copyToSourceRoot: true
+        });
+    });
     ipcMain.handle('stones:show-video-helper-storage', async () => {
         await shell.openPath(config.getHelperStorageRoot());
         return { success: true };
@@ -236,6 +256,13 @@ const registerIpcHandlers = ({
         await shell.openExternal(ensureHttpUrl(url));
         return { ok: true };
     });
+    ipcMain.handle('stones:start-video-export-run', async (_event, payload) => requireMediaWorkflowManager().startVideoExportRun(payload));
+    ipcMain.handle('stones:render-video-export-item', async (_event, payload) => requireMediaWorkflowManager().renderVideoExportItem(payload));
+    ipcMain.handle('stones:upload-video-export-item', async (_event, payload) => requireMediaWorkflowManager().uploadVideoExportItem(payload));
+    ipcMain.handle('stones:retry-video-export-item-upload', async (_event, runId, itemId) => requireMediaWorkflowManager().retryVideoExportItemUpload(runId, itemId));
+    ipcMain.handle('stones:rerender-video-export-item', async (_event, runId, itemId, manifestSlice) => requireMediaWorkflowManager().rerenderVideoExportItem(runId, itemId, manifestSlice));
+    ipcMain.handle('stones:cancel-video-export-item', async (_event, runId, itemId) => requireMediaWorkflowManager().cancelVideoExportItem(runId, itemId));
+    ipcMain.handle('stones:get-video-export-run-snapshot', async (_event, batchId) => requireMediaWorkflowManager().getVideoExportRunSnapshot(batchId));
 };
 
 module.exports = {

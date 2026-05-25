@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     syncAuthToken: (accessToken) => ipcRenderer.invoke('stones:sync-auth-token', accessToken),
     getVideoHelperStatus: () => ipcRenderer.invoke('stones:get-video-helper-status'),
     cleanupVideoHelper: () => ipcRenderer.invoke('stones:cleanup-video-helper'),
+    importVideoSource: (payload) => ipcRenderer.invoke('stones:import-video-source', payload),
     showVideoHelperStorage: () => ipcRenderer.invoke('stones:show-video-helper-storage'),
     selectBatchDiagnosticsMediaFolder: () => ipcRenderer.invoke('stones:select-batch-diagnostics-media-folder'),
     exportDiagnosticsMarkdown: (payload) => ipcRenderer.invoke('stones:export-diagnostics-markdown', payload),
@@ -37,6 +38,13 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     retryMediaQueueJob: (jobId) => ipcRenderer.invoke('stones:retry-media-queue-job', jobId),
     cancelMediaQueueJob: (jobId) => ipcRenderer.invoke('stones:cancel-media-queue-job', jobId),
     clearCompletedMediaQueueJobs: () => ipcRenderer.invoke('stones:clear-completed-media-queue-jobs'),
+    startVideoExportRun: (payload) => ipcRenderer.invoke('stones:start-video-export-run', payload),
+    renderVideoExportItem: (payload) => ipcRenderer.invoke('stones:render-video-export-item', payload),
+    uploadVideoExportItem: (payload) => ipcRenderer.invoke('stones:upload-video-export-item', payload),
+    retryVideoExportItemUpload: (runId, itemId) => ipcRenderer.invoke('stones:retry-video-export-item-upload', runId, itemId),
+    rerenderVideoExportItem: (runId, itemId, manifestSlice) => ipcRenderer.invoke('stones:rerender-video-export-item', runId, itemId, manifestSlice),
+    cancelVideoExportItem: (runId, itemId) => ipcRenderer.invoke('stones:cancel-video-export-item', runId, itemId),
+    getVideoExportRunSnapshot: (batchId) => ipcRenderer.invoke('stones:get-video-export-run-snapshot', batchId),
     subscribeMediaQueue: (callback) => {
         const listener = (_event, snapshot) => callback(snapshot);
         ipcRenderer.on('stones:media-queue-updated', listener);

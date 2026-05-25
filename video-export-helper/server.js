@@ -793,6 +793,7 @@ export async function startVideoExportHelperServer(options = {}) {
     const sources = new Map();
     const jobs = new Map();
     const buildHelperUrl = (pathname) => `http://${host}:${port}${pathname}`;
+    const allowedSourceExtensions = new Set(['.mp4', '.mov', '.m4v', '.webm']);
     const renderLimiter = createConcurrencyLimiter(videoRenderConcurrency);
     const getJobStats = () => {
         let activeJobs = 0;
@@ -1264,6 +1265,116 @@ export async function startVideoExportHelperServer(options = {}) {
     await cleanupOldAssets().catch(() => undefined);
     await getHealthInfo();
 
+    const importSourceFile = async ({
+        sourcePath,
+        originalName,
+        lastModified = 0,
+        copyToSourceRoot = true
+    }) => {
+        const safeOriginalName = typeof originalName === 'string' && originalName.trim()
+            ? originalName.trim()
+            : path.basename(sourcePath || 'source.mp4');
+        const extension = path.extname(safeOriginalName).toLowerCase() || path.extname(sourcePath || '').toLowerCase() || '.mp4';
+        if (!allowedSourceExtensions.has(extension)) {
+            throw new Error('Для источника разрешены только mp4, mov, m4v и webm.');
+        }
+
+        const stat = await fsp.stat(sourcePath);
+        if (!stat.isFile()) {
+            throw new Error('Исходный видеофайл не найден.');
+        }
+
+        await ensureEnoughDiskSpace(stat.size);
+
+        const sourceId = crypto.randomUUID();
+        const filePath = copyToSourceRoot
+            ? path.join(sourceRoot, `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`)
+            : sourcePath;
+
+        if (copyToSourceRoot) {
+            await fsp.copyFile(sourcePath, filePath);
+        }
+
+        try {
+            const probe = await runDiagnosticStage(
+                'video-export-helper',
+                'probe',
+                {
+                    source_id: sourceId,
+                    size_bytes: stat.size
+                },
+                () => probeSource(ffprobePath, filePath),
+                (result) => ({
+                    has_audio: result.hasAudio,
+                    preview_expected: shouldGeneratePreview(safeOriginalName, result)
+                })
+            );
+            if (probe.durationMs <= 0) {
+                throw new Error('Не удалось определить длительность исходного ролика.');
+            }
+
+            if (probe.durationMs > maxSourceDurationMs) {
+                throw new Error(`Исходный ролик длиннее допустимого лимита ${Math.round(maxSourceDurationMs / 60000)} минут.`);
+            }
+
+            const sourceRecord = {
+                id: sourceId,
+                original_name: safeOriginalName,
+                file_path: filePath,
+                preview_path: null,
+                size: stat.size,
+                duration_ms: probe.durationMs,
+                has_audio: probe.hasAudio,
+                created_at: new Date().toISOString()
+            };
+
+            if (shouldGeneratePreview(safeOriginalName, probe)) {
+                const previewPath = path.join(previewRoot, `${sourceId}.mp4`);
+                try {
+                    await runDiagnosticStage(
+                        'video-export-helper',
+                        'preview_render',
+                        {
+                            source_id: sourceId,
+                            size_bytes: stat.size,
+                            has_audio: sourceRecord.has_audio
+                        },
+                        () => renderPreviewFile(ffmpegPath, sourceRecord, previewPath)
+                    );
+                    sourceRecord.preview_path = previewPath;
+                } catch (previewError) {
+                    console.warn('[video-export-helper] preview render failed', previewError);
+                    await fsp.rm(previewPath, { force: true }).catch(() => undefined);
+                }
+            }
+
+            sources.set(sourceId, sourceRecord);
+            await persistState();
+
+            return {
+                source_id: sourceRecord.id,
+                duration_ms: sourceRecord.duration_ms,
+                has_audio: sourceRecord.has_audio,
+                video_codec: probe.videoCodec,
+                format_name: probe.formatName,
+                preview_url: sourceRecord.preview_path
+                    ? buildHelperUrl(`/sources/${sourceRecord.id}/preview`)
+                    : undefined,
+                fingerprint: {
+                    name: sourceRecord.original_name,
+                    size: sourceRecord.size,
+                    lastModified: Number(lastModified) || 0,
+                    durationMs: sourceRecord.duration_ms
+                }
+            };
+        } catch (error) {
+            if (copyToSourceRoot) {
+                await fsp.rm(filePath, { force: true }).catch(() => undefined);
+            }
+            throw error;
+        }
+    };
+
     const upload = multer({
         storage: multer.diskStorage({
             destination: (_req, _file, cb) => cb(null, sourceRoot),
@@ -1274,8 +1385,7 @@ export async function startVideoExportHelperServer(options = {}) {
         }),
         fileFilter: (_req, file, cb) => {
             const extension = path.extname(file.originalname).toLowerCase();
-            const allowedExtensions = new Set(['.mp4', '.mov', '.m4v', '.webm']);
-            if ((file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream' || !file.mimetype) && allowedExtensions.has(extension)) {
+            if ((file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream' || !file.mimetype) && allowedSourceExtensions.has(extension)) {
                 cb(null, true);
                 return;
             }
@@ -1389,80 +1499,13 @@ export async function startVideoExportHelperServer(options = {}) {
                 return res.status(400).json({ error: 'Не передан исходный видеофайл.' });
             }
 
-            await ensureEnoughDiskSpace(req.file.size);
-
-            const sourceId = crypto.randomUUID();
-            const probe = await runDiagnosticStage(
-                'video-export-helper',
-                'probe',
-                {
-                    source_id: sourceId,
-                    size_bytes: req.file.size
-                },
-                () => probeSource(ffprobePath, req.file.path),
-                (result) => ({
-                    has_audio: result.hasAudio,
-                    preview_expected: shouldGeneratePreview(req.file.originalname, result)
-                })
-            );
-            if (probe.durationMs <= 0) {
-                throw new Error('Не удалось определить длительность исходного ролика.');
-            }
-
-            if (probe.durationMs > maxSourceDurationMs) {
-                throw new Error(`Исходный ролик длиннее допустимого лимита ${Math.round(maxSourceDurationMs / 60000)} минут.`);
-            }
-
-            const sourceRecord = {
-                id: sourceId,
-                original_name: req.file.originalname,
-                file_path: req.file.path,
-                preview_path: null,
-                size: req.file.size,
-                duration_ms: probe.durationMs,
-                has_audio: probe.hasAudio,
-                created_at: new Date().toISOString()
-            };
-
-            if (shouldGeneratePreview(req.file.originalname, probe)) {
-                const previewPath = path.join(previewRoot, `${sourceId}.mp4`);
-                try {
-                    await runDiagnosticStage(
-                        'video-export-helper',
-                        'preview_render',
-                        {
-                            source_id: sourceId,
-                            size_bytes: req.file.size,
-                            has_audio: sourceRecord.has_audio
-                        },
-                        () => renderPreviewFile(ffmpegPath, sourceRecord, previewPath)
-                    );
-                    sourceRecord.preview_path = previewPath;
-                } catch (previewError) {
-                    console.warn('[video-export-helper] preview render failed', previewError);
-                    await fsp.rm(previewPath, { force: true }).catch(() => undefined);
-                }
-            }
-
-            sources.set(sourceId, sourceRecord);
-            await persistState();
-
-            res.status(201).json({
-                source_id: sourceRecord.id,
-                duration_ms: sourceRecord.duration_ms,
-                has_audio: sourceRecord.has_audio,
-                video_codec: probe.videoCodec,
-                format_name: probe.formatName,
-                preview_url: sourceRecord.preview_path
-                    ? buildHelperUrl(`/sources/${sourceRecord.id}/preview`)
-                    : undefined,
-                fingerprint: {
-                    name: sourceRecord.original_name,
-                    size: sourceRecord.size,
-                    lastModified: Number(req.body.lastModified) || 0,
-                    durationMs: sourceRecord.duration_ms
-                }
+            const payload = await importSourceFile({
+                sourcePath: req.file.path,
+                originalName: req.file.originalname,
+                lastModified: req.body.lastModified,
+                copyToSourceRoot: false
             });
+            res.status(201).json(payload);
         } catch (error) {
             if (req.file?.path) {
                 await fsp.rm(req.file.path, { force: true }).catch(() => undefined);
@@ -1768,6 +1811,7 @@ export async function startVideoExportHelperServer(options = {}) {
         ffmpegPath,
         ffprobePath,
         getHealthInfo,
+        importSourceFile,
         cleanupOldAssets,
         getRecentLogs: () => recentLogs,
         stop: async () => {

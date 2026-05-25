@@ -54,6 +54,12 @@ export type VideoExportManifest = {
     segments: VideoExportSegment[];
     outputs: VideoExportOutput[];
     intro_asset?: VideoExportIntroAsset | null;
+    export_settings?: {
+        resolution?: '1080p' | '720p';
+        quality?: 'high' | 'medium' | 'low';
+        fps?: 30 | 60;
+        audio_normalize?: boolean;
+    };
 };
 
 export type UploadedVideoExportManifestEntry = {
@@ -235,12 +241,36 @@ export const parseVideoExportManifest = (value: Prisma.JsonValue | null | undefi
             : null;
     }
 
+    let exportSettings: VideoExportManifest['export_settings'];
+    if (isRecord(value.export_settings)) {
+        const resolution = value.export_settings.resolution === '1080p' || value.export_settings.resolution === '720p'
+            ? value.export_settings.resolution
+            : undefined;
+        const quality = value.export_settings.quality === 'high' || value.export_settings.quality === 'medium' || value.export_settings.quality === 'low'
+            ? value.export_settings.quality
+            : undefined;
+        const fps = value.export_settings.fps === 30 || value.export_settings.fps === 60
+            ? value.export_settings.fps
+            : undefined;
+        const audioNormalize = typeof value.export_settings.audio_normalize === 'boolean'
+            ? value.export_settings.audio_normalize
+            : undefined;
+
+        exportSettings = {
+            ...(resolution ? { resolution } : {}),
+            ...(quality ? { quality } : {}),
+            ...(fps ? { fps } : {}),
+            ...(audioNormalize !== undefined ? { audio_normalize: audioNormalize } : {})
+        };
+    }
+
     return {
         ...(Number.isFinite(manifestVersion) ? { manifest_version: manifestVersion } : {}),
         ...(sources ? { sources } : {}),
         segments,
         outputs,
-        ...(introAsset !== undefined ? { intro_asset: introAsset } : {})
+        ...(introAsset !== undefined ? { intro_asset: introAsset } : {}),
+        ...(exportSettings && Object.keys(exportSettings).length > 0 ? { export_settings: exportSettings } : {})
     };
 };
 

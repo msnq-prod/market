@@ -1,3 +1,10 @@
+import type {
+    DesktopStartVideoExportRunPayload,
+    DesktopVideoExportItemPayload,
+    LocalVideoExportRunSnapshot,
+    VideoExportManifestSlice
+} from '../admin/pages/video-tool/types';
+
 export type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
 
 export type StonesDesktopAppInfo = {
@@ -191,6 +198,9 @@ export type StonesDesktopVideoHelperStatus = {
     storage_root?: string;
     free_bytes?: number;
     allowed_origins?: string[];
+    page_origin?: string;
+    expected_port?: number;
+    discovered_port?: number;
     queued_jobs?: number;
     startup_error?: string;
     error?: string;
@@ -202,6 +212,21 @@ export type StonesDesktopVideoHelperCleanupResult = {
     removed_jobs?: number;
     removed_bytes?: number;
     health?: unknown;
+};
+
+export type StonesDesktopVideoSourceImportPayload = {
+    source_id: string;
+    duration_ms: number;
+    has_audio: boolean;
+    video_codec?: string;
+    format_name?: string;
+    preview_url?: string;
+    fingerprint: {
+        name: string;
+        size: number;
+        lastModified: number;
+        durationMs: number;
+    };
 };
 
 export type StonesBatchDiagnosticsMediaFile = {
@@ -232,6 +257,14 @@ export type StonesDesktopApi = {
     syncAuthToken: (accessToken: string | null) => Promise<{ ok: true }>;
     getVideoHelperStatus: () => Promise<StonesDesktopVideoHelperStatus>;
     cleanupVideoHelper: () => Promise<StonesDesktopVideoHelperCleanupResult>;
+    importVideoSource: (payload: {
+        stagedSourceId: string;
+        cachePath: string;
+        originalName: string;
+        mimeType: string;
+        size: number;
+        lastModified: number;
+    }) => Promise<StonesDesktopVideoSourceImportPayload>;
     showVideoHelperStorage: () => Promise<{ success: true }>;
     selectBatchDiagnosticsMediaFolder: () => Promise<StonesBatchDiagnosticsMediaFolder>;
     exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string; jsonPath?: string }>;
@@ -259,6 +292,13 @@ export type StonesDesktopApi = {
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs: () => Promise<StonesMediaQueueSnapshot>;
+    startVideoExportRun: (payload: DesktopStartVideoExportRunPayload) => Promise<{ run?: LocalVideoExportRunSnapshot }>;
+    renderVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
+    uploadVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
+    retryVideoExportItemUpload: (runId: string, itemId: string) => Promise<{ success: boolean }>;
+    rerenderVideoExportItem: (runId: string, itemId: string, manifestSlice: VideoExportManifestSlice) => Promise<{ success: boolean }>;
+    cancelVideoExportItem: (runId: string, itemId: string) => Promise<{ success: boolean }>;
+    getVideoExportRunSnapshot: (batchId: string) => Promise<LocalVideoExportRunSnapshot | null>;
     openExternal: (url: string) => Promise<{ ok: true }>;
 };
 

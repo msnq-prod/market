@@ -25,8 +25,7 @@ const localServerRuntime = createLocalServerRuntime({
     getMimeType: config.getMimeType,
     proxyPrefixes: config.PROXY_PREFIXES,
     desktopHelperPrefix: config.DESKTOP_HELPER_PREFIX,
-    helperPort: config.HELPER_PORT,
-    getHelperError: () => helperRuntime.getStartupError()
+    getHelperProxyStatus: () => helperRuntime.getProxyStatus()
 });
 
 const helperRuntime = createHelperRuntime({
@@ -173,7 +172,7 @@ const createWindow = async () => {
     try {
         await helperRuntime.start(appOrigin);
     } catch (error) {
-        await helperRuntime.handleStartupError(error);
+        await helperRuntime.handleStartupError(error, appOrigin);
         console.error('[zagarami-hq] failed to start embedded helper', error);
     }
 
