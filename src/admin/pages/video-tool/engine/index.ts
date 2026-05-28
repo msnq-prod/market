@@ -201,7 +201,7 @@ export const createSourceFromFingerprint = (
     sourceIndex: number,
     role: SourceRole,
     fingerprint: SourceFingerprint,
-    options?: Partial<Pick<WorkingSource, 'file' | 'helperSourceId' | 'stagedSourceId' | 'cachePath' | 'checksumSha256' | 'previewUrl' | 'previewUnavailable'>>
+    options?: Partial<Pick<WorkingSource, 'file' | 'helperSourceId' | 'stagedSourceId' | 'cachePath' | 'checksumSha256' | 'previewUrl' | 'previewFileId' | 'previewError' | 'previewUnavailable'>>
 ): WorkingSource => ({
     sourceIndex,
     role,
@@ -215,6 +215,8 @@ export const createSourceFromFingerprint = (
     cachePath: options?.cachePath ?? null,
     checksumSha256: options?.checksumSha256 ?? null,
     previewUrl: options?.previewUrl ?? '',
+    previewFileId: options?.previewFileId ?? null,
+    previewError: options?.previewError ?? null,
     previewUnavailable: options?.previewUnavailable ?? false
 });
 

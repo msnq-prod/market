@@ -1,4 +1,5 @@
-const { app, BrowserWindow, Notification, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Notification, dialog, ipcMain, shell, protocol, net } = require('electron');
+const { pathToFileURL } = require('url');
 
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
 const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
@@ -13,6 +14,15 @@ const { registerIpcHandlers } = require('./ipcHandlers.cjs');
 
 const config = createAppConfig({ app });
 app.setName(config.APP_DISPLAY_NAME);
+protocol.registerSchemesAsPrivileged([{
+    scheme: 'zagarami-media',
+    privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        stream: true
+    }
+}]);
 
 let isQuitting = false;
 let accessToken = null;
@@ -186,6 +196,33 @@ const showMainWindow = async () => {
     return windowsRuntime.show({ appUrl, appOrigin: new URL(appUrl).origin, apiOrigin });
 };
 
+let mediaProtocolRegistered = false;
+const registerMediaProtocol = () => {
+    if (mediaProtocolRegistered) {
+        return;
+    }
+
+    protocol.handle('zagarami-media', async (request) => {
+        const parsed = new URL(request.url);
+        if (parsed.hostname !== 'video-preview') {
+            return new Response('Unsupported media endpoint', { status: 404 });
+        }
+
+        const sourceId = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+        if (!sourceId || !/^[0-9a-f-]{36}$/i.test(sourceId)) {
+            return new Response('Invalid preview id', { status: 400 });
+        }
+
+        try {
+            const previewPath = await helperRuntime.getPreviewFilePath(sourceId);
+            return net.fetch(pathToFileURL(previewPath).toString());
+        } catch (error) {
+            return new Response(error instanceof Error ? error.message : 'Preview unavailable', { status: 404 });
+        }
+    });
+    mediaProtocolRegistered = true;
+};
+
 registerIpcHandlers({
     ipcMain,
     shell,
@@ -243,7 +280,10 @@ app.on('before-quit', (event) => {
 });
 
 app.whenReady()
-    .then(() => showMainWindow())
+    .then(() => {
+        registerMediaProtocol();
+        return showMainWindow();
+    })
     .catch((error) => {
         console.error('[zagarami-hq] failed to start', error);
         app.quit();

@@ -282,6 +282,13 @@ const createHelperRuntime = ({
 
             return helperController.importSourceFile(payload);
         },
+        async getPreviewFilePath(sourceId) {
+            if (!helperController) {
+                throw new Error(helperStartupError || 'Встроенный helper ещё не запущен.');
+            }
+
+            return helperController.getPreviewFilePath(sourceId);
+        },
         async stop() {
             if (!helperController) {
                 return;

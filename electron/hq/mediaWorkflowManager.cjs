@@ -17,6 +17,7 @@ const ACTIVE_VIDEO_PHASES = new Set([
     'paused_offline',
     'auth_required'
 ]);
+const ACTIVE_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'auth_required']);
 const ACTIVE_PHOTO_PHASES = new Set([
     'queued',
     'converting',
@@ -1519,6 +1520,20 @@ class MediaWorkflowManager extends EventEmitter {
             throw new Error('Видео ещё не отрендерено.');
         }
 
+        if (item.uploadJobId) {
+            const existingJob = this.mediaQueue.jobs.find((job) => job.id === item.uploadJobId);
+            if (existingJob && ACTIVE_QUEUE_STATUSES.has(existingJob.status)) {
+                return { success: true, jobId: existingJob.id };
+            }
+            if (existingJob?.status === 'done') {
+                item.uploadStatus = 'completed';
+                item.uploadProgress = 100;
+                item.errorMessage = '';
+                await this.markV2Changed();
+                return { success: true, jobId: existingJob.id };
+            }
+        }
+
         const queuedJob = await this.mediaQueue.enqueue('VIDEO_EXPORT_RUN_ITEM_UPLOAD', {
             batchId: run.batchId,
             runId: run.runId,
@@ -1711,9 +1726,8 @@ class MediaWorkflowManager extends EventEmitter {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                source_id: source.helperSourceId,
-                                start_ms: Number(introSegment.start_ms),
-                                end_ms: Number(introSegment.end_ms)
+                                sources: [{ source_index: introSourceIndex, source_id: source.helperSourceId }],
+                                segment: introSegment
                             })
                         }, 'Не удалось запустить intro job в helper.');
                         if (!payload?.job_id) {
@@ -1782,24 +1796,29 @@ class MediaWorkflowManager extends EventEmitter {
                             item.renderProgress = 100;
                             changed = true;
 
-                            // Enqueue upload
-                            const queuedJob = await this.mediaQueue.enqueue('VIDEO_EXPORT_RUN_ITEM_UPLOAD', {
-                                batchId: run.batchId,
-                                runId: run.runId,
-                                itemId: item.itemId,
-                                serialNumber: item.serialNumber,
-                                helperJobId: item.renderJobId,
-                                helperBaseUrl: HELPER_BASE_URL
-                            }, [], {
-                                title: `${item.serialNumber}.mp4`,
-                                batchId: run.batchId,
-                                fileName: `${item.serialNumber}.mp4`,
-                                serialNumber: item.serialNumber
-                            });
+                            const existingJob = item.uploadJobId
+                                ? this.mediaQueue.jobs.find((job) => job.id === item.uploadJobId)
+                                : null;
+                            const hasActiveUpload = existingJob && ACTIVE_QUEUE_STATUSES.has(existingJob.status);
+                            if (!hasActiveUpload && item.uploadStatus !== 'completed') {
+                                const queuedJob = await this.mediaQueue.enqueue('VIDEO_EXPORT_RUN_ITEM_UPLOAD', {
+                                    batchId: run.batchId,
+                                    runId: run.runId,
+                                    itemId: item.itemId,
+                                    serialNumber: item.serialNumber,
+                                    helperJobId: item.renderJobId,
+                                    helperBaseUrl: HELPER_BASE_URL
+                                }, [], {
+                                    title: `${item.serialNumber}.mp4`,
+                                    batchId: run.batchId,
+                                    fileName: `${item.serialNumber}.mp4`,
+                                    serialNumber: item.serialNumber
+                                });
 
-                            item.uploadStatus = 'uploading';
-                            item.uploadJobId = queuedJob.id;
-                            item.uploadProgress = 0;
+                                item.uploadStatus = 'uploading';
+                                item.uploadJobId = queuedJob.id;
+                                item.uploadProgress = 0;
+                            }
                         } else {
                             const progress = Number(payload.progress || 0);
                             if (progress !== item.renderProgress) {

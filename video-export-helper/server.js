@@ -264,8 +264,16 @@ const isLoopbackAddress = (value) => {
         || value === '::ffff:127.0.0.1';
 };
 
-const runBinary = async (binary, args) =>
-    execFileAsync(binary, args, { maxBuffer: 32 * 1024 * 1024 });
+const runBinary = async (binary, args) => {
+    try {
+        return await execFileAsync(binary, args, { maxBuffer: 32 * 1024 * 1024 });
+    } catch (error) {
+        if (error && typeof error === 'object' && typeof error.stderr === 'string' && error.stderr.trim()) {
+            error.message = `${error.message}\nStderr:\n${error.stderr.trim()}`;
+        }
+        throw error;
+    }
+};
 
 const ensureBinaryExists = async (binary) => {
     await runBinary(binary, ['-version']);
@@ -557,24 +565,6 @@ const probeSource = async (ffprobePath, filePath) => {
         videoCodec: typeof videoStream.codec_name === 'string' ? videoStream.codec_name : '',
         formatName: typeof parsed.format?.format_name === 'string' ? parsed.format.format_name : ''
     };
-};
-
-const shouldGeneratePreview = (originalName, probe) => {
-    const extension = path.extname(originalName).toLowerCase();
-    const codec = (probe.videoCodec || '').toLowerCase();
-    const formatName = (probe.formatName || '').toLowerCase();
-
-    if (extension === '.mp4' && ['h264', 'avc1'].includes(codec)) {
-        return false;
-    }
-
-    if (extension === '.webm' && ['vp8', 'vp9', 'av1'].includes(codec)) {
-        return false;
-    }
-
-    return formatName.includes('mov')
-        || ['hevc', 'h265', 'prores', 'dnxhd'].some((part) => codec.includes(part))
-        || extension === '.m4v';
 };
 
 const renderPreviewFile = async (ffmpegPath, source, outputPath) => {
@@ -1306,7 +1296,7 @@ export async function startVideoExportHelperServer(options = {}) {
                 () => probeSource(ffprobePath, filePath),
                 (result) => ({
                     has_audio: result.hasAudio,
-                    preview_expected: shouldGeneratePreview(safeOriginalName, result)
+                    preview_expected: true
                 })
             );
             if (probe.durationMs <= 0) {
@@ -1328,24 +1318,22 @@ export async function startVideoExportHelperServer(options = {}) {
                 created_at: new Date().toISOString()
             };
 
-            if (shouldGeneratePreview(safeOriginalName, probe)) {
-                const previewPath = path.join(previewRoot, `${sourceId}.mp4`);
-                try {
-                    await runDiagnosticStage(
-                        'video-export-helper',
-                        'preview_render',
-                        {
-                            source_id: sourceId,
-                            size_bytes: stat.size,
-                            has_audio: sourceRecord.has_audio
-                        },
-                        () => renderPreviewFile(ffmpegPath, sourceRecord, previewPath)
-                    );
-                    sourceRecord.preview_path = previewPath;
-                } catch (previewError) {
-                    console.warn('[video-export-helper] preview render failed', previewError);
-                    await fsp.rm(previewPath, { force: true }).catch(() => undefined);
-                }
+            const previewPath = path.join(previewRoot, `${sourceId}.mp4`);
+            try {
+                await runDiagnosticStage(
+                    'video-export-helper',
+                    'preview_render',
+                    {
+                        source_id: sourceId,
+                        size_bytes: stat.size,
+                        has_audio: sourceRecord.has_audio
+                    },
+                    () => renderPreviewFile(ffmpegPath, sourceRecord, previewPath)
+                );
+                sourceRecord.preview_path = previewPath;
+            } catch (previewError) {
+                await fsp.rm(previewPath, { force: true }).catch(() => undefined);
+                throw new Error(`Не удалось создать preview для исходника: ${previewError instanceof Error ? previewError.message : String(previewError || 'unknown error')}`);
             }
 
             sources.set(sourceId, sourceRecord);
@@ -1357,9 +1345,11 @@ export async function startVideoExportHelperServer(options = {}) {
                 has_audio: sourceRecord.has_audio,
                 video_codec: probe.videoCodec,
                 format_name: probe.formatName,
-                preview_url: sourceRecord.preview_path
-                    ? buildHelperUrl(`/sources/${sourceRecord.id}/preview`)
-                    : undefined,
+                preview_url: buildHelperUrl(`/sources/${sourceRecord.id}/preview`),
+                preview_file_id: sourceRecord.id,
+                preview_path: sourceRecord.preview_path,
+                preview_created: true,
+                preview_error: null,
                 fingerprint: {
                     name: sourceRecord.original_name,
                     size: sourceRecord.size,
@@ -1373,6 +1363,19 @@ export async function startVideoExportHelperServer(options = {}) {
             }
             throw error;
         }
+    };
+
+    const getPreviewFilePath = async (sourceId) => {
+        const source = sources.get(sourceId);
+        if (!source) {
+            throw new Error('Исходник не найден.');
+        }
+
+        if (!source.preview_path || !fs.existsSync(source.preview_path)) {
+            throw new Error('Preview-файл отсутствует на диске.');
+        }
+
+        return source.preview_path;
     };
 
     const upload = multer({
@@ -1519,16 +1522,21 @@ export async function startVideoExportHelperServer(options = {}) {
 
     app.get('/sources/:id/preview', (req, res) => {
         const source = sources.get(req.params.id);
-        if (!source || !source.preview_path) {
-            return res.status(404).json({ error: 'Preview для исходника не найден.' });
+        if (!source) {
+            return res.status(404).json({ error: 'Исходник не найден.' });
         }
 
-        if (!fs.existsSync(source.preview_path)) {
-            return res.status(404).json({ error: 'Preview-файл отсутствует на диске.' });
+        const fileToServe = source.preview_path;
+        if (!fileToServe) {
+            return res.status(404).json({ error: 'Preview для исходника не создан.' });
+        }
+
+        if (!fs.existsSync(fileToServe)) {
+            return res.status(404).json({ error: 'Файл отсутствует на диске.' });
         }
 
         res.setHeader('Content-Type', 'video/mp4');
-        res.sendFile(source.preview_path);
+        res.sendFile(fileToServe);
     });
 
     app.post('/intro-jobs', async (req, res) => {
@@ -1812,6 +1820,7 @@ export async function startVideoExportHelperServer(options = {}) {
         ffprobePath,
         getHealthInfo,
         importSourceFile,
+        getPreviewFilePath,
         cleanupOldAssets,
         getRecentLogs: () => recentLogs,
         stop: async () => {

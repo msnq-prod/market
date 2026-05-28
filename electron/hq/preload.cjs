@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     getVideoHelperStatus: () => ipcRenderer.invoke('stones:get-video-helper-status'),
     cleanupVideoHelper: () => ipcRenderer.invoke('stones:cleanup-video-helper'),
     importVideoSource: (payload) => ipcRenderer.invoke('stones:import-video-source', payload),
+    getVideoSourcePreview: (sourceId) => ipcRenderer.invoke('stones:get-video-source-preview', sourceId),
     showVideoHelperStorage: () => ipcRenderer.invoke('stones:show-video-helper-storage'),
     selectBatchDiagnosticsMediaFolder: () => ipcRenderer.invoke('stones:select-batch-diagnostics-media-folder'),
     exportDiagnosticsMarkdown: (payload) => ipcRenderer.invoke('stones:export-diagnostics-markdown', payload),

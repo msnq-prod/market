@@ -115,7 +115,10 @@ const normalizeDesktopDraft = (batchId: string, value: unknown): VideoToolDraft 
             helperSourceId: source.helperSourceId ?? null,
             stagedSourceId: source.stagedSourceId ?? null,
             cachePath: source.cachePath ?? null,
-            checksumSha256: source.checksumSha256 ?? null
+            checksumSha256: source.checksumSha256 ?? null,
+            previewUrl: typeof source.previewUrl === 'string' && source.previewUrl.startsWith('zagarami-media://') ? source.previewUrl : null,
+            previewFileId: source.previewFileId ?? null,
+            previewError: source.previewError ?? null
         })),
         segments: normalizeSegments(draft.segments),
         sessionId: draft.sessionId ?? null,
@@ -617,6 +620,45 @@ export function VideoToolController() {
                 ? normalizeDesktopDraft(batchId, await desktop.getVideoDraft(batchId))
                 : parseDraft(batchId);
             setDraft(existingDraft);
+            const resolveRestoredPreview = async (
+                helperSourceId: string,
+                draftSource?: NonNullable<VideoToolDraft['sources']>[number]
+            ) => {
+                if (!helperSourceId) {
+                    return {
+                        previewUrl: '',
+                        previewFileId: null,
+                        previewError: 'Исходник нужно привязать заново.',
+                        previewUnavailable: true
+                    };
+                }
+
+                if (isDesktopApp && desktop) {
+                    try {
+                        const preview = await desktop.getVideoSourcePreview(helperSourceId);
+                        return {
+                            previewUrl: preview.previewUrl,
+                            previewFileId: preview.previewFileId,
+                            previewError: null,
+                            previewUnavailable: false
+                        };
+                    } catch (previewError) {
+                        return {
+                            previewUrl: '',
+                            previewFileId: draftSource?.previewFileId || helperSourceId,
+                            previewError: previewError instanceof Error ? previewError.message : 'Preview-файл отсутствует. Привяжите исходник заново.',
+                            previewUnavailable: true
+                        };
+                    }
+                }
+
+                return {
+                    previewUrl: `${helperBaseUrl}/sources/${helperSourceId}/preview`,
+                    previewFileId: draftSource?.previewFileId || helperSourceId,
+                    previewError: null,
+                    previewUnavailable: false
+                };
+            };
             const { runs } = await fetchVideoExportRuns(batchId);
             const preferredRun = runs.find((run) => !['COMPLETED', 'CANCELLED'].includes(run.status)) ?? runs[0] ?? null;
             setActiveV2Run(preferredRun as VideoExportRunDetails | null);
@@ -626,23 +668,24 @@ export function VideoToolController() {
                 setActiveV2Run(latestRun);
                 applyLoadedExportSettings(latestRun.export_settings ?? latestRun.render_manifest?.export_settings ?? null);
 
-                const manifestSources = createSourcesFromManifest(latestRun.render_manifest).map((source) => {
+                const manifestSources = await Promise.all(createSourcesFromManifest(latestRun.render_manifest).map(async (source) => {
                     const draftSource = existingDraft?.sources.find((entry) =>
                         entry.sourceIndex === source.sourceIndex
                         && entry.fingerprint.name === source.name
                         && entry.fingerprint.size === source.size
                         && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
                     );
-                    return draftSource?.helperSourceId
-                        ? {
-                            ...source,
-                            helperSourceId: draftSource.helperSourceId,
-                            stagedSourceId: draftSource.stagedSourceId || null,
-                            cachePath: draftSource.cachePath || null,
-                            checksumSha256: draftSource.checksumSha256 || null
-                        }
-                        : source;
-                });
+                    const helperSourceId = draftSource?.helperSourceId || '';
+                    const previewState = await resolveRestoredPreview(helperSourceId, draftSource);
+                    return {
+                        ...source,
+                        helperSourceId: helperSourceId,
+                        stagedSourceId: draftSource?.stagedSourceId || null,
+                        cachePath: draftSource?.cachePath || null,
+                        checksumSha256: draftSource?.checksumSha256 || null,
+                        ...previewState
+                    };
+                }));
                 if (manifestSources.length > 0) {
                     setSources(manifestSources);
                     setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);
@@ -660,18 +703,22 @@ export function VideoToolController() {
                         .map((item) => item.serial_number)
                 );
             } else if (existingDraft?.sources.length) {
-                const draftSources = existingDraft.sources.map((source) => createSourceFromFingerprint(
-                    source.sourceIndex,
-                    source.role,
-                    source.fingerprint,
-                    {
-                        helperSourceId: source.helperSourceId || '',
-                        stagedSourceId: source.stagedSourceId || null,
-                        cachePath: source.cachePath || null,
-                        checksumSha256: source.checksumSha256 || null,
-                        previewUnavailable: Boolean(source.stagedSourceId)
-                    }
-                ));
+                const draftSources = await Promise.all(existingDraft.sources.map(async (source) => {
+                    const helperSourceId = source.helperSourceId || '';
+                    const previewState = await resolveRestoredPreview(helperSourceId, source);
+                    return createSourceFromFingerprint(
+                        source.sourceIndex,
+                        source.role,
+                        source.fingerprint,
+                        {
+                            helperSourceId,
+                            stagedSourceId: source.stagedSourceId || null,
+                            cachePath: source.cachePath || null,
+                            checksumSha256: source.checksumSha256 || null,
+                            ...previewState
+                        }
+                    );
+                }));
                 setSources(draftSources);
                 setActiveSourceIndex(draftSources[0]?.sourceIndex ?? 0);
                 setSegments(normalizeSegments(existingDraft.segments));
@@ -993,7 +1040,10 @@ export function VideoToolController() {
                 helperSourceId: source.helperSourceId || null,
                 stagedSourceId: source.stagedSourceId || null,
                 cachePath: source.cachePath || null,
-                checksumSha256: source.checksumSha256 || null
+                checksumSha256: source.checksumSha256 || null,
+                previewUrl: source.previewUrl.startsWith('zagarami-media://') ? source.previewUrl : null,
+                previewFileId: source.previewFileId || null,
+                previewError: source.previewError || null
             })),
             segments,
             sessionId: activeV2Run?.run_id || null,
@@ -1209,6 +1259,20 @@ export function VideoToolController() {
             : source));
     };
 
+    const handleVideoError = () => {
+        if (!activeSource) {
+            return;
+        }
+
+        setSources((current) => current.map((source) => source.sourceIndex === activeSource.sourceIndex
+            ? {
+                ...source,
+                previewUnavailable: true,
+                previewError: `Preview не декодируется${source.helperSourceId ? ` (source ${source.helperSourceId})` : ''}. Привяжите исходник заново.`
+            }
+            : source));
+    };
+
     const importSourceIntoHelper = async (
         file: File,
         sourceIndex: number,
@@ -1281,11 +1345,18 @@ export function VideoToolController() {
             const formatName = (payload.format_name || '').toLowerCase();
             const isHevcMov = (codec === 'hevc' || codec === 'h265') && formatName.includes('mov');
             if (payload.preview_url) {
-                try {
-                    previewUrl = `${helperBaseUrl}${new URL(payload.preview_url).pathname}`;
-                } catch {
+                if (isDesktopApp && payload.preview_url.startsWith('zagarami-media://')) {
                     previewUrl = payload.preview_url;
+                } else {
+                    try {
+                        previewUrl = `${helperBaseUrl}${new URL(payload.preview_url).pathname}`;
+                    } catch {
+                        previewUrl = payload.preview_url;
+                    }
                 }
+            }
+            if (isDesktopApp && (!payload.preview_created || !payload.preview_file_id || !previewUrl.startsWith('zagarami-media://'))) {
+                throw new Error(payload.preview_error || 'Helper не создал desktop preview для исходника.');
             }
 
             const nextSource = createSourceFromFingerprint(sourceIndex, role, expectedFingerprint || nextFingerprint, {
@@ -1295,6 +1366,8 @@ export function VideoToolController() {
                 cachePath: stagedSource?.cachePath || null,
                 checksumSha256: stagedSource?.checksumSha256 || null,
                 previewUrl,
+                previewFileId: payload.preview_file_id || null,
+                previewError: payload.preview_error || null,
                 previewUnavailable: false
             });
 
@@ -2107,6 +2180,7 @@ export function VideoToolController() {
                         setPreviewOpen={setPreviewOpen}
                         showHelp={showHotkeyHelp}
                         setShowHelp={setShowHotkeyHelp}
+                        onVideoError={handleVideoError}
                     />
                 )}
 

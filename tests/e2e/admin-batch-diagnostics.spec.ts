@@ -127,10 +127,12 @@ const prepareMediaFolder = async (): Promise<PreparedMedia> => {
         await writeFile(path.join(directoryPath, `${String(index).padStart(2, '0')}.png`), TINY_PNG);
     }
 
-    await createMp4(path.join(directoryPath, 'source.mp4'));
+    await createMp4(path.join(directoryPath, 'source-1.mp4'));
+    await createMp4(path.join(directoryPath, 'source-2.mp4'));
     const names = [
         ...Array.from({ length: 10 }, (_entry, index) => `${String(index + 1).padStart(2, '0')}.png`),
-        'source.mp4'
+        'source-1.mp4',
+        'source-2.mp4'
     ];
     const files = await Promise.all(names.map(async (name) => {
         const fullPath = path.join(directoryPath, name);

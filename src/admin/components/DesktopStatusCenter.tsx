@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
     Activity,
@@ -13,7 +13,13 @@ import {
     UploadCloud,
     Video,
     Wifi,
-    X
+    X,
+    CheckCircle2,
+    AlertCircle,
+    Terminal,
+    Copy,
+    ExternalLink,
+    Sparkles
 } from 'lucide-react';
 import {
     getStonesDesktop,
@@ -577,6 +583,14 @@ export function DesktopStatusCenter() {
         steps: [],
         mediaDiagnostics: []
     });
+    
+    const consoleEndRef = useRef<HTMLDivElement | null>(null);
+    
+    useEffect(() => {
+        if (consoleEndRef.current) {
+            consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [batchDiagnosticsLog.mediaDiagnostics]);
     const currentRole = localStorage.getItem('userRole') || '';
     const currentRoleLabel = roleLabel[currentRole] || currentRole || 'Не определена';
 
@@ -1019,6 +1033,11 @@ export function DesktopStatusCenter() {
             }));
         }
     }, [desktop, refresh]);
+
+    const copyTerminalLogs = useCallback(() => {
+        const text = batchDiagnosticsLog.mediaDiagnostics.join('\n');
+        void navigator.clipboard.writeText(text);
+    }, [batchDiagnosticsLog.mediaDiagnostics]);
 
     useEffect(() => {
         if (!isDesktopRuntime || !desktop) {
@@ -1469,114 +1488,272 @@ export function DesktopStatusCenter() {
                             ) : null}
 
                             {isDesktopRuntime && activeTab === 'diagnostics' ? (
-                                <div className="space-y-3">
+                                <div className="space-y-4">
+                                    {/* Header Banner */}
+                                    <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-zinc-900/80 to-zinc-950/80 backdrop-blur-md p-4 relative overflow-hidden shadow-xl">
+                                        <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+                                        <div className="flex items-start gap-3">
+                                            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                                                <TestTube2 size={20} />
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                                                    Диагностический стенд E2E
+                                                    <span className="inline-flex items-center rounded-md bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 ring-1 ring-inset ring-emerald-400/20 animate-pulse">HQ</span>
+                                                </h3>
+                                                <p className="mt-1 text-xs leading-relaxed text-gray-400">
+                                                    Интерактивный запуск полной цепочки создания партии (10 товаров). Стенд загружает фото, выполняет физический рендеринг видео на helper, тестирует QR, публичные страницы и цифровые двойники.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Dynamic Status Grid */}
+                                        <div className="mt-4 grid grid-cols-2 gap-2 border-t border-white/8 pt-3">
+                                            <div className="rounded-xl bg-white/3 border border-white/6 px-3 py-2">
+                                                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Текущий статус</p>
+                                                <div className="mt-1 flex items-center gap-2">
+                                                    <span className={`h-2 w-2 rounded-full ${
+                                                        batchDiagnosticsLog.status === 'success' ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' :
+                                                        batchDiagnosticsLog.status === 'failed' ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]' :
+                                                        batchDiagnosticsLog.status === 'running' ? 'bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-pulse' :
+                                                        'bg-zinc-500'
+                                                    }`} />
+                                                    <span className="text-xs font-medium text-white uppercase" data-testid="batch-diagnostics-status">
+                                                        {batchDiagnosticsLog.status === 'idle' ? 'Не запускалась' :
+                                                         batchDiagnosticsLog.status === 'running' ? 'Выполняется' :
+                                                         batchDiagnosticsLog.status === 'success' ? 'Успешно' : 'Ошибка'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="rounded-xl bg-white/3 border border-white/6 px-3 py-2">
+                                                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Серийный номер / Twin</p>
+                                                {batchDiagnosticsLog.serialNumber ? (
+                                                    <a
+                                                        href={batchDiagnosticsLog.cloneUrl}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="mt-1 flex items-center gap-1 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+                                                    >
+                                                        {batchDiagnosticsLog.serialNumber}
+                                                        <ExternalLink size={11} />
+                                                    </a>
+                                                ) : (
+                                                    <p className="mt-1 text-xs text-gray-400">—</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Action Control Panel */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => void runBatchDiagnostics()}
+                                            disabled={batchDiagnosticsLog.status === 'running'}
+                                            data-testid="batch-diagnostics-run"
+                                            className="relative overflow-hidden inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-bold shadow-[0_4px_15px_rgba(16,185,129,0.25)] transition-all hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:pointer-events-none"
+                                        >
+                                            {batchDiagnosticsLog.status === 'running' ? (
+                                                <>
+                                                    <LoaderCircle size={16} className="animate-spin text-white" />
+                                                    <span>Проверка выполняется...</span>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Sparkles size={16} />
+                                                    <span>Запустить проверку партии</span>
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => void exportDiagnostics()}
+                                            disabled={batchDiagnosticsLog.steps.length === 0 && batchDiagnosticsLog.mediaDiagnostics.length === 0}
+                                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/3 px-4 text-sm font-bold text-gray-200 hover:bg-white/8 hover:text-white disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                                        >
+                                            <Download size={16} />
+                                            Экспортировать .md
+                                        </button>
+                                    </div>
+
+                                    {/* Main Workspace: Steps (Pipeline) & Terminal Logs */}
+                                    <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-stretch">
+                                        
+                                        {/* Pipeline Stepper (5 columns) */}
+                                        <div className="xl:col-span-5 flex flex-col rounded-2xl border border-white/8 bg-black/25 p-3 overflow-hidden min-h-[300px]">
+                                            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 flex items-center gap-1.5 mb-2.5">
+                                                <Activity size={12} className="text-emerald-400" />
+                                                Конвейер Шагов
+                                            </h4>
+                                            
+                                            {batchDiagnosticsLog.steps.length === 0 ? (
+                                                <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+                                                    <Activity size={24} className="text-zinc-600 animate-pulse" />
+                                                    <p className="mt-2 text-xs text-gray-500 font-medium">Конвейер ожидает запуска проверки</p>
+                                                </div>
+                                            ) : (
+                                                <div className="flex-1 space-y-2 overflow-y-auto max-h-[320px] pr-1">
+                                                    {batchDiagnosticsLog.steps.map((step) => {
+                                                        const isOk = step.status === 'ok';
+                                                        const isFailed = step.status === 'failed';
+                                                        const isRunning = step.status === 'running';
+                                                        
+                                                        return (
+                                                            <div key={step.key} className="p-2 rounded-xl border border-white/5 bg-white/2 hover:bg-white/4 transition-colors">
+                                                                <div className="flex items-start justify-between gap-2.5">
+                                                                    <div className="flex items-start gap-2 min-w-0">
+                                                                        <div className="mt-0.5 shrink-0">
+                                                                            {isOk ? (
+                                                                                <CheckCircle2 size={14} className="text-emerald-400" />
+                                                                            ) : isFailed ? (
+                                                                                <AlertCircle size={14} className="text-rose-500" />
+                                                                            ) : isRunning ? (
+                                                                                <LoaderCircle size={14} className="animate-spin text-sky-400" />
+                                                                            ) : (
+                                                                                <span className="block h-3.5 w-3.5 rounded-full border border-white/20" />
+                                                                            )}
+                                                                        </div>
+                                                                        <div className="min-w-0">
+                                                                            <p className="text-xs font-semibold text-white truncate">{step.label}</p>
+                                                                            {step.durationMs != null ? (
+                                                                                <p className="text-[10px] text-zinc-500 font-medium">длительность: {(step.durationMs / 1000).toFixed(2)}с</p>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    </div>
+                                                                    <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+                                                                        isOk ? 'bg-emerald-400/10 text-emerald-400 border border-emerald-400/20' :
+                                                                        isFailed ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' :
+                                                                        'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                                                                    }`}>
+                                                                        {isOk ? 'OK' : isFailed ? 'ERR' : 'RUN'}
+                                                                    </span>
+                                                                </div>
+                                                                {step.error ? (
+                                                                    <p className="mt-1.5 text-[10px] leading-relaxed text-rose-400 bg-rose-950/20 border border-rose-900/30 p-1.5 rounded-lg break-words">
+                                                                        {step.error}
+                                                                    </p>
+                                                                ) : null}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Styled Terminal Console (7 columns) */}
+                                        <div className="xl:col-span-7 flex flex-col rounded-2xl border border-white/8 bg-[#0a0a0a] shadow-2xl min-h-[300px] overflow-hidden">
+                                            {/* Terminal Header */}
+                                            <div className="flex items-center justify-between px-3 py-2 border-b border-white/6 bg-white/2 shrink-0">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="flex gap-1.5">
+                                                        <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]" />
+                                                        <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]" />
+                                                        <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]" />
+                                                    </div>
+                                                    <div className="flex items-center gap-1 text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+                                                        <Terminal size={10} className="text-zinc-500" />
+                                                        stones-e2e-stdout
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={copyTerminalLogs}
+                                                    disabled={batchDiagnosticsLog.mediaDiagnostics.length === 0}
+                                                    className="p-1 rounded-md text-zinc-500 hover:text-white hover:bg-white/5 transition-colors disabled:opacity-50"
+                                                    title="Копировать логи"
+                                                >
+                                                    <Copy size={12} />
+                                                </button>
+                                            </div>
+
+                                            {/* Terminal Output */}
+                                            <div className="flex-1 p-3 overflow-y-auto max-h-[320px] scrollbar-thin scrollbar-thumb-white/10">
+                                                {batchDiagnosticsLog.mediaDiagnostics.length === 0 ? (
+                                                    <div className="h-full flex flex-col items-center justify-center text-center p-4">
+                                                        <Terminal size={20} className="text-zinc-700" />
+                                                        <p className="mt-1 text-[10px] font-mono text-zinc-600">СТАНДАРТНЫЙ ВЫВОД ПУСТ</p>
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-1">
+                                                        {batchDiagnosticsLog.mediaDiagnostics.map((line, index) => {
+                                                            let color = 'text-zinc-400';
+                                                            let text = line;
+                                                            if (line.startsWith('[INFO]')) {
+                                                                color = 'text-sky-300/90';
+                                                                text = line.substring(6).trim();
+                                                            } else if (line.startsWith('[SUCCESS]')) {
+                                                                color = 'text-emerald-400 font-semibold';
+                                                                text = line.substring(9).trim();
+                                                            } else if (line.startsWith('[ERROR]')) {
+                                                                color = 'text-rose-400 font-bold';
+                                                                text = line.substring(7).trim();
+                                                            } else if (line.startsWith('[PROCESS]')) {
+                                                                color = 'text-yellow-300 font-medium';
+                                                                text = line.substring(9).trim();
+                                                            }
+                                                            return (
+                                                                <div key={index} className={`font-mono text-[10px] leading-relaxed pl-1.5 py-0.5 border-l border-white/5 break-words ${color}`}>
+                                                                    {text}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                        {batchDiagnosticsLog.status === 'running' && (
+                                                            <div className="font-mono text-[10px] text-emerald-400 animate-pulse pl-1.5">
+                                                                <span>Идёт выполнение</span>
+                                                                <span className="inline-block w-1.5 h-3.5 bg-emerald-400 ml-1">_</span>
+                                                            </div>
+                                                        )}
+                                                        <div ref={consoleEndRef} />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                    </div>
+
+                                    {/* Logs Export Row */}
                                     <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
                                         <div className="flex items-start gap-3">
-                                            <TestTube2 className="mt-0.5 text-emerald-200" size={18} />
-                                            <div className="min-w-0 flex-1">
-                                                <h3 className="text-sm font-semibold text-white">Проверка создания партии</h3>
-                                                <p className="mt-1 text-sm leading-6 text-gray-400">
-                                                    Создает e2e-партию на 10 камней, загружает фото и видео, проверяет QR и публичный паспорт.
+                                            <Info className="mt-0.5 text-sky-200" size={16} />
+                                            <div>
+                                                <h4 className="text-xs font-bold text-white">Экспорт отчетов & логов</h4>
+                                                <p className="mt-0.5 text-[11px] leading-relaxed text-gray-400">
+                                                    При возникновении ошибок сети или проблем с рендерингом на helper экспортируйте полные логи для последующего аудита.
                                                 </p>
                                             </div>
                                         </div>
                                         <div className="mt-3 grid grid-cols-2 gap-2">
                                             <button
                                                 type="button"
-                                                onClick={() => void runBatchDiagnostics()}
-                                                disabled={batchDiagnosticsLog.status === 'running'}
-                                                data-testid="batch-diagnostics-run"
-                                                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                onClick={() => void exportDiagnostics()}
+                                                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-white/10 px-3 text-xs font-semibold text-gray-200 hover:bg-white/5 transition-colors"
                                             >
-                                                {batchDiagnosticsLog.status === 'running' ? <LoaderCircle size={16} className="animate-spin" /> : <TestTube2 size={16} />}
-                                                Проверка создания партии
+                                                <Download size={14} />
+                                                Экспортировать Markdown (.md)
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => void exportDiagnostics()}
-                                                disabled={batchDiagnosticsLog.steps.length === 0 && batchDiagnosticsLog.mediaDiagnostics.length === 0}
-                                                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 px-4 text-sm font-semibold text-gray-200 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                                onClick={() => void exportStatusCenterLogs()}
+                                                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-white/10 px-3 text-xs font-semibold text-gray-200 hover:bg-white/5 transition-colors"
                                             >
-                                                <Download size={16} />
-                                                Экспорт .md
+                                                <Download size={14} />
+                                                Экспортировать JSON (.json)
                                             </button>
                                         </div>
-                                        <div className="mt-3 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-gray-300" data-testid="batch-diagnostics-status">
-                                            Статус: {batchDiagnosticsLog.status === 'idle'
-                                                ? 'не запускалась'
-                                                : batchDiagnosticsLog.status === 'running'
-                                                    ? 'выполняется'
-                                                    : batchDiagnosticsLog.status === 'success'
-                                                        ? 'успешно'
-                                                        : 'ошибка'}
-                                            {batchDiagnosticsLog.batchId ? ` · партия ${batchDiagnosticsLog.batchId}` : ''}
-                                            {batchDiagnosticsLog.serialNumber ? ` · serial ${batchDiagnosticsLog.serialNumber}` : ''}
-                                        </div>
-                                        {batchDiagnosticsLog.error ? (
-                                            <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
-                                                {batchDiagnosticsLog.error}
+                                        {exportedDiagnosticsPath ? (
+                                            <p className="mt-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] leading-relaxed text-emerald-400 font-medium">
+                                                Markdown-отчет сохранен в папку Загрузки: {exportedDiagnosticsPath}
                                             </p>
                                         ) : null}
-                                        {batchDiagnosticsLog.steps.length > 0 ? (
-                                            <div className="mt-3 max-h-56 overflow-auto rounded-xl border border-white/8 bg-black/20">
-                                                {batchDiagnosticsLog.steps.map((step) => (
-                                                    <div key={step.key} className="flex items-start justify-between gap-3 border-b border-white/6 px-3 py-2 last:border-b-0">
-                                                        <div className="min-w-0">
-                                                            <p className="truncate text-xs font-medium text-white">{step.label}</p>
-                                                            {step.error ? <p className="mt-1 text-xs text-red-100/85">{step.error}</p> : null}
-                                                        </div>
-                                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-medium ${
-                                                            step.status === 'ok'
-                                                                ? 'bg-emerald-400/10 text-emerald-100'
-                                                                : step.status === 'failed'
-                                                                    ? 'bg-red-500/10 text-red-100'
-                                                                    : 'bg-sky-400/10 text-sky-100'
-                                                        }`}>
-                                                            {step.status === 'ok' ? 'ok' : step.status === 'failed' ? 'error' : 'run'}
-                                                        </span>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                        {exportedLogsPath ? (
+                                            <p className="mt-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] leading-relaxed text-emerald-400 font-medium">
+                                                JSON-логи сохранены в папку Загрузки: {exportedLogsPath}
+                                            </p>
                                         ) : null}
                                     </div>
-                                    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                                        <div className="flex items-start gap-3">
-                                            <Info className="mt-0.5 text-sky-200" size={18} />
-                                            <div>
-                                                <h3 className="text-sm font-semibold text-white">Общая диагностика</h3>
-                                                <p className="mt-1 text-sm leading-6 text-gray-400">
-                                                    Экспортируйте Markdown-отчет в Downloads для разбора проблем с сетью, helper, очередью или обновлениями.
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => void exportDiagnostics()}
-                                        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100"
-                                    >
-                                        <Download size={16} />
-                                        Экспортировать диагностику .md
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => void exportStatusCenterLogs()}
-                                        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 text-sm font-semibold text-gray-200 transition hover:bg-white/5"
-                                    >
-                                        <Download size={16} />
-                                        Сохранить все логи .json
-                                    </button>
-                                    {exportedDiagnosticsPath ? (
-                                        <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs leading-5 text-emerald-100">
-                                            Отчет сохранен: {exportedDiagnosticsPath}
-                                        </p>
-                                    ) : null}
-                                    {exportedLogsPath ? (
-                                        <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs leading-5 text-emerald-100">
-                                            Логи сохранены: {exportedLogsPath}
-                                        </p>
-                                    ) : null}
-                                    <pre className="max-h-[420px] overflow-auto rounded-2xl border border-white/8 bg-black/30 p-3 text-[11px] leading-5 text-gray-300">
+
+                                    {/* Diagnostics JSON Dump */}
+                                    <pre className="max-h-[140px] overflow-auto rounded-xl border border-white/8 bg-black/45 p-2.5 text-[10px] leading-normal text-zinc-500 font-mono">
                                         {JSON.stringify({
                                             app: diagnostics?.app,
                                             network: diagnostics?.network,

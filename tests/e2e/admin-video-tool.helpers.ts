@@ -152,6 +152,28 @@ export async function installDesktopVideoMock(page: Page, batchId: string) {
                 size: 10,
                 checksumSha256: `sha-${stagedSourceId}`
             }),
+            importVideoSource: async (payload: { stagedSourceId: string; originalName: string; size: number; lastModified: number }) => ({
+                source_id: payload.stagedSourceId,
+                duration_ms: 2000,
+                has_audio: true,
+                video_codec: 'h264',
+                format_name: 'mp4',
+                preview_url: `zagarami-media://source-preview/${payload.stagedSourceId}`,
+                preview_file_id: payload.stagedSourceId,
+                preview_created: true,
+                preview_error: null,
+                fingerprint: {
+                    name: payload.originalName,
+                    size: payload.size,
+                    lastModified: payload.lastModified,
+                    durationMs: 2000
+                }
+            }),
+            getVideoSourcePreview: async (sourceId: string) => ({
+                ok: true,
+                previewFileId: sourceId,
+                previewUrl: `zagarami-media://source-preview/${sourceId}`
+            }),
             saveVideoDraft: async (payload: { batchId: string }) => {
                 const drafts = getDrafts();
                 drafts[payload.batchId] = payload;

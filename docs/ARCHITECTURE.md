@@ -147,6 +147,10 @@ ZAGARAMI состоит из четырех основных частей:
 - `VideoProcessingJobStatus`
 - `BatchVideoExportSession`
 - `BatchVideoExportStatus`
+- `BatchVideoExportRun`
+- `BatchVideoExportRunStatus`
+- `BatchVideoExportItem`
+- `BatchVideoExportItemStatus`
 
 ## 5. Аутентификация и доступ
 
@@ -197,10 +201,11 @@ ZAGARAMI состоит из четырех основных частей:
 - сохранение идет по полному manifest и контролируется через `photo_state_token`
 - итог сохраняется в `Item.item_photo_url`
 
-В проекте есть два разных сценария работы с видео:
+В проекте есть три разных сценария работы с видео:
 
 1. server-side processing через `server/videoProcessor.ts`
-2. локальный export-flow через HQ Video Tool и desktop helper
+2. legacy export-session flow через HQ Video Tool и helper
+3. V2 export-run flow через HQ Video Tool, Electron desktop state и helper
 
 ### Backend video processing
 
@@ -208,16 +213,40 @@ ZAGARAMI состоит из четырех основных частей:
 - worker читает задания из БД
 - результат может обновлять `item_video_url`
 
-### Локальный export-flow
+### Legacy export-session flow
 
 - HQ открывает `/admin/video-tool/:batchId`
-- браузер проверяет локальный helper и его `protocol_version`
 - создается или расширяется `BatchVideoExportSession`
 - `render_manifest` хранит v2-манифест: ordered sources, source-aware segments, prefix outputs и server-side `intro_asset`
 - локальный helper v3 рендерит ролики по item из сохраненного intro и текущих source без intro
 - незавершенная session может быть продолжена через append-only dogruzka или retry-tail для отсутствующих файлов
 - частичная загрузка не обновляет `item_video_url`; ссылки проставляются только после полного набора `expected_count`
 - готовые `.mp4` дозагружаются обратно в backend
+
+Код:
+
+- `server/routes/batches/videoToolRoutes.ts`
+- `server/routes/batches/videoExportSessionService.ts`
+
+### V2 export-run flow
+
+- HQ открывает `/admin/video-tool/:batchId`
+- Electron HQ проверяет embedded helper protocol `stones-video-export-helper-v3`
+- UI создает backend `BatchVideoExportRun`
+- Electron создает local V2 run snapshot в desktop state
+- helper используется через HTTP-контракт `/sources`, `/intro-jobs`, `/render-jobs`
+- item-level upload идет через `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
+- commit идет через `POST /api/batches/:id/video-export-runs/:runId/commit`
+
+Код:
+
+- `server/routes/batches/videoToolRoutesV2.ts`
+- `server/routes/batches/videoExportRunService.ts`
+- `electron/hq/mediaWorkflowManager.cjs`
+- `electron/hq/mediaQueue.cjs`
+- `src/admin/pages/video-tool/VideoToolController.tsx`
+
+Ограничение текущей реализации: automatic item render queue для V2 еще не является чистым завершенным workflow. План рефактора описан в `VIDEO_TOOL_WORKFLOW_REFACTOR_PLAN_RU.md`.
 
 ## 8. Публичный цифровой паспорт
 

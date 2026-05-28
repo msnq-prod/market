@@ -184,12 +184,25 @@ const registerIpcHandlers = ({
     ipcMain.handle('stones:cleanup-video-helper', async () => helperRuntime.cleanupOldAssets());
     ipcMain.handle('stones:import-video-source', async (_event, payload) => {
         const safePayload = ensureVideoSourceImportPayload(payload);
-        return helperRuntime.importSourceFile({
+        const result = await helperRuntime.importSourceFile({
             sourcePath: safePayload.cachePath,
             originalName: safePayload.originalName,
             lastModified: safePayload.lastModified,
             copyToSourceRoot: true
         });
+        return {
+            ...result,
+            preview_url: result.preview_file_id ? `zagarami-media://video-preview/${result.preview_file_id}` : result.preview_url
+        };
+    });
+    ipcMain.handle('stones:get-video-source-preview', async (_event, sourceId) => {
+        const safeSourceId = ensureStringId(sourceId, 'sourceId');
+        await helperRuntime.getPreviewFilePath(safeSourceId);
+        return {
+            ok: true,
+            previewFileId: safeSourceId,
+            previewUrl: `zagarami-media://video-preview/${safeSourceId}`
+        };
     });
     ipcMain.handle('stones:show-video-helper-storage', async () => {
         await shell.openPath(config.getHelperStorageRoot());

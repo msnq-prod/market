@@ -175,6 +175,9 @@ npm run dev
 
 - `GET /api/batches/:id/video-tool`
 - `POST /api/batches/:id/video-jobs`
+
+Legacy export-session endpoints:
+
 - `POST /api/batches/:id/video-export-sessions`
 - `GET /api/batches/:id/video-export-sessions/:sessionId`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/intro-file`
@@ -182,7 +185,19 @@ npm run dev
 - `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
 - `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
 
-`video-tool` использует локальный helper с `protocol_version = stones-video-export-helper-v3`, сохраняет intro первой выгрузки через `intro-file` и позволяет append-only догрузку исходников без intro только для недостающих роликов.
+V2 export-run endpoints:
+
+- `GET /api/batches/:id/video-export-runs`
+- `POST /api/batches/:id/video-export-runs`
+- `GET /api/batches/:id/video-export-runs/:runId`
+- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/render`
+- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
+- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/retry-upload`
+- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/cancel`
+- `POST /api/batches/:id/video-export-runs/:runId/commit`
+- `POST /api/batches/:id/video-export-runs/:runId/cancel`
+
+`video-tool` в Electron HQ использует embedded helper с `protocol_version = stones-video-export-helper-v3`. В коде сейчас сосуществуют legacy `video-export-sessions` и V2 `video-export-runs`; для новых задач по V2 ориентироваться на V2 endpoints и `VIDEO_TOOL_WORKFLOW_REFACTOR_PLAN_RU.md`.
 
 ### Фото
 
@@ -256,9 +271,10 @@ Seed создает:
 
 1. Войти как `manager@stones.com` или `admin@stones.com`.
 2. Открыть `/admin/video-tool/:batchId`.
-3. Проверить, что helper доступен и tool видит текущую export-session.
-4. Для незавершенной session проверить сценарий retry-tail только по отсутствующим роликам.
-5. Для частично выгруженной партии проверить `Добавить ещё видео`: второй source должен быть без intro, а уже загруженные `serial_number` не должны пересобираться.
+3. Проверить, что embedded helper доступен и protocol version совпадает.
+4. Для legacy session-flow проверить retry-tail только если задача явно касается `video-export-sessions`.
+5. Для V2 run-flow проверить создание `video-export-runs`, item upload и commit.
+6. До завершения рефактора automatic render queue учитывать, что основной V2 UI еще содержит ручное действие `Рендер + Загрузка`.
 
 ### Проверка публичного паспорта
 

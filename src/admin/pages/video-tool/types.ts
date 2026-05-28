@@ -204,6 +204,8 @@ export type WorkingSource = SourceFingerprint & {
     cachePath?: string | null;
     checksumSha256?: string | null;
     previewUrl: string;
+    previewFileId?: string | null;
+    previewError?: string | null;
     previewUnavailable: boolean;
 };
 
@@ -218,6 +220,9 @@ export type VideoToolDraft = {
         stagedSourceId?: string | null;
         cachePath?: string | null;
         checksumSha256?: string | null;
+        previewUrl?: string | null;
+        previewFileId?: string | null;
+        previewError?: string | null;
     }>;
     segments: Segment[];
     sessionId: string | null;
@@ -275,6 +280,10 @@ export type HelperSourceUploadPayload = {
     video_codec?: string;
     format_name?: string;
     preview_url?: string;
+    preview_file_id?: string;
+    preview_path?: string;
+    preview_created?: boolean;
+    preview_error?: string | null;
     fingerprint: SourceFingerprint;
 };
 

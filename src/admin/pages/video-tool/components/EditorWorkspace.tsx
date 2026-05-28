@@ -53,6 +53,7 @@ interface EditorWorkspaceProps {
     setPreviewOpen: (open: boolean) => void;
     showHelp: boolean;
     setShowHelp: (show: boolean) => void;
+    onVideoError?: () => void;
 }
 
 export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
@@ -95,7 +96,8 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     previewOpen,
     setPreviewOpen,
     showHelp,
-    setShowHelp
+    setShowHelp,
+    onVideoError
 }) => {
     const timelineRulerRef = useRef<HTMLDivElement | null>(null);
 
@@ -480,12 +482,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                             <div className="relative aspect-[9/16] w-full max-w-[280px] max-h-full overflow-hidden rounded-[20px] border border-zinc-900 bg-black shadow-lg">
                                 {sourceUrl && !sourcePreviewUnavailable ? (
                                     <video
+                                        key={sourceUrl}
                                         ref={videoRef}
                                         src={sourceUrl}
                                         preload="metadata"
                                         playsInline
                                         className="h-full w-full object-contain"
                                         onLoadedMetadata={handleLoadedMetadataInternal}
+                                        onLoadedData={handleLoadedMetadataInternal}
+                                        onCanPlay={handleLoadedMetadataInternal}
                                         onPlay={() => setIsPlaying(true)}
                                         onPause={() => setIsPlaying(false)}
                                         onTimeUpdate={(event) => {
@@ -494,11 +499,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                                 : 0;
                                             setPlayheadMs(offsetMs + Math.round(event.currentTarget.currentTime * 1000));
                                         }}
+                                        onError={() => onVideoError?.()}
                                     />
                                 ) : (
                                     <div className="flex h-full flex-col items-center justify-center text-center p-4 text-xs text-zinc-600">
                                         <AlertTriangle size={24} className="mb-2" />
-                                        <span>Видео недоступно</span>
+                                        <span>{activeSource?.previewError || 'Видео недоступно'}</span>
                                     </div>
                                 )}
                             </div>

@@ -172,8 +172,8 @@ const createDiagnosticsRuntime = ({
         const videoCount = files.filter((file) => file.kind === 'video').length;
         diagnostics.push(`Найдено фото: ${photoCount}, видео: ${videoCount}.`);
 
-        if (photoCount !== 10 || videoCount !== 1) {
-            throw new Error(`Для проверки нужна папка с 10 фото и 1 видео. Сейчас: ${photoCount} фото, ${videoCount} видео.`);
+        if (photoCount !== 10 || videoCount < 1) {
+            throw new Error(`Для проверки нужна папка с 10 фото и как минимум 1 видео. Сейчас: ${photoCount} фото, ${videoCount} видео.`);
         }
 
         return { cancelled: false, directoryPath, files, diagnostics };
@@ -265,7 +265,7 @@ const createDiagnosticsRuntime = ({
         },
         async selectBatchDiagnosticsMediaFolder() {
             const result = await dialog.showOpenDialog(getMainWindow() || undefined, {
-                title: 'Выберите папку с 10 фото и 1 видео для проверки партии',
+                title: 'Выберите папку с 10 фото и как минимум 1 видео для проверки партии',
                 properties: ['openDirectory']
             });
 

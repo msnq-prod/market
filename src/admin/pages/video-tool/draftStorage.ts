@@ -25,7 +25,10 @@ export const parseDraft = (batchId: string): VideoToolDraft | null => {
                 helperSourceId: source.helperSourceId ?? null,
                 stagedSourceId: source.stagedSourceId ?? null,
                 cachePath: source.cachePath ?? null,
-                checksumSha256: source.checksumSha256 ?? null
+                checksumSha256: source.checksumSha256 ?? null,
+                previewUrl: typeof source.previewUrl === 'string' && source.previewUrl.startsWith('zagarami-media://') ? source.previewUrl : null,
+                previewFileId: source.previewFileId ?? null,
+                previewError: source.previewError ?? null
             })),
             segments: normalizeSegments(parsed.segments)
         };

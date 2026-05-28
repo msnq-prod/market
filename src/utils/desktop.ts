@@ -221,6 +221,10 @@ export type StonesDesktopVideoSourceImportPayload = {
     video_codec?: string;
     format_name?: string;
     preview_url?: string;
+    preview_file_id?: string;
+    preview_path?: string;
+    preview_created?: boolean;
+    preview_error?: string | null;
     fingerprint: {
         name: string;
         size: number;
@@ -265,6 +269,7 @@ export type StonesDesktopApi = {
         size: number;
         lastModified: number;
     }) => Promise<StonesDesktopVideoSourceImportPayload>;
+    getVideoSourcePreview: (sourceId: string) => Promise<{ ok: true; previewFileId: string; previewUrl: string }>;
     showVideoHelperStorage: () => Promise<{ success: true }>;
     selectBatchDiagnosticsMediaFolder: () => Promise<StonesBatchDiagnosticsMediaFolder>;
     exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string; jsonPath?: string }>;
