@@ -19,22 +19,6 @@ export type VideoToolPayload = {
     }>;
 };
 
-export type VideoExportSessionPayload = {
-    session: {
-        session_id: string;
-        status: string;
-        version: number;
-        uploaded_count: number;
-        expected_count: number;
-        render_manifest: {
-            outputs: Array<{ serial_number: string }>;
-        } | null;
-        uploaded_manifest: Array<{ serial_number: string; skipped?: boolean; public_url?: string }>;
-    };
-    resumed?: boolean;
-    duplicate?: boolean;
-};
-
 type DesktopRunItemSnapshot = {
     itemId: string;
     serialNumber: string;
@@ -51,17 +35,30 @@ type DesktopRunSnapshot = {
     runId: string;
     batchId: string;
     status: string;
+    renderManifest?: DesktopRunStartPayload['renderManifest'];
     items: Record<string, DesktopRunItemSnapshot>;
 };
 
 type DesktopRunStartPayload = {
     runId: string;
     renderManifest?: {
+        segments?: Array<{
+            sequence: number;
+            source_index?: number;
+            start_ms: number;
+            end_ms: number;
+        }>;
         outputs?: Array<{
+            segment_seq?: number;
             item_id: string;
             serial_number: string;
         }>;
     };
+};
+
+export type DesktopVideoMockOptions = {
+    apiOrigin?: string;
+    autoCompleteRun?: boolean;
 };
 
 export const ADMIN_EMAIL = 'admin@stones.com';
@@ -100,8 +97,9 @@ export async function seekTimelineToRatio(page: Page, ratio: number) {
     }, ratio);
 }
 
-export async function installDesktopVideoMock(page: Page, batchId: string) {
-    await page.addInitScript((mockBatchId) => {
+export async function installDesktopVideoMock(page: Page, batchId: string, options: DesktopVideoMockOptions = {}) {
+    await page.addInitScript((payload: { mockBatchId: string; mockApiOrigin: string; mockAutoCompleteRun: boolean }) => {
+        const { mockBatchId, mockApiOrigin, mockAutoCompleteRun } = payload;
         const getDrafts = () => JSON.parse(window.localStorage.getItem('__desktopVideoDrafts') || '{}') as Record<string, unknown>;
         const setDrafts = (drafts: Record<string, unknown>) => window.localStorage.setItem('__desktopVideoDrafts', JSON.stringify(drafts));
         const getRuns = () => JSON.parse(window.localStorage.getItem('__desktopVideoExportRuns') || '{}') as Record<string, DesktopRunSnapshot>;
@@ -125,10 +123,38 @@ export async function installDesktopVideoMock(page: Page, batchId: string) {
             setRuns(runs);
             return run.items[itemId];
         };
+        const completeRunItem = async (requestedBatchId: string, runId: string, itemId: string) => {
+            const runs = getRuns();
+            const run = runs[requestedBatchId];
+            const item = run?.items?.[itemId];
+            if (!item) {
+                return;
+            }
+
+            const form = new FormData();
+            form.append('serial_number', item.serialNumber || itemId);
+            if (run.renderManifest) {
+                form.append('render_manifest', JSON.stringify(run.renderManifest));
+            }
+            form.append('file', new Blob([`fake-run-item-${itemId}`], { type: 'video/mp4' }), `${item.serialNumber || itemId}.mp4`);
+            await fetch(`/api/batches/${requestedBatchId}/video-export-runs/${runId}/items/${itemId}/upload`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: form
+            });
+            updateRunItem(requestedBatchId, itemId, (current) => ({
+                ...current,
+                renderStatus: 'completed',
+                renderProgress: 100,
+                uploadStatus: 'completed',
+                uploadProgress: 100,
+                errorMessage: ''
+            }));
+        };
 
         window.stonesDesktop = {
             isDesktop: true,
-            getAppInfo: async () => ({ version: 'test', platform: 'darwin', mode: 'development', apiOrigin: window.location.origin }),
+            getAppInfo: async () => ({ version: 'test', platform: 'darwin', mode: 'development', apiOrigin: mockApiOrigin || window.location.origin }),
             getNetworkStatus: async () => ({ online: true, apiReachable: true, checkedAt: new Date().toISOString() }),
             getDesktopDiagnostics: async () => ({ app: {}, network: {}, helper: { embedded: true, ok: true }, queue: { counts: {}, activeJobs: 0, failedJobs: 0 } }),
             checkHqUpdate: async () => ({ updateAvailable: false }),
@@ -192,8 +218,6 @@ export async function installDesktopVideoMock(page: Page, batchId: string) {
             subscribeMediaQueue: () => () => undefined,
             subscribeMediaWorkflows: () => () => undefined,
             enqueuePhotoToolApply: async () => ({}),
-            enqueueVideoIntroUpload: async () => ({}),
-            enqueueVideoRenderUpload: async () => ({}),
             retryMediaWorkflow: async () => ({ workflows: [], counts: {} }),
             cancelMediaWorkflow: async () => ({ workflows: [], counts: {} }),
             retryMediaQueueJob: async () => ({ jobs: [], counts: {} }),
@@ -216,16 +240,18 @@ export async function installDesktopVideoMock(page: Page, batchId: string) {
                     runId: payload.runId,
                     batchId: mockBatchId,
                     status: 'ready',
+                    renderManifest: payload.renderManifest,
                     items
                 };
                 setRuns(runs);
-                return { run: runs[mockBatchId] };
+                if (mockAutoCompleteRun) {
+                    for (const output of payload.renderManifest?.outputs || []) {
+                        await completeRunItem(mockBatchId, payload.runId, output.item_id);
+                    }
+                }
+                return { run: getRuns()[mockBatchId] };
             },
             renderVideoExportItem: async (payload: { batchId: string; runId: string; itemId: string }) => {
-                await fetch(`/api/batches/${payload.batchId}/video-export-runs/${payload.runId}/items/${payload.itemId}/render`, {
-                    method: 'POST',
-                    headers: getAuthHeaders()
-                });
                 updateRunItem(payload.batchId, payload.itemId, (item) => ({
                     ...item,
                     renderStatus: 'rendering',
@@ -235,114 +261,33 @@ export async function installDesktopVideoMock(page: Page, batchId: string) {
                 return { success: true };
             },
             uploadVideoExportItem: async (payload: { batchId: string; runId: string; itemId: string }) => {
+                await completeRunItem(payload.batchId, payload.runId, payload.itemId);
+                return { success: true };
+            },
+            cancelVideoExportRun: async (runId: string) => {
                 const runs = getRuns();
-                const run = runs[payload.batchId];
-                const item = run?.items?.[payload.itemId];
-                const form = new FormData();
-                form.append('serial_number', item?.serialNumber || payload.itemId);
-                form.append('file', new Blob(['fake-run-item'], { type: 'video/mp4' }), `${item?.serialNumber || payload.itemId}.mp4`);
-                await fetch(`/api/batches/${payload.batchId}/video-export-runs/${payload.runId}/items/${payload.itemId}/upload`, {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: form
-                });
-                updateRunItem(payload.batchId, payload.itemId, (current) => ({
-                    ...current,
-                    renderStatus: 'completed',
-                    renderProgress: 100,
-                    uploadStatus: 'completed',
-                    uploadProgress: 100,
-                    errorMessage: ''
-                }));
-                return { success: true };
-            },
-            retryVideoExportItemUpload: async (runId: string, itemId: string) => {
-                const runs = getRuns();
-                const run = runs[mockBatchId];
-                const item = run?.items?.[itemId];
-                await fetch(`/api/batches/${mockBatchId}/video-export-runs/${runId}/items/${itemId}/retry-upload`, {
-                    method: 'POST',
-                    headers: getAuthHeaders()
-                });
-                const form = new FormData();
-                form.append('serial_number', item?.serialNumber || itemId);
-                form.append('file', new Blob(['fake-run-item-retry'], { type: 'video/mp4' }), `${item?.serialNumber || itemId}.mp4`);
-                await fetch(`/api/batches/${mockBatchId}/video-export-runs/${runId}/items/${itemId}/upload`, {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: form
-                });
-                updateRunItem(mockBatchId, itemId, (current) => ({
-                    ...current,
-                    renderStatus: 'completed',
-                    renderProgress: 100,
-                    uploadStatus: 'completed',
-                    uploadProgress: 100,
-                    errorMessage: ''
-                }));
-                return { success: true };
-            },
-            rerenderVideoExportItem: async (runId: string, itemId: string) => {
-                await fetch(`/api/batches/${mockBatchId}/video-export-runs/${runId}/items/${itemId}/render`, {
-                    method: 'POST',
-                    headers: getAuthHeaders()
-                });
-                updateRunItem(mockBatchId, itemId, (item) => ({
-                    ...item,
-                    renderStatus: 'rendering',
-                    renderProgress: 50,
-                    uploadStatus: 'pending',
-                    uploadProgress: 0,
-                    errorMessage: ''
-                }));
-                return { success: true };
-            },
-            cancelVideoExportItem: async (runId: string, itemId: string) => {
-                await fetch(`/api/batches/${mockBatchId}/video-export-runs/${runId}/items/${itemId}/cancel`, {
-                    method: 'POST',
-                    headers: getAuthHeaders()
-                });
-                updateRunItem(mockBatchId, itemId, (item) => ({
-                    ...item,
-                    renderStatus: 'cancelled',
-                    uploadStatus: 'cancelled',
-                    errorMessage: 'Cancelled by test'
-                }));
+                const run = Object.values(runs).find((entry) => entry.runId === runId);
+                if (run) {
+                    run.status = 'cancelled';
+                    for (const item of Object.values(run.items)) {
+                        item.renderStatus = item.renderStatus === 'completed' ? item.renderStatus : 'cancelled';
+                        item.uploadStatus = item.uploadStatus === 'completed' ? item.uploadStatus : 'cancelled';
+                        item.errorMessage = 'Cancelled by test';
+                    }
+                    runs[run.batchId] = run;
+                    setRuns(runs);
+                }
                 return { success: true };
             },
             getVideoExportRunSnapshot: async (requestedBatchId: string) => getRuns()[requestedBatchId] || null,
             openExternal: async () => ({ ok: true })
         };
-    }, batchId);
-
-    await page.route('**/desktop-helper/health', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ ok: true, protocol_version: 'stones-video-export-helper-v3', helper_version: 'test' })
-        });
+    }, {
+        mockBatchId: batchId,
+        mockApiOrigin: options.apiOrigin || '',
+        mockAutoCompleteRun: Boolean(options.autoCompleteRun)
     });
 
-    await page.route('**/desktop-helper/sources', async (route) => {
-        const postData = route.request().postDataBuffer()?.toString('utf8') ?? '';
-        const match = postData.match(/source-(\d+)\.mp4/);
-        const sourceNumber = Number(match?.[1] || 1);
-        await route.fulfill({
-            status: 201,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                source_id: `source-${sourceNumber}`,
-                duration_ms: 8000,
-                has_audio: true,
-                fingerprint: {
-                    name: `source-${sourceNumber}.mp4`,
-                    size: 10,
-                    lastModified: 123456 + sourceNumber,
-                    durationMs: 8000
-                }
-            })
-        });
-    });
 }
 
 export async function login(request: APIRequestContext, email: string, password: string): Promise<LoginPayload> {
@@ -375,14 +320,6 @@ export function buildManifest(payload: VideoToolPayload) {
             serial_number: item.serial_number!,
             item_id: item.id
         }))
-    };
-}
-
-export function takeManifestPrefix(manifest: ReturnType<typeof buildManifest>, count: number) {
-    return {
-        ...manifest,
-        segments: manifest.segments.slice(0, count + 1),
-        outputs: manifest.outputs.slice(0, count)
     };
 }
 

@@ -752,10 +752,11 @@ export async function startVideoExportHelperServer(options = {}) {
         serverSentryInitialized = true;
     }
 
-    const app = express();
     const port = Number.parseInt(String(options.port || process.env.VIDEO_EXPORT_HELPER_PORT || DEFAULT_PORT), 10) || DEFAULT_PORT;
     const host = typeof options.host === 'string' ? options.host : DEFAULT_HOST;
     const listenHosts = normalizeListenHosts(host, options.additionalHosts);
+    const shouldListen = options.listen !== false;
+    const app = shouldListen ? express() : null;
     const storageRoot = options.storageRoot || process.env.VIDEO_EXPORT_HELPER_STORAGE_ROOT || getDefaultStorageRoot();
     const sourceRoot = path.join(storageRoot, 'sources');
     const previewRoot = path.join(storageRoot, 'previews');
@@ -940,7 +941,7 @@ export async function startVideoExportHelperServer(options = {}) {
             protocol_version: HELPER_PROTOCOL_VERSION,
             port,
             host,
-            listen_hosts: listenHosts,
+            listen_hosts: shouldListen ? listenHosts : [],
             storage_root: storageRoot,
             allowed_origins: allowedOrigins,
             free_bytes: freeBytes,
@@ -1345,7 +1346,7 @@ export async function startVideoExportHelperServer(options = {}) {
                 has_audio: sourceRecord.has_audio,
                 video_codec: probe.videoCodec,
                 format_name: probe.formatName,
-                preview_url: buildHelperUrl(`/sources/${sourceRecord.id}/preview`),
+                preview_url: shouldListen ? buildHelperUrl(`/sources/${sourceRecord.id}/preview`) : '',
                 preview_file_id: sourceRecord.id,
                 preview_path: sourceRecord.preview_path,
                 preview_created: true,
@@ -1401,6 +1402,7 @@ export async function startVideoExportHelperServer(options = {}) {
         }
     });
 
+    if (app) {
     app.use((req, res, next) => {
         const start = Date.now();
         res.on('finish', () => {
@@ -1538,96 +1540,232 @@ export async function startVideoExportHelperServer(options = {}) {
         res.setHeader('Content-Type', 'video/mp4');
         res.sendFile(fileToServe);
     });
+    }
 
+    const serializeIntroJob = (job) => ({
+        job_id: job.id,
+        status: job.status,
+        processed_count: job.processed_count,
+        total_count: job.total_count,
+        error_message: job.error_message,
+        created_at: job.created_at,
+        updated_at: job.updated_at
+    });
+
+    const serializeRenderJob = (job) => ({
+        job_id: job.id,
+        source_id: job.source_id,
+        status: job.status,
+        crossfade_ms: job.crossfade_ms,
+        processed_count: job.processed_count,
+        total_count: job.total_count,
+        error_message: job.error_message,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+        outputs: job.outputs.map((output) => ({
+            serial_number: output.serial_number,
+            segment_seq: output.segment_seq,
+            status: output.status,
+            error_message: output.error_message
+        }))
+    });
+
+    const createIntroJob = async ({ source_id: sourceId = '', sources: inputSources, segment }) => {
+        const sourceMap = normalizeRenderSources(inputSources, sourceId, sources);
+        if (Array.from(sourceMap.values()).some((source) => !source)) {
+            throw new Error('Исходный файл для intro не найден в helper.');
+        }
+
+        const introSegment = normalizeIntroSegment(segment);
+        const introSource = sourceMap.get(introSegment.source_index ?? 0);
+        if (!introSource) {
+            throw new Error('segment.source_index ссылается на отсутствующий source.');
+        }
+
+        await ensureEnoughDiskSpace(estimateRenderBytes(introSource, 1));
+
+        const jobId = crypto.randomUUID();
+        const jobDir = path.join(jobRoot, jobId);
+        await ensureDirectory(jobDir);
+
+        const job = {
+            id: jobId,
+            kind: 'INTRO',
+            source_id: introSource.id,
+            source_ids: Array.from(sourceMap.values()).map((source) => source.id),
+            status: 'QUEUED',
+            crossfade_ms: 0,
+            processed_count: 0,
+            total_count: 1,
+            error_message: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            outputs: [{
+                serial_number: 'INTRO',
+                segment_seq: 0,
+                status: 'QUEUED',
+                file_name: 'intro.mp4',
+                file_path: path.join(jobDir, 'intro.mp4'),
+                error_message: null
+            }]
+        };
+
+        jobs.set(jobId, job);
+        await persistState();
+        void processIntroJob(jobId, sourceMap, introSegment);
+
+        return {
+            job_id: job.id,
+            status: job.status,
+            processed_count: job.processed_count,
+            total_count: job.total_count
+        };
+    };
+
+    const getIntroJob = (jobId) => {
+        const job = jobs.get(jobId);
+        if (!job || job.kind !== 'INTRO') {
+            throw new Error('Intro job не найден.');
+        }
+        return serializeIntroJob(job);
+    };
+
+    const getIntroJobFilePath = (jobId) => {
+        const job = jobs.get(jobId);
+        if (!job || job.kind !== 'INTRO') {
+            throw new Error('Intro job не найден.');
+        }
+
+        const output = job.outputs[0];
+        if (!output || output.status !== 'COMPLETED') {
+            const error = new Error('Intro-файл ещё не готов к скачиванию.');
+            error.statusCode = 409;
+            throw error;
+        }
+
+        return output.file_path;
+    };
+
+    const createRenderJob = async ({ source_id: sourceId = '', sources: inputSources, crossfade_ms: crossfadeMsInput, segments: inputSegments, outputs: inputOutputs }) => {
+        const sourceMap = normalizeRenderSources(inputSources, sourceId, sources);
+        if (Array.from(sourceMap.values()).some((source) => !source)) {
+            throw new Error('Исходный файл для рендера не найден в helper.');
+        }
+
+        const crossfadeMs = typeof crossfadeMsInput === 'number'
+            ? crossfadeMsInput
+            : Number(crossfadeMsInput);
+        if (!Number.isFinite(crossfadeMs) || crossfadeMs < 0 || crossfadeMs > 5000) {
+            throw new Error('crossfade_ms должен быть числом от 0 до 5000.');
+        }
+
+        const segments = normalizeSegments(inputSegments);
+        const outputs = normalizeOutputs(inputOutputs);
+        const invalidOutput = outputs.find((output) => output.segment_seq >= segments.length);
+        if (invalidOutput) {
+            throw new Error('Один из outputs ссылается на отсутствующий товарный сегмент.');
+        }
+
+        const firstSource = Array.from(sourceMap.values())[0];
+        await ensureEnoughDiskSpace(estimateRenderBytes(firstSource, outputs.length));
+
+        const jobId = crypto.randomUUID();
+        const jobDir = path.join(jobRoot, jobId);
+        await ensureDirectory(jobDir);
+
+        const job = {
+            id: jobId,
+            source_id: sourceId || Array.from(sourceMap.values())[0]?.id,
+            source_ids: Array.from(sourceMap.values()).map((source) => source.id),
+            status: 'QUEUED',
+            crossfade_ms: crossfadeMs,
+            processed_count: 0,
+            total_count: outputs.length,
+            error_message: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            outputs: outputs.map((output) => ({
+                serial_number: output.serial_number,
+                segment_seq: output.segment_seq,
+                status: 'QUEUED',
+                file_name: `${output.serial_number}.mp4`,
+                file_path: path.join(jobDir, `${output.serial_number}.mp4`),
+                error_message: null
+            }))
+        };
+
+        jobs.set(jobId, job);
+        await persistState();
+        void processRenderJob(jobId, sourceMap, segments);
+
+        return {
+            job_id: job.id,
+            status: job.status,
+            processed_count: job.processed_count,
+            total_count: job.total_count,
+            outputs: job.outputs.map((output) => ({
+                serial_number: output.serial_number,
+                segment_seq: output.segment_seq,
+                status: output.status,
+                error_message: output.error_message
+            }))
+        };
+    };
+
+    const getRenderJob = (jobId) => {
+        const job = jobs.get(jobId);
+        if (!job) {
+            throw new Error('Render job не найден.');
+        }
+        return serializeRenderJob(job);
+    };
+
+    const getRenderOutputFilePath = (jobId, serialNumber) => {
+        const job = jobs.get(jobId);
+        if (!job) {
+            throw new Error('Render job не найден.');
+        }
+
+        const output = job.outputs.find((entry) => entry.serial_number === String(serialNumber || '').trim().toUpperCase());
+        if (!output) {
+            throw new Error('Файл для указанного serial_number не найден.');
+        }
+
+        if (output.status !== 'COMPLETED') {
+            const error = new Error('Файл ещё не готов к скачиванию.');
+            error.statusCode = 409;
+            throw error;
+        }
+
+        return output.file_path;
+    };
+
+    if (app) {
     app.post('/intro-jobs', async (req, res) => {
         try {
-            const sourceId = typeof req.body.source_id === 'string' ? req.body.source_id : '';
-            const sourceMap = normalizeRenderSources(req.body.sources, sourceId, sources);
-            if (Array.from(sourceMap.values()).some((source) => !source)) {
-                return res.status(404).json({ error: 'Исходный файл для intro не найден в helper.' });
-            }
-
-            const introSegment = normalizeIntroSegment(req.body.segment);
-            const introSource = sourceMap.get(introSegment.source_index ?? 0);
-            if (!introSource) {
-                return res.status(400).json({ error: 'segment.source_index ссылается на отсутствующий source.' });
-            }
-
-            await ensureEnoughDiskSpace(estimateRenderBytes(introSource, 1));
-
-            const jobId = crypto.randomUUID();
-            const jobDir = path.join(jobRoot, jobId);
-            await ensureDirectory(jobDir);
-
-            const job = {
-                id: jobId,
-                kind: 'INTRO',
-                source_id: introSource.id,
-                source_ids: Array.from(sourceMap.values()).map((source) => source.id),
-                status: 'QUEUED',
-                crossfade_ms: 0,
-                processed_count: 0,
-                total_count: 1,
-                error_message: null,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                outputs: [{
-                    serial_number: 'INTRO',
-                    segment_seq: 0,
-                    status: 'QUEUED',
-                    file_name: 'intro.mp4',
-                    file_path: path.join(jobDir, 'intro.mp4'),
-                    error_message: null
-                }]
-            };
-
-            jobs.set(jobId, job);
-            await persistState();
-            void processIntroJob(jobId, sourceMap, introSegment);
-
-            res.status(202).json({
-                job_id: job.id,
-                status: job.status,
-                processed_count: job.processed_count,
-                total_count: job.total_count
-            });
+            res.status(202).json(await createIntroJob(req.body));
         } catch (error) {
-            res.status(400).json({
+            res.status(error?.statusCode || 400).json({
                 error: error instanceof Error ? error.message : 'Не удалось создать intro job.'
             });
         }
     });
 
     app.get('/intro-jobs/:id', (req, res) => {
-        const job = jobs.get(req.params.id);
-        if (!job || job.kind !== 'INTRO') {
-            return res.status(404).json({ error: 'Intro job не найден.' });
+        try {
+            res.json(getIntroJob(req.params.id));
+        } catch (error) {
+            res.status(404).json({ error: error instanceof Error ? error.message : 'Intro job не найден.' });
         }
-
-        res.json({
-            job_id: job.id,
-            status: job.status,
-            processed_count: job.processed_count,
-            total_count: job.total_count,
-            error_message: job.error_message,
-            created_at: job.created_at,
-            updated_at: job.updated_at
-        });
     });
 
     app.get('/intro-jobs/:id/file', async (req, res) => {
-        const job = jobs.get(req.params.id);
-        if (!job || job.kind !== 'INTRO') {
-            return res.status(404).json({ error: 'Intro job не найден.' });
+        try {
+            res.setHeader('Content-Type', 'video/mp4');
+            res.sendFile(getIntroJobFilePath(req.params.id));
+        } catch (error) {
+            res.status(error?.statusCode || 404).json({ error: error instanceof Error ? error.message : 'Intro job не найден.' });
         }
-
-        const output = job.outputs[0];
-        if (!output || output.status !== 'COMPLETED') {
-            return res.status(409).json({ error: 'Intro-файл ещё не готов к скачиванию.' });
-        }
-
-        res.setHeader('Content-Type', 'video/mp4');
-        res.sendFile(output.file_path);
     });
 
     app.post('/intro-jobs/:id/cleanup', async (req, res) => {
@@ -1642,119 +1780,29 @@ export async function startVideoExportHelperServer(options = {}) {
 
     app.post('/render-jobs', async (req, res) => {
         try {
-            const sourceId = typeof req.body.source_id === 'string' ? req.body.source_id : '';
-            const sourceMap = normalizeRenderSources(req.body.sources, sourceId, sources);
-            if (Array.from(sourceMap.values()).some((source) => !source)) {
-                return res.status(404).json({ error: 'Исходный файл для рендера не найден в helper.' });
-            }
-
-            const crossfadeMs = typeof req.body.crossfade_ms === 'number'
-                ? req.body.crossfade_ms
-                : Number(req.body.crossfade_ms);
-            if (!Number.isFinite(crossfadeMs) || crossfadeMs < 0 || crossfadeMs > 5000) {
-                return res.status(400).json({ error: 'crossfade_ms должен быть числом от 0 до 5000.' });
-            }
-
-            const segments = normalizeSegments(req.body.segments);
-            const outputs = normalizeOutputs(req.body.outputs);
-            const invalidOutput = outputs.find((output) => output.segment_seq >= segments.length);
-            if (invalidOutput) {
-                return res.status(400).json({ error: 'Один из outputs ссылается на отсутствующий товарный сегмент.' });
-            }
-
-            const firstSource = Array.from(sourceMap.values())[0];
-            await ensureEnoughDiskSpace(estimateRenderBytes(firstSource, outputs.length));
-
-            const jobId = crypto.randomUUID();
-            const jobDir = path.join(jobRoot, jobId);
-            await ensureDirectory(jobDir);
-
-            const job = {
-                id: jobId,
-                source_id: sourceId || Array.from(sourceMap.values())[0]?.id,
-                source_ids: Array.from(sourceMap.values()).map((source) => source.id),
-                status: 'QUEUED',
-                crossfade_ms: crossfadeMs,
-                processed_count: 0,
-                total_count: outputs.length,
-                error_message: null,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                outputs: outputs.map((output) => ({
-                    serial_number: output.serial_number,
-                    segment_seq: output.segment_seq,
-                    status: 'QUEUED',
-                    file_name: `${output.serial_number}.mp4`,
-                    file_path: path.join(jobDir, `${output.serial_number}.mp4`),
-                    error_message: null
-                }))
-            };
-
-            jobs.set(jobId, job);
-            await persistState();
-            void processRenderJob(jobId, sourceMap, segments);
-
-            res.status(202).json({
-                job_id: job.id,
-                status: job.status,
-                processed_count: job.processed_count,
-                total_count: job.total_count,
-                outputs: job.outputs.map((output) => ({
-                    serial_number: output.serial_number,
-                    segment_seq: output.segment_seq,
-                    status: output.status,
-                    error_message: output.error_message
-                }))
-            });
+            res.status(202).json(await createRenderJob(req.body));
         } catch (error) {
-            res.status(400).json({
+            res.status(error?.statusCode || 400).json({
                 error: error instanceof Error ? error.message : 'Не удалось создать render job.'
             });
         }
     });
 
     app.get('/render-jobs/:id', (req, res) => {
-        const job = jobs.get(req.params.id);
-        if (!job) {
-            return res.status(404).json({ error: 'Render job не найден.' });
+        try {
+            res.json(getRenderJob(req.params.id));
+        } catch (error) {
+            res.status(404).json({ error: error instanceof Error ? error.message : 'Render job не найден.' });
         }
-
-        res.json({
-            job_id: job.id,
-            source_id: job.source_id,
-            status: job.status,
-            crossfade_ms: job.crossfade_ms,
-            processed_count: job.processed_count,
-            total_count: job.total_count,
-            error_message: job.error_message,
-            created_at: job.created_at,
-            updated_at: job.updated_at,
-            outputs: job.outputs.map((output) => ({
-                serial_number: output.serial_number,
-                segment_seq: output.segment_seq,
-                status: output.status,
-                error_message: output.error_message
-            }))
-        });
     });
 
     app.get('/render-jobs/:id/files/:serial', async (req, res) => {
-        const job = jobs.get(req.params.id);
-        if (!job) {
-            return res.status(404).json({ error: 'Render job не найден.' });
+        try {
+            res.setHeader('Content-Type', 'video/mp4');
+            res.sendFile(getRenderOutputFilePath(req.params.id, req.params.serial));
+        } catch (error) {
+            res.status(error?.statusCode || 404).json({ error: error instanceof Error ? error.message : 'Render job не найден.' });
         }
-
-        const output = job.outputs.find((entry) => entry.serial_number === req.params.serial.trim().toUpperCase());
-        if (!output) {
-            return res.status(404).json({ error: 'Файл для указанного serial_number не найден.' });
-        }
-
-        if (output.status !== 'COMPLETED') {
-            return res.status(409).json({ error: 'Файл ещё не готов к скачиванию.' });
-        }
-
-        res.setHeader('Content-Type', 'video/mp4');
-        res.sendFile(output.file_path);
     });
 
     app.post('/render-jobs/:id/cleanup', async (req, res) => {
@@ -1789,19 +1837,24 @@ export async function startVideoExportHelperServer(options = {}) {
 
         res.status(statusCode).json({ error: message });
     });
+    }
 
     const servers = [];
     const [primaryListenHost, ...optionalListenHosts] = listenHosts;
-    const server = await listenOnHost(app, port, primaryListenHost);
-    servers.push({ host: primaryListenHost, server });
+    const server = shouldListen && app ? await listenOnHost(app, port, primaryListenHost) : null;
+    if (server) {
+        servers.push({ host: primaryListenHost, server });
+    }
 
-    for (const optionalHost of optionalListenHosts) {
-        try {
-            const optionalServer = await listenOnHost(app, port, optionalHost);
-            servers.push({ host: optionalHost, server: optionalServer });
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`[video-export-helper] optional listener failed on ${optionalHost}:${port}: ${message}`);
+    if (shouldListen) {
+        for (const optionalHost of optionalListenHosts) {
+            try {
+                const optionalServer = await listenOnHost(app, port, optionalHost);
+                servers.push({ host: optionalHost, server: optionalServer });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                console.warn(`[video-export-helper] optional listener failed on ${optionalHost}:${port}: ${message}`);
+            }
         }
     }
 
@@ -1821,6 +1874,13 @@ export async function startVideoExportHelperServer(options = {}) {
         getHealthInfo,
         importSourceFile,
         getPreviewFilePath,
+        createIntroJob,
+        getIntroJob,
+        getIntroJobFilePath,
+        createRenderJob,
+        getRenderJob,
+        getRenderOutputFilePath,
+        cleanupJob: removeJobArtifacts,
         cleanupOldAssets,
         getRecentLogs: () => recentLogs,
         stop: async () => {

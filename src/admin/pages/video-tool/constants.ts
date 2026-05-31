@@ -2,14 +2,9 @@ import type { ExportPhase } from './types';
 
 export const normalizeHelperUrl = (value: string) => value.trim().replace(/\/+$/, '');
 
-export const VIDEO_EXPORT_HELPER_URL = normalizeHelperUrl(import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012');
-export const DESKTOP_VIDEO_HELPER_URL = '/desktop-helper';
+export const DESKTOP_VIDEO_HELPER_URL = 'desktop-ipc';
 export const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 export const HELPER_HEALTH_TIMEOUT_MS = 2500;
-export const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL = '/uploads/downloads/ZAGARAMI-Video-Helper.dmg';
-export const DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64 = '/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg';
-export const VIDEO_HELPER_DOWNLOAD_URL = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL).trim();
-export const VIDEO_HELPER_DOWNLOAD_URL_ARM64 = (import.meta.env.VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64 || DEFAULT_VIDEO_HELPER_DOWNLOAD_URL_ARM64).trim();
 export const ZAGARAMI_PRODUCTION_ORIGIN = 'https://zagarami.com';
 export const MIN_SEGMENT_DURATION_MS = 200;
 export const CROSSFADE_MS = 200;

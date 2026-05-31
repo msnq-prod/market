@@ -94,8 +94,8 @@ npm run dev
 - `/admin/users`
 - `/admin/telegram-bots`
 - `/admin/clone-content`
-- `/admin/photo-tool/:batchId`
-- `/admin/video-tool/:batchId`
+- `/admin/photo-tool/:batchId` — рабочий tool только в `ZAGARAMI HQ`, в браузере заглушка скачивания
+- `/admin/video-tool/:batchId` — рабочий tool только в `ZAGARAMI HQ`, в браузере заглушка скачивания
 - `/admin/qr/print?batchId=<ID>`
 
 ### Франчайзи
@@ -176,28 +176,14 @@ npm run dev
 - `GET /api/batches/:id/video-tool`
 - `POST /api/batches/:id/video-jobs`
 
-Legacy export-session endpoints:
-
-- `POST /api/batches/:id/video-export-sessions`
-- `GET /api/batches/:id/video-export-sessions/:sessionId`
-- `POST /api/batches/:id/video-export-sessions/:sessionId/intro-file`
-- `POST /api/batches/:id/video-export-sessions/:sessionId/files`
-- `POST /api/batches/:id/video-export-sessions/:sessionId/retry-tail`
-- `POST /api/batches/:id/video-export-sessions/:sessionId/cancel`
-
 V2 export-run endpoints:
 
 - `GET /api/batches/:id/video-export-runs`
-- `POST /api/batches/:id/video-export-runs`
 - `GET /api/batches/:id/video-export-runs/:runId`
-- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/render`
 - `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
-- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/retry-upload`
-- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/cancel`
-- `POST /api/batches/:id/video-export-runs/:runId/commit`
 - `POST /api/batches/:id/video-export-runs/:runId/cancel`
 
-`video-tool` в Electron HQ использует embedded helper с `protocol_version = stones-video-export-helper-v3`. В коде сейчас сосуществуют legacy `video-export-sessions` и V2 `video-export-runs`; для новых задач по V2 ориентироваться на V2 endpoints и `VIDEO_TOOL_WORKFLOW_REFACTOR_PLAN_RU.md`.
+`video-tool` в Electron HQ использует внутренний video runtime через IPC с `protocol_version = stones-video-export-helper-v3`. В браузерном HQ `/admin/video-tool/:batchId` показывает заглушку скачивания `ZAGARAMI HQ`. Активный UI-flow Video Tool рендерит локально, создает backend `video-export-runs` лениво при первом upload и после upload показывает ссылку на файл и `/clone/:serialNumber`.
 
 ### Фото
 
@@ -205,6 +191,7 @@ V2 export-run endpoints:
 - `POST /api/batches/:id/photo-tool/apply`
 
 `photo-tool/apply` использует optimistic concurrency через `base_photo_state_token`, требует полный manifest по всем Item партии и назначает фото по `item_seq`, а не по `serial_number`.
+В браузерном HQ `/admin/photo-tool/:batchId` показывает заглушку скачивания `ZAGARAMI HQ`; API оставлен для desktop HQ.
 Shared upload теперь нормализует расширение по разрешенному media-type и режет активный HTML/SVG/XML payload до попадания в `public/uploads`.
 
 ### Legacy media sync
@@ -271,10 +258,8 @@ Seed создает:
 
 1. Войти как `manager@stones.com` или `admin@stones.com`.
 2. Открыть `/admin/video-tool/:batchId`.
-3. Проверить, что embedded helper доступен и protocol version совпадает.
-4. Для legacy session-flow проверить retry-tail только если задача явно касается `video-export-sessions`.
-5. Для V2 run-flow проверить создание `video-export-runs`, item upload и commit.
-6. До завершения рефактора automatic render queue учитывать, что основной V2 UI еще содержит ручное действие `Рендер + Загрузка`.
+3. Проверить, что внутренний video runtime доступен и protocol version совпадает.
+4. Для V2 run-flow проверить локальный запуск, item upload, запись `item_video_url` и ссылку `/clone/:serialNumber`.
 
 ### Проверка публичного паспорта
 

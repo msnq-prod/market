@@ -60,48 +60,13 @@ npm run ops:deploy
 - `.env.production` настроен вручную и не хранится в git;
 - production checkout не должен содержать незакоммиченных tracked-изменений;
 - `docker` и `docker compose` доступны для пользователя деплоя.
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL` может отсутствовать: тогда UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`.
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64` может отсутствовать: тогда UI использует same-origin fallback `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`.
 - по умолчанию preflight требует 2 GiB свободного места, но порог можно переопределить через `STONES_MIN_FREE_GB`.
 
-## 1.2 Desktop helper для zagarami.com
+## 1.2 Video Tool runtime для zagarami.com
 
-Production helper должен быть собран под канонический origin `https://zagarami.com`.
+Отдельный production helper больше не собирается и не публикуется. Video Tool использует внутренний video runtime внутри `ZAGARAMI HQ`; обновляется только desktop HQ.
 
-Базовый путь:
-
-```bash
-STONES_HELPER_ALLOWED_ORIGIN=https://zagarami.com npm run video-export-helper:desktop:dist
-```
-
-Для релизов можно явно задать версию helper:
-
-```bash
-STONES_HELPER_ALLOWED_ORIGIN=https://zagarami.com STONES_HELPER_VERSION=2026.5.14 npm run video-export-helper:desktop:dist
-```
-
-Если `STONES_HELPER_VERSION` не задан, сборка использует UTC-дату в формате `YYYY.M.D`. При нескольких релизах в один день задавайте версию вручную, чтобы встроенная проверка обновлений корректно видела новую сборку.
-
-После сборки в `dist-electron/` должны лежать:
-
-- versioned DMG от `electron-builder`;
-- стабильный `ZAGARAMI-Video-Helper.dmg` для Intel;
-- стабильный `ZAGARAMI-Video-Helper-arm64.dmg` для Apple Silicon.
-- `ZAGARAMI-Video-Helper-update.json` — manifest обновлений с версией, URL, размером и sha256 для обеих архитектур.
-
-Если используются same-origin ссылки по умолчанию, опубликуйте оба DMG по путям:
-
-- `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`
-- `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`
-- `/uploads/downloads/ZAGARAMI-Video-Helper-update.json`
-
-Если используются внешние URL, заполните `VITE_VIDEO_HELPER_DOWNLOAD_URL` и `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64`.
-
-Desktop helper проверяет обновления из `ZAGARAMI-Video-Helper-update.json`, скачивает подходящий DMG в локальный cache и открывает его. Автоматическая замена `.app` не выполняется: оператору нужно перетащить новую версию в Applications и перезапустить helper. Для нестандартного update URL используйте `STONES_HELPER_UPDATE_BASE_URL=https://.../downloads` при сборке helper.
-
-При локальной эксплуатации packaged helper можно дополнительно ограничить render-нагрузку через `~/Library/Application Support/ZAGARAMI Video Helper/config.json` с ключами `video_render_concurrency` и `video_render_ffmpeg_threads`. Те же значения можно переопределить env-переменными `VIDEO_RENDER_CONCURRENCY` и `VIDEO_RENDER_FFMPEG_THREADS`.
-
-При первом обращении `https://zagarami.com` к локальному `http://127.0.0.1:3012` браузер может запросить доступ к localhost или локальной сети. Этот доступ нужно разрешить, иначе Video Tool будет считать helper недоступным.
+Браузерная версия HQ больше не открывает рабочий Video Tool: маршруты media tools показывают заглушку со скачиванием `ZAGARAMI HQ`. Основной production-сценарий для Photo Tool и Video Tool — desktop HQ.
 
 ## 1.3 Desktop HQ для zagarami.com
 

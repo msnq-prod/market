@@ -1,8 +1,6 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-    readonly VITE_VIDEO_EXPORT_HELPER_URL?: string;
-    readonly VITE_VIDEO_HELPER_DOWNLOAD_URL?: string;
     readonly VITE_SENTRY_DSN_FRONTEND?: string;
     readonly VITE_SENTRY_ENVIRONMENT?: string;
 }
@@ -203,11 +201,7 @@ interface StonesDesktopApi {
     subscribeMediaQueue(callback: (snapshot: StonesMediaQueueSnapshot) => void): () => void;
     subscribeMediaWorkflows(callback: (snapshot: StonesMediaWorkflowSnapshot) => void): () => void;
     enqueuePhotoToolApply(payload: unknown): Promise<StonesMediaQueueJob>;
-    enqueueVideoIntroUpload(payload: unknown): Promise<StonesMediaQueueJob>;
-    enqueueVideoRenderUpload(payload: unknown): Promise<StonesMediaQueueJob>;
     startPhotoApplyWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
-    startVideoExportWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
-    startVideoWorkflow?(batchId: string): Promise<StonesMediaWorkflow>;
     retryMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     cancelMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;
@@ -218,13 +212,7 @@ interface StonesDesktopApi {
     }>;
     renderVideoExportItem(payload: import('./admin/pages/video-tool/types').DesktopVideoExportItemPayload): Promise<{ success: boolean }>;
     uploadVideoExportItem(payload: import('./admin/pages/video-tool/types').DesktopVideoExportItemPayload): Promise<{ success: boolean }>;
-    retryVideoExportItemUpload(runId: string, itemId: string): Promise<{ success: boolean }>;
-    rerenderVideoExportItem(
-        runId: string,
-        itemId: string,
-        manifestSlice: import('./admin/pages/video-tool/types').VideoExportManifestSlice
-    ): Promise<{ success: boolean }>;
-    cancelVideoExportItem(runId: string, itemId: string): Promise<{ success: boolean }>;
+    cancelVideoExportRun(runId: string): Promise<{ success: boolean }>;
     getVideoExportRunSnapshot(batchId: string): Promise<import('./admin/pages/video-tool/types').LocalVideoExportRunSnapshot | null>;
     openExternal(url: string): Promise<{ ok: true }>;
 }
@@ -234,7 +222,7 @@ interface Window {
 }
 
 type StonesMediaQueueJobStatus = 'staging' | 'queued' | 'uploading' | 'retrying' | 'failed' | 'done' | 'cancelled' | 'auth_required';
-type StonesMediaQueueJobType = 'PHOTO_TOOL_APPLY' | 'VIDEO_INTRO_UPLOAD' | 'VIDEO_RENDER_UPLOAD';
+type StonesMediaQueueJobType = 'PHOTO_TOOL_APPLY' | 'VIDEO_EXPORT_RUN_ITEM_UPLOAD';
 
 type StonesMediaQueueJob = {
     id: string;
@@ -257,16 +245,9 @@ type StonesMediaQueueJob = {
         fileName?: string;
         tool?: string;
         batchId?: string;
-        sessionId?: string;
+        runId?: string;
         serialNumber?: string;
         total?: number;
-        groupId?: string | null;
-        groupTitle?: string;
-        groupKind?: 'VIDEO_EXPORT_UPLOAD';
-        groupTotal?: number;
-        helperJobId?: string;
-        notifyOnComplete?: boolean;
-        cleanupHelperJob?: boolean;
     } | null;
 };
 
@@ -275,17 +256,12 @@ type StonesMediaQueueSnapshot = {
     counts: Partial<Record<StonesMediaQueueJobStatus, number>>;
 };
 
-type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW' | 'VIDEO_EXPORT_WORKFLOW';
+type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW';
 type StonesMediaWorkflowPhase =
     | 'queued'
     | 'converting'
     | 'uploading'
     | 'verifying'
-    | 'preparing_session'
-    | 'importing_sources'
-    | 'rendering_intro'
-    | 'rendering_outputs'
-    | 'uploading_outputs'
     | 'paused_offline'
     | 'auth_required'
     | 'failed'
@@ -311,8 +287,6 @@ type StonesMediaWorkflow = {
         currentSerial?: string;
     };
     routePath: string;
-    sessionId: string | null;
-    sessionVersion: number | null;
     progress: {
         completed: number;
         total: number;

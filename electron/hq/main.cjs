@@ -1,8 +1,9 @@
-const { app, BrowserWindow, Notification, dialog, ipcMain, shell, protocol, net } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, protocol, net } = require('electron');
 const { pathToFileURL } = require('url');
 
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
 const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
+const { VideoExportRunManager } = require('./videoExportRunManager.cjs');
 const { VideoWorkflowStore } = require('./videoWorkflowStore.cjs');
 const { createAppConfig } = require('./appConfig.cjs');
 const { createLocalServerRuntime } = require('./localServer.cjs');
@@ -28,14 +29,13 @@ let isQuitting = false;
 let accessToken = null;
 let mediaQueue = null;
 let mediaWorkflowManager = null;
+let videoExportRunManager = null;
 let videoWorkflowStore = null;
 
 const localServerRuntime = createLocalServerRuntime({
     getDistRoot: config.getDistRoot,
     getMimeType: config.getMimeType,
-    proxyPrefixes: config.PROXY_PREFIXES,
-    desktopHelperPrefix: config.DESKTOP_HELPER_PREFIX,
-    getHelperProxyStatus: () => helperRuntime.getProxyStatus()
+    proxyPrefixes: config.PROXY_PREFIXES
 });
 
 const helperRuntime = createHelperRuntime({
@@ -110,8 +110,6 @@ const getNetworkStatus = async () => new Promise(async (resolve) => {
 const diagnosticsRuntime = createDiagnosticsRuntime({
     app,
     dialog,
-    Notification,
-    helperPort: config.HELPER_PORT,
     getDiagnosticFileKind: config.getDiagnosticFileKind,
     getMimeType: config.getMimeType,
     getAppInfo,
@@ -122,8 +120,7 @@ const diagnosticsRuntime = createDiagnosticsRuntime({
     getMediaQueue: () => mediaQueue,
     getMediaWorkflowManager: () => mediaWorkflowManager,
     getLastUpdateStatus: () => updatesRuntime.getLastStatus(),
-    getMainWindow: () => windowsRuntime.getMainWindow(),
-    showMainWindow: () => showMainWindow()
+    getMainWindow: () => windowsRuntime.getMainWindow()
 });
 
 const ensureMediaRuntimes = async (apiOrigin, appOrigin) => {
@@ -131,7 +128,8 @@ const ensureMediaRuntimes = async (apiOrigin, appOrigin) => {
         mediaQueue = new MediaUploadQueue({
             rootDir: config.getMediaQueueRoot(),
             getApiOrigin: () => apiOrigin,
-            getAccessToken: () => accessToken
+            getAccessToken: () => accessToken,
+            helperRuntime
         });
         mediaQueue.on('change', (snapshot) => {
             BrowserWindow.getAllWindows().forEach((window) => {
@@ -148,8 +146,7 @@ const ensureMediaRuntimes = async (apiOrigin, appOrigin) => {
             stagedFilesDir: `${config.getMediaQueueRoot()}/files`,
             mediaQueue,
             getApiOrigin: () => apiOrigin,
-            getAccessToken: () => accessToken,
-            getAppOrigin: () => appOrigin
+            getAccessToken: () => accessToken
         });
         mediaWorkflowManager.on('change', (snapshot) => {
             BrowserWindow.getAllWindows().forEach((window) => {
@@ -157,6 +154,23 @@ const ensureMediaRuntimes = async (apiOrigin, appOrigin) => {
             });
         });
         await mediaWorkflowManager.init();
+    }
+
+    if (!videoExportRunManager) {
+        videoExportRunManager = new VideoExportRunManager({
+            rootDir: config.getMediaWorkflowRoot(),
+            mediaQueue,
+            getApiOrigin: () => apiOrigin,
+            getAccessToken: () => accessToken,
+            helperRuntime
+        });
+        videoExportRunManager.on('change', () => {
+            const snapshot = mediaWorkflowManager ? mediaWorkflowManager.getSnapshot() : { workflows: [], counts: {} };
+            BrowserWindow.getAllWindows().forEach((window) => {
+                window.webContents.send('stones:media-workflows-updated', snapshot);
+            });
+        });
+        await videoExportRunManager.init();
     }
 
     if (!videoWorkflowStore) {
@@ -239,6 +253,7 @@ registerIpcHandlers({
     },
     getMediaQueue: () => mediaQueue,
     getMediaWorkflowManager: () => mediaWorkflowManager,
+    getVideoExportRunManager: () => videoExportRunManager,
     getVideoWorkflowStore: () => videoWorkflowStore
 });
 

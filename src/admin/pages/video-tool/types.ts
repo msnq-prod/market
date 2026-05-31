@@ -21,7 +21,6 @@ export type VideoToolBatch = {
         job_id: string;
         status: string;
     } | null;
-    video_export: VideoExportSessionSummary | null;
 };
 
 export type VideoToolItem = {
@@ -30,25 +29,6 @@ export type VideoToolItem = {
     item_seq: number | null;
     serial_number: string | null;
     item_video_url: string | null;
-};
-
-export type VideoExportSessionSummary = {
-    session_id: string;
-    status: string;
-    version: number;
-    expected_count: number;
-    uploaded_count: number;
-    crossfade_ms: number;
-    error_message: string | null;
-    started_at: string | null;
-    finished_at: string | null;
-};
-
-export type RetryTailPayload = {
-    session: VideoExportSessionDetails;
-    pending_serials: string[];
-    resumed: boolean;
-    recovered_stale: boolean;
 };
 
 export type VideoExportManifest = {
@@ -108,6 +88,7 @@ export type VideoExportRunItemDetails = {
     render_status: VideoExportRunItemStatus | null;
     upload_status: VideoExportRunItemStatus | null;
     file_url?: string | null;
+    item_card_url?: string | null;
     error_message?: string | null;
     checksum?: string | null;
     updated_at?: string;
@@ -132,28 +113,7 @@ export type VideoExportRunListResponse = {
     runs: VideoExportRunDetails[];
 };
 
-export type VideoExportRunMutationResponse = {
-    run: VideoExportRunDetails;
-    resumed?: boolean;
-};
-
 export type VideoExportManifestSlice = Pick<VideoExportManifest, 'segments' | 'outputs'>;
-
-export type VideoExportSessionDetails = VideoExportSessionSummary & {
-    source_fingerprint: SourceFingerprint | null;
-    render_manifest: VideoExportManifest | null;
-    uploaded_manifest: Array<{
-        serial_number: string;
-        item_id: string;
-        file_name: string;
-        relative_path: string;
-        public_url: string;
-        uploaded_at: string;
-        skipped?: boolean;
-    }>;
-    created_at: string;
-    updated_at: string;
-};
 
 export type VideoToolPayload = {
     batch: VideoToolBatch;
@@ -225,10 +185,11 @@ export type VideoToolDraft = {
         previewError?: string | null;
     }>;
     segments: Segment[];
-    sessionId: string | null;
-    sessionVersion: number | null;
+    runId: string | null;
+    runVersion: number | null;
     pendingSerials: string[];
     introHelperSourceId: string | null;
+    renderManifest?: VideoExportManifest | null;
     exportSettings?: {
         resolution?: '1080p' | '720p';
         quality?: 'high' | 'medium' | 'low';
@@ -406,7 +367,6 @@ export type VideoToolState = {
         diagnosticCopied: boolean;
     };
     export: {
-        session: VideoExportSessionDetails | null;
         pendingSerials: string[];
         renderJobId: string;
         phase: ExportPhase;
@@ -446,7 +406,6 @@ export type VideoToolAction =
     | { type: 'sources/set'; sources: WorkingSource[] }
     | { type: 'timeline/set-segments'; segments: Segment[] }
     | { type: 'helper/status'; status: HelperStatus; issueMessage?: string }
-    | { type: 'export/session'; session: VideoExportSessionDetails | null }
     | { type: 'layout/preview-width'; width: number }
     | { type: 'export/phase'; phase: ExportPhase; message?: string }
     | { type: 'export/renderJobId'; jobId: string }

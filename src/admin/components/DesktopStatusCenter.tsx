@@ -91,8 +91,7 @@ const jobStatusLabel: Record<string, string> = {
 
 const jobTypeLabel: Record<string, string> = {
     PHOTO_TOOL_APPLY: 'Photo Tool',
-    VIDEO_INTRO_UPLOAD: 'Video intro',
-    VIDEO_RENDER_UPLOAD: 'Video render'
+    VIDEO_EXPORT_RUN_ITEM_UPLOAD: 'Video Tool'
 };
 
 const workflowPhaseLabel: Record<string, string> = {
@@ -100,11 +99,6 @@ const workflowPhaseLabel: Record<string, string> = {
     converting: 'Конвертация',
     uploading: 'Загрузка',
     verifying: 'Проверка',
-    preparing_session: 'Подготовка session',
-    importing_sources: 'Импорт source',
-    rendering_intro: 'Сборка intro',
-    rendering_outputs: 'Рендер',
-    uploading_outputs: 'Загрузка MP4',
     paused_offline: 'Пауза: нет связи',
     auth_required: 'Нужен вход',
     failed: 'Ошибка',
@@ -174,14 +168,15 @@ const getVideoUploadGroups = (jobs: StonesMediaQueueJob[]) => {
     const groups = new Map<string, VideoUploadGroup>();
     for (const job of jobs) {
         const summary = job.summary;
-        if (job.type !== 'VIDEO_RENDER_UPLOAD' || summary?.groupKind !== 'VIDEO_EXPORT_UPLOAD' || !summary.groupId) {
+        if (job.type !== 'VIDEO_EXPORT_RUN_ITEM_UPLOAD') {
             continue;
         }
 
-        const group = groups.get(summary.groupId) || {
-            id: summary.groupId,
-            title: summary.groupTitle || 'Видео партии',
-            total: summary.groupTotal || 0,
+        const groupId = summary?.runId || summary?.batchId || job.id;
+        const group = groups.get(groupId) || {
+            id: groupId,
+            title: summary?.title || 'Видео партии',
+            total: summary?.total || 0,
             done: 0,
             active: 0,
             failed: 0,
@@ -202,7 +197,7 @@ const getVideoUploadGroups = (jobs: StonesMediaQueueJob[]) => {
         if (job.status === 'auth_required') {
             group.blockedAuth += 1;
         }
-        groups.set(summary.groupId, group);
+        groups.set(groupId, group);
     }
 
     return Array.from(groups.values()).sort((left, right) => {
@@ -418,11 +413,7 @@ function WorkflowRow({
                 ? 'border-emerald-400/20 bg-emerald-400/10'
                 : 'border-sky-400/20 bg-sky-400/10';
     const total = Math.max(workflow.progress.total || 0, 0);
-    const completed = Math.min(Math.max(workflow.progress.completed || 0, 0), total || workflow.progress.completed || 0);
-    const left = Math.max(total - completed, 0);
-    const detail = workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-        ? `загружено ${completed}/${total}, осталось ${left}`
-        : `${total} фото`;
+    const detail = `${total} фото`;
     const normalizedLastError = normalizeQueueOrWorkflowError(workflow.lastError);
 
     return (
@@ -430,7 +421,7 @@ function WorkflowRow({
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-white">
-                        {workflow.summary?.title || (workflow.kind === 'VIDEO_EXPORT_WORKFLOW' ? 'Video workflow' : 'Photo workflow')}
+                        {workflow.summary?.title || 'Photo workflow'}
                     </p>
                     <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">{workflowPhaseLabel[workflow.phase] || workflow.phase}</p>
                     <p className="mt-1 text-xs text-gray-300">
@@ -643,9 +634,8 @@ export function DesktopStatusCenter() {
     const activeVideoUploads = videoUploadGroups.reduce((total, group) => total + group.active, 0);
     const backgroundProgress = useMemo<BackgroundProgress[]>(() => {
         const photoQueueJobs = queue.jobs.filter((job) => job.type === 'PHOTO_TOOL_APPLY');
-        const videoQueueJobs = queue.jobs.filter((job) => job.type === 'VIDEO_INTRO_UPLOAD');
+        const videoQueueJobs = queue.jobs.filter((job) => job.type === 'VIDEO_EXPORT_RUN_ITEM_UPLOAD' && !groupedJobIds.has(job.id));
         const photoWorkflows = workflows.filter((workflow) => workflow.kind === 'PHOTO_APPLY_WORKFLOW');
-        const videoWorkflows = workflows.filter((workflow) => workflow.kind === 'VIDEO_EXPORT_WORKFLOW');
 
         const photoQueueTotal = photoQueueJobs.reduce((total, job) => total + Math.max(1, Number(job.summary?.total || 1)), 0);
         const photoQueueDone = photoQueueJobs.reduce((total, job) => total + (job.status === 'done' ? Math.max(1, Number(job.summary?.total || 1)) : 0), 0);
@@ -667,19 +657,14 @@ export function DesktopStatusCenter() {
         const videoGroupDone = videoUploadGroups.reduce((total, group) => total + group.done, 0);
         const videoQueueTotal = videoQueueJobs.length;
         const videoQueueDone = videoQueueJobs.filter((job) => job.status === 'done').length;
-        const videoWorkflowTotal = videoWorkflows.reduce((total, workflow) => total + Math.max(1, workflow.progress.total || 1), 0);
-        const videoWorkflowDone = videoWorkflows.reduce((total, workflow) => total + Math.min(Math.max(0, workflow.progress.completed), Math.max(1, workflow.progress.total || 1)), 0);
-        const videoTotal = videoGroupTotal + videoQueueTotal + videoWorkflowTotal;
-        const videoDone = videoGroupDone + videoQueueDone + videoWorkflowDone;
+        const videoTotal = videoGroupTotal + videoQueueTotal;
+        const videoDone = videoGroupDone + videoQueueDone;
         const videoActive = videoQueueJobs.filter((job) => activeQueueStatuses.has(job.status)).length
-            + videoUploadGroups.reduce((total, group) => total + group.active, 0)
-            + videoWorkflows.filter((workflow) => !['completed', 'cancelled', 'failed'].includes(workflow.phase)).length;
+            + videoUploadGroups.reduce((total, group) => total + group.active, 0);
         const videoFailed = videoQueueJobs.filter((job) => job.status === 'failed').length
-            + videoUploadGroups.reduce((total, group) => total + group.failed, 0)
-            + videoWorkflows.filter((workflow) => workflow.phase === 'failed').length;
+            + videoUploadGroups.reduce((total, group) => total + group.failed, 0);
         const videoBlocked = videoQueueJobs.filter((job) => job.status === 'auth_required').length
-            + videoUploadGroups.reduce((total, group) => total + group.blockedAuth, 0)
-            + videoWorkflows.filter((workflow) => workflow.phase === 'auth_required' || workflow.phase === 'paused_offline').length;
+            + videoUploadGroups.reduce((total, group) => total + group.blockedAuth, 0);
 
         return [
             {
@@ -701,7 +686,7 @@ export function DesktopStatusCenter() {
                 blocked: videoBlocked
             }
         ].filter((item) => item.active > 0 || item.failed > 0 || item.blocked > 0 || item.percent > 0);
-    }, [queue.jobs, videoUploadGroups, workflows]);
+    }, [groupedJobIds, queue.jobs, videoUploadGroups, workflows]);
 
     const headerSummary = useMemo(() => {
         if (!isDesktopRuntime) {

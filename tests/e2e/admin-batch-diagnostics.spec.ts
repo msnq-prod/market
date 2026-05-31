@@ -1,19 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { disconnectTestDb, testDb } from './support/db-fixtures';
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
-const HELPER_URL = 'http://127.0.0.1:3012';
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 const TINY_PNG = Buffer.from(
@@ -53,51 +48,6 @@ const setAdminSession = async (page: Page, loginPayload: LoginPayload) => {
         localStorage.setItem('userRole', payload.role);
         localStorage.setItem('userName', payload.name);
     }, loginPayload);
-};
-
-const waitForHelper = async (timeoutMs = 60_000) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        try {
-            const response = await fetch(`${HELPER_URL}/health`);
-            if (response.ok) {
-                const payload = await response.json() as { protocol_version?: string };
-                if (payload.protocol_version === 'stones-video-export-helper-v3') {
-                    return true;
-                }
-            }
-        } catch {
-            // keep polling
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-    return false;
-};
-
-const ensureHelper = async (storageRoot: string): Promise<ChildProcess | null> => {
-    if (await waitForHelper(3_000)) {
-        return null;
-    }
-
-    const child = spawn(process.execPath, ['video-export-helper/index.js'], {
-        cwd: repoRoot,
-        env: {
-            ...process.env,
-            VIDEO_EXPORT_HELPER_STORAGE_ROOT: storageRoot,
-            VIDEO_PIPELINE_DIAGNOSTICS: '1'
-        },
-        stdio: ['ignore', 'pipe', 'pipe']
-    });
-
-    child.stdout?.on('data', () => undefined);
-    child.stderr?.on('data', () => undefined);
-
-    if (!await waitForHelper()) {
-        child.kill();
-        throw new Error('Video helper did not become healthy.');
-    }
-
-    return child;
 };
 
 const createMp4 = async (filePath: string) => {
@@ -257,16 +207,7 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
             enqueuePhotoToolApply: async () => {
                 throw new Error('not used');
             },
-            enqueueVideoIntroUpload: async () => {
-                throw new Error('not used');
-            },
-            enqueueVideoRenderUpload: async () => {
-                throw new Error('not used');
-            },
             startPhotoApplyWorkflow: async () => {
-                throw new Error('not used');
-            },
-            startVideoExportWorkflow: async () => {
                 throw new Error('not used');
             },
             retryMediaWorkflow: async () => emptyWorkflows,
@@ -280,24 +221,13 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
 };
 
 test.describe('batch creation diagnostics', () => {
-    let helperProcess: ChildProcess | null = null;
-    let helperStorageRoot = '';
     let mediaFolder = '';
 
     test.setTimeout(300_000);
 
-    test.beforeAll(async () => {
-        helperStorageRoot = await mkdtemp(path.join(tmpdir(), 'stones-video-helper-'));
-        helperProcess = await ensureHelper(helperStorageRoot);
-    });
-
     test.afterAll(async () => {
-        helperProcess?.kill();
         if (mediaFolder) {
             await rm(mediaFolder, { recursive: true, force: true });
-        }
-        if (helperStorageRoot) {
-            await rm(helperStorageRoot, { recursive: true, force: true });
         }
         await disconnectTestDb();
     });
@@ -314,7 +244,7 @@ test.describe('batch creation diagnostics', () => {
         await page.getByRole('button', { name: 'Диагностика' }).click();
         await page.getByTestId('batch-diagnostics-run').click();
 
-        await expect(page.getByTestId('batch-diagnostics-status')).toContainText('успешно', { timeout: 240_000 });
+        await expect(page.getByTestId('batch-diagnostics-status')).toContainText('Успешно', { timeout: 240_000 });
 
         const batch = await testDb.batch.findFirst({
             where: {
@@ -339,7 +269,7 @@ test.describe('batch creation diagnostics', () => {
 
         expect(batch).toBeTruthy();
         expect(batch?.items).toHaveLength(10);
-        expect(batch?.items.every((item) => item.serial_number && item.item_photo_url && item.item_video_url)).toBeTruthy();
+        expect(batch?.items.every((item) => item.serial_number && item.item_photo_url)).toBeTruthy();
         expect(batch?.product?.location?.translations.some((translation) => translation.name.includes('Луна'))).toBeTruthy();
 
         const firstSerial = batch?.items[0]?.serial_number || '';
@@ -352,7 +282,6 @@ test.describe('batch creation diagnostics', () => {
         };
         expect(publicPayload.location_name).toContain('Луна');
         expect(publicPayload.has_photo).toBe(true);
-        expect(publicPayload.has_video).toBe(true);
 
         const qrResponse = await page.request.get(`/api/public/items/${encodeURIComponent(firstSerial)}/qr`);
         expect(qrResponse.ok()).toBeTruthy();
@@ -361,6 +290,5 @@ test.describe('batch creation diagnostics', () => {
         await page.goto(`/clone/${encodeURIComponent(firstSerial)}`);
         await expect(page.getByRole('heading', { name: /\[e2e\] Лунный камень/ })).toBeVisible({ timeout: 30_000 });
         await expect(page.getByText(/Тестовая локация Луна/)).toBeVisible();
-        await expect(page.getByRole('button', { name: /Открыть видео/ })).toBeVisible();
     });
 });

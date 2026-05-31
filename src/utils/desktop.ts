@@ -1,8 +1,7 @@
 import type {
     DesktopStartVideoExportRunPayload,
     DesktopVideoExportItemPayload,
-    LocalVideoExportRunSnapshot,
-    VideoExportManifestSlice
+    LocalVideoExportRunSnapshot
 } from '../admin/pages/video-tool/types';
 
 export type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
@@ -94,7 +93,7 @@ export type StonesHqUpdateDownloadResult = StonesHqUpdateInfo & {
 };
 
 export type StonesMediaQueueJobStatus = 'staging' | 'queued' | 'uploading' | 'retrying' | 'failed' | 'done' | 'cancelled' | 'auth_required';
-export type StonesMediaQueueJobType = 'PHOTO_TOOL_APPLY' | 'VIDEO_INTRO_UPLOAD' | 'VIDEO_RENDER_UPLOAD';
+export type StonesMediaQueueJobType = 'PHOTO_TOOL_APPLY' | 'VIDEO_EXPORT_RUN_ITEM_UPLOAD';
 
 export type StonesMediaQueueJob = {
     id: string;
@@ -117,16 +116,9 @@ export type StonesMediaQueueJob = {
         fileName?: string;
         tool?: string;
         batchId?: string;
-        sessionId?: string;
+        runId?: string;
         serialNumber?: string;
         total?: number;
-        groupId?: string | null;
-        groupTitle?: string;
-        groupKind?: 'VIDEO_EXPORT_UPLOAD';
-        groupTotal?: number;
-        helperJobId?: string;
-        notifyOnComplete?: boolean;
-        cleanupHelperJob?: boolean;
     } | null;
 };
 
@@ -135,17 +127,12 @@ export type StonesMediaQueueSnapshot = {
     counts: Partial<Record<StonesMediaQueueJobStatus, number>>;
 };
 
-export type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW' | 'VIDEO_EXPORT_WORKFLOW';
+export type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW';
 export type StonesMediaWorkflowPhase =
     | 'queued'
     | 'converting'
     | 'uploading'
     | 'verifying'
-    | 'preparing_session'
-    | 'importing_sources'
-    | 'rendering_intro'
-    | 'rendering_outputs'
-    | 'uploading_outputs'
     | 'paused_offline'
     | 'auth_required'
     | 'failed'
@@ -171,8 +158,6 @@ export type StonesMediaWorkflow = {
         currentSerial?: string;
     };
     routePath: string;
-    sessionId: string | null;
-    sessionVersion: number | null;
     progress: {
         completed: number;
         total: number;
@@ -287,11 +272,7 @@ export type StonesDesktopApi = {
     subscribeMediaQueue: (callback: (snapshot: StonesMediaQueueSnapshot) => void) => () => void;
     subscribeMediaWorkflows: (callback: (snapshot: StonesMediaWorkflowSnapshot) => void) => () => void;
     enqueuePhotoToolApply: (payload: unknown) => Promise<StonesMediaQueueJob>;
-    enqueueVideoIntroUpload: (payload: unknown) => Promise<StonesMediaQueueJob>;
-    enqueueVideoRenderUpload: (payload: unknown) => Promise<StonesMediaQueueJob>;
     startPhotoApplyWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
-    startVideoExportWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
-    startVideoWorkflow?: (batchId: string) => Promise<StonesMediaWorkflow>;
     retryMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     cancelMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
@@ -300,9 +281,7 @@ export type StonesDesktopApi = {
     startVideoExportRun: (payload: DesktopStartVideoExportRunPayload) => Promise<{ run?: LocalVideoExportRunSnapshot }>;
     renderVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
     uploadVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
-    retryVideoExportItemUpload: (runId: string, itemId: string) => Promise<{ success: boolean }>;
-    rerenderVideoExportItem: (runId: string, itemId: string, manifestSlice: VideoExportManifestSlice) => Promise<{ success: boolean }>;
-    cancelVideoExportItem: (runId: string, itemId: string) => Promise<{ success: boolean }>;
+    cancelVideoExportRun: (runId: string) => Promise<{ success: boolean }>;
     getVideoExportRunSnapshot: (batchId: string) => Promise<LocalVideoExportRunSnapshot | null>;
     openExternal: (url: string) => Promise<{ ok: true }>;
 };

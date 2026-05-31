@@ -1,19 +1,14 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import type { BatchVideoExportSession, Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { projectRoot } from '../utils/projectPaths.ts';
 
 export const VIDEO_EXPORT_STORAGE_ROOT = path.join(projectRoot, 'storage/video-export');
 export const VIDEO_EXPORT_STAGING_ROOT = path.join(VIDEO_EXPORT_STORAGE_ROOT, 'staging');
 export const VIDEO_EXPORT_PUBLIC_OUTPUT_ROOT = path.join(projectRoot, 'public/uploads/videos/exports');
 export const VIDEO_EXPORT_PUBLIC_URL_ROOT = '/uploads/videos/exports';
-export const ACTIVE_VIDEO_EXPORT_STATUSES = new Set(['OPEN', 'UPLOADING']);
-export const RECOVERABLE_VIDEO_EXPORT_STATUSES = new Set(['OPEN', 'UPLOADING', 'FAILED', 'ABANDONED']);
 export const VIDEO_EXPORT_CROSSFADE_MS = 200;
-export const VIDEO_EXPORT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
-export const VIDEO_EXPORT_ABANDONED_MESSAGE = 'Сессия автоматически переведена в ABANDONED после 24 часов без активности.';
-export const VIDEO_EXPORT_CANCELLED_MESSAGE = 'Сессия экспорта отменена вручную.';
 
 export type VideoExportSourceFingerprint = {
     name: string;
@@ -110,26 +105,6 @@ export const sanitizeVideoExportSerial = (serialNumber: string) =>
 
 export const buildVideoExportFilename = (serialNumber: string) =>
     `${sanitizeVideoExportSerial(serialNumber)}.mp4`;
-
-export const serializeBatchVideoExportSession = (
-    session: Pick<BatchVideoExportSession, 'id' | 'status' | 'version' | 'expected_count' | 'uploaded_count' | 'crossfade_ms' | 'error_message' | 'started_at' | 'finished_at'> | null | undefined
-) => {
-    if (!session) {
-        return null;
-    }
-
-    return {
-        session_id: session.id,
-        status: session.status,
-        version: session.version,
-        expected_count: session.expected_count,
-        uploaded_count: session.uploaded_count,
-        crossfade_ms: session.crossfade_ms,
-        error_message: session.error_message,
-        started_at: session.started_at,
-        finished_at: session.finished_at
-    };
-};
 
 export const parseVideoExportSourceFingerprint = (
     value: Prisma.JsonValue | null | undefined

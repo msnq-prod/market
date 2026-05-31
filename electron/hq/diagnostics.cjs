@@ -63,7 +63,6 @@ const buildDiagnosticsMarkdown = (payload) => {
             pageOrigin: videoTool.pageOrigin,
             helperStatus: videoTool.helperStatus,
             helperIssueMessage: videoTool.helperIssueMessage,
-            helperBaseUrl: videoTool.helperBaseUrl,
             helperUrlCandidates: videoTool.helperUrlCandidates,
             helperAllowedOrigins: videoTool.helperHealth?.allowed_origins
         }),
@@ -121,8 +120,6 @@ const buildStatusCenterLogsPayload = (payload) => ({
 const createDiagnosticsRuntime = ({
     app,
     dialog,
-    Notification,
-    helperPort,
     getDiagnosticFileKind,
     getMimeType,
     getAppInfo,
@@ -133,11 +130,8 @@ const createDiagnosticsRuntime = ({
     getMediaQueue,
     getMediaWorkflowManager,
     getLastUpdateStatus,
-    getMainWindow,
-    showMainWindow
+    getMainWindow
 }) => {
-    const mediaQueueGroupStates = new Map();
-
     const readBatchDiagnosticsMediaFolder = async (directoryPath) => {
         const diagnostics = [];
         const entries = await fsp.readdir(directoryPath, { withFileTypes: true });
@@ -177,66 +171,6 @@ const createDiagnosticsRuntime = ({
         }
 
         return { cancelled: false, directoryPath, files, diagnostics };
-    };
-
-    const cleanupRenderJobAfterUpload = async (helperJobId) => {
-        const safeHelperJobId = typeof helperJobId === 'string' ? helperJobId.trim() : '';
-        if (!safeHelperJobId) {
-            return;
-        }
-
-        try {
-            const response = await fetch(`http://127.0.0.1:${helperPort}/render-jobs/${encodeURIComponent(safeHelperJobId)}/cleanup`, {
-                method: 'POST'
-            });
-            if (!response.ok) {
-                console.error('[zagarami-hq] failed to cleanup completed render job', response.status);
-            }
-        } catch (error) {
-            console.error('[zagarami-hq] failed to cleanup completed render job', error);
-        }
-    };
-
-    const getVideoUploadGroups = (snapshot) => {
-        const groups = new Map();
-        for (const job of snapshot.jobs || []) {
-            const summary = job.summary || {};
-            if (job.type !== 'VIDEO_RENDER_UPLOAD' || summary.groupKind !== 'VIDEO_EXPORT_UPLOAD' || !summary.groupId) {
-                continue;
-            }
-
-            const group = groups.get(summary.groupId) || {
-                id: summary.groupId,
-                title: summary.groupTitle || 'Видео партии',
-                total: Number(summary.groupTotal || 0),
-                helperJobId: summary.helperJobId || '',
-                notifyOnComplete: Boolean(summary.notifyOnComplete),
-                cleanupHelperJob: Boolean(summary.cleanupHelperJob),
-                jobs: []
-            };
-            group.jobs.push(job);
-            group.total = Math.max(group.total, group.jobs.length);
-            group.notifyOnComplete = group.notifyOnComplete || Boolean(summary.notifyOnComplete);
-            group.cleanupHelperJob = group.cleanupHelperJob || Boolean(summary.cleanupHelperJob);
-            if (!group.helperJobId && summary.helperJobId) {
-                group.helperJobId = summary.helperJobId;
-            }
-            groups.set(summary.groupId, group);
-        }
-
-        return Array.from(groups.values());
-    };
-
-    const showDesktopNotification = (title, body) => {
-        if (!Notification.isSupported()) {
-            return;
-        }
-
-        const notification = new Notification({ title, body, silent: false });
-        notification.on('click', () => {
-            void showMainWindow();
-        });
-        notification.show();
     };
 
     return {
@@ -279,44 +213,8 @@ const createDiagnosticsRuntime = ({
 
             return readBatchDiagnosticsMediaFolder(result.filePaths[0]);
         },
-        async handleMediaQueueGroupTransitions(snapshot) {
-            for (const group of getVideoUploadGroups(snapshot)) {
-                const total = Math.max(group.total, group.jobs.length);
-                const done = group.jobs.filter((job) => job.status === 'done').length;
-                const failed = group.jobs.filter((job) => job.status === 'failed' || job.status === 'auth_required').length;
-                const cancelled = group.jobs.filter((job) => job.status === 'cancelled').length;
-                const previousState = mediaQueueGroupStates.get(group.id);
-
-                if (done === total && total > 0) {
-                    if (previousState !== 'done') {
-                        mediaQueueGroupStates.set(group.id, 'done');
-                        if (group.notifyOnComplete) {
-                            showDesktopNotification('Загрузка видео завершена', `${group.title}: ${done}/${total} файлов загружено.`);
-                        }
-                        if (group.cleanupHelperJob) {
-                            await cleanupRenderJobAfterUpload(group.helperJobId);
-                        }
-                    }
-                    continue;
-                }
-
-                if (failed > 0) {
-                    if (previousState !== 'attention') {
-                        mediaQueueGroupStates.set(group.id, 'attention');
-                        if (group.notifyOnComplete) {
-                            showDesktopNotification('Загрузка видео требует внимания', `${group.title}: ошибок ${failed}. Откройте Status Center.`);
-                        }
-                    }
-                    continue;
-                }
-
-                if (cancelled === total && total > 0) {
-                    mediaQueueGroupStates.set(group.id, 'cancelled');
-                    continue;
-                }
-
-                mediaQueueGroupStates.set(group.id, 'active');
-            }
+        async handleMediaQueueGroupTransitions() {
+            return undefined;
         },
         async getDesktopDiagnostics() {
             const [appInfo, network] = await Promise.all([getAppInfo(), getNetworkStatus()]);
@@ -348,15 +246,7 @@ const createDiagnosticsRuntime = ({
                     done: queueSnapshot.counts.done || 0,
                     cancelled: queueSnapshot.counts.cancelled || 0,
                     stuck: (queueSnapshot.jobs || []).filter((job) => job.stuck).length,
-                    groups: getVideoUploadGroups(queueSnapshot).map((group) => ({
-                        id: group.id,
-                        title: group.title,
-                        total: Math.max(group.total, group.jobs.length),
-                        done: group.jobs.filter((job) => job.status === 'done').length,
-                        active: group.jobs.filter((job) => ['queued', 'uploading', 'retrying'].includes(job.status)).length,
-                        failed: group.jobs.filter((job) => job.status === 'failed').length,
-                        blockedAuth: group.jobs.filter((job) => job.status === 'auth_required').length
-                    }))
+                    groups: []
                 },
                 workflows: {
                     counts: workflowSnapshot.counts,

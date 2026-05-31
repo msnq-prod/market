@@ -107,11 +107,6 @@ export const videoToolReducer = (state: VideoToolState, action: VideoToolAction)
                     issueMessage: action.issueMessage ?? state.helper.issueMessage
                 }
             };
-        case 'export/session':
-            return {
-                ...state,
-                export: { ...state.export, session: action.session }
-            };
         case 'export/phase':
             return {
                 ...state,

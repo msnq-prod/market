@@ -13,7 +13,6 @@ const HELPER_PORT = 3012;
 const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 const UPDATE_MANIFEST_FILE = 'ZAGARAMI-HQ-update.json';
 const PROXY_PREFIXES = ['/api', '/auth', '/uploads', '/healthz'];
-const DESKTOP_HELPER_PREFIX = '/desktop-helper';
 const TEXT_EXTENSIONS = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt', '.map']);
 const DIAGNOSTIC_PHOTO_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 const DIAGNOSTIC_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
@@ -80,7 +79,6 @@ const createAppConfig = ({ app }) => {
         HELPER_PROTOCOL_VERSION,
         UPDATE_MANIFEST_FILE,
         PROXY_PREFIXES,
-        DESKTOP_HELPER_PREFIX,
         TEXT_EXTENSIONS,
         DIAGNOSTIC_PHOTO_EXTENSIONS,
         DIAGNOSTIC_VIDEO_EXTENSIONS,

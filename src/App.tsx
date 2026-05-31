@@ -15,14 +15,17 @@ import { LoadingScreen } from './components/LoadingScreen'
 import { ScrollToProductsHint } from './components/ScrollToProductsHint'
 import { AdminLayout } from './admin/components/AdminLayout'
 import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
+import { HqDesktopDownloadPlaceholder } from './admin/components/HqDesktopDownloadPlaceholder'
 import { Dashboard } from './admin/pages/Dashboard'
 import { Products } from './admin/pages/Products'
 import { Brandbook } from './admin/pages/Brandbook'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
 import { logReactError, logRouteChange } from './utils/clientLogger'
+import { isStonesDesktop } from './utils/desktop'
 
 const VideoTool = React.lazy(() => import('./admin/pages/VideoTool').then((module) => ({ default: module.VideoTool })))
+const PhotoTool = React.lazy(() => import('./admin/pages/PhotoTool').then((module) => ({ default: module.PhotoTool })))
 
 type StonesDebugWindow = Window & {
   __STONES_DEBUG__?: {
@@ -602,9 +605,20 @@ import { Clients } from './admin/pages/Clients'
 import { SalesInventory } from './admin/pages/SalesInventory'
 import { SalesHistory } from './admin/pages/SalesHistory'
 import { VideoToolLauncher } from './admin/pages/VideoToolLauncher'
-import { PhotoTool } from './admin/pages/PhotoTool'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
 import { TelegramBots } from './admin/pages/TelegramBots'
+
+function DesktopOnlyToolRoute({ toolName, children }: { toolName: string; children: React.ReactNode }) {
+  if (!isStonesDesktop()) {
+    return <HqDesktopDownloadPlaceholder toolName={toolName} fullscreen />
+  }
+
+  return (
+    <Suspense fallback={null}>
+      {children}
+    </Suspense>
+  )
+}
 
 function App() {
   return (
@@ -620,7 +634,9 @@ function App() {
           path="/admin/photo-tool/:batchId"
           element={(
             <AdminFullscreenRoute>
-              <PhotoTool />
+              <DesktopOnlyToolRoute toolName="Photo Tool">
+                <PhotoTool />
+              </DesktopOnlyToolRoute>
             </AdminFullscreenRoute>
           )}
         />
@@ -628,9 +644,9 @@ function App() {
           path="/admin/video-tool/:batchId"
           element={(
             <AdminFullscreenRoute>
-              <Suspense fallback={null}>
+              <DesktopOnlyToolRoute toolName="Video Tool">
                 <VideoTool />
-              </Suspense>
+              </DesktopOnlyToolRoute>
             </AdminFullscreenRoute>
           )}
         />

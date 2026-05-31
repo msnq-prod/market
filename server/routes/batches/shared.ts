@@ -8,7 +8,6 @@ import { buildCloneUrl, buildQrUrl } from '../../utils/cloneUrls.ts';
 import { formatItemSeq } from '../../utils/collectionWorkflow.ts';
 import { resolveProjectPath } from '../../utils/projectPaths.ts';
 import { serializeVideoProcessingJob } from '../../services/videoProcessing.ts';
-import { serializeBatchVideoExportSession } from '../../services/videoExport.ts';
 import { prisma } from '../../services/prisma.ts';
 
 export { prisma };
@@ -53,10 +52,6 @@ export const BATCH_INCLUDE = Prisma.validator<Prisma.BatchInclude>()({
         orderBy: { created_at: 'desc' },
         take: 1
     },
-    video_export_sessions: {
-        orderBy: { created_at: 'desc' },
-        take: 1
-    }
 });
 
 export type BatchRecord = Prisma.BatchGetPayload<{ include: typeof BATCH_INCLUDE }>;
@@ -75,7 +70,6 @@ export const serializeBatch = (req: AuthRequest, batch: BatchRecord) => ({
     owner: batch.owner,
     collection_request: batch.collection_request,
     video_processing: serializeVideoProcessingJob(batch.video_processing_jobs[0]),
-    video_export: serializeBatchVideoExportSession(batch.video_export_sessions[0]),
     product: batch.product ? {
         id: batch.product.id,
         price: Number(batch.product.price),

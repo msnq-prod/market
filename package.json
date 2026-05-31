@@ -1,7 +1,7 @@
 {
   "name": "stones",
   "private": true,
-  "version": "1.5.25-9",
+  "version": "1.5.29-2",
   "type": "module",
   "packageManager": "npm@10.9.3",
   "engines": {
@@ -26,10 +26,6 @@
     "video-processor:prod": "node build/server/videoProcessor.js",
     "telegram-worker": "npm run prisma:generate && tsx server/telegramWorker.ts",
     "telegram-worker:prod": "node build/server/telegramWorker.js",
-    "video-export-helper": "node video-export-helper/index.js",
-    "video-export-helper:desktop": "electron video-export-helper/desktop/main.cjs",
-    "video-export-helper:desktop:dist": "node video-export-helper/build-desktop.mjs",
-    "video-export-helper:desktop:dist:raw": "electron-builder --config video-export-helper/electron-builder.json",
     "admin:desktop": "electron electron/hq/main.cjs",
     "admin:desktop:dev": "node scripts/dev-admin-desktop.mjs",
     "admin:desktop:prod-like": "node scripts/dev-admin-desktop.mjs --dist",

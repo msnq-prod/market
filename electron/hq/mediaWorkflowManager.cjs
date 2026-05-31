@@ -6,18 +6,6 @@ const { EventEmitter } = require('events');
 
 const heicConvert = require('heic-convert');
 
-const ACTIVE_VIDEO_PHASES = new Set([
-    'queued',
-    'preparing_session',
-    'importing_sources',
-    'rendering_intro',
-    'rendering_outputs',
-    'uploading_outputs',
-    'verifying',
-    'paused_offline',
-    'auth_required'
-]);
-const ACTIVE_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'auth_required']);
 const ACTIVE_PHOTO_PHASES = new Set([
     'queued',
     'converting',
@@ -30,9 +18,6 @@ const TERMINAL_PHASES = new Set(['completed', 'cancelled', 'failed']);
 const IMAGE_CONVERT_EXTENSIONS = new Set(['.heic', '.heif']);
 const RETRY_DELAY_MS = 3_000;
 const VERIFY_DELAY_MS = 1_200;
-const HELPER_BASE_URL = 'http://127.0.0.1:3012';
-const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
-const VIDEO_EXPORT_CROSSFADE_MS = 200;
 const STATE_VERSION = 2;
 const EVENT_BUFFER_SIZE = 10;
 const WORKFLOW_STUCK_MS = 10 * 60_000;
@@ -155,29 +140,14 @@ const normalizeFailure = (error, fallbackMessage) => {
 };
 
 const isActiveWorkflow = (workflow) => {
-    if (workflow.kind === 'VIDEO_EXPORT_WORKFLOW') {
-        return ACTIVE_VIDEO_PHASES.has(workflow.phase);
-    }
-
     return ACTIVE_PHOTO_PHASES.has(workflow.phase);
 };
 
-const getRoutePath = (workflow) => workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-    ? `/admin/video-tool/${encodeURIComponent(workflow.batchId)}`
-    : `/admin/photo-tool/${encodeURIComponent(workflow.batchId)}`;
+const getRoutePath = (workflow) => `/admin/photo-tool/${encodeURIComponent(workflow.batchId)}`;
 
 const buildWorkflowSnapshot = (workflow) => {
-    const total = workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-        ? workflow.expectedCount
-        : workflow.items.length;
-    const completed = workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-        ? workflow.confirmedSerials.length
-        : workflow.phase === 'completed'
-            ? workflow.items.length
-            : 0;
-    const currentSerial = workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-        ? workflow.pendingSerials[0] || workflow.confirmedSerials.at(-1) || ''
-        : '';
+    const total = workflow.items.length;
+    const completed = workflow.phase === 'completed' ? workflow.items.length : 0;
 
     return {
         id: workflow.id,
@@ -192,41 +162,29 @@ const buildWorkflowSnapshot = (workflow) => {
         recentEvents: Array.isArray(workflow.recentEvents) ? workflow.recentEvents : [],
         stuck: isStuckWorkflow(workflow),
         summary: {
-            title: workflow.summary?.title || (workflow.kind === 'VIDEO_EXPORT_WORKFLOW' ? 'Video workflow' : 'Photo workflow'),
+            title: workflow.summary?.title || 'Photo workflow',
             subtitle: workflow.summary?.subtitle || '',
-            batchLabel: workflow.summary?.batchLabel || workflow.batchId,
-            currentSerial
+            batchLabel: workflow.summary?.batchLabel || workflow.batchId
         },
         routePath: getRoutePath(workflow),
-        sessionId: workflow.sessionId || null,
-        sessionVersion: workflow.sessionVersion || null,
         progress: {
             completed,
             total
         },
-        uploadState: workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-            ? {
-                pendingSerials: [...workflow.pendingSerials],
-                confirmedSerials: [...workflow.confirmedSerials],
-                failedSerials: [...workflow.failedSerials]
-            }
-            : null
+        uploadState: null
     };
 };
 
 class MediaWorkflowManager extends EventEmitter {
-    constructor({ rootDir, stagedFilesDir, mediaQueue, getApiOrigin, getAccessToken, getAppOrigin }) {
+    constructor({ rootDir, stagedFilesDir, mediaQueue, getApiOrigin, getAccessToken }) {
         super();
         this.rootDir = rootDir;
         this.stagedFilesDir = stagedFilesDir;
         this.statePath = path.join(rootDir, 'workflows.json');
-        this.v2StatePath = path.join(rootDir, 'video-runs-v2.json');
         this.mediaQueue = mediaQueue;
         this.getApiOrigin = getApiOrigin;
         this.getAccessToken = getAccessToken;
-        this.getAppOrigin = getAppOrigin || getApiOrigin;
         this.workflows = [];
-        this.videoExportRuns = {};
         this.processing = false;
         this.persistPromise = Promise.resolve();
         this.timer = null;
@@ -242,79 +200,16 @@ class MediaWorkflowManager extends EventEmitter {
         this.schedule(0);
     }
 
-    async loadV2Runs() {
-        try {
-            const rawV2 = await fsp.readFile(this.v2StatePath, 'utf8');
-            const parsedV2 = JSON.parse(rawV2);
-            this.videoExportRuns = isRecord(parsedV2?.runs) ? parsedV2.runs : {};
-        } catch {
-            this.videoExportRuns = {};
-        }
-    }
-
-    async persistV2Runs() {
-        const payload = JSON.stringify({ version: 1, runs: this.videoExportRuns }, null, 2);
-        this.persistPromise = this.persistPromise
-            .catch(() => undefined)
-            .then(() => fsp.writeFile(this.v2StatePath, `${payload}\n`, 'utf8'));
-        await this.persistPromise;
-    }
-
     async load() {
         try {
             const raw = await fsp.readFile(this.statePath, 'utf8');
             const parsed = JSON.parse(raw);
             const workflows = Array.isArray(parsed?.workflows) ? parsed.workflows : [];
-            this.workflows = workflows.filter(isRecord).map((workflow) => this.normalizeLoadedWorkflow(workflow));
-            await this.validateLoadedVideoSources();
+            this.workflows = workflows
+                .filter((workflow) => isRecord(workflow) && workflow.kind === 'PHOTO_APPLY_WORKFLOW')
+                .map((workflow) => this.normalizeLoadedWorkflow(workflow));
         } catch {
             this.workflows = [];
-        }
-        await this.loadV2Runs().catch(() => undefined);
-    }
-
-    async validateLoadedVideoSources() {
-        let changed = false;
-        for (const workflow of this.workflows) {
-            if (workflow.kind !== 'VIDEO_EXPORT_WORKFLOW' || TERMINAL_PHASES.has(workflow.phase)) {
-                continue;
-            }
-
-            for (const source of workflow.sources) {
-                if (!source.cachePath) {
-                    continue;
-                }
-
-                const exists = await fsp.stat(source.cachePath).then((stat) => stat.isFile()).catch(() => false);
-                if (!exists) {
-                    workflow.phase = 'failed';
-                    workflow.lastError = 'local_cache_missing';
-                    workflow.blockingReason = 'local_cache_missing';
-                    workflow.nextAttemptAt = 0;
-                    workflow.updatedAt = nowIso();
-                    appendEvent(workflow, 'failed', { reason: 'local_cache_missing' });
-                    changed = true;
-                    break;
-                }
-
-                if (source.checksumSha256) {
-                    const actualChecksum = await sha256File(source.cachePath).catch(() => '');
-                    if (actualChecksum && actualChecksum !== source.checksumSha256) {
-                        workflow.phase = 'failed';
-                        workflow.lastError = 'local_cache_missing';
-                        workflow.blockingReason = 'local_cache_missing';
-                        workflow.nextAttemptAt = 0;
-                        workflow.updatedAt = nowIso();
-                        appendEvent(workflow, 'failed', { reason: 'local_cache_checksum_mismatch' });
-                        changed = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (changed) {
-            await this.persist();
         }
     }
 
@@ -328,17 +223,8 @@ class MediaWorkflowManager extends EventEmitter {
         nextWorkflow.recentEvents = Array.isArray(workflow.recentEvents) ? workflow.recentEvents.slice(-EVENT_BUFFER_SIZE) : [];
         nextWorkflow.summary = isRecord(workflow.summary) ? workflow.summary : {};
 
-        if (nextWorkflow.kind === 'VIDEO_EXPORT_WORKFLOW') {
-            nextWorkflow.sources = Array.isArray(workflow.sources) ? workflow.sources : [];
-            nextWorkflow.pendingSerials = Array.isArray(workflow.pendingSerials) ? workflow.pendingSerials : [];
-            nextWorkflow.confirmedSerials = Array.isArray(workflow.confirmedSerials) ? workflow.confirmedSerials : [];
-            nextWorkflow.failedSerials = Array.isArray(workflow.failedSerials) ? workflow.failedSerials : [];
-            nextWorkflow.uploadJobIds = isRecord(workflow.uploadJobIds) ? workflow.uploadJobIds : {};
-            nextWorkflow.expectedCount = Number(workflow.expectedCount || 0) || 0;
-        } else {
-            nextWorkflow.items = Array.isArray(workflow.items) ? workflow.items : [];
-            nextWorkflow.files = Array.isArray(workflow.files) ? workflow.files : [];
-        }
+        nextWorkflow.items = Array.isArray(workflow.items) ? workflow.items : [];
+        nextWorkflow.files = Array.isArray(workflow.files) ? workflow.files : [];
 
         return nextWorkflow;
     }
@@ -358,7 +244,7 @@ class MediaWorkflowManager extends EventEmitter {
             return acc;
         }, {});
 
-        return { workflows, counts, videoExportRuns: this.videoExportRuns };
+        return { workflows, counts };
     }
 
     emitChange() {
@@ -447,73 +333,6 @@ class MediaWorkflowManager extends EventEmitter {
         return buildWorkflowSnapshot(workflow);
     }
 
-    async startVideoExportWorkflow(payload) {
-        const manifestHash = createWorkflowHash({
-            batchId: payload.batchId,
-            renderManifest: payload.renderManifest
-        });
-        const duplicate = this.findDuplicate('VIDEO_EXPORT_WORKFLOW', payload.batchId, manifestHash);
-        if (duplicate) {
-            return buildWorkflowSnapshot(duplicate);
-        }
-
-        const sources = (payload.sources || []).map((source) => ({
-            sourceIndex: source.sourceIndex,
-            role: source.role,
-            helperSourceId: source.helperSourceId || '',
-            originalName: safeFileName(source.originalName || source.name),
-            mimeType: source.mimeType || 'video/mp4',
-            size: Number(source.size || 0) || 0,
-            checksumSha256: source.checksumSha256 || '',
-            lastModified: Number(source.lastModified || 0) || 0,
-            fileId: source.fileId,
-            cachePath: source.cachePath || fileCachePathFor(this.stagedFilesDir, source.fileId),
-            fingerprint: source.fingerprint || null
-        }));
-        const outputs = Array.isArray(payload.renderManifest?.outputs) ? payload.renderManifest.outputs : [];
-        const expectedCount = outputs.length;
-        const pendingSerials = outputs.map((output) => String(output.serial_number || '').trim().toUpperCase()).filter(Boolean);
-        const workflow = {
-            id: createId(),
-            kind: 'VIDEO_EXPORT_WORKFLOW',
-            batchId: payload.batchId,
-            phase: 'queued',
-            createdAt: nowIso(),
-            updatedAt: nowIso(),
-            nextAttemptAt: 0,
-            lastError: '',
-            blockingReason: null,
-            recentEvents: [],
-            summary: {
-                title: 'Video workflow',
-                subtitle: payload.subtitle || `${expectedCount} роликов`,
-                batchLabel: payload.batchLabel || payload.batchId
-            },
-            manifestHash,
-            expectedCount,
-            renderManifest: payload.renderManifest,
-            sourceFingerprint: payload.sourceFingerprint || null,
-            helperBaseUrl: payload.helperBaseUrl || HELPER_BASE_URL,
-            sessionId: payload.sessionId || '',
-            sessionVersion: payload.sessionVersion || null,
-            sources,
-            introHelperSourceId: payload.introHelperSourceId || '',
-            introJobId: '',
-            introUploadJobId: '',
-            renderJobId: '',
-            uploadJobIds: {},
-            pendingSerials,
-            confirmedSerials: [],
-            failedSerials: []
-        };
-        appendEvent(workflow, 'created');
-
-        this.workflows.unshift(workflow);
-        await this.markChanged();
-        this.schedule(0);
-        return buildWorkflowSnapshot(workflow);
-    }
-
     async retryWorkflow(workflowId) {
         const workflow = this.workflows.find((entry) => entry.id === workflowId);
         if (!workflow) {
@@ -525,12 +344,7 @@ class MediaWorkflowManager extends EventEmitter {
         workflow.nextAttemptAt = 0;
         workflow.blockingReason = null;
         appendEvent(workflow, 'retry_scheduled');
-        if (workflow.kind === 'VIDEO_EXPORT_WORKFLOW') {
-            workflow.phase = workflow.confirmedSerials.length >= workflow.expectedCount ? 'completed' : 'queued';
-            workflow.failedSerials = [];
-        } else {
-            workflow.phase = 'queued';
-        }
+        workflow.phase = 'queued';
 
         await this.markChanged();
         this.schedule(0);
@@ -554,11 +368,6 @@ class MediaWorkflowManager extends EventEmitter {
     }
 
     async cleanupWorkflowFiles(workflow) {
-        if (workflow.kind === 'VIDEO_EXPORT_WORKFLOW') {
-            await Promise.all((workflow.sources || []).map((source) => safeRemove(source.cachePath)));
-            return;
-        }
-
         await Promise.all((workflow.files || []).map((file) => safeRemove(file.cachePath)));
         await Promise.all((workflow.files || []).map((file) => safeRemove(file.convertedPath)));
     }
@@ -578,15 +387,9 @@ class MediaWorkflowManager extends EventEmitter {
 
         this.processing = true;
         try {
-            await this.processV2Runs().catch((err) => console.error('Error processing V2 runs:', err));
-
             const workflow = this.getNextReadyWorkflow();
             if (workflow) {
-                if (workflow.kind === 'VIDEO_EXPORT_WORKFLOW') {
-                    await this.processVideoWorkflow(workflow);
-                } else {
-                    await this.processPhotoWorkflow(workflow);
-                }
+                await this.processPhotoWorkflow(workflow);
             }
         } finally {
             this.processing = false;
@@ -624,26 +427,6 @@ class MediaWorkflowManager extends EventEmitter {
         }
     }
 
-    async helperRequest(pathname, init = {}, fallbackMessage = 'Helper недоступен.') {
-        try {
-            const method = String(init.method || 'GET').toUpperCase();
-            const headers = new Headers(init.headers || {});
-
-            if (method !== 'GET' && method !== 'HEAD') {
-                headers.set('Origin', this.getAppOrigin());
-                headers.set('X-Stones-Video-Helper-Version', HELPER_PROTOCOL_VERSION);
-            }
-
-            const response = await fetch(`${HELPER_BASE_URL}${pathname}`, {
-                ...init,
-                headers
-            });
-            return await parseJsonResponse(response, fallbackMessage);
-        } catch (error) {
-            throw normalizeFailure(error, fallbackMessage);
-        }
-    }
-
     async setWorkflowPhase(workflow, phase, overrides = {}) {
         const previousPhase = workflow.phase;
         workflow.phase = phase;
@@ -661,7 +444,7 @@ class MediaWorkflowManager extends EventEmitter {
     }
 
     async handleWorkflowError(workflow, error) {
-        const normalized = normalizeFailure(error, workflow.kind === 'VIDEO_EXPORT_WORKFLOW' ? 'Видео workflow завершился с ошибкой.' : 'Фото workflow завершился с ошибкой.');
+        const normalized = normalizeFailure(error, 'Фото workflow завершился с ошибкой.');
         workflow.lastError = normalized.message || workflow.lastError;
         workflow.updatedAt = nowIso();
 
@@ -680,13 +463,6 @@ class MediaWorkflowManager extends EventEmitter {
             workflow.nextAttemptAt = 0;
             workflow.blockingReason = null;
             appendEvent(workflow, 'failed');
-            if (workflow.kind === 'VIDEO_EXPORT_WORKFLOW') {
-                const serials = new Set(workflow.failedSerials);
-                for (const serial of workflow.pendingSerials) {
-                    serials.add(serial);
-                }
-                workflow.failedSerials = Array.from(serials);
-            }
         }
 
         await this.markChanged();
@@ -804,1054 +580,6 @@ class MediaWorkflowManager extends EventEmitter {
         }
     }
 
-    async reconcileVideoSession(workflow) {
-        if (!workflow.sessionId) {
-            return null;
-        }
-
-        const payload = await this.apiRequest(`/api/batches/${encodeURIComponent(workflow.batchId)}/video-export-sessions/${encodeURIComponent(workflow.sessionId)}`, undefined, 'Не удалось загрузить export-session.');
-        const session = payload?.session || null;
-        if (!session) {
-            return null;
-        }
-
-        workflow.sessionVersion = session.version || workflow.sessionVersion;
-        const uploadedManifest = Array.isArray(session.uploaded_manifest) ? session.uploaded_manifest : [];
-        const confirmed = uploadedManifest
-            .map((entry) => String(entry.serial_number || '').trim().toUpperCase())
-            .filter(Boolean);
-        const confirmedSet = new Set(confirmed);
-        workflow.confirmedSerials = confirmed;
-        workflow.pendingSerials = workflow.pendingSerials.filter((serial) => !confirmedSet.has(serial));
-        for (const [serial, jobId] of Object.entries(workflow.uploadJobIds)) {
-            if (confirmedSet.has(serial)) {
-                delete workflow.uploadJobIds[serial];
-            } else if (!jobId) {
-                delete workflow.uploadJobIds[serial];
-            }
-        }
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-        return session;
-    }
-
-    async reopenVideoSessionTail(workflow) {
-        if (!workflow.sessionId) {
-            return null;
-        }
-
-        const payload = await this.apiRequest(
-            `/api/batches/${encodeURIComponent(workflow.batchId)}/video-export-sessions/${encodeURIComponent(workflow.sessionId)}/retry-tail`,
-            { method: 'POST' },
-            'Не удалось восстановить export-session.'
-        );
-        const session = payload?.session || null;
-        if (!session) {
-            throw new Error('Сервер не вернул export-session.');
-        }
-
-        workflow.sessionVersion = session.version || workflow.sessionVersion;
-        const uploadedManifest = Array.isArray(session.uploaded_manifest) ? session.uploaded_manifest : [];
-        const confirmed = uploadedManifest
-            .map((entry) => String(entry.serial_number || '').trim().toUpperCase())
-            .filter(Boolean);
-        const confirmedSet = new Set(confirmed);
-        const pendingSerials = Array.isArray(payload.pending_serials)
-            ? payload.pending_serials.map((serial) => String(serial || '').trim().toUpperCase()).filter(Boolean)
-            : (Array.isArray(session.render_manifest?.outputs) ? session.render_manifest.outputs : [])
-                .map((output) => String(output.serial_number || '').trim().toUpperCase())
-                .filter((serial) => serial && !confirmedSet.has(serial));
-
-        workflow.confirmedSerials = confirmed;
-        workflow.pendingSerials = pendingSerials;
-        for (const [serial, jobId] of Object.entries(workflow.uploadJobIds)) {
-            if (confirmedSet.has(serial) || !jobId) {
-                delete workflow.uploadJobIds[serial];
-            }
-        }
-
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-        return session;
-    }
-
-    getMediaQueueJob(jobId) {
-        return this.mediaQueue.getSnapshot().jobs.find((job) => job.id === jobId) || null;
-    }
-
-    async ensureVideoSession(workflow) {
-        const payload = await this.apiRequest(`/api/batches/${encodeURIComponent(workflow.batchId)}/video-export-sessions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                expected_count: workflow.expectedCount,
-                crossfade_ms: VIDEO_EXPORT_CROSSFADE_MS,
-                source_fingerprint: workflow.sourceFingerprint,
-                render_manifest: workflow.renderManifest
-            })
-        }, 'Не удалось создать export-session.');
-        const session = payload?.session || null;
-        if (!session) {
-            throw new Error('Сервер не вернул export-session.');
-        }
-
-        workflow.sessionId = session.session_id;
-        workflow.sessionVersion = session.version;
-        workflow.phase = 'importing_sources';
-        workflow.updatedAt = nowIso();
-        workflow.lastError = '';
-        workflow.nextAttemptAt = 0;
-        await this.markChanged();
-        await this.reconcileVideoSession(workflow);
-        return session;
-    }
-
-    async importSourceToHelper(workflow, source) {
-        const form = new FormData();
-        await appendFileToForm(form, 'file', source.cachePath, source.originalName, source.mimeType);
-        form.append('lastModified', String(source.lastModified || 0));
-
-        const payload = await this.helperRequest('/sources', {
-            method: 'POST',
-            body: form
-        }, 'Не удалось загрузить source в helper.');
-        if (!payload?.source_id) {
-            throw new Error('Helper не вернул source_id.');
-        }
-
-        source.helperSourceId = payload.source_id;
-        source.fingerprint = payload.fingerprint || source.fingerprint;
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-    }
-
-    async ensureVideoSources(workflow) {
-        const nextSource = workflow.sources.find((source) => !source.helperSourceId);
-        if (!nextSource) {
-            return false;
-        }
-
-        await this.importSourceToHelper(workflow, nextSource);
-        return true;
-    }
-
-    getRenderPendingOutputs(workflow) {
-        const pendingSet = new Set(workflow.pendingSerials);
-        return (workflow.renderManifest?.outputs || []).filter((output) => pendingSet.has(String(output.serial_number || '').trim().toUpperCase()));
-    }
-
-    getRenderSegmentsForPending(workflow) {
-        const pendingOutputs = this.getRenderPendingOutputs(workflow);
-        const pendingSegmentSeqs = new Set(pendingOutputs.map((output) => Number(output.segment_seq)));
-        return (workflow.renderManifest?.segments || []).filter((segment) => pendingSegmentSeqs.has(Number(segment.sequence)));
-    }
-
-    async createIntroJob(workflow) {
-        const introSegment = workflow.renderManifest?.segments?.[0];
-        if (!introSegment) {
-            throw new Error('В render_manifest нет intro-сегмента.');
-        }
-
-        const introSourceIndex = Number(introSegment.source_index ?? 0);
-        const source = workflow.sources.find((entry) => Number(entry.sourceIndex) === introSourceIndex);
-        if (!source?.helperSourceId) {
-            throw new Error('Исходник intro не загружен в helper.');
-        }
-
-        const payload = await this.helperRequest('/intro-jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                sources: [{ source_index: introSourceIndex, source_id: source.helperSourceId }],
-                segment: introSegment
-            })
-        }, 'Не удалось создать intro job в helper.');
-        if (!payload?.job_id) {
-            throw new Error('Helper не вернул intro job id.');
-        }
-
-        workflow.introJobId = payload.job_id;
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-    }
-
-    async ensureIntroHelperSource(workflow, introAsset) {
-        if (workflow.introHelperSourceId) {
-            return workflow.introHelperSourceId;
-        }
-
-        const introUrl = isNonEmptyString(introAsset?.public_url)
-            ? introAsset.public_url.startsWith('http')
-                ? introAsset.public_url
-                : `${this.getApiOrigin().replace(/\/+$/, '')}${introAsset.public_url}`
-            : '';
-        if (!introUrl) {
-            throw new Error('Intro asset URL отсутствует.');
-        }
-
-        let response;
-        try {
-            response = await fetch(introUrl);
-        } catch (error) {
-            throw normalizeFailure(error, 'Не удалось скачать intro с сервера.');
-        }
-        if (!response.ok) {
-            throw new Error('Не удалось скачать intro с сервера.');
-        }
-
-        const blob = await response.blob();
-        const form = new FormData();
-        form.append('file', blob, introAsset.file_name || 'intro.mp4');
-        form.append('lastModified', String(Date.parse(introAsset.uploaded_at) || Date.now()));
-
-        const payload = await this.helperRequest('/sources', {
-            method: 'POST',
-            body: form
-        }, 'Не удалось импортировать intro в helper.');
-        if (!payload?.source_id) {
-            throw new Error('Helper не вернул source_id для intro.');
-        }
-
-        workflow.introHelperSourceId = payload.source_id;
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-        return payload.source_id;
-    }
-
-    async createRenderJob(workflow, introAsset) {
-        const pendingOutputs = this.getRenderPendingOutputs(workflow);
-        if (pendingOutputs.length === 0) {
-            return null;
-        }
-
-        const pendingSegments = this.getRenderSegmentsForPending(workflow);
-        const introSourceId = await this.ensureIntroHelperSource(workflow, introAsset);
-        const requiredTailSourceIndexes = Array.from(new Set(pendingSegments.map((segment) => Number(segment.source_index ?? 0))));
-        const renderSources = [
-            { source_index: 0, source_id: introSourceId },
-            ...requiredTailSourceIndexes.map((sourceIndex) => {
-                const source = workflow.sources.find((entry) => Number(entry.sourceIndex) === sourceIndex);
-                return {
-                    source_index: sourceIndex + 1,
-                    source_id: source?.helperSourceId || ''
-                };
-            })
-        ];
-        const introSegment = workflow.renderManifest?.segments?.[0];
-        const introDurationMs = introSegment ? Number(introSegment.end_ms) - Number(introSegment.start_ms) : 0;
-        const helperSegments = (workflow.renderManifest?.segments || []).map((segment) => (
-            Number(segment.sequence) === 0
-                ? {
-                    ...segment,
-                    source_index: 0,
-                    start_ms: 0,
-                    end_ms: introDurationMs
-                }
-                : {
-                    ...segment,
-                    source_index: Number(segment.source_index ?? 0) + 1
-                }
-        ));
-
-        try {
-            const payload = await this.helperRequest('/render-jobs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sources: renderSources,
-                    crossfade_ms: VIDEO_EXPORT_CROSSFADE_MS,
-                    segments: helperSegments,
-                    outputs: pendingOutputs
-                })
-            }, 'Не удалось создать render job в helper.');
-            if (!payload?.job_id) {
-                throw new Error('Helper не вернул render job id.');
-            }
-
-            workflow.renderJobId = payload.job_id;
-            workflow.updatedAt = nowIso();
-            await this.markChanged();
-            return payload;
-        } catch (error) {
-            if (/исходный файл.*не найден|source.*not found/i.test(String(error?.message || ''))) {
-                workflow.introHelperSourceId = '';
-                workflow.renderJobId = '';
-                for (const source of workflow.sources) {
-                    source.helperSourceId = '';
-                }
-                workflow.phase = 'importing_sources';
-                workflow.updatedAt = nowIso();
-                workflow.nextAttemptAt = 0;
-                await this.markChanged();
-                return null;
-            }
-
-            throw error;
-        }
-    }
-
-    async enqueueRenderUploads(workflow, renderStatusPayload) {
-        const outputs = Array.isArray(renderStatusPayload?.outputs) ? renderStatusPayload.outputs : [];
-        const readySerials = outputs
-            .filter((output) => output.status === 'COMPLETED')
-            .map((output) => String(output.serial_number || '').trim().toUpperCase())
-            .filter((serial) => serial && workflow.pendingSerials.includes(serial) && !workflow.uploadJobIds[serial]);
-
-        if (readySerials.length === 0) {
-            return;
-        }
-
-        const groupId = `${workflow.id}:${workflow.renderJobId || 'render'}`;
-        const groupTitle = `Видео партии ${workflow.batchId.slice(0, 8)}`;
-        for (const serialNumber of readySerials) {
-            const queuedJob = await this.mediaQueue.enqueueVideoRenderUpload({
-                batchId: workflow.batchId,
-                sessionId: workflow.sessionId,
-                helperBaseUrl: HELPER_BASE_URL,
-                helperJobId: workflow.renderJobId,
-                serialNumber,
-                groupId,
-                groupTitle,
-                groupKind: 'VIDEO_EXPORT_UPLOAD',
-                groupTotal: workflow.pendingSerials.length,
-                notifyOnComplete: true,
-                cleanupHelperJob: true
-            });
-            workflow.uploadJobIds[serialNumber] = queuedJob.id;
-        }
-
-        workflow.phase = 'uploading_outputs';
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-    }
-
-    async ensureIntroUploaded(workflow, session) {
-        if (session?.render_manifest?.intro_asset) {
-            return true;
-        }
-
-        if (!workflow.introJobId) {
-            await this.createIntroJob(workflow);
-            workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-            await this.markChanged();
-            return false;
-        }
-
-        const payload = await this.helperRequest(`/intro-jobs/${encodeURIComponent(workflow.introJobId)}`, undefined, 'Не удалось получить статус intro job.');
-        if (payload.status === 'FAILED') {
-            workflow.introJobId = '';
-            workflow.introUploadJobId = '';
-            workflow.updatedAt = nowIso();
-            await this.markChanged();
-            return false;
-        }
-
-        if (payload.status !== 'COMPLETED') {
-            workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-            await this.markChanged();
-            return false;
-        }
-
-        if (!workflow.introUploadJobId) {
-            const queuedJob = await this.mediaQueue.enqueueVideoIntroUpload({
-                batchId: workflow.batchId,
-                sessionId: workflow.sessionId,
-                helperBaseUrl: HELPER_BASE_URL,
-                helperJobId: workflow.introJobId
-            });
-            workflow.introUploadJobId = queuedJob.id;
-            workflow.updatedAt = nowIso();
-            workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-            await this.markChanged();
-            return false;
-        }
-
-        const queueJob = this.getMediaQueueJob(workflow.introUploadJobId);
-        if (!queueJob) {
-            workflow.introUploadJobId = '';
-            workflow.updatedAt = nowIso();
-            await this.markChanged();
-            return false;
-        }
-
-        if (queueJob.status === 'done') {
-            const refreshed = await this.reconcileVideoSession(workflow);
-            if (refreshed?.render_manifest?.intro_asset) {
-                workflow.introUploadJobId = '';
-                workflow.introJobId = '';
-                workflow.updatedAt = nowIso();
-                await this.markChanged();
-                return true;
-            }
-
-            throw new Error('Intro upload завершился, но session не содержит intro_asset.');
-        }
-
-        if (queueJob.status === 'auth_required') {
-            throw toAuthError(queueJob.lastError || 'Нужно войти в HQ заново.');
-        }
-
-        if (queueJob.status === 'failed') {
-            throw new Error(queueJob.lastError || 'Не удалось загрузить intro.');
-        }
-
-        if (queueJob.status === 'retrying' && isLikelyOfflineError(queueJob.lastError)) {
-            throw toOfflineError(queueJob.lastError);
-        }
-
-        workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-        await this.markChanged();
-        return false;
-    }
-
-    async verifyQueuedUploads(workflow) {
-        await this.reconcileVideoSession(workflow);
-        if (workflow.confirmedSerials.length >= workflow.expectedCount) {
-            await this.cleanupWorkflowFiles(workflow);
-            await this.setWorkflowPhase(workflow, 'completed', { nextAttemptAt: 0, lastError: '' });
-            return true;
-        }
-
-        const pendingJobs = Object.entries(workflow.uploadJobIds);
-        let hasActiveJobs = false;
-        let shouldRerender = false;
-        for (const [serial, jobId] of pendingJobs) {
-            const queueJob = this.getMediaQueueJob(jobId);
-            if (!queueJob) {
-                delete workflow.uploadJobIds[serial];
-                shouldRerender = true;
-                continue;
-            }
-
-            if (queueJob.status === 'done') {
-                if (!workflow.confirmedSerials.includes(serial)) {
-                    shouldRerender = true;
-                }
-                continue;
-            }
-
-            if (queueJob.status === 'auth_required') {
-                throw toAuthError(queueJob.lastError || 'Нужно войти в HQ заново.');
-            }
-
-            if (queueJob.status === 'failed') {
-                throw new Error(queueJob.lastError || `Не удалось загрузить ${serial}.`);
-            }
-
-            if (queueJob.status === 'retrying' && isLikelyOfflineError(queueJob.lastError)) {
-                throw toOfflineError(queueJob.lastError);
-            }
-
-            hasActiveJobs = true;
-        }
-
-        workflow.updatedAt = nowIso();
-        await this.markChanged();
-        if (hasActiveJobs) {
-            workflow.phase = 'verifying';
-            workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-            await this.markChanged();
-            return false;
-        }
-
-        if (workflow.pendingSerials.length > 0 || shouldRerender) {
-            workflow.renderJobId = '';
-            workflow.phase = 'rendering_outputs';
-            workflow.nextAttemptAt = 0;
-            await this.markChanged();
-            return false;
-        }
-
-        return false;
-    }
-
-    async processVideoWorkflow(workflow) {
-        try {
-            if (workflow.phase === 'queued' || workflow.phase === 'preparing_session') {
-                await this.setWorkflowPhase(workflow, 'preparing_session', { nextAttemptAt: 0, lastError: '' });
-                const session = workflow.sessionId
-                    ? await this.reopenVideoSessionTail(workflow)
-                    : await this.ensureVideoSession(workflow);
-                if (workflow.confirmedSerials.length >= workflow.expectedCount) {
-                    await this.cleanupWorkflowFiles(workflow);
-                    await this.setWorkflowPhase(workflow, 'completed', { nextAttemptAt: 0, lastError: '' });
-                    return;
-                }
-                if (!session) {
-                    await this.ensureVideoSession(workflow);
-                }
-                if (workflow.phase === 'preparing_session') {
-                    await this.setWorkflowPhase(workflow, 'importing_sources', { nextAttemptAt: 0, lastError: '' });
-                }
-            }
-
-            if (workflow.phase === 'paused_offline' || workflow.phase === 'auth_required') {
-                await this.setWorkflowPhase(workflow, workflow.pendingSerials.length > 0 ? 'preparing_session' : 'completed', { nextAttemptAt: 0, lastError: '' });
-                if (workflow.phase === 'completed') {
-                    return;
-                }
-            }
-
-            if (workflow.phase === 'importing_sources') {
-                const changed = await this.ensureVideoSources(workflow);
-                if (changed) {
-                    workflow.nextAttemptAt = Date.now() + 250;
-                    await this.markChanged();
-                    return;
-                }
-
-                await this.setWorkflowPhase(workflow, 'rendering_intro', { nextAttemptAt: 0, lastError: '' });
-            }
-
-            if (workflow.phase === 'rendering_intro') {
-                const session = await this.reconcileVideoSession(workflow);
-                const ready = await this.ensureIntroUploaded(workflow, session);
-                if (!ready) {
-                    return;
-                }
-
-                await this.setWorkflowPhase(workflow, 'rendering_outputs', { nextAttemptAt: 0, lastError: '' });
-            }
-
-            if (workflow.phase === 'rendering_outputs') {
-                const session = await this.reconcileVideoSession(workflow);
-                if (workflow.confirmedSerials.length >= workflow.expectedCount) {
-                    await this.cleanupWorkflowFiles(workflow);
-                    await this.setWorkflowPhase(workflow, 'completed', { nextAttemptAt: 0, lastError: '' });
-                    return;
-                }
-
-                const introAsset = session?.render_manifest?.intro_asset || null;
-                if (!introAsset) {
-                    await this.setWorkflowPhase(workflow, 'rendering_intro', { nextAttemptAt: 0, lastError: '' });
-                    return;
-                }
-
-                if (!workflow.renderJobId) {
-                    const created = await this.createRenderJob(workflow, introAsset);
-                    if (!created) {
-                        return;
-                    }
-                    workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-                    await this.markChanged();
-                    return;
-                }
-
-                const payload = await this.helperRequest(`/render-jobs/${encodeURIComponent(workflow.renderJobId)}`, undefined, 'Не удалось получить статус render job.');
-                await this.enqueueRenderUploads(workflow, payload);
-                if (payload.status === 'FAILED') {
-                    workflow.renderJobId = '';
-                    workflow.updatedAt = nowIso();
-                    await this.markChanged();
-                }
-
-                if (Object.keys(workflow.uploadJobIds).length > 0) {
-                    await this.setWorkflowPhase(workflow, 'verifying', { nextAttemptAt: Date.now() + VERIFY_DELAY_MS, lastError: '' });
-                    return;
-                }
-
-                workflow.nextAttemptAt = Date.now() + VERIFY_DELAY_MS;
-                await this.markChanged();
-                return;
-            }
-
-            if (workflow.phase === 'uploading_outputs') {
-                await this.setWorkflowPhase(workflow, 'verifying', { nextAttemptAt: Date.now() + VERIFY_DELAY_MS, lastError: '' });
-            }
-
-            if (workflow.phase === 'verifying') {
-                await this.verifyQueuedUploads(workflow);
-            }
-        } catch (error) {
-            await this.handleWorkflowError(workflow, error);
-        }
-    }
-
-    async markV2Changed() {
-        await this.persistV2Runs();
-        this.emit('change', this.getSnapshot());
-    }
-
-    async startVideoExportRun(payload) {
-        const { batchId, runId, renderManifest, sources } = payload;
-        const run = {
-            runId,
-            batchId,
-            status: 'importing_sources',
-            sources: (sources || []).map((s) => ({
-                sourceIndex: s.sourceIndex,
-                role: s.role,
-                helperSourceId: s.helperSourceId || '',
-                cachePath: s.cachePath,
-                originalName: s.originalName || s.name || 'source.mp4',
-                mimeType: s.mimeType || 'video/mp4',
-                size: s.size,
-                checksumSha256: s.checksumSha256,
-                lastModified: s.lastModified
-            })),
-            renderManifest,
-            introHelperSourceId: '',
-            introJobId: '',
-            introJobStatus: '',
-            errorMessage: '',
-            items: {}
-        };
-
-        const outputs = renderManifest?.outputs || [];
-        for (const output of outputs) {
-            run.items[output.item_id] = {
-                itemId: output.item_id,
-                serialNumber: output.serial_number,
-                segmentSeq: output.segment_seq,
-                renderStatus: 'pending',
-                renderJobId: '',
-                renderProgress: 0,
-                uploadStatus: 'pending',
-                uploadJobId: '',
-                uploadProgress: 0,
-                errorMessage: ''
-            };
-        }
-
-        this.videoExportRuns[batchId] = run;
-        await this.markV2Changed();
-        this.schedule(0);
-        return { run };
-    }
-
-    async renderVideoExportItem(payload) {
-        const { batchId, runId, itemId } = payload;
-        const run = this.videoExportRuns[batchId];
-        if (!run) {
-            throw new Error('Run не найден для этой партии.');
-        }
-
-        const item = run.items[itemId];
-        if (!item) {
-            throw new Error('Товар не найден в этом запуске.');
-        }
-
-        // Notify server render started
-        await this.apiRequest(`/api/batches/${batchId}/video-export-runs/${runId}/items/${itemId}/render`, { method: 'POST' });
-
-        const output = run.renderManifest.outputs.find(o => o.item_id === itemId);
-        const introSegment = run.renderManifest.segments[0];
-        const introDurationMs = Number(introSegment.end_ms) - Number(introSegment.start_ms);
-
-        const itemSegment = run.renderManifest.segments.find(s => Number(s.sequence) === output.segment_seq);
-        if (!itemSegment) {
-            throw new Error(`Сегмент ${output.segment_seq} не найден в манифесте.`);
-        }
-
-        const itemSourceIndex = Number(itemSegment.source_index ?? 0);
-        const itemSource = run.sources.find(s => Number(s.sourceIndex) === itemSourceIndex);
-        if (!itemSource || !itemSource.helperSourceId) {
-            throw new Error(`Исходник ${itemSourceIndex} не импортирован в хелпер.`);
-        }
-
-        const helperSources = [
-            { source_index: 0, source_id: run.introHelperSourceId },
-            { source_index: itemSourceIndex + 1, source_id: itemSource.helperSourceId }
-        ];
-
-        const helperSegments = [
-            {
-                sequence: 0,
-                source_index: 0,
-                start_ms: 0,
-                end_ms: introDurationMs
-            },
-            {
-                ...itemSegment,
-                source_index: itemSourceIndex + 1
-            }
-        ];
-
-        const helperOutputs = [
-            {
-                item_id: itemId,
-                serial_number: output.serial_number,
-                segment_seq: output.segment_seq
-            }
-        ];
-
-        const renderJob = await this.helperRequest('/render-jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                sources: helperSources,
-                crossfade_ms: VIDEO_EXPORT_CROSSFADE_MS,
-                segments: helperSegments,
-                outputs: helperOutputs
-            })
-        }, 'Не удалось запустить render job в helper.');
-
-        if (!renderJob?.job_id) {
-            throw new Error('Helper не вернул render job ID.');
-        }
-
-        item.renderStatus = 'rendering';
-        item.renderJobId = renderJob.job_id;
-        item.renderProgress = 0;
-        item.uploadStatus = 'pending';
-        item.uploadJobId = '';
-        item.uploadProgress = 0;
-        item.errorMessage = '';
-
-        await this.markV2Changed();
-        this.schedule(0);
-
-        return { success: true };
-    }
-
-    async uploadVideoExportItem(payload) {
-        const { batchId, runId, itemId } = payload;
-        const run = this.videoExportRuns[batchId];
-        if (!run) {
-            throw new Error('Run не найден.');
-        }
-
-        const item = run.items[itemId];
-        if (!item) {
-            throw new Error('Товар не найден.');
-        }
-
-        if (!item.renderJobId) {
-            throw new Error('Видео ещё не отрендерено.');
-        }
-
-        if (item.uploadJobId) {
-            const existingJob = this.mediaQueue.jobs.find((job) => job.id === item.uploadJobId);
-            if (existingJob && ACTIVE_QUEUE_STATUSES.has(existingJob.status)) {
-                return { success: true, jobId: existingJob.id };
-            }
-            if (existingJob?.status === 'done') {
-                item.uploadStatus = 'completed';
-                item.uploadProgress = 100;
-                item.errorMessage = '';
-                await this.markV2Changed();
-                return { success: true, jobId: existingJob.id };
-            }
-        }
-
-        const queuedJob = await this.mediaQueue.enqueue('VIDEO_EXPORT_RUN_ITEM_UPLOAD', {
-            batchId: run.batchId,
-            runId: run.runId,
-            itemId: item.itemId,
-            serialNumber: item.serialNumber,
-            helperJobId: item.renderJobId,
-            helperBaseUrl: HELPER_BASE_URL
-        }, [], {
-            title: `${item.serialNumber}.mp4`,
-            batchId: run.batchId,
-            fileName: `${item.serialNumber}.mp4`,
-            serialNumber: item.serialNumber
-        });
-
-        item.uploadStatus = 'uploading';
-        item.uploadJobId = queuedJob.id;
-        item.uploadProgress = 0;
-        item.errorMessage = '';
-
-        await this.markV2Changed();
-        this.schedule(0);
-
-        return { success: true };
-    }
-
-    async retryVideoExportItemUpload(runId, itemId) {
-        const run = Object.values(this.videoExportRuns).find(r => r.runId === runId);
-        if (!run) {
-            throw new Error('Run не найден.');
-        }
-
-        const item = run.items[itemId];
-        if (!item) {
-            throw new Error('Товар не найден.');
-        }
-
-        // Call server retry endpoint
-        await this.apiRequest(`/api/batches/${run.batchId}/video-export-runs/${runId}/items/${itemId}/retry-upload`, { method: 'POST' });
-
-        if (item.uploadJobId) {
-            await this.mediaQueue.retry(item.uploadJobId);
-            item.uploadStatus = 'uploading';
-            item.errorMessage = '';
-            await this.markV2Changed();
-            this.schedule(0);
-        } else {
-            await this.uploadVideoExportItem({ batchId: run.batchId, runId, itemId });
-        }
-
-        return { success: true };
-    }
-
-    async rerenderVideoExportItem(runId, itemId, manifestSlice) {
-        const run = Object.values(this.videoExportRuns).find(r => r.runId === runId);
-        if (!run) {
-            throw new Error('Run не найден.');
-        }
-
-        const item = run.items[itemId];
-        if (!item) {
-            throw new Error('Товар не найден.');
-        }
-
-        // Apply manifest slice updates
-        if (manifestSlice?.segments) {
-            for (const newSeg of manifestSlice.segments) {
-                const idx = run.renderManifest.segments.findIndex(s => s.sequence === newSeg.sequence);
-                if (idx !== -1) {
-                    run.renderManifest.segments[idx] = newSeg;
-                } else {
-                    run.renderManifest.segments.push(newSeg);
-                }
-            }
-        }
-        if (manifestSlice?.outputs) {
-            for (const newOut of manifestSlice.outputs) {
-                const idx = run.renderManifest.outputs.findIndex(o => o.item_id === newOut.item_id);
-                if (idx !== -1) {
-                    run.renderManifest.outputs[idx] = newOut;
-                }
-            }
-        }
-
-        // Clean old render and upload states
-        if (item.uploadJobId) {
-            await this.mediaQueue.cancel(item.uploadJobId).catch(() => undefined);
-        }
-
-        item.renderStatus = 'pending';
-        item.renderJobId = '';
-        item.renderProgress = 0;
-        item.uploadStatus = 'pending';
-        item.uploadJobId = '';
-        item.uploadProgress = 0;
-        item.errorMessage = '';
-
-        await this.markV2Changed();
-
-        // Trigger render
-        await this.renderVideoExportItem({ batchId: run.batchId, runId, itemId });
-        return { success: true };
-    }
-
-    async cancelVideoExportItem(runId, itemId) {
-        const run = Object.values(this.videoExportRuns).find(r => r.runId === runId);
-        if (!run) {
-            throw new Error('Run не найден.');
-        }
-
-        const item = run.items[itemId];
-        if (!item) {
-            throw new Error('Товар не найден.');
-        }
-
-        // Call server cancel endpoint
-        await this.apiRequest(`/api/batches/${run.batchId}/video-export-runs/${runId}/items/${itemId}/cancel`, { method: 'POST' });
-
-        if (item.uploadJobId) {
-            await this.mediaQueue.cancel(item.uploadJobId).catch(() => undefined);
-        }
-
-        item.renderStatus = 'cancelled';
-        item.uploadStatus = 'cancelled';
-        item.errorMessage = 'Cancelled by user';
-
-        await this.markV2Changed();
-        this.schedule(0);
-
-        return { success: true };
-    }
-
-    getVideoExportRunSnapshot(batchId) {
-        return this.videoExportRuns[batchId] || null;
-    }
-
-    async importSourceToHelperV2(run, source) {
-        const form = new FormData();
-        await appendFileToForm(form, 'file', source.cachePath, source.originalName, source.mimeType);
-        form.append('lastModified', String(source.lastModified || 0));
-
-        const payload = await this.helperRequest('/sources', {
-            method: 'POST',
-            body: form
-        }, 'Не удалось загрузить source в helper.');
-        if (!payload?.source_id) {
-            throw new Error('Helper не вернул source_id.');
-        }
-
-        source.helperSourceId = payload.source_id;
-    }
-
-    async processV2Runs() {
-        let changed = false;
-
-        for (const batchId of Object.keys(this.videoExportRuns)) {
-            const run = this.videoExportRuns[batchId];
-
-            if (run.status === 'importing_sources') {
-                const nextSource = run.sources.find((source) => !source.helperSourceId);
-                if (nextSource) {
-                    try {
-                        await this.importSourceToHelperV2(run, nextSource);
-                        changed = true;
-                    } catch (err) {
-                        console.error(`Error importing source for run ${run.runId}:`, err);
-                        run.status = 'failed';
-                        run.errorMessage = `Ошибка импорта исходника: ${err.message}`;
-                        changed = true;
-                    }
-                } else {
-                    run.status = 'rendering_intro';
-                    changed = true;
-                }
-            }
-
-            if (run.status === 'rendering_intro') {
-                if (!run.introJobId) {
-                    try {
-                        const introSegment = run.renderManifest?.segments?.[0];
-                        if (!introSegment) {
-                            throw new Error('В render_manifest нет intro-сегмента.');
-                        }
-                        const introSourceIndex = Number(introSegment.source_index ?? 0);
-                        const source = run.sources.find((entry) => Number(entry.sourceIndex) === introSourceIndex);
-                        if (!source?.helperSourceId) {
-                            throw new Error('Первый source ещё не импортирован.');
-                        }
-
-                        const payload = await this.helperRequest('/intro-jobs', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                sources: [{ source_index: introSourceIndex, source_id: source.helperSourceId }],
-                                segment: introSegment
-                            })
-                        }, 'Не удалось запустить intro job в helper.');
-                        if (!payload?.job_id) {
-                            throw new Error('Helper не вернул intro job id.');
-                        }
-                        run.introJobId = payload.job_id;
-                        changed = true;
-                    } catch (err) {
-                        console.error(`Error starting intro job for run ${run.runId}:`, err);
-                        run.status = 'failed';
-                        run.errorMessage = `Ошибка запуска рендера интро: ${err.message}`;
-                        changed = true;
-                    }
-                } else {
-                    try {
-                        const payload = await this.helperRequest(`/intro-jobs/${encodeURIComponent(run.introJobId)}`, undefined, 'Не удалось получить статус intro job.');
-                        run.introJobStatus = payload.status;
-                        if (payload.status === 'FAILED') {
-                            run.status = 'failed';
-                            run.errorMessage = payload.error || 'Рендер интро завершился с ошибкой.';
-                            changed = true;
-                        } else if (payload.status === 'COMPLETED') {
-                            const introFileUrl = `/intro-jobs/${encodeURIComponent(run.introJobId)}/file`;
-                            const response = await fetch(`${HELPER_BASE_URL}${introFileUrl}`);
-                            if (!response.ok) {
-                                throw new Error(`Не удалось скачать интро файл из хелпера: HTTP ${response.status}`);
-                            }
-                            const blob = await response.blob();
-                            const form = new FormData();
-                            form.append('file', blob, 'intro.mp4');
-                            form.append('lastModified', String(Date.now()));
-
-                            const importPayload = await this.helperRequest('/sources', {
-                                method: 'POST',
-                                body: form
-                            }, 'Не удалось импортировать intro в helper.');
-                            if (!importPayload?.source_id) {
-                                throw new Error('Helper не вернул source_id для intro.');
-                            }
-
-                            run.introHelperSourceId = importPayload.source_id;
-                            run.status = 'ready';
-                            changed = true;
-                        }
-                    } catch (err) {
-                        console.error(`Error checking/importing intro job for run ${run.runId}:`, err);
-                        run.status = 'failed';
-                        run.errorMessage = `Ошибка рендера/импорта интро: ${err.message}`;
-                        changed = true;
-                    }
-                }
-            }
-
-            for (const itemId of Object.keys(run.items)) {
-                const item = run.items[itemId];
-
-                if (item.renderStatus === 'rendering' && item.renderJobId) {
-                    try {
-                        const payload = await this.helperRequest(`/render-jobs/${encodeURIComponent(item.renderJobId)}`, undefined, 'Не удалось получить статус render job.');
-                        if (payload.status === 'FAILED') {
-                            item.renderStatus = 'failed';
-                            item.errorMessage = payload.error || 'Ошибка рендеринга.';
-                            changed = true;
-                        } else if (payload.status === 'COMPLETED') {
-                            item.renderStatus = 'completed';
-                            item.renderProgress = 100;
-                            changed = true;
-
-                            const existingJob = item.uploadJobId
-                                ? this.mediaQueue.jobs.find((job) => job.id === item.uploadJobId)
-                                : null;
-                            const hasActiveUpload = existingJob && ACTIVE_QUEUE_STATUSES.has(existingJob.status);
-                            if (!hasActiveUpload && item.uploadStatus !== 'completed') {
-                                const queuedJob = await this.mediaQueue.enqueue('VIDEO_EXPORT_RUN_ITEM_UPLOAD', {
-                                    batchId: run.batchId,
-                                    runId: run.runId,
-                                    itemId: item.itemId,
-                                    serialNumber: item.serialNumber,
-                                    helperJobId: item.renderJobId,
-                                    helperBaseUrl: HELPER_BASE_URL
-                                }, [], {
-                                    title: `${item.serialNumber}.mp4`,
-                                    batchId: run.batchId,
-                                    fileName: `${item.serialNumber}.mp4`,
-                                    serialNumber: item.serialNumber
-                                });
-
-                                item.uploadStatus = 'uploading';
-                                item.uploadJobId = queuedJob.id;
-                                item.uploadProgress = 0;
-                            }
-                        } else {
-                            const progress = Number(payload.progress || 0);
-                            if (progress !== item.renderProgress) {
-                                item.renderProgress = progress;
-                                changed = true;
-                            }
-                        }
-                    } catch (err) {
-                        console.error(`Error checking render status for run item ${item.serialNumber}:`, err);
-                    }
-                }
-
-                if (item.uploadStatus === 'uploading' && item.uploadJobId) {
-                    const queueJob = this.mediaQueue.jobs.find(j => j.id === item.uploadJobId);
-                    if (queueJob) {
-                        if (queueJob.status === 'done') {
-                            item.uploadStatus = 'completed';
-                            item.uploadProgress = 100;
-                            changed = true;
-                        } else if (queueJob.status === 'failed') {
-                            item.uploadStatus = 'failed';
-                            item.errorMessage = queueJob.lastError || 'Ошибка загрузки.';
-                            changed = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (changed) {
-            await this.persistV2Runs();
-        }
-    }
 }
 
 module.exports = {

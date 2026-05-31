@@ -1,7 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { Prisma } from '@prisma/client';
-import { loadBatchMediaSnapshot, queueBatchMediaReadyNotifications, runTelegramSideEffect } from '../../services/telegramNotifications.ts';
 import {
     buildVideoExportFilename,
     buildVideoExportPublicOutputDir,
@@ -34,6 +33,14 @@ export const buildVideoExportRunInclude = Prisma.validator<Prisma.BatchVideoExpo
 
 type RunRecord = Prisma.BatchVideoExportRunGetPayload<{ include: typeof buildVideoExportRunInclude }>;
 
+export const BLOCKING_VIDEO_EXPORT_RUN_STATUSES: Array<'DRAFT' | 'READY' | 'RENDERING' | 'UPLOADING' | 'PARTIAL'> = [
+    'DRAFT',
+    'READY',
+    'RENDERING',
+    'UPLOADING',
+    'PARTIAL'
+];
+
 export const serializeVideoExportRunDetails = (run: RunRecord) => ({
     run_id: run.id,
     batch_id: run.batch_id,
@@ -53,12 +60,25 @@ export const serializeVideoExportRunDetails = (run: RunRecord) => ({
         render_status: item.render_status,
         upload_status: item.upload_status,
         file_url: item.file_url,
+        item_card_url: `/clone/${encodeURIComponent(item.serial_number)}`,
         error_message: item.error_message,
         checksum: item.checksum,
         updated_at: item.updated_at,
         created_at: item.created_at
     }))
 });
+
+const parseJsonBodyField = (value: unknown) => {
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value) as unknown;
+        } catch {
+            return null;
+        }
+    }
+
+    return value ?? null;
+};
 
 const normalizeVideoExportManifest = (
     value: unknown,
@@ -206,29 +226,6 @@ const normalizeVideoExportManifest = (
     };
 };
 
-const manifestsAreAppendCompatible = (
-    existingManifest: VideoExportManifest | null,
-    nextManifest: VideoExportManifest
-) => {
-    if (!existingManifest || existingManifest.outputs.length > nextManifest.outputs.length || existingManifest.segments.length > nextManifest.segments.length) {
-        return false;
-    }
-
-    const existingWithoutIntroAsset = {
-        ...existingManifest,
-        intro_asset: null
-    };
-    const nextPrefixWithoutIntroAsset = {
-        ...nextManifest,
-        sources: nextManifest.sources?.slice(0, existingManifest.sources?.length ?? nextManifest.sources?.length),
-        segments: nextManifest.segments.slice(0, existingManifest.segments.length),
-        outputs: nextManifest.outputs.slice(0, existingManifest.outputs.length),
-        intro_asset: null
-    };
-
-    return JSON.stringify(existingWithoutIntroAsset) === JSON.stringify(nextPrefixWithoutIntroAsset);
-};
-
 export const withVideoExportBatchLock = async <T>(batchId: string, handler: (tx: Prisma.TransactionClient) => Promise<T>) =>
     prisma.$transaction(async (tx) => {
         const lockName = `video_export_run_batch_${batchId}`;
@@ -271,209 +268,11 @@ export const getVideoExportRuns = async (batchId: string) => {
     return { runs: runs.map(serializeVideoExportRunDetails) };
 };
 
-export const createOrResumeVideoExportRun = async (
-    batchId: string,
-    userId: string,
-    body: {
-        expected_count?: number;
-        crossfade_ms?: number;
-        source_fingerprint?: unknown;
-        render_manifest?: unknown;
-        export_settings?: unknown;
-    }
-) => {
-    const safeExpectedCount = typeof body.expected_count === 'number' ? body.expected_count : Number(body.expected_count);
-    if (!Number.isFinite(safeExpectedCount)) {
-        throw createHttpError('expected_count должен быть числом.', 400);
-    }
-
-    return withVideoExportBatchLock(batchId, async (tx) => {
-        const batch = await tx.batch.findFirst({
-            where: { id: batchId, deleted_at: null },
-            include: {
-                items: {
-                    where: { deleted_at: null },
-                    orderBy: { item_seq: 'asc' }
-                }
-            }
-        });
-
-        if (!batch) {
-            throw createHttpError('Партия не найдена.', 404);
-        }
-
-        if (batch.status !== 'RECEIVED') {
-            throw createHttpError('Монтаж видео доступен только для партии в статусе RECEIVED.', 400);
-        }
-
-        if (safeExpectedCount !== batch.items.length) {
-            throw createHttpError(`Количество товарных фрагментов должно совпадать с количеством Item партии: ${batch.items.length}.`, 400);
-        }
-
-        const normalizedManifest = normalizeVideoExportManifest(body.render_manifest, batch.items);
-
-        const latestReusable = await tx.batchVideoExportRun.findFirst({
-            where: {
-                batch_id: batch.id,
-                status: {
-                    in: ['DRAFT', 'READY', 'RENDERING', 'UPLOADING', 'PARTIAL', 'FAILED']
-                }
-            },
-            orderBy: { created_at: 'desc' },
-            include: buildVideoExportRunInclude
-        });
-
-        if (latestReusable) {
-            const existingManifest = parseVideoExportManifest(latestReusable.render_manifest);
-            const sameManifestConfig = manifestsAreAppendCompatible(existingManifest, normalizedManifest)
-                && existingManifest?.segments.length === normalizedManifest.segments.length
-                && existingManifest?.outputs.length === normalizedManifest.outputs.length
-                && (existingManifest.sources?.length ?? 0) === (normalizedManifest.sources?.length ?? 0);
-
-            if (sameManifestConfig) {
-                // Return existing run
-                return {
-                    statusCode: 200,
-                    payload: {
-                        run: serializeVideoExportRunDetails(latestReusable),
-                        resumed: true
-                    }
-                };
-            }
-
-            if (latestReusable.status === 'DRAFT' || latestReusable.status === 'READY') {
-                // Overwrite the manifest of draft
-                const updatedRun = await tx.batchVideoExportRun.update({
-                    where: { id: latestReusable.id },
-                    data: {
-                        render_manifest: normalizedManifest as Prisma.InputJsonValue,
-                        export_settings: (body.export_settings || {}) as Prisma.InputJsonValue,
-                        status: 'READY'
-                    },
-                    include: buildVideoExportRunInclude
-                });
-
-                await tx.batchVideoExportItem.deleteMany({
-                    where: { run_id: updatedRun.id }
-                });
-
-                for (const output of normalizedManifest.outputs) {
-                    await tx.batchVideoExportItem.create({
-                        data: {
-                            run_id: updatedRun.id,
-                            item_id: output.item_id,
-                            serial_number: output.serial_number,
-                            segment_seq: output.segment_seq,
-                            status: 'PENDING'
-                        }
-                    });
-                }
-
-                const runWithItems = await tx.batchVideoExportRun.findUniqueOrThrow({
-                    where: { id: updatedRun.id },
-                    include: buildVideoExportRunInclude
-                });
-
-                return {
-                    statusCode: 200,
-                    payload: {
-                        run: serializeVideoExportRunDetails(runWithItems),
-                        resumed: true
-                    }
-                };
-            }
-        }
-
-        // Create new version run
-        const latestVersionRecord = await tx.batchVideoExportRun.findFirst({
-            where: { batch_id: batch.id },
-            orderBy: { version: 'desc' },
-            select: { version: true }
-        });
-
-        const createdRun = await tx.batchVideoExportRun.create({
-            data: {
-                batch_id: batch.id,
-                created_by_user_id: userId,
-                status: 'READY',
-                version: (latestVersionRecord?.version ?? 0) + 1,
-                render_manifest: normalizedManifest as Prisma.InputJsonValue,
-                export_settings: (body.export_settings || {}) as Prisma.InputJsonValue
-            },
-            include: buildVideoExportRunInclude
-        });
-
-        for (const output of normalizedManifest.outputs) {
-            await tx.batchVideoExportItem.create({
-                data: {
-                    run_id: createdRun.id,
-                    item_id: output.item_id,
-                    serial_number: output.serial_number,
-                    segment_seq: output.segment_seq,
-                    status: 'PENDING'
-                }
-            });
-        }
-
-        const runWithItems = await tx.batchVideoExportRun.findUniqueOrThrow({
-            where: { id: createdRun.id },
-            include: buildVideoExportRunInclude
-        });
-
-        return {
-            statusCode: 201,
-            payload: {
-                run: serializeVideoExportRunDetails(runWithItems),
-                resumed: false
-            }
-        };
-    });
-};
-
-export const renderVideoExportItem = async (batchId: string, runId: string, itemId: string) => {
-    return withVideoExportBatchLock(batchId, async (tx) => {
-        const run = await loadVideoExportRun(tx, batchId, runId);
-        if (!run) {
-            throw createHttpError('Запуск экспорта не найден.', 404);
-        }
-
-        if (run.status === 'CANCELLED' || run.status === 'COMPLETED') {
-            throw createHttpError('Этот запуск уже закрыт.', 400);
-        }
-
-        const targetItem = run.items.find((it) => it.item_id === itemId);
-        if (!targetItem) {
-            throw createHttpError('Товар не найден в этом запуске экспорта.', 404);
-        }
-
-        await tx.batchVideoExportItem.update({
-            where: { id: targetItem.id },
-            data: {
-                status: 'RENDERING',
-                render_status: 'RENDERING'
-            }
-        });
-
-        if (run.status === 'READY') {
-            await tx.batchVideoExportRun.update({
-                where: { id: run.id },
-                data: { status: 'RENDERING' }
-            });
-        }
-
-        const updatedRun = await tx.batchVideoExportRun.findUniqueOrThrow({
-            where: { id: run.id },
-            include: buildVideoExportRunInclude
-        });
-
-        return { run: serializeVideoExportRunDetails(updatedRun) };
-    });
-};
-
 export const uploadVideoExportItemFile = async (
     batchId: string,
     runId: string,
     itemId: string,
+    userId: string,
     body: Record<string, unknown> | undefined,
     uploadedFile: Express.Multer.File
 ) => {
@@ -494,9 +293,69 @@ export const uploadVideoExportItemFile = async (
         }
 
         return await withVideoExportBatchLock(batchId, async (tx) => {
-            const run = await loadVideoExportRun(tx, batchId, runId);
+            const batch = await tx.batch.findFirst({
+                where: { id: batchId, deleted_at: null },
+                include: {
+                    items: {
+                        where: { deleted_at: null },
+                        orderBy: { item_seq: 'asc' }
+                    }
+                }
+            });
+            if (!batch) {
+                throw createHttpError('Партия не найдена.', 404);
+            }
+            if (batch.status !== 'RECEIVED') {
+                throw createHttpError('Загрузка видео доступна только для партии в статусе RECEIVED.', 400);
+            }
+
+            const normalizedManifest = normalizeVideoExportManifest(parseJsonBodyField(body?.render_manifest), batch.items);
+            const manifestTarget = normalizedManifest.outputs.find((output) => (
+                output.item_id === itemId && output.serial_number.toUpperCase() === serialNumber
+            ));
+            if (!manifestTarget) {
+                throw createHttpError('render_manifest не содержит загружаемый Item.', 400);
+            }
+
+            let run = await loadVideoExportRun(tx, batchId, runId);
             if (!run) {
-                throw createHttpError('Запуск экспорта не найден.', 404);
+                const latestVersionRecord = await tx.batchVideoExportRun.findFirst({
+                    where: { batch_id: batch.id },
+                    orderBy: { version: 'desc' },
+                    select: { version: true }
+                });
+                await tx.batchVideoExportRun.create({
+                    data: {
+                        id: runId,
+                        batch_id: batch.id,
+                        created_by_user_id: userId,
+                        status: 'UPLOADING',
+                        version: (latestVersionRecord?.version ?? 0) + 1,
+                        render_manifest: normalizedManifest as Prisma.InputJsonValue,
+                        export_settings: (parseJsonBodyField(body?.export_settings) || normalizedManifest.export_settings || {}) as Prisma.InputJsonValue
+                    }
+                });
+                for (const output of normalizedManifest.outputs) {
+                    await tx.batchVideoExportItem.create({
+                        data: {
+                            run_id: runId,
+                            item_id: output.item_id,
+                            serial_number: output.serial_number,
+                            segment_seq: output.segment_seq,
+                            status: 'PENDING'
+                        }
+                    });
+                }
+
+                run = await loadVideoExportRun(tx, batchId, runId);
+                if (!run) {
+                    throw createHttpError('Не удалось создать серверный запуск экспорта.', 500);
+                }
+            } else {
+                const existingManifest = parseVideoExportManifest(run.render_manifest);
+                if (JSON.stringify(existingManifest) !== JSON.stringify(normalizedManifest)) {
+                    throw createHttpError('render_manifest не совпадает с серверным запуском экспорта.', 409);
+                }
             }
 
             if (run.status === 'CANCELLED' || run.status === 'COMPLETED') {
@@ -566,129 +425,22 @@ export const uploadVideoExportItemFile = async (
                 include: buildVideoExportRunInclude
             });
 
-            return { run: serializeVideoExportRunDetails(updatedRun) };
+            return {
+                run: serializeVideoExportRunDetails(updatedRun),
+                status: nextRunStatus,
+                file_url: publicUrl,
+                item_card_url: `/clone/${encodeURIComponent(serialNumber)}`,
+                uploaded: {
+                    item_id: itemId,
+                    serial_number: serialNumber,
+                    file_url: publicUrl,
+                    item_card_url: `/clone/${encodeURIComponent(serialNumber)}`
+                }
+            };
         });
     } finally {
         await removeStagedVideoFile(uploadedFile);
     }
-};
-
-export const retryVideoExportItemUpload = async (batchId: string, runId: string, itemId: string) => {
-    return withVideoExportBatchLock(batchId, async (tx) => {
-        const run = await loadVideoExportRun(tx, batchId, runId);
-        if (!run) {
-            throw createHttpError('Запуск экспорта не найден.', 404);
-        }
-
-        if (run.status === 'CANCELLED' || run.status === 'COMPLETED') {
-            throw createHttpError('Запуск экспорта закрыт.', 400);
-        }
-
-        const targetItem = run.items.find((it) => it.item_id === itemId);
-        if (!targetItem) {
-            throw createHttpError('Товар не найден в этом запуске экспорта.', 404);
-        }
-
-        await tx.batchVideoExportItem.update({
-            where: { id: targetItem.id },
-            data: {
-                status: 'UPLOADING',
-                upload_status: 'UPLOADING',
-                error_message: null
-            }
-        });
-
-        const updatedRun = await tx.batchVideoExportRun.findUniqueOrThrow({
-            where: { id: run.id },
-            include: buildVideoExportRunInclude
-        });
-
-        return { run: serializeVideoExportRunDetails(updatedRun) };
-    });
-};
-
-export const cancelVideoExportItem = async (batchId: string, runId: string, itemId: string) => {
-    return withVideoExportBatchLock(batchId, async (tx) => {
-        const run = await loadVideoExportRun(tx, batchId, runId);
-        if (!run) {
-            throw createHttpError('Запуск экспорта не найден.', 404);
-        }
-
-        if (run.status === 'CANCELLED' || run.status === 'COMPLETED') {
-            throw createHttpError('Запуск экспорта закрыт.', 400);
-        }
-
-        const targetItem = run.items.find((it) => it.item_id === itemId);
-        if (!targetItem) {
-            throw createHttpError('Товар не найден в этом запуске экспорта.', 404);
-        }
-
-        await tx.batchVideoExportItem.update({
-            where: { id: targetItem.id },
-            data: {
-                status: 'CANCELLED',
-                render_status: 'CANCELLED',
-                upload_status: 'CANCELLED'
-            }
-        });
-
-        const updatedRun = await tx.batchVideoExportRun.findUniqueOrThrow({
-            where: { id: run.id },
-            include: buildVideoExportRunInclude
-        });
-
-        return { run: serializeVideoExportRunDetails(updatedRun) };
-    });
-};
-
-export const commitVideoExportRun = async (batchId: string, runId: string) => {
-    const beforeMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);
-
-    const result = await withVideoExportBatchLock(batchId, async (tx) => {
-        const run = await loadVideoExportRun(tx, batchId, runId);
-        if (!run) {
-            throw createHttpError('Запуск экспорта не найден.', 404);
-        }
-
-        if (run.status === 'CANCELLED') {
-            throw createHttpError('Запуск экспорта отменен.', 400);
-        }
-
-        const currentItems = await tx.batchVideoExportItem.findMany({
-            where: { run_id: run.id }
-        });
-
-        // Verify all outputs are uploaded or skipped/cancelled
-        for (const entry of currentItems) {
-            if (entry.status !== 'UPLOADED' && entry.status !== 'SKIPPED' && entry.status !== 'CANCELLED') {
-                throw createHttpError(`Экспорт не завершен. Товар ${entry.serial_number} находится в состоянии ${entry.status}.`, 400);
-            }
-        }
-
-        // Set run status to COMPLETED
-        await tx.batchVideoExportRun.update({
-            where: { id: run.id },
-            data: {
-                status: 'COMPLETED',
-                committed_at: new Date()
-            }
-        });
-
-        const updatedRun = await tx.batchVideoExportRun.findUniqueOrThrow({
-            where: { id: run.id },
-            include: buildVideoExportRunInclude
-        });
-
-        return {
-            run: serializeVideoExportRunDetails(updatedRun),
-            version: run.version
-        };
-    });
-
-    const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);
-    await runTelegramSideEffect(() => queueBatchMediaReadyNotifications(prisma, beforeMediaSnapshot, afterMediaSnapshot));
-
-    return result;
 };
 
 export const cancelVideoExportRun = async (batchId: string, runId: string) => {

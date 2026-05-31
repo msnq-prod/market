@@ -1,5 +1,6 @@
-import React, { useRef } from 'react';
-import { Play, RotateCcw, AlertTriangle, RefreshCw, XCircle, ExternalLink, Upload, Ban } from 'lucide-react';
+import React from 'react';
+import { AlertTriangle, XCircle, ExternalLink } from 'lucide-react';
+import { resolveServerUrl } from '../../../../utils/serverUrls';
 import type { PreflightIssue } from '../engine/preflight';
 
 interface VideoExportRunItem {
@@ -10,6 +11,7 @@ interface VideoExportRunItem {
     render_status: string;
     upload_status: string;
     file_url?: string | null;
+    item_card_url?: string | null;
     error_message?: string | null;
     checksum?: string | null;
     updated_at?: string;
@@ -38,35 +40,19 @@ interface ExportMenuProps {
         }>;
     } | null;
     preflightIssues?: PreflightIssue[];
-    onStartRender: (itemId: string) => void;
-    onRetryUpload: (itemId: string) => void;
-    onRerender: (itemId: string) => void;
-    onCancelItem: (itemId: string) => void;
-    onManualReplace: (itemId: string, file: File) => void;
-    onCommitRun: () => void;
     onCancelRun: () => void;
     onStartRun: () => void;
-    isExporting?: boolean;
-    isCommitting: boolean;
+    serverAssetOrigin?: string | null;
 }
 
 export const ExportMenu: React.FC<ExportMenuProps> = ({
     run,
     localRunSnapshot,
     preflightIssues: _preflightIssues,
-    onStartRender,
-    onRetryUpload,
-    onRerender,
-    onCancelItem,
-    onManualReplace,
-    onCommitRun,
     onCancelRun,
     onStartRun,
-    isExporting: _isExporting,
-    isCommitting
+    serverAssetOrigin
 }) => {
-    const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-
     if (!run) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-zinc-500">
@@ -93,12 +79,19 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
             itemId: item.item_id,
             serialNumber: item.serial_number,
             segmentSeq: item.segment_seq,
-            status: local?.uploadStatus === 'completed' ? 'UPLOADED' : (local?.renderStatus === 'rendering' ? 'RENDERING' : item.status),
+            status: local?.uploadStatus === 'completed'
+                ? 'UPLOADED'
+                : local?.uploadStatus === 'uploading'
+                    ? 'UPLOADING'
+                    : local?.renderStatus === 'rendering'
+                        ? 'RENDERING'
+                        : item.status,
             renderStatus: local?.renderStatus || item.render_status || 'PENDING',
             uploadStatus: local?.uploadStatus || item.upload_status || 'PENDING',
             renderProgress: local?.renderProgress ?? (item.render_status === 'RENDERED' ? 100 : 0),
             uploadProgress: local?.uploadProgress ?? (item.upload_status === 'UPLOADED' ? 100 : 0),
             fileUrl: item.file_url,
+            itemCardUrl: item.item_card_url || `/clone/${encodeURIComponent(item.serial_number)}`,
             errorMessage: local?.errorMessage || item.error_message || ''
         };
     };
@@ -139,10 +132,19 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {mergedItems.map((item) => {
                     const isRendering = item.renderStatus === 'rendering' || item.renderStatus === 'RENDERING';
-                    const isUploading = item.uploadStatus === 'uploading' || item.uploadStatus === 'UPLOADING';
                     const isCompleted = item.status === 'UPLOADED' || item.uploadStatus === 'completed' || item.uploadStatus === 'UPLOADED';
+                    const isReadyToUpload = Boolean(
+                        item.fileUrl
+                        || isCompleted
+                        || item.renderStatus === 'completed'
+                        || item.renderStatus === 'RENDERED'
+                        || item.renderStatus === 'COMPLETED'
+                        || item.uploadStatus === 'uploading'
+                        || item.uploadStatus === 'UPLOADING'
+                    );
                     const isFailed = item.renderStatus === 'failed' || item.renderStatus === 'FAILED' || item.uploadStatus === 'failed' || item.uploadStatus === 'FAILED';
-                    const isCancelled = item.status === 'CANCELLED' || item.renderStatus === 'cancelled' || item.uploadStatus === 'cancelled';
+                    const resolvedFileUrl = resolveServerUrl(item.fileUrl, { serverOrigin: serverAssetOrigin });
+                    const resolvedCardUrl = resolveServerUrl(item.itemCardUrl, { serverOrigin: serverAssetOrigin });
 
                     return (
                         <div
@@ -151,7 +153,7 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                             className={`rounded-2xl border p-5 bg-[#16171c] shadow-md transition-all duration-200 ${
                                 isCompleted
                                     ? 'border-emerald-500/20 bg-emerald-950/5 shadow-[0_0_15px_rgba(16,185,129,0.02)]'
-                                    : isRendering || isUploading
+                                    : isRendering
                                         ? 'border-blue-500/30 bg-blue-950/5 shadow-[0_0_15px_rgba(59,130,246,0.02)]'
                                         : isFailed
                                             ? 'border-red-500/20 bg-red-950/5'
@@ -174,15 +176,11 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                                             ? 'bg-emerald-950 text-emerald-400'
                                             : isRendering
                                                 ? 'bg-blue-950 text-blue-400 animate-pulse'
-                                                : isUploading
-                                                    ? 'bg-indigo-950 text-indigo-400 animate-pulse'
-                                                    : isFailed
-                                                        ? 'bg-red-950 text-red-400'
-                                                        : isCancelled
-                                                            ? 'bg-zinc-800 text-zinc-400'
-                                                            : 'bg-zinc-900 text-zinc-500'
+                                                : isReadyToUpload
+                                                    ? 'bg-emerald-950 text-emerald-400'
+                                                    : 'bg-zinc-900 text-zinc-500'
                                     }`}>
-                                        {isCompleted ? 'Готово' : isRendering ? 'Рендер' : isUploading ? 'Загрузка' : isFailed ? 'Ошибка' : isCancelled ? 'Отмена' : 'В очереди'}
+                                        {isRendering ? 'Рендеринг' : isReadyToUpload ? 'Готов к загрузке' : 'В очереди'}
                                     </span>
                                 </div>
                             </div>
@@ -219,18 +217,36 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                             </div>
 
                             {/* File URL / Error message */}
-                            {item.fileUrl && (
-                                <div className="mt-3.5 flex items-center justify-between text-[11px] border-t border-zinc-850 pt-3">
-                                    <span className="text-zinc-500">Серверный URL:</span>
-                                    <a
-                                        href={item.fileUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="text-emerald-400 inline-flex items-center gap-1 hover:underline"
-                                    >
-                                        <ExternalLink size={12} />
-                                        Смотреть файл
-                                    </a>
+                            {resolvedFileUrl && (
+                                <div className="mt-3.5 grid gap-2 text-[11px] border-t border-zinc-850 pt-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="text-zinc-500">Серверный файл:</span>
+                                        <a
+                                            data-testid={`server-file-link-${item.itemId}`}
+                                            href={resolvedFileUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-emerald-400 inline-flex items-center gap-1 hover:underline"
+                                        >
+                                            <ExternalLink size={12} />
+                                            Смотреть файл
+                                        </a>
+                                    </div>
+                                    {resolvedCardUrl && (
+                                        <div className="flex items-center justify-between gap-3">
+                                            <span className="text-zinc-500">Карточка:</span>
+                                            <a
+                                                data-testid={`item-card-link-${item.itemId}`}
+                                                href={resolvedCardUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="text-emerald-400 inline-flex items-center gap-1 hover:underline"
+                                            >
+                                                <ExternalLink size={12} />
+                                                Проверить
+                                            </a>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
@@ -240,105 +256,21 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                                     <span>{item.errorMessage}</span>
                                 </div>
                             )}
-
-                            {/* Action buttons */}
-                            <div className="mt-4 border-t border-zinc-850 pt-3 flex flex-wrap gap-2">
-                                {!isCompleted && !isRendering && !isUploading && (
-                                    <button
-                                        type="button"
-                                        data-testid={`render-upload-${item.itemId}`}
-                                        onClick={() => onStartRender(item.itemId)}
-                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-bold text-zinc-950 hover:bg-emerald-400 transition"
-                                    >
-                                        <Play size={12} fill="currentColor" />
-                                        Рендер + Загрузка
-                                    </button>
-                                )}
-
-                                {isFailed && item.uploadStatus === 'failed' && (
-                                    <button
-                                        type="button"
-                                        data-testid={`retry-upload-${item.itemId}`}
-                                        onClick={() => onRetryUpload(item.itemId)}
-                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-indigo-500 px-3 text-xs font-bold text-white hover:bg-indigo-400 transition"
-                                    >
-                                        <RefreshCw size={12} />
-                                        Повторить загрузку
-                                    </button>
-                                )}
-
-                                {(isCompleted || isFailed) && (
-                                    <button
-                                        type="button"
-                                        data-testid={`rerender-${item.itemId}`}
-                                        onClick={() => onRerender(item.itemId)}
-                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:border-zinc-500 hover:text-white transition"
-                                        title="Рендерить заново с актуальной таймлайн-нарезкой"
-                                    >
-                                        <RotateCcw size={12} />
-                                        Перерендерить
-                                    </button>
-                                )}
-
-                                {(isRendering || isUploading) && (
-                                    <button
-                                        type="button"
-                                        data-testid={`cancel-item-${item.itemId}`}
-                                        onClick={() => onCancelItem(item.itemId)}
-                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/5 px-3 text-xs font-semibold text-red-400 hover:bg-red-500/10 transition"
-                                    >
-                                        <Ban size={12} />
-                                        Отмена
-                                    </button>
-                                )}
-
-                                {/* Manual File Upload Replacement */}
-                                <label className="inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 transition hover:border-zinc-500 hover:text-white">
-                                    <Upload size={12} />
-                                    Выбрать MP4
-                                    <input
-                                        data-testid={`manual-file-${item.itemId}`}
-                                        ref={(el) => {
-                                            fileInputRefs.current[item.itemId] = el;
-                                        }}
-                                        type="file"
-                                        accept="video/mp4"
-                                        className="hidden"
-                                        onChange={(e) => {
-                                            const file = e.target.files?.[0];
-                                            if (file) {
-                                                onManualReplace(item.itemId, file);
-                                            }
-                                            e.currentTarget.value = '';
-                                        }}
-                                    />
-                                </label>
-                            </div>
                         </div>
                     );
                 })}
             </div>
 
-            {/* Commit section */}
             {allTerminal && run.status !== 'CANCELLED' && (
                 <section className="rounded-2xl border border-zinc-800 bg-[#16171c] p-6 text-center shadow-lg space-y-4">
                     <div>
                         <h3 className="text-sm font-semibold text-zinc-100 uppercase tracking-wider">
-                            Все элементы обработаны
+                            Все элементы выгружены
                         </h3>
                         <p className="text-xs text-zinc-400 mt-1">
-                            Подтвердите запуск, чтобы сохранить видеоролики в карточках товаров в базе данных.
+                            Сервер принял ролики и записал ссылки в карточки Item.
                         </p>
                     </div>
-                    <button
-                        type="button"
-                        data-testid="commit-run"
-                        disabled={isCommitting}
-                        onClick={onCommitRun}
-                        className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-6 py-2 text-xs font-bold text-zinc-950 shadow-md hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                        {isCommitting ? 'Применяем...' : 'Применить результаты (Commit)'}
-                    </button>
                 </section>
             )}
         </div>

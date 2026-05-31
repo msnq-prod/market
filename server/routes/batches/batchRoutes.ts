@@ -8,8 +8,7 @@ import { writeSecurityAuditLog } from '../../services/security.ts';
 import { getDefaultProductTranslation, hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../../utils/collectionWorkflow.ts';
 import { softDeleteBatch } from '../../utils/softDelete.ts';
 import { BATCH_INCLUDE, ACTIVE_VIDEO_JOB_STATUSES, createHttpError, getFileType, getSerialFromFilename, prisma, serializeBatch } from './shared.ts';
-import { ACTIVE_VIDEO_EXPORT_STATUSES } from '../../services/videoExport.ts';
-import { markAllStaleVideoExportSessions, markStaleVideoExportSessions, withVideoExportBatchLock } from './videoExportSessionService.ts';
+import { BLOCKING_VIDEO_EXPORT_RUN_STATUSES, withVideoExportBatchLock } from './videoExportRunService.ts';
 import { canFinalizeBatch, canReceiveBatch, isPartnerRole } from '../../../shared/domain/policy.ts';
 
 const router = express.Router();
@@ -23,8 +22,6 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
             where.owner_id = req.user.id;
         } else if (!isStaffRole(req.user.role)) {
             return res.sendStatus(403);
-        } else {
-            await markAllStaleVideoExportSessions();
         }
 
         const batches = await prisma.batch.findMany({
@@ -280,8 +277,6 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
         const updated = await withVideoExportBatchLock(req.params.id, async (tx) => {
-            await markStaleVideoExportSessions(tx, req.params.id);
-
             const batch = await tx.batch.findFirst({
                 where: {
                     id: req.params.id,
@@ -302,10 +297,10 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
                         },
                         take: 1
                     },
-                    video_export_sessions: {
+                    video_export_runs: {
                         where: {
                             status: {
-                                in: [...ACTIVE_VIDEO_EXPORT_STATUSES] as Array<'OPEN' | 'UPLOADING'>
+                                in: BLOCKING_VIDEO_EXPORT_RUN_STATUSES
                             }
                         },
                         take: 1
@@ -325,8 +320,8 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
                 throw createHttpError('Нельзя завершить партию, пока идет обработка видео-комплекта.', 400);
             }
 
-            if (batch.video_export_sessions.length > 0) {
-                throw createHttpError('Нельзя завершить партию, пока идёт локальный экспорт видео.', 400);
+            if (batch.video_export_runs.length > 0) {
+                throw createHttpError('Нельзя завершить партию, пока идёт экспорт видео.', 400);
             }
 
             if (!hasAllBatchMedia(batch.items)) {

@@ -29,11 +29,7 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     getMediaQueueSnapshot: () => ipcRenderer.invoke('stones:get-media-queue-snapshot'),
     getMediaWorkflowSnapshot: () => ipcRenderer.invoke('stones:get-media-workflow-snapshot'),
     enqueuePhotoToolApply: (payload) => ipcRenderer.invoke('stones:enqueue-photo-tool-apply', payload),
-    enqueueVideoIntroUpload: (payload) => ipcRenderer.invoke('stones:enqueue-video-intro-upload', payload),
-    enqueueVideoRenderUpload: (payload) => ipcRenderer.invoke('stones:enqueue-video-render-upload', payload),
     startPhotoApplyWorkflow: (payload) => ipcRenderer.invoke('stones:start-photo-apply-workflow', payload),
-    startVideoExportWorkflow: (payload) => ipcRenderer.invoke('stones:start-video-export-workflow', payload),
-    startVideoWorkflow: (batchId) => ipcRenderer.invoke('stones:start-video-workflow', batchId),
     retryMediaWorkflow: (workflowId) => ipcRenderer.invoke('stones:retry-media-workflow', workflowId),
     cancelMediaWorkflow: (workflowId) => ipcRenderer.invoke('stones:cancel-media-workflow', workflowId),
     retryMediaQueueJob: (jobId) => ipcRenderer.invoke('stones:retry-media-queue-job', jobId),
@@ -42,9 +38,7 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     startVideoExportRun: (payload) => ipcRenderer.invoke('stones:start-video-export-run', payload),
     renderVideoExportItem: (payload) => ipcRenderer.invoke('stones:render-video-export-item', payload),
     uploadVideoExportItem: (payload) => ipcRenderer.invoke('stones:upload-video-export-item', payload),
-    retryVideoExportItemUpload: (runId, itemId) => ipcRenderer.invoke('stones:retry-video-export-item-upload', runId, itemId),
-    rerenderVideoExportItem: (runId, itemId, manifestSlice) => ipcRenderer.invoke('stones:rerender-video-export-item', runId, itemId, manifestSlice),
-    cancelVideoExportItem: (runId, itemId) => ipcRenderer.invoke('stones:cancel-video-export-item', runId, itemId),
+    cancelVideoExportRun: (runId) => ipcRenderer.invoke('stones:cancel-video-export-run', runId),
     getVideoExportRunSnapshot: (batchId) => ipcRenderer.invoke('stones:get-video-export-run-snapshot', batchId),
     subscribeMediaQueue: (callback) => {
         const listener = (_event, snapshot) => callback(snapshot);

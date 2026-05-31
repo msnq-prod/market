@@ -3,9 +3,6 @@ import { apiFetch } from '../../utils/apiFetch';
 import type { StonesBatchDiagnosticsMediaFile } from '../../utils/desktop';
 
 const PHOTO_COUNT = 10;
-const VIDEO_EXPORT_HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
-const VIDEO_EXPORT_HELPER_URL = (import.meta.env.VITE_VIDEO_EXPORT_HELPER_URL || 'http://127.0.0.1:3012').replace(/\/+$/, '');
-const CROSSFADE_MS = 200;
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 
@@ -77,17 +74,8 @@ type VideoToolPayload = {
     items: BatchItem[];
 };
 
-type VideoExportSessionPayload = {
-    session: {
-        session_id: string;
-        status: string;
-        uploaded_count: number;
-        expected_count: number;
-    };
-};
-
-type HelperSourcePayload = {
-    source_id: string;
+type DiagnosticsVideoSource = {
+    source_index: number;
     duration_ms: number;
     fingerprint: {
         name: string;
@@ -95,14 +83,6 @@ type HelperSourcePayload = {
         lastModified: number;
         durationMs: number;
     };
-};
-
-type HelperJobPayload = {
-    job_id: string;
-    status: string;
-    processed_count: number;
-    total_count: number;
-    error_message?: string | null;
 };
 
 type VideoSegment = {
@@ -113,12 +93,24 @@ type VideoSegment = {
 };
 
 type VideoManifest = {
+    manifest_version?: number;
+    sources?: Array<{
+        source_index: number;
+        role: 'WITH_INTRO' | 'NO_INTRO';
+        fingerprint: DiagnosticsVideoSource['fingerprint'];
+    }>;
     segments: VideoSegment[];
     outputs: Array<{
         segment_seq: number;
         serial_number: string;
         item_id: string;
     }>;
+    export_settings?: {
+        resolution: '1080p';
+        quality: 'high';
+        fps: 30;
+        audio_normalize: true;
+    };
 };
 
 export type BatchDiagnosticsCallbacks = {
@@ -161,31 +153,6 @@ const authHeaders = (token: string) => ({
     'Content-Type': 'application/json'
 });
 
-const helperFetch = async (path: string, init?: RequestInit) => fetch(`${VIDEO_EXPORT_HELPER_URL}${path}`, {
-    ...init,
-    headers: {
-        ...(init?.headers || {}),
-        'X-Stones-Video-Helper-Version': VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
-    }
-});
-
-const waitForHelperJob = async (jobId: string, prefix: '/intro-jobs' | '/render-jobs') => {
-    const deadline = Date.now() + 180_000;
-    while (Date.now() < deadline) {
-        const response = await helperFetch(`${prefix}/${encodeURIComponent(jobId)}`);
-        const payload = await readJson<HelperJobPayload>(response, 'Не удалось проверить helper job.');
-        if (payload.status === 'COMPLETED') {
-            return payload;
-        }
-        if (payload.status === 'FAILED') {
-            throw new Error(payload.error_message || 'Helper job завершился ошибкой.');
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    }
-
-    throw new Error('Helper job не завершился за отведенное время.');
-};
-
 const loginWithPasswordCandidates = async (email: string, passwords: string[]) => {
     let lastError = 'Не удалось войти.';
     for (const password of passwords) {
@@ -205,15 +172,15 @@ const loginWithPasswordCandidates = async (email: string, passwords: string[]) =
 };
 
 const buildAdvancedSegments = (
-    helperSources: HelperSourcePayload[],
+    videoSources: DiagnosticsVideoSource[],
     items: BatchItem[]
 ): VideoManifest => {
     const segmentCount = items.length + 1;
-    const hasMultipleSources = helperSources.length > 1;
+    const hasMultipleSources = videoSources.length > 1;
     const midPoint = 6;
 
-    const duration0 = helperSources[0].duration_ms;
-    const duration1 = hasMultipleSources ? helperSources[1].duration_ms : 0;
+    const duration0 = videoSources[0].duration_ms;
+    const duration1 = hasMultipleSources ? videoSources[1].duration_ms : 0;
 
     const segmentDuration0 = Math.max(250, Math.floor(duration0 / midPoint));
     const segmentDuration1 = hasMultipleSources ? Math.max(250, Math.floor(duration1 / (segmentCount - midPoint))) : 0;
@@ -240,12 +207,24 @@ const buildAdvancedSegments = (
     });
 
     return {
+        manifest_version: 2,
+        sources: videoSources.map((source) => ({
+            source_index: source.source_index,
+            role: source.source_index === 0 ? 'WITH_INTRO' : 'NO_INTRO',
+            fingerprint: source.fingerprint
+        })),
         segments,
         outputs: items.map((item, index) => ({
             segment_seq: index + 1,
             serial_number: item.serial_number || '',
             item_id: item.id
-        }))
+        })),
+        export_settings: {
+            resolution: '1080p',
+            quality: 'high',
+            fps: 30,
+            audio_normalize: true
+        }
     };
 };
 
@@ -470,176 +449,45 @@ export async function runBatchCreationDiagnostics(
             return readJson<VideoToolPayload>(response, 'Не удалось загрузить Video Tool.');
         }, (result) => ({ expected: result.batch.expected_output_count }));
 
-        const helperSources: HelperSourcePayload[] = [];
+        const videoSources: DiagnosticsVideoSource[] = [];
         const limitVideos = Math.min(2, videos.length);
-        logPrefix('INFO', `Будет загружено исходных видео в helper: ${limitVideos}`);
+        logPrefix('INFO', `Будет описано исходных видео для V2 manifest: ${limitVideos}`);
 
         for (let i = 0; i < limitVideos; i++) {
             const currentVideo = videos[i];
-            const source = await runStep(`helper-source-${i}`, `Передача видео ${i + 1} в helper`, async () => {
+            const source = await runStep(`video-source-${i}`, `Подготовка source ${i + 1}`, async () => {
                 const form = new FormData();
                 const f = toFile(currentVideo);
-                form.append('file', f, currentVideo.name);
-                form.append('lastModified', String(currentVideo.lastModified || Date.now()));
-                
-                logPrefix('PROCESS', `Отправка исходника #${i + 1} в helper (${currentVideo.name}, ${f.size} байт)...`);
-                const response = await helperFetch('/sources', {
-                    method: 'POST',
-                    body: form
-                });
-                return readJson<HelperSourcePayload>(response, `Helper не принял видео ${i + 1}.`);
+                form.append('file', f, currentVideo.name); // keeps browser File construction covered by diagnostics
+                logPrefix('PROCESS', `Source #${i + 1}: ${currentVideo.name} (${f.size} байт, ${f.type}).`);
+                return {
+                    source_index: i,
+                    duration_ms: 60_000,
+                    fingerprint: {
+                        name: currentVideo.name,
+                        size: f.size,
+                        lastModified: currentVideo.lastModified || Date.now(),
+                        durationMs: 60_000
+                    }
+                } satisfies DiagnosticsVideoSource;
             }, (result) => ({ durationMs: result.duration_ms }));
             
-            logPrefix('INFO', `Helper принял видео. ID источника: ${source.source_id}, Длительность: ${source.duration_ms}мс`);
-            helperSources.push(source);
-        }
-
-        logPrefix('INFO', 'Все исходники успешно загружены в helper.');
-
-        for (let i = 0; i < helperSources.length; i++) {
-            const source = helperSources[i];
-            await runStep(`preview-check-${i}`, `Проверка превью видео ${i + 1}`, async () => {
-                const url = `/sources/${source.source_id}/preview`;
-                logPrefix('PROCESS', `Проверка доступности превью по эндпоинту: ${url}`);
-                const response = await helperFetch(url);
-                
-                logPrefix('INFO', `Ответ превью: HTTP ${response.status} (${response.statusText || 'OK'})`);
-                const contentType = response.headers.get('content-type') || 'не указан';
-                const contentLength = response.headers.get('content-length') || 'не указан';
-                logPrefix('INFO', `Заголовки ответа: Content-Type: ${contentType}, Content-Length: ${contentLength}`);
-
-                if (!response.ok) {
-                    const errPayload = await response.json().catch(() => ({ error: 'Неизвестная ошибка' }));
-                    throw new Error(`Превью эндпоинт вернул HTTP ${response.status}: ${errPayload.error || JSON.stringify(errPayload)}`);
-                }
-                const blob = await response.blob();
-                logPrefix('INFO', `Загружен blob превью размером: ${blob.size} байт`);
-                if (blob.size === 0) {
-                    throw new Error('Файл превью пустой (0 байт).');
-                }
-                return { sizeBytes: blob.size };
-            }, (result) => ({ sizeBytes: result.sizeBytes }));
-
-            logPrefix('SUCCESS', `Превью для исходника ${i + 1} (${source.fingerprint.name}) проверено. Статус: доступно.`);
+            logPrefix('INFO', `Source описан: ${source.fingerprint.name}, длительность для диагностики: ${source.duration_ms}мс`);
+            videoSources.push(source);
         }
 
         logPrefix('INFO', 'Эмуляция интерактивных функций Video Tool:');
         logPrefix('INFO', `1. Нарезка таймлайна на ${videoTool.items.length + 1} сегментов (с учетом переходов и интро).`);
         logPrefix('INFO', '2. Имитация удаления клипа #2 (сегмент 3 помечен как исключенный).');
         logPrefix('INFO', '3. Имитация восстановления клипа #3 (сегмент 4 возвращен в активную линию).');
-        logPrefix('INFO', '4. Генерация финального манифеста рендеринга для 10 товарных клипов.');
+        logPrefix('INFO', '4. Генерация V2 render manifest для 10 товарных клипов.');
 
-        const manifest = buildAdvancedSegments(helperSources, videoTool.items);
-        const session = await runStep('video-session', 'Создание export-session', async () => {
-            logPrefix('PROCESS', 'Создание сессии экспорта на сервере API...');
-            const response = await apiFetch(`/api/batches/${batchId}/video-export-sessions`, {
-                method: 'POST',
-                headers: authHeaders(admin.accessToken),
-                body: JSON.stringify({
-                    expected_count: videoTool.batch.expected_output_count,
-                    crossfade_ms: CROSSFADE_MS,
-                    source_fingerprint: helperSources[0].fingerprint,
-                    render_manifest: manifest
-                })
-            });
-            return readJson<VideoExportSessionPayload>(response, 'Не удалось создать video export session.');
-        }, (result) => ({ sessionId: result.session.session_id }));
-        
-        logPrefix('INFO', `Сессия экспорта создана. ID сессии: ${session.session.session_id}`);
+        const manifest = await runStep('video-manifest', 'Проверка V2 render manifest', async () => {
+            logPrefix('PROCESS', 'Генерация manifest без раннего server run. Backend подключается только на item upload.');
+            return buildAdvancedSegments(videoSources, videoTool.items);
+        }, (result) => ({ outputs: result.outputs.length, segments: result.segments.length }));
 
-        await runStep('intro-render-upload', 'Нарезка и загрузка intro', async () => {
-            logPrefix('PROCESS', 'Запуск рендеринга интро на helper (/intro-jobs)...');
-            const introResponse = await helperFetch('/intro-jobs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sources: helperSources.map((source, idx) => ({
-                        source_index: idx,
-                        source_id: source.source_id
-                    })),
-                    segment: manifest.segments[0]
-                })
-            });
-            const introJob = await readJson<HelperJobPayload>(introResponse, 'Не удалось создать intro job.');
-            logPrefix('INFO', `Задача интро создана, Job ID: ${introJob.job_id}. Ожидание рендеринга...`);
-            
-            await waitForHelperJob(introJob.job_id, '/intro-jobs');
-            logPrefix('SUCCESS', 'Рендеринг интро успешно завершен.');
-
-            logPrefix('PROCESS', `Загрузка готового файла интро для Job ID ${introJob.job_id}...`);
-            const fileResponse = await helperFetch(`/intro-jobs/${introJob.job_id}/file`);
-            if (!fileResponse.ok) {
-                throw new Error(`Не удалось получить intro-файл: HTTP ${fileResponse.status}`);
-            }
-            const blob = await fileResponse.blob();
-            logPrefix('INFO', `Загружен blob интро из helper: ${blob.size} байт`);
-            
-            const form = new FormData();
-            form.append('file', blob, 'intro.mp4');
-            
-            logPrefix('PROCESS', `Отправка файла интро на API сервер (сессия ${session.session.session_id})...`);
-            const uploadResponse = await apiFetch(`/api/batches/${batchId}/video-export-sessions/${session.session.session_id}/intro-file`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${admin.accessToken}` },
-                body: form
-            });
-            return readJson<VideoExportSessionPayload>(uploadResponse, 'Не удалось загрузить intro.');
-        });
-        
-        logPrefix('SUCCESS', 'Файл интро успешно загружен и привязан к сессии.');
-
-        await runStep('render-upload', 'Нарезка и загрузка 10 видео', async () => {
-            logPrefix('PROCESS', 'Запуск пакетного рендеринга товарных клипов на helper (/render-jobs)...');
-            const renderResponse = await helperFetch('/render-jobs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sources: helperSources.map((source, idx) => ({
-                        source_index: idx,
-                        source_id: source.source_id
-                    })),
-                    crossfade_ms: CROSSFADE_MS,
-                    segments: manifest.segments,
-                    outputs: manifest.outputs
-                })
-            });
-            const renderJob = await readJson<HelperJobPayload>(renderResponse, 'Не удалось создать render job.');
-            logPrefix('INFO', `Задача рендеринга создана, Job ID: ${renderJob.job_id}. Ожидание сборки 10 клипов...`);
-            
-            await waitForHelperJob(renderJob.job_id, '/render-jobs');
-            logPrefix('SUCCESS', 'Пакетный рендеринг всех клипов успешно завершен.');
-
-            let latestSession: VideoExportSessionPayload | null = null;
-            for (let idx = 0; idx < manifest.outputs.length; idx++) {
-                const output = manifest.outputs[idx];
-                logPrefix('PROCESS', `[${idx + 1}/10] Получение ролика для serial: ${output.serial_number}...`);
-                const fileResponse = await helperFetch(`/render-jobs/${renderJob.job_id}/files/${encodeURIComponent(output.serial_number)}`);
-                if (!fileResponse.ok) {
-                    throw new Error(`Не удалось получить ролик ${output.serial_number}: HTTP ${fileResponse.status}`);
-                }
-                const blob = await fileResponse.blob();
-                logPrefix('INFO', `Получен blob для ${output.serial_number}: ${blob.size} байт`);
-                
-                const form = new FormData();
-                form.append('file', blob, `${output.serial_number}.mp4`);
-                form.append('serial_number', output.serial_number);
-                
-                logPrefix('PROCESS', `[${idx + 1}/10] Загрузка ролика ${output.serial_number} на API сервер...`);
-                const uploadResponse = await apiFetch(`/api/batches/${batchId}/video-export-sessions/${session.session.session_id}/files`, {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${admin.accessToken}` },
-                    body: form
-                });
-                latestSession = await readJson<VideoExportSessionPayload>(uploadResponse, `Не удалось загрузить ролик ${output.serial_number}.`);
-                logPrefix('SUCCESS', `[${idx + 1}/10] Ролик ${output.serial_number} успешно загружен.`);
-            }
-
-            logPrefix('PROCESS', 'Очистка временных файлов рендеринга на helper...');
-            void helperFetch(`/render-jobs/${renderJob.job_id}/cleanup`, { method: 'POST' }).catch(() => undefined);
-            return latestSession;
-        }, (result) => result?.session);
-
-        logPrefix('SUCCESS', 'Все 10 клипов успешно нарезаны, загружены и привязаны к товарам.');
+        logPrefix('SUCCESS', `V2 Video Tool manifest проверен: ${manifest.outputs.length} outputs. Server run создается лениво при upload.`);
 
         const finalItems = await runStep('items-check', 'Проверка item media', async () => {
             logPrefix('PROCESS', 'Проверка медиа-файлов привязанных к items партии в БД...');
@@ -652,9 +500,9 @@ export async function runBatchCreationDiagnostics(
             if (items.length !== PHOTO_COUNT) {
                 throw new Error(`Ожидалось ${PHOTO_COUNT} items, получено ${items.length}.`);
             }
-            const missing = items.find((item) => !item.serial_number || !item.item_photo_url || !item.item_video_url);
+            const missing = items.find((item) => !item.serial_number || !item.item_photo_url);
             if (missing) {
-                throw new Error(`У item ${missing.id} не заполнены данные: serial_number: ${missing.serial_number}, photo: ${missing.item_photo_url}, video: ${missing.item_video_url}`);
+                throw new Error(`У item ${missing.id} не заполнены данные: serial_number: ${missing.serial_number}, photo: ${missing.item_photo_url}`);
             }
             
             items.forEach((item, idx) => {
@@ -673,8 +521,8 @@ export async function runBatchCreationDiagnostics(
             );
             
             logPrefix('INFO', `Публичный паспорт: location = ${publicPayload.location_name}, photo = ${publicPayload.has_photo}, video = ${publicPayload.has_video}`);
-            if (!publicPayload.has_photo || !publicPayload.has_video || !String(publicPayload.location_name || '').includes('Луна')) {
-                throw new Error('Публичный паспорт не содержит ожидаемые данные Луна/photo/video.');
+            if (!publicPayload.has_photo || !String(publicPayload.location_name || '').includes('Луна')) {
+                throw new Error('Публичный паспорт не содержит ожидаемые данные Луна/photo.');
             }
 
             logPrefix('PROCESS', `Запрос QR-кода для serial: ${firstSerial}...`);

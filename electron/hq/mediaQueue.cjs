@@ -1,8 +1,6 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = require('fs/promises');
-const http = require('http');
-const https = require('https');
 const path = require('path');
 const { EventEmitter } = require('events');
 
@@ -15,6 +13,7 @@ const MAX_RETRY_DELAY_MS = 5 * 60_000;
 const STATE_VERSION = 2;
 const EVENT_BUFFER_SIZE = 10;
 const QUEUE_STUCK_MS = 5 * 60_000;
+const LEGACY_VIDEO_UPLOAD_JOB_TYPES = new Set(['VIDEO_' + 'INTRO_UPLOAD', 'VIDEO_' + 'RENDER_UPLOAD']);
 
 const nowIso = () => new Date().toISOString();
 const createId = () => crypto.randomUUID();
@@ -107,27 +106,15 @@ const parseJsonResponse = async (response, fallbackMessage) => {
     return payload;
 };
 
-const resolveHelperBaseUrl = (value) => {
-    const rawValue = String(value || '').replace(/\/+$/, '');
-    if (!rawValue || rawValue === '/desktop-helper') {
-        return 'http://127.0.0.1:3012';
-    }
-
-    if (rawValue.startsWith('/')) {
-        return `http://127.0.0.1:3012${rawValue}`;
-    }
-
-    return rawValue;
-};
-
 class MediaUploadQueue extends EventEmitter {
-    constructor({ rootDir, getApiOrigin, getAccessToken }) {
+    constructor({ rootDir, getApiOrigin, getAccessToken, helperRuntime = null }) {
         super();
         this.rootDir = rootDir;
         this.filesDir = path.join(rootDir, 'files');
         this.statePath = path.join(rootDir, 'queue.json');
         this.getApiOrigin = getApiOrigin;
         this.getAccessToken = getAccessToken;
+        this.helperRuntime = helperRuntime;
         this.jobs = [];
         this.stagedFiles = new Map();
         this.processing = false;
@@ -164,6 +151,11 @@ class MediaUploadQueue extends EventEmitter {
             && /Данные photo-tool изменились|Фото партии уже обновились/i.test(String(job.lastError || ''));
         return {
             ...job,
+            ...(LEGACY_VIDEO_UPLOAD_JOB_TYPES.has(job.type) && !DONE_STATUSES.has(job.status) ? {
+                status: 'cancelled',
+                lastError: 'Legacy video export upload отключен. Используйте V2 export-run.',
+                nextAttemptAt: 0
+            } : {}),
             blockingReason: typeof job.blockingReason === 'string'
                 ? job.blockingReason
                 : isLegacyPhotoToolStale ? 'photo_tool_state_stale' : null,
@@ -331,55 +323,6 @@ class MediaUploadQueue extends EventEmitter {
         });
     }
 
-    async enqueueVideoIntroUpload(payload) {
-        return this.enqueue('VIDEO_INTRO_UPLOAD', {
-            batchId: payload.batchId,
-            sessionId: payload.sessionId,
-            helperBaseUrl: payload.helperBaseUrl,
-            helperJobId: payload.helperJobId
-        }, [], {
-            title: 'Video intro',
-            batchId: payload.batchId,
-            batchLabel: payload.batchLabel,
-            subtitle: payload.subtitle,
-            sessionId: payload.sessionId
-        });
-    }
-
-    async enqueueVideoRenderUpload(payload) {
-        const groupId = typeof payload.groupId === 'string' && payload.groupId
-            ? payload.groupId
-            : null;
-        const groupTotal = Number(payload.groupTotal || 0);
-        return this.enqueue('VIDEO_RENDER_UPLOAD', {
-            batchId: payload.batchId,
-            sessionId: payload.sessionId,
-            helperBaseUrl: payload.helperBaseUrl,
-            helperJobId: payload.helperJobId,
-            serialNumber: payload.serialNumber,
-            groupId
-        }, [], {
-            title: `${payload.serialNumber}.mp4`,
-            batchId: payload.batchId,
-            batchLabel: payload.batchLabel,
-            subtitle: payload.subtitle,
-            fileName: `${payload.serialNumber}.mp4`,
-            sessionId: payload.sessionId,
-            serialNumber: payload.serialNumber,
-            helperJobId: payload.helperJobId,
-            groupId,
-            groupTitle: typeof payload.groupTitle === 'string' && payload.groupTitle
-                ? payload.groupTitle
-                : 'Видео партии',
-            groupKind: payload.groupKind === 'VIDEO_EXPORT_UPLOAD'
-                ? 'VIDEO_EXPORT_UPLOAD'
-                : undefined,
-            groupTotal: Number.isFinite(groupTotal) && groupTotal > 0 ? groupTotal : undefined,
-            notifyOnComplete: Boolean(payload.notifyOnComplete),
-            cleanupHelperJob: Boolean(payload.cleanupHelperJob)
-        });
-    }
-
     async retry(jobId) {
         const job = this.jobs.find((entry) => entry.id === jobId);
         if (!job || DONE_STATUSES.has(job.status)) {
@@ -540,14 +483,6 @@ class MediaUploadQueue extends EventEmitter {
             return this.uploadPhotoToolApply(job, token);
         }
 
-        if (job.type === 'VIDEO_INTRO_UPLOAD') {
-            return this.uploadVideoIntro(job, token);
-        }
-
-        if (job.type === 'VIDEO_RENDER_UPLOAD') {
-            return this.uploadVideoRender(job, token);
-        }
-
         if (job.type === 'VIDEO_EXPORT_RUN_ITEM_UPLOAD') {
             return this.uploadVideoExportRunItem(job, token);
         }
@@ -596,76 +531,29 @@ class MediaUploadQueue extends EventEmitter {
             return job.files[0];
         }
 
-        const helperUrl = `${resolveHelperBaseUrl(job.payload.helperBaseUrl)}${helperPath}`;
-        const response = await fetch(helperUrl);
-        if (!response.ok) {
-            const error = new Error(`Не удалось получить файл из helper: HTTP ${response.status}.`);
-            error.statusCode = response.status === 409 ? 425 : response.status;
-            throw error;
-        }
-
         const fileId = createId();
         const cachePath = path.join(this.filesDir, `${fileId}.bin`);
-        const arrayBuffer = await response.arrayBuffer();
-        await fsp.writeFile(cachePath, Buffer.from(arrayBuffer));
+        if (job.payload.helperFilePath) {
+            await fsp.copyFile(job.payload.helperFilePath, cachePath);
+        } else if (this.helperRuntime && job.payload.helperJobId && job.payload.serialNumber) {
+            const sourcePath = await this.helperRuntime.getRenderOutputFilePath(job.payload.helperJobId, job.payload.serialNumber);
+            await fsp.copyFile(sourcePath, cachePath);
+        } else {
+            throw new Error('Внутренний video helper недоступен для получения файла.');
+        }
         const checksumSha256 = await sha256File(cachePath);
+        const stat = await fsp.stat(cachePath);
         const file = {
             fileId,
             cachePath,
             originalName: safeFileName(fileName),
             mimeType,
             checksumSha256,
-            size: Buffer.byteLength(Buffer.from(arrayBuffer))
+            size: stat.size
         };
         job.files = [file];
         await this.persist();
         return file;
-    }
-
-    async uploadVideoIntro(job, token) {
-        const file = await this.fetchHelperFile(
-            job,
-            `/intro-jobs/${encodeURIComponent(job.payload.helperJobId)}/file`,
-            'intro.mp4',
-            'video/mp4'
-        );
-        const form = new FormData();
-        await appendFileToForm(form, 'file', file.cachePath, file.originalName, file.mimeType);
-        form.append('queue_job_id', job.id);
-        form.append('queue_file_id', file.fileId);
-        form.append('checksum_sha256', file.checksumSha256);
-
-        const response = await fetch(this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-sessions/${encodeURIComponent(job.payload.sessionId)}/intro-file`), {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: form
-        });
-
-        return parseJsonResponse(response, 'Не удалось сохранить intro-файл.');
-    }
-
-    async uploadVideoRender(job, token) {
-        const serialNumber = String(job.payload.serialNumber || '').trim().toUpperCase();
-        const file = await this.fetchHelperFile(
-            job,
-            `/render-jobs/${encodeURIComponent(job.payload.helperJobId)}/files/${encodeURIComponent(serialNumber)}`,
-            `${serialNumber}.mp4`,
-            'video/mp4'
-        );
-        const form = new FormData();
-        await appendFileToForm(form, 'file', file.cachePath, file.originalName, file.mimeType);
-        form.append('serial_number', serialNumber);
-        form.append('queue_job_id', job.id);
-        form.append('queue_file_id', file.fileId);
-        form.append('checksum_sha256', file.checksumSha256);
-
-        const response = await fetch(this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-sessions/${encodeURIComponent(job.payload.sessionId)}/files`), {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: form
-        });
-
-        return parseJsonResponse(response, 'Не удалось загрузить финальный ролик.');
     }
 
     async uploadVideoExportRunItem(job, token) {
@@ -682,6 +570,12 @@ class MediaUploadQueue extends EventEmitter {
         form.append('queue_job_id', job.id);
         form.append('queue_file_id', file.fileId);
         form.append('checksum_sha256', file.checksumSha256);
+        if (job.payload.renderManifest) {
+            form.append('render_manifest', JSON.stringify(job.payload.renderManifest));
+        }
+        if (job.payload.exportSettings) {
+            form.append('export_settings', JSON.stringify(job.payload.exportSettings));
+        }
 
         const response = await fetch(this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-runs/${encodeURIComponent(job.payload.runId)}/items/${encodeURIComponent(job.payload.itemId)}/upload`), {
             method: 'POST',

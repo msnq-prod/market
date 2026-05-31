@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, Video, Settings2, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, HardDriveDownload, Settings2, Menu, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { logoutSession } from '../../utils/session';
@@ -83,7 +83,7 @@ export function Sidebar() {
             items: [
                 { id: 'products', to: '/admin/products', icon: <Box size={18} />, label: 'Товары' },
                 { id: 'qr-print', to: '/admin/qr/print', icon: <QrCode size={18} />, label: 'QR-печать', newTab: true },
-                { id: 'video-tool', to: '/admin/video-tool', icon: <Video size={18} />, label: 'Video Tool' },
+                { id: 'hq-admin', to: '/admin/video-tool', icon: <HardDriveDownload size={18} />, label: 'HQ Admin' },
                 { id: 'clone-content', to: '/admin/clone-content', icon: <FileText size={18} />, label: 'Страница клона' }
             ]
         },

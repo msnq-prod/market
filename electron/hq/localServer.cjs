@@ -23,9 +23,7 @@ const rewriteSetCookieHeaders = (headers) => {
 const createLocalServerRuntime = ({
     getDistRoot,
     getMimeType,
-    proxyPrefixes,
-    desktopHelperPrefix,
-    getHelperProxyStatus
+    proxyPrefixes
 }) => {
     let localServer = null;
     let localServerUrl = '';
@@ -33,10 +31,6 @@ const createLocalServerRuntime = ({
     const isProxyRequest = (pathname) => proxyPrefixes.some((prefix) => (
         pathname === prefix || pathname.startsWith(`${prefix}/`)
     ));
-
-    const isDesktopHelperRequest = (pathname) => (
-        pathname === desktopHelperPrefix || pathname.startsWith(`${desktopHelperPrefix}/`)
-    );
 
     const proxyRequest = (req, res, apiOrigin) => {
         const targetUrl = new URL(req.url || '/', apiOrigin);
@@ -69,74 +63,6 @@ const createLocalServerRuntime = ({
 
             res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'HQ API недоступен.' }));
-        });
-
-        req.pipe(proxy);
-    };
-
-    const getRequestPageOrigin = (req) => {
-        if (localServerUrl) {
-            return localServerUrl;
-        }
-
-        if (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)) {
-            return req.headers.origin;
-        }
-
-        const host = typeof req.headers.host === 'string' ? req.headers.host : '';
-        return host ? `http://${host}` : '';
-    };
-
-    const proxyDesktopHelperRequest = async (req, res) => {
-        const pageOrigin = getRequestPageOrigin(req);
-        const proxyStatus = await getHelperProxyStatus(pageOrigin);
-        if (!proxyStatus?.ok || !proxyStatus.port) {
-            res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-                error: proxyStatus?.helperIssueMessage || 'Встроенный video helper недоступен.',
-                pageOrigin: proxyStatus?.pageOrigin || '',
-                allowed_origins: proxyStatus?.allowed_origins || [],
-                expected_port: proxyStatus?.expected_port || null,
-                discovered_port: proxyStatus?.discovered_port || null
-            }));
-            return;
-        }
-
-        const helperPort = proxyStatus.port;
-        const requestUrl = new URL(req.url || '/', `http://127.0.0.1:${helperPort}`);
-        const helperPathname = requestUrl.pathname === desktopHelperPrefix
-            ? '/'
-            : requestUrl.pathname.slice(desktopHelperPrefix.length) || '/';
-        const proxy = http.request({
-            protocol: 'http:',
-            hostname: '127.0.0.1',
-            port: helperPort,
-            method: req.method,
-            path: `${helperPathname}${requestUrl.search}`,
-            headers: {
-                ...req.headers,
-                host: `127.0.0.1:${helperPort}`,
-                ...(pageOrigin ? { origin: pageOrigin } : {})
-            }
-        }, (proxyRes) => {
-            res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-            proxyRes.pipe(res);
-        });
-
-        proxy.on('error', (error) => {
-            if (res.headersSent) {
-                res.destroy(error);
-                return;
-            }
-
-            res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-                error: proxyStatus.helperIssueMessage || 'Встроенный video helper недоступен.',
-                pageOrigin: proxyStatus.pageOrigin || '',
-                allowed_origins: proxyStatus.allowed_origins || [],
-                expected_port: proxyStatus.expected_port || null,
-                discovered_port: proxyStatus.discovered_port || null
-            }));
         });
 
         req.pipe(proxy);
@@ -192,11 +118,6 @@ const createLocalServerRuntime = ({
 
             const server = http.createServer((req, res) => {
                 const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
-
-                if (isDesktopHelperRequest(requestUrl.pathname)) {
-                    void proxyDesktopHelperRequest(req, res);
-                    return;
-                }
 
                 if (isProxyRequest(requestUrl.pathname)) {
                     proxyRequest(req, res, apiOrigin);

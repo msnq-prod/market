@@ -196,16 +196,16 @@ ZAGARAMI состоит из четырех основных частей:
 ### HQ Photo Tool
 
 - маршрут: `/admin/photo-tool/:batchId`
+- в браузерном HQ маршрут показывает заглушку скачивания `ZAGARAMI HQ`; рабочий интерфейс доступен в Electron HQ
 - backend: `GET /api/batches/:id/photo-tool`, `POST /api/batches/:id/photo-tool/apply`
 - инструмент работает только для batch в `RECEIVED`
 - сохранение идет по полному manifest и контролируется через `photo_state_token`
 - итог сохраняется в `Item.item_photo_url`
 
-В проекте есть три разных сценария работы с видео:
+В проекте есть два активных сценария работы с видео:
 
 1. server-side processing через `server/videoProcessor.ts`
-2. legacy export-session flow через HQ Video Tool и helper
-3. V2 export-run flow через HQ Video Tool, Electron desktop state и helper
+2. V2 export-run flow через HQ Video Tool, Electron desktop state и внутренний video runtime
 
 ### Backend video processing
 
@@ -213,30 +213,16 @@ ZAGARAMI состоит из четырех основных частей:
 - worker читает задания из БД
 - результат может обновлять `item_video_url`
 
-### Legacy export-session flow
-
-- HQ открывает `/admin/video-tool/:batchId`
-- создается или расширяется `BatchVideoExportSession`
-- `render_manifest` хранит v2-манифест: ordered sources, source-aware segments, prefix outputs и server-side `intro_asset`
-- локальный helper v3 рендерит ролики по item из сохраненного intro и текущих source без intro
-- незавершенная session может быть продолжена через append-only dogruzka или retry-tail для отсутствующих файлов
-- частичная загрузка не обновляет `item_video_url`; ссылки проставляются только после полного набора `expected_count`
-- готовые `.mp4` дозагружаются обратно в backend
-
-Код:
-
-- `server/routes/batches/videoToolRoutes.ts`
-- `server/routes/batches/videoExportSessionService.ts`
-
 ### V2 export-run flow
 
 - HQ открывает `/admin/video-tool/:batchId`
-- Electron HQ проверяет embedded helper protocol `stones-video-export-helper-v3`
-- UI создает backend `BatchVideoExportRun`
+- Electron HQ проверяет внутренний video runtime protocol `stones-video-export-helper-v3`
+- UI создает local runId
 - Electron создает local V2 run snapshot в desktop state
-- helper используется через HTTP-контракт `/sources`, `/intro-jobs`, `/render-jobs`
+- video runtime вызывается через IPC/helperRuntime без локального HTTP endpoint
+- backend `BatchVideoExportRun` создается при первом item-level upload
 - item-level upload идет через `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
-- commit идет через `POST /api/batches/:id/video-export-runs/:runId/commit`
+- upload сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
 
 Код:
 
@@ -246,7 +232,7 @@ ZAGARAMI состоит из четырех основных частей:
 - `electron/hq/mediaQueue.cjs`
 - `src/admin/pages/video-tool/VideoToolController.tsx`
 
-Ограничение текущей реализации: automatic item render queue для V2 еще не является чистым завершенным workflow. План рефактора описан в `VIDEO_TOOL_WORKFLOW_REFACTOR_PLAN_RU.md`.
+Ограничение текущей реализации: историческая модель `BatchVideoExportSession` может оставаться в БД для старых данных, но активные роуты/UI используют V2 runs.
 
 ## 8. Публичный цифровой паспорт
 

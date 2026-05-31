@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { RefreshCw, HardDriveDownload, Clipboard } from 'lucide-react';
+import { RefreshCw, Clipboard } from 'lucide-react';
 import {
     getStonesDesktop,
     isStonesDesktop,
-    stageDesktopVideoSourceFile,
-    type StonesMediaWorkflowSnapshot
+    stageDesktopVideoSourceFile
 } from '../../../utils/desktop';
 import {
     DESKTOP_VIDEO_HELPER_URL,
-    HELPER_HEALTH_TIMEOUT_MS,
     PREVIEW_PANEL_MAX_WIDTH,
     PREVIEW_PANEL_MIN_WIDTH,
     PREVIEW_PANEL_WIDTH_STORAGE_KEY,
     TIMELINE_ZOOM_STEP,
-    VIDEO_EXPORT_HELPER_PROTOCOL_VERSION,
-    VIDEO_EXPORT_HELPER_URL,
-    VIDEO_HELPER_DOWNLOAD_URL,
-    VIDEO_HELPER_DOWNLOAD_URL_ARM64
+    VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
 } from './constants';
 import { draftKeyFor, parseDraft } from './draftStorage';
+import {
+    SOURCE_DURATION_TOLERANCE_MS,
+    createLocalRunId,
+    createLocalVideoExportRunDetails,
+    createRestoredLocalVideoExportRunDetails,
+    normalizeDesktopDraft
+} from './localRun';
 import {
     buildRenderManifest,
     createSourceFromFingerprint,
@@ -42,23 +44,16 @@ import {
 } from './engine/index.ts';
 import { runPreflight, type PreflightIssue } from './engine/preflight';
 import {
-    VIDEO_EXPORT_HELPER_URL_CANDIDATES,
     buildHelperIssueMessage,
-    classifyHelperFetchError,
-    getHelperErrorDetail,
-    helperFetch,
     revokeObjectUrl
 } from './videoHelperClient';
 import { useVideoToolHotkeys } from './useVideoToolHotkeys';
 import {
-    cancelVideoExportRun,
-    commitVideoExportRun,
-    createVideoExportRun,
-    fetchVideoExportRunDetails,
+    cancelVideoExportRun as cancelServerVideoExportRun,
     fetchVideoExportRuns,
-    fetchVideoToolPayload,
-    uploadVideoExportRunItemManual
+    fetchVideoToolPayload
 } from './videoExportClient';
+import { useVideoExportRunState } from './useVideoExportRunState';
 import {
     clampVisibleDuration,
     clampVisibleStart,
@@ -77,13 +72,11 @@ import type {
     HelperSourceUploadPayload,
     HelperStatus,
     InlineNotice,
-    LocalVideoExportRunSnapshot,
     Segment,
     SourceFingerprint,
     SourceRole,
     TimelineViewport,
     VideoExportManifest,
-    VideoExportManifestSlice,
     VideoExportRunDetails,
     VideoExportSettings,
     VideoToolPanViewportState,
@@ -94,94 +87,6 @@ import type {
     VideoToolState,
     WorkingSource
 } from './types';
-
-const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = { workflows: [], counts: {} };
-const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed']);
-const SOURCE_DURATION_TOLERANCE_MS = 1000;
-
-const normalizeDesktopDraft = (batchId: string, value: unknown): VideoToolDraft | null => {
-    const draft = value as Partial<VideoToolDraft> | null;
-    if (!draft || draft.batchId !== batchId || !Array.isArray(draft.sources) || !Array.isArray(draft.segments)) {
-        return null;
-    }
-
-    return {
-        version: 2,
-        batchId,
-        sources: draft.sources.map((source) => ({
-            sourceIndex: source.sourceIndex,
-            role: source.role,
-            fingerprint: source.fingerprint,
-            helperSourceId: source.helperSourceId ?? null,
-            stagedSourceId: source.stagedSourceId ?? null,
-            cachePath: source.cachePath ?? null,
-            checksumSha256: source.checksumSha256 ?? null,
-            previewUrl: typeof source.previewUrl === 'string' && source.previewUrl.startsWith('zagarami-media://') ? source.previewUrl : null,
-            previewFileId: source.previewFileId ?? null,
-            previewError: source.previewError ?? null
-        })),
-        segments: normalizeSegments(draft.segments),
-        sessionId: draft.sessionId ?? null,
-        sessionVersion: draft.sessionVersion ?? null,
-        pendingSerials: Array.isArray(draft.pendingSerials) ? draft.pendingSerials : [],
-        introHelperSourceId: draft.introHelperSourceId ?? null,
-        exportSettings: draft.exportSettings
-    };
-};
-
-const workflowPhaseLabel: Record<string, string> = {
-    queued: 'В очереди',
-    converting: 'Конвертация',
-    uploading: 'Загрузка',
-    verifying: 'Проверка',
-    preparing_session: 'Подготовка session',
-    importing_sources: 'Импорт исходников',
-    rendering_intro: 'Сборка intro',
-    rendering_outputs: 'Рендер',
-    uploading_outputs: 'Загрузка MP4',
-    paused_offline: 'Пауза: нет связи с сервером',
-    auth_required: 'Нужен повторный вход',
-    failed: 'Ошибка',
-    completed: 'Готово',
-    cancelled: 'Отменено'
-};
-
-const normalizeWorkflowError = (value: string | null | undefined) => {
-    const message = String(value || '').trim();
-    if (!message) {
-        return '';
-    }
-
-    if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline/i.test(message)) {
-        return 'Сервер недоступен. Workflow продолжит работу после восстановления связи.';
-    }
-
-    if (/401|403|auth|token|войти/i.test(message)) {
-        return 'Нужно войти в HQ заново. После входа workflow продолжит работу.';
-    }
-
-    return message;
-};
-
-const isActiveWorkflow = (workflow: StonesMediaWorkflow | null | undefined) =>
-    Boolean(workflow && !terminalWorkflowPhases.has(workflow.phase));
-
-const buildWorkflowStatusText = (workflow: StonesMediaWorkflow | null | undefined) => {
-    if (!workflow) {
-        return '';
-    }
-
-    const phase = workflowPhaseLabel[workflow.phase] || workflow.phase;
-    const total = Math.max(workflow.progress.total || 0, 0);
-    const completed = Math.min(Math.max(workflow.progress.completed || 0, 0), total || workflow.progress.completed || 0);
-    const left = Math.max(total - completed, 0);
-    const serial = workflow.summary?.currentSerial ? ` · сейчас ${workflow.summary.currentSerial}` : '';
-    const error = normalizeWorkflowError(workflow.lastError);
-
-    return workflow.kind === 'VIDEO_EXPORT_WORKFLOW'
-        ? `${phase}: загружено ${completed}/${total}, осталось ${left}${serial}${error ? `. ${error}` : ''}`
-        : `${phase}: ${total} фото${error ? `. ${error}` : ''}`;
-};
 
 const createInitialVideoToolState = (): VideoToolState => ({
     data: { payload: null, loading: true, error: '' },
@@ -197,14 +102,14 @@ const createInitialVideoToolState = (): VideoToolState => ({
         status: 'checking',
         health: null,
         issueMessage: '',
-        baseUrl: isStonesDesktop() ? DESKTOP_VIDEO_HELPER_URL : VIDEO_EXPORT_HELPER_URL,
+        baseUrl: DESKTOP_VIDEO_HELPER_URL,
         diagnostics: [],
         accessRequesting: false,
         diagnosticCopied: false
     },
-    export: { session: null, pendingSerials: [], renderJobId: '', phase: 'idle', message: '', notice: null },
+    export: { pendingSerials: [], renderJobId: '', phase: 'idle', message: '', notice: null },
     layout: { previewPanelWidth: readStoredPreviewPanelWidth() },
-    workflow: { snapshot: emptyWorkflowSnapshot }
+    workflow: { snapshot: null }
 });
 
 export function VideoToolController() {
@@ -234,10 +139,6 @@ export function VideoToolController() {
     const setHelperIssueMessage = useCallback((issueMessage: string) => {
         dispatchVideoTool({ type: 'helper/status', status: controllerState.helper.status, issueMessage });
     }, [controllerState.helper.status]);
-    const [helperAccessRequesting, setHelperAccessRequesting] = useState(false);
-    const [helperBaseUrl, setHelperBaseUrl] = useState(() => (
-        isStonesDesktop() ? DESKTOP_VIDEO_HELPER_URL : VIDEO_EXPORT_HELPER_URL
-    ));
     const [helperDiagnostics, setHelperDiagnostics] = useState<HelperDiagnosticEntry[]>([]);
     const [sources, setSources] = useState<WorkingSource[]>([]);
     const [activeSourceIndex, setActiveSourceIndex] = useState(0);
@@ -247,11 +148,8 @@ export function VideoToolController() {
     const [playheadMs, setPlayheadMs] = useState(0);
     const [draft, setDraft] = useState<VideoToolDraft | null>(null);
     const [activeMode, setActiveMode] = useState<'prepare' | 'edit' | 'export'>('prepare');
-    const [activeV2Run, setActiveV2Run] = useState<VideoExportRunDetails | null>(null);
-    const [localRunSnapshot, setLocalRunSnapshot] = useState<LocalVideoExportRunSnapshot | null>(null);
+    const [serverAssetOrigin, setServerAssetOrigin] = useState('');
     const [isStartingRun, setIsStartingRun] = useState(false);
-    const [isRefreshingRun, setIsRefreshingRun] = useState(false);
-    const [isCommitting, setIsCommitting] = useState(false);
     const [pendingSerials, setPendingSerials] = useState<string[]>([]);
     const exportPhase = controllerState.export.phase;
     const setExportPhase = useCallback((phase: ExportPhase) => {
@@ -266,13 +164,32 @@ export function VideoToolController() {
     const [exportQuality, setExportQuality] = useState<'high' | 'medium' | 'low'>('high');
     const [exportFps, setExportFps] = useState<30 | 60>(30);
     const [exportAudioNormalize, setExportAudioNormalize] = useState(true);
+    const isDesktopApp = isStonesDesktop();
+    const applyLoadedExportSettings = useCallback((settings?: VideoExportSettings | null) => {
+        if (!settings) {
+            return;
+        }
+
+        if (settings.resolution) setExportResolution(settings.resolution);
+        if (settings.quality) setExportQuality(settings.quality);
+        if (settings.fps) setExportFps(settings.fps);
+        if (settings.audio_normalize !== undefined) setExportAudioNormalize(settings.audio_normalize);
+    }, []);
+    const {
+        activeV2Run,
+        setActiveV2Run,
+        localRunSnapshot,
+        setLocalRunSnapshot,
+        refreshLocalRunSnapshot,
+        refreshActiveV2Run,
+        isRefreshingRun
+    } = useVideoExportRunState(batchId, isDesktopApp, applyLoadedExportSettings);
     const previewPanelWidth = controllerState.layout.previewPanelWidth;
     const setPreviewPanelWidth = useCallback((nextWidth: number | ((current: number) => number)) => {
         const resolvedWidth = typeof nextWidth === 'function' ? nextWidth(previewPanelWidth) : nextWidth;
         dispatchVideoTool({ type: 'layout/preview-width', width: resolvedWidth });
     }, [previewPanelWidth]);
     const [previewOpen, setPreviewOpen] = useState(true);
-    const [workflowSnapshot, setWorkflowSnapshot] = useState<StonesMediaWorkflowSnapshot>(emptyWorkflowSnapshot);
     const [timelineViewport, setTimelineViewport] = useState<TimelineViewport>({
         zoom: 1,
         visibleStartMs: 0,
@@ -308,48 +225,22 @@ export function VideoToolController() {
         [segments]
     );
     const activeProductCount = Math.max(0, activeSegments.length - 1);
-    const isDesktopApp = isStonesDesktop();
-    const batchVideoWorkflow = useMemo(() => (
-        workflowSnapshot.workflows.find((workflow) =>
-            workflow.kind === 'VIDEO_EXPORT_WORKFLOW' && workflow.batchId === batchId
-        ) || null
-    ), [batchId, workflowSnapshot.workflows]);
-    const activeVideoWorkflow = isActiveWorkflow(batchVideoWorkflow) ? batchVideoWorkflow : null;
-    const videoWorkflowStatusText = buildWorkflowStatusText(batchVideoWorkflow);
     const missingLocalSources = useMemo(
         () => sources.filter((source) => isDesktopApp ? !source.stagedSourceId : (!source.file && !source.helperSourceId)),
         [isDesktopApp, sources]
     );
     const firstMissingLocalSource = missingLocalSources[0] ?? null;
-    const helperDownloadConfigured = Boolean(VIDEO_HELPER_DOWNLOAD_URL);
-    const helperDownloadArm64Configured = Boolean(VIDEO_HELPER_DOWNLOAD_URL_ARM64);
-    const helperIssueKind = helperStatus === 'version_mismatch'
-        ? 'version'
-        : !isDesktopApp && helperIssueMessage.includes('Safari блокирует')
-            ? 'safari'
-        : !isDesktopApp && (helperIssueMessage.includes('заблокировал доступ') || helperIssueMessage.includes('доступ к localhost'))
-            ? 'browser'
-            : helperIssueMessage.includes('старый Stones Video Helper') || helperIssueMessage.includes('собран не для')
-                ? 'old'
-                : 'missing';
-    const helperNeedsDownload = !isDesktopApp && !['browser', 'safari'].includes(helperIssueKind);
     const helperBlockReason = helperStatus === 'unavailable'
-        ? helperIssueKind === 'safari'
-            ? 'Откройте страницу в Chrome или Яндекс Браузере.'
-            : helperIssueKind === 'browser'
-            ? 'Разрешите доступ к localhost.'
-            : isDesktopApp ? 'Перезапустите ZAGARAMI admin.' : 'Запустите ZAGARAMI Video Helper.'
+        ? 'Перезапустите ZAGARAMI admin.'
         : helperStatus === 'version_mismatch'
-            ? isDesktopApp ? 'Обновите ZAGARAMI admin.' : 'Обновите ZAGARAMI Video Helper.'
+            ? 'Обновите ZAGARAMI admin.'
             : '';
-    const exportBlockedReason = activeVideoWorkflow
-        ? 'По этой партии уже идет фоновый video workflow.'
-        : helperStatus === 'unavailable'
+    const exportBlockedReason = helperStatus === 'unavailable'
         ? helperBlockReason
         : helperStatus === 'version_mismatch'
             ? helperBlockReason
             : helperStatus !== 'ready'
-                ? isDesktopApp ? 'Проверяем встроенный helper.' : 'Проверяем ZAGARAMI Video Helper.'
+                ? 'Проверяем внутренний video helper.'
         : sources.length === 0 || !durationMs
             ? 'Загрузите исходник.'
         : firstMissingLocalSource
@@ -548,60 +439,6 @@ export function VideoToolController() {
         videoRef.current.pause();
     }, [sourcePreviewUnavailable, sourceUrl]);
 
-    const applyLoadedExportSettings = useCallback((settings?: VideoExportSettings | null) => {
-        if (!settings) {
-            return;
-        }
-
-        if (settings.resolution) setExportResolution(settings.resolution);
-        if (settings.quality) setExportQuality(settings.quality);
-        if (settings.fps) setExportFps(settings.fps);
-        if (settings.audio_normalize !== undefined) setExportAudioNormalize(settings.audio_normalize);
-    }, []);
-
-    const refreshLocalRunSnapshot = useCallback(async (nextBatchId = batchId) => {
-        if (!isDesktopApp) {
-            setLocalRunSnapshot(null);
-            return null;
-        }
-
-        const desktop = getStonesDesktop();
-        if (!desktop) {
-            setLocalRunSnapshot(null);
-            return null;
-        }
-
-        const snapshot = await desktop.getVideoExportRunSnapshot(nextBatchId).catch(() => null) as LocalVideoExportRunSnapshot | null;
-        setLocalRunSnapshot(snapshot);
-        return snapshot;
-    }, [batchId, isDesktopApp]);
-
-    const refreshActiveV2Run = useCallback(async (
-        runId?: string | null,
-        options?: { silent?: boolean }
-    ) => {
-        const targetRunId = runId || activeV2Run?.run_id || null;
-        if (!targetRunId) {
-            setActiveV2Run(null);
-            return null;
-        }
-
-        if (!options?.silent) {
-            setIsRefreshingRun(true);
-        }
-
-        try {
-            const nextRun = await fetchVideoExportRunDetails(batchId, targetRunId) as VideoExportRunDetails;
-            setActiveV2Run(nextRun);
-            applyLoadedExportSettings(nextRun.export_settings ?? nextRun.render_manifest?.export_settings ?? null);
-            return nextRun;
-        } finally {
-            if (!options?.silent) {
-                setIsRefreshingRun(false);
-            }
-        }
-    }, [activeV2Run?.run_id, applyLoadedExportSettings, batchId]);
-
     const loadPageData = useEffectEvent(async () => {
         if (!batchId) {
             setError('Не указан batchId для монтажа.');
@@ -653,10 +490,10 @@ export function VideoToolController() {
                 }
 
                 return {
-                    previewUrl: `${helperBaseUrl}/sources/${helperSourceId}/preview`,
+                    previewUrl: '',
                     previewFileId: draftSource?.previewFileId || helperSourceId,
-                    previewError: null,
-                    previewUnavailable: false
+                    previewError: 'Preview доступен только в Desktop app.',
+                    previewUnavailable: true
                 };
             };
             const { runs } = await fetchVideoExportRuns(batchId);
@@ -664,9 +501,10 @@ export function VideoToolController() {
             setActiveV2Run(preferredRun as VideoExportRunDetails | null);
 
             if (preferredRun) {
-                const latestRun = await fetchVideoExportRunDetails(batchId, preferredRun.run_id) as VideoExportRunDetails;
-                setActiveV2Run(latestRun);
-                applyLoadedExportSettings(latestRun.export_settings ?? latestRun.render_manifest?.export_settings ?? null);
+                const latestRun = await refreshActiveV2Run(preferredRun.run_id);
+                if (!latestRun) {
+                    throw new Error('Не удалось загрузить активный video export run.');
+                }
 
                 const manifestSources = await Promise.all(createSourcesFromManifest(latestRun.render_manifest).map(async (source) => {
                     const draftSource = existingDraft?.sources.find((entry) =>
@@ -725,6 +563,7 @@ export function VideoToolController() {
                 setPendingSerials(existingDraft.pendingSerials);
                 setIntroHelperSourceId(existingDraft.introHelperSourceId || '');
                 applyLoadedExportSettings(existingDraft.exportSettings);
+                setActiveV2Run(createRestoredLocalVideoExportRunDetails(batchId, existingDraft));
             }
 
             await refreshLocalRunSnapshot(batchId);
@@ -737,116 +576,54 @@ export function VideoToolController() {
     });
 
     const helperUrlCandidates = useMemo(() => {
-        if (isDesktopApp) {
-            return [DESKTOP_VIDEO_HELPER_URL];
+        return [DESKTOP_VIDEO_HELPER_URL];
+    }, []);
+
+    const fetchHelperHealth = useCallback(async () => {
+        const desktop = getStonesDesktop();
+        if (!desktop) {
+            throw new Error('Desktop API недоступен.');
         }
 
-        return Array.from(new Set([
-            helperBaseUrl,
-            ...VIDEO_EXPORT_HELPER_URL_CANDIDATES
-        ]));
-    }, [helperBaseUrl, isDesktopApp]);
-
-    const fetchHelperHealth = useCallback(async (init?: RequestInit) => {
-        let lastError: unknown = null;
-        const diagnostics: HelperDiagnosticEntry[] = [];
-
-        if (isDesktopApp) {
-            const desktop = getStonesDesktop();
-            if (!desktop) {
-                throw new Error('Desktop API недоступен.');
-            }
-
-            const status = await desktop.getVideoHelperStatus();
-            const payload: HelperHealthPayload = {
-                ok: Boolean(status.ok),
-                helper_version: status.helper_version,
-                protocol_version: status.protocol_version,
-                listen_hosts: status.listen_hosts,
-                storage_root: status.storage_root,
-                free_bytes: status.free_bytes,
-                allowed_origins: status.allowed_origins,
-                queued_jobs: status.queued_jobs,
-                error: status.error || status.startup_error,
-                pageOrigin: status.page_origin,
-                expected_port: status.expected_port,
-                discovered_port: status.discovered_port
-            };
-            const detail = payload.error || (payload.ok ? 'Embedded helper ответил через IPC.' : 'Embedded helper недоступен.');
-            const diagnostic: HelperDiagnosticEntry = {
-                url: 'desktop-ipc',
-                mode: 'standard',
-                status: payload.ok
-                    ? payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
-                        ? 'ok'
-                        : 'bad protocol'
-                    : 'connection failed',
-                detail,
-                protocolVersion: payload.protocol_version,
-                pageOrigin: payload.pageOrigin,
-                allowedOrigins: payload.allowed_origins,
-                expectedPort: payload.expected_port,
-                discoveredPort: payload.discovered_port,
-                storageRoot: payload.storage_root
-            };
-            setHelperDiagnostics([diagnostic]);
-            return {
-                helperUrl: 'desktop-ipc',
-                response: { ok: payload.ok, status: payload.ok ? 200 : 503 },
-                payload
-            };
-        }
-
-        for (const helperUrl of helperUrlCandidates) {
-            for (const mode of ['standard', 'pna'] as const) {
-                const controller = new AbortController();
-                const timeoutId = window.setTimeout(() => controller.abort(), HELPER_HEALTH_TIMEOUT_MS);
-                try {
-                    const response = await helperFetch(helperUrl, '/health', {
-                        ...init,
-                        signal: controller.signal
-                    }, { useTargetAddressSpace: mode === 'pna' });
-                    const payload = await response.json().catch(() => ({ error: 'Helper не отвечает.' })) as HelperHealthPayload;
-                    const detail = payload.error || (response.ok ? 'Helper ответил.' : `HTTP ${response.status}`);
-                    const diagnostic: HelperDiagnosticEntry = {
-                        url: helperUrl,
-                        mode,
-                        status: response.ok && payload.ok
-                            ? payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
-                                ? 'ok'
-                                : 'bad protocol'
-                            : detail.includes('Origin helper запроса') || detail.includes('Private Network')
-                                ? 'cors/pna failed'
-                                : 'connection failed',
-                        detail,
-                        httpStatus: response.status,
-                        protocolVersion: payload.protocol_version,
-                        pageOrigin: payload.pageOrigin || (typeof window !== 'undefined' ? window.location.origin : undefined),
-                        allowedOrigins: payload.allowed_origins || payload.allowedOrigins,
-                        expectedPort: payload.expected_port,
-                        discoveredPort: payload.discovered_port,
-                        storageRoot: payload.storage_root
-                    };
-                    diagnostics.push(diagnostic);
-                    setHelperDiagnostics(diagnostics);
-                    return { helperUrl, response, payload };
-                } catch (helperError) {
-                    lastError = helperError;
-                    diagnostics.push({
-                        url: helperUrl,
-                        mode,
-                        status: classifyHelperFetchError(helperError),
-                        detail: getHelperErrorDetail(helperError)
-                    });
-                } finally {
-                    window.clearTimeout(timeoutId);
-                    setHelperDiagnostics(diagnostics);
-                }
-            }
-        }
-
-        throw lastError instanceof Error ? lastError : new Error('Локальный helper не отвечает.');
-    }, [helperUrlCandidates, isDesktopApp]);
+        const status = await desktop.getVideoHelperStatus();
+        const payload: HelperHealthPayload = {
+            ok: Boolean(status.ok),
+            helper_version: status.helper_version,
+            protocol_version: status.protocol_version,
+            listen_hosts: status.listen_hosts,
+            storage_root: status.storage_root,
+            free_bytes: status.free_bytes,
+            allowed_origins: status.allowed_origins,
+            queued_jobs: status.queued_jobs,
+            error: status.error || status.startup_error,
+            pageOrigin: status.page_origin,
+            expected_port: status.expected_port,
+            discovered_port: status.discovered_port
+        };
+        const detail = payload.error || (payload.ok ? 'Video helper ответил через IPC.' : 'Video helper недоступен.');
+        const diagnostic: HelperDiagnosticEntry = {
+            url: DESKTOP_VIDEO_HELPER_URL,
+            mode: 'standard',
+            status: payload.ok
+                ? payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
+                    ? 'ok'
+                    : 'bad protocol'
+                : 'connection failed',
+            detail,
+            protocolVersion: payload.protocol_version,
+            pageOrigin: payload.pageOrigin,
+            allowedOrigins: payload.allowed_origins,
+            expectedPort: payload.expected_port,
+            discoveredPort: payload.discovered_port,
+            storageRoot: payload.storage_root
+        };
+        setHelperDiagnostics([diagnostic]);
+        return {
+            helperUrl: DESKTOP_VIDEO_HELPER_URL,
+            response: { ok: payload.ok, status: payload.ok ? 200 : 503 },
+            payload
+        };
+    }, []);
 
     const checkHelper = useCallback(async () => {
         setHelperStatus('checking');
@@ -864,12 +641,9 @@ export function VideoToolController() {
                 }));
             }
 
-            setHelperBaseUrl(isDesktopApp ? DESKTOP_VIDEO_HELPER_URL : helperUrl);
             setHelperHealth(payload);
             if (payload.protocol_version !== VIDEO_EXPORT_HELPER_PROTOCOL_VERSION) {
-                setHelperIssueMessage(isDesktopApp
-                    ? 'Встроенный helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
-                    : 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
+                setHelperIssueMessage('Внутренний video helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.');
                 setHelperStatus('version_mismatch');
                 return;
             }
@@ -879,62 +653,12 @@ export function VideoToolController() {
         } catch (helperError) {
             setHelperHealth(null);
             setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : '', {
-                helperBaseUrl
+                helperBaseUrl: DESKTOP_VIDEO_HELPER_URL
             }));
             setHelperStatus('unavailable');
             console.error(helperError);
         }
-    }, [fetchHelperHealth, helperBaseUrl, isDesktopApp, setHelperIssueMessage, setHelperStatus]);
-    const requestHelperBrowserAccess = async () => {
-        setHelperAccessRequesting(true);
-        setHelperStatus('checking');
-        setHelperIssueMessage('');
-        try {
-            const { helperUrl, response, payload } = await fetchHelperHealth({ cache: 'no-store' });
-            if (!response.ok || !payload.ok) {
-                throw new Error(buildHelperIssueMessage(payload.error || 'Helper ffmpeg недоступен.', {
-                    helperBaseUrl: helperUrl,
-                    pageOrigin: payload.pageOrigin,
-                    allowedOrigins: payload.allowed_origins || payload.allowedOrigins,
-                    expectedPort: payload.expected_port,
-                    discoveredPort: payload.discovered_port,
-                    storageRoot: payload.storage_root
-                }));
-            }
-
-            setHelperBaseUrl(helperUrl);
-            setHelperHealth(payload);
-            setHelperStatus(payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION ? 'ready' : 'version_mismatch');
-            setHelperIssueMessage(payload.protocol_version === VIDEO_EXPORT_HELPER_PROTOCOL_VERSION
-                ? ''
-                : isDesktopApp
-                    ? 'Встроенный helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
-                    : 'Локальный helper устарел. Скачайте актуальную версию для zagarami.com и перепроверьте статус.');
-        } catch (helperError) {
-            setHelperHealth(null);
-            setHelperIssueMessage(buildHelperIssueMessage(helperError instanceof Error ? helperError.message : '', {
-                helperBaseUrl
-            }));
-            setHelperStatus('unavailable');
-            console.error(helperError);
-        } finally {
-            setHelperAccessRequesting(false);
-        }
-    };
-    const openHelperDownload = () => {
-        if (!helperDownloadConfigured) {
-            return;
-        }
-
-        window.open(VIDEO_HELPER_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
-    };
-    const openHelperDownloadArm64 = () => {
-        if (!helperDownloadArm64Configured) {
-            return;
-        }
-
-        window.open(VIDEO_HELPER_DOWNLOAD_URL_ARM64, '_blank', 'noopener,noreferrer');
-    };
+    }, [fetchHelperHealth, setHelperIssueMessage, setHelperStatus]);
     const openDesktopStatusCenter = (focusWorkflowId?: string) => {
         window.dispatchEvent(new CustomEvent('stones:open-status-center', {
             detail: {
@@ -953,32 +677,6 @@ export function VideoToolController() {
             setHelperIssueMessage('Video Tool доступен только в ZAGARAMI admin Desktop app.');
         }
     }, [batchId, checkHelper, isDesktopApp, setHelperIssueMessage, setHelperStatus]);
-
-    useEffect(() => {
-        if (!isDesktopApp) {
-            return;
-        }
-
-        const desktop = getStonesDesktop();
-        if (!desktop) {
-            return;
-        }
-
-        let cancelled = false;
-        void desktop.getMediaWorkflowSnapshot()
-            .then((snapshot) => {
-                if (!cancelled) {
-                    setWorkflowSnapshot(snapshot);
-                }
-            })
-            .catch(() => undefined);
-
-        const unsubscribe = desktop.subscribeMediaWorkflows(setWorkflowSnapshot);
-        return () => {
-            cancelled = true;
-            unsubscribe();
-        };
-    }, [isDesktopApp]);
 
     useEffect(() => {
         const previousBodyOverflow = document.body.style.overflow;
@@ -1046,8 +744,8 @@ export function VideoToolController() {
                 previewError: source.previewError || null
             })),
             segments,
-            sessionId: activeV2Run?.run_id || null,
-            sessionVersion: activeV2Run?.version || null,
+            runId: activeV2Run?.run_id || null,
+            runVersion: activeV2Run?.version || null,
             pendingSerials,
             introHelperSourceId: introHelperSourceId || null,
             renderManifest,
@@ -1081,6 +779,40 @@ export function VideoToolController() {
 
         return () => window.clearInterval(intervalId);
     }, [activeV2Run?.run_id, isDesktopApp, refreshActiveV2Run, refreshLocalRunSnapshot]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadServerAssetOrigin = async () => {
+            if (!isDesktopApp) {
+                setServerAssetOrigin(window.location.origin);
+                return;
+            }
+
+            const desktop = getStonesDesktop();
+            if (!desktop) {
+                setServerAssetOrigin(window.location.origin);
+                return;
+            }
+
+            try {
+                const appInfo = await desktop.getAppInfo();
+                if (!cancelled) {
+                    setServerAssetOrigin(appInfo.apiOrigin || window.location.origin);
+                }
+            } catch {
+                if (!cancelled) {
+                    setServerAssetOrigin(window.location.origin);
+                }
+            }
+        };
+
+        void loadServerAssetOrigin();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isDesktopApp]);
 
     useEffect(() => {
         setPreviewPanelWidth((current) => clampPreviewPanelWidth(current));
@@ -1285,42 +1017,21 @@ export function VideoToolController() {
     ) => {
         try {
             let stagedSource: Awaited<ReturnType<typeof stageDesktopVideoSourceFile>> | null = null;
-            let payload: Partial<HelperSourceUploadPayload> & { error?: string };
 
-            if (isDesktopApp) {
-                const desktop = getStonesDesktop();
-                if (!desktop) {
-                    throw new Error('Desktop API недоступен.');
-                }
-
-                stagedSource = await stageDesktopVideoSourceFile(file);
-                payload = await desktop.importVideoSource({
-                    stagedSourceId: stagedSource.stagedSourceId,
-                    cachePath: stagedSource.cachePath,
-                    originalName: file.name,
-                    mimeType: file.type || 'application/octet-stream',
-                    size: stagedSource.size,
-                    lastModified: file.lastModified
-                });
-            } else {
-                const form = new FormData();
-                form.append('file', file);
-                form.append('lastModified', String(file.lastModified));
-
-                const response = await helperFetch(helperBaseUrl, '/sources', {
-                    method: 'POST',
-                    body: form
-                });
-                payload = await response.json().catch(() => ({ error: 'Не удалось загрузить исходник в helper.' })) as Partial<HelperSourceUploadPayload> & { error?: string };
-                if (!response.ok) {
-                    throw new Error(buildHelperIssueMessage(payload.error || 'Не удалось загрузить исходник в helper.', {
-                        helperBaseUrl,
-                        pageOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
-                        allowedOrigins: helperHealth?.allowed_origins,
-                        storageRoot: helperHealth?.storage_root
-                    }));
-                }
+            const desktop = getStonesDesktop();
+            if (!isDesktopApp || !desktop) {
+                throw new Error('Video Tool доступен только в ZAGARAMI admin Desktop app.');
             }
+
+            stagedSource = await stageDesktopVideoSourceFile(file);
+            const payload: Partial<HelperSourceUploadPayload> & { error?: string } = await desktop.importVideoSource({
+                stagedSourceId: stagedSource.stagedSourceId,
+                cachePath: stagedSource.cachePath,
+                originalName: file.name,
+                mimeType: file.type || 'application/octet-stream',
+                size: stagedSource.size,
+                lastModified: file.lastModified
+            });
 
             if (!payload.source_id || !payload.fingerprint) {
                 throw new Error(payload.error || 'Не удалось импортировать исходник в helper.');
@@ -1347,12 +1058,6 @@ export function VideoToolController() {
             if (payload.preview_url) {
                 if (isDesktopApp && payload.preview_url.startsWith('zagarami-media://')) {
                     previewUrl = payload.preview_url;
-                } else {
-                    try {
-                        previewUrl = `${helperBaseUrl}${new URL(payload.preview_url).pathname}`;
-                    } catch {
-                        previewUrl = payload.preview_url;
-                    }
                 }
             }
             if (isDesktopApp && (!payload.preview_created || !payload.preview_file_id || !previewUrl.startsWith('zagarami-media://'))) {
@@ -1459,24 +1164,6 @@ export function VideoToolController() {
         } satisfies VideoExportManifest;
     }, [data, exportAudioNormalize, exportFps, exportQuality, exportResolution, segments, sources]);
 
-    const buildManifestSliceForItem = useCallback((itemId: string, manifest: VideoExportManifest): VideoExportManifestSlice => {
-        const output = manifest.outputs.find((entry) => entry.item_id === itemId);
-        if (!output) {
-            throw new Error('Не найден output для выбранного item.');
-        }
-
-        const introSegment = manifest.segments.find((segment) => segment.sequence === 0);
-        const targetSegment = manifest.segments.find((segment) => segment.sequence === output.segment_seq);
-        if (!introSegment || !targetSegment) {
-            throw new Error('Не удалось собрать manifest slice для перерендера.');
-        }
-
-        return {
-            segments: [introSegment, targetSegment],
-            outputs: [output]
-        };
-    }, []);
-
     const buildDesktopRunSources = useCallback((): DesktopVideoExportSource[] => {
         return sources.map((source) => {
             if (!source.stagedSourceId) {
@@ -1554,7 +1241,6 @@ export function VideoToolController() {
     const isExporting = Boolean(
         isStartingRun
         || isRefreshingRun
-        || activeVideoWorkflow
         || ['rendering', 'uploading', 'verifying'].includes(exportPhase)
     );
 
@@ -1606,7 +1292,6 @@ export function VideoToolController() {
                     pageOrigin: window.location.origin,
                     helperStatus,
                     helperIssueMessage,
-                    helperBaseUrl,
                     helperUrlCandidates,
                     helperHealth,
                     helperDiagnostics
@@ -1679,27 +1364,22 @@ export function VideoToolController() {
 
             const manifest = buildCurrentManifest();
             setIsStartingRun(true);
-            const created = await createVideoExportRun(
-                data.batch.id,
-                data.batch.expected_output_count,
-                manifest,
-                manifest.export_settings
-            );
-            const nextRun = created.run as VideoExportRunDetails;
-            setActiveV2Run(nextRun);
-            setPendingSerials(nextRun.items.map((item) => item.serial_number));
+            const localRunId = createLocalRunId();
+            const localRun = createLocalVideoExportRunDetails(data.batch.id, localRunId, manifest, manifest.export_settings);
+            setActiveV2Run(localRun);
+            setPendingSerials(localRun.items.map((item) => item.serial_number));
 
             await desktop.startVideoExportRun({
                 batchId: data.batch.id,
-                runId: nextRun.run_id,
+                runId: localRunId,
                 renderManifest: manifest,
                 sources: buildDesktopRunSources()
             });
             await refreshLocalRunSnapshot();
-            await refreshActiveV2Run(nextRun.run_id);
+            await refreshActiveV2Run(localRunId, { silent: true }).catch(() => null);
 
             setExportPhase('ready');
-            setExportMessage(created.resumed ? 'V2 запуск экспорта восстановлен.' : 'V2 запуск экспорта создан.');
+            setExportMessage('Локальный запуск экспорта создан. Сервер подключится только на этапе upload.');
             setActiveMode('export');
         } catch (startError) {
             console.error(startError);
@@ -1708,189 +1388,43 @@ export function VideoToolController() {
         } finally {
             setIsStartingRun(false);
         }
-    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, runPreflightCheck, setExportPhase]);
-
-    const handleStartRender = useCallback(async (itemId: string) => {
-        if (!data || !activeV2Run) {
-            return;
-        }
-
-        const desktop = getStonesDesktop();
-        if (!desktop) {
-            setExportPhase('failed');
-            setExportMessage('Desktop workflow недоступен.');
-            return;
-        }
-
-        try {
-            setExportPhase('rendering');
-            setExportMessage('Запускаем рендер и загрузку по товару...');
-            await desktop.renderVideoExportItem({ batchId: data.batch.id, runId: activeV2Run.run_id, itemId });
-            await desktop.uploadVideoExportItem({ batchId: data.batch.id, runId: activeV2Run.run_id, itemId });
-            await refreshLocalRunSnapshot();
-            await refreshActiveV2Run(activeV2Run.run_id);
-            setExportPhase('uploading');
-            setExportMessage('Рендер и загрузка поставлены в обработку.');
-        } catch (renderError) {
-            console.error(renderError);
-            setExportPhase('failed');
-            setExportMessage(renderError instanceof Error ? renderError.message : 'Не удалось запустить рендер элемента.');
-        }
-    }, [activeV2Run, data, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
-
-    const handleRetryUpload = useCallback(async (itemId: string) => {
-        if (!activeV2Run) {
-            return;
-        }
-
-        const desktop = getStonesDesktop();
-        if (!desktop) {
-            setExportPhase('failed');
-            setExportMessage('Desktop workflow недоступен.');
-            return;
-        }
-
-        try {
-            setExportPhase('uploading');
-            setExportMessage('Повторяем загрузку элемента...');
-            await desktop.retryVideoExportItemUpload(activeV2Run.run_id, itemId);
-            await refreshLocalRunSnapshot();
-            await refreshActiveV2Run(activeV2Run.run_id);
-        } catch (retryError) {
-            console.error(retryError);
-            setExportPhase('failed');
-            setExportMessage(retryError instanceof Error ? retryError.message : 'Не удалось повторить загрузку.');
-        }
-    }, [activeV2Run, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
-
-    const handleRerender = useCallback(async (itemId: string) => {
-        if (!data || !activeV2Run) {
-            return;
-        }
-
-        const desktop = getStonesDesktop();
-        if (!desktop) {
-            setExportPhase('failed');
-            setExportMessage('Desktop workflow недоступен.');
-            return;
-        }
-
-        try {
-            const manifest = buildCurrentManifest();
-            const manifestSlice = buildManifestSliceForItem(itemId, manifest);
-            setExportPhase('rendering');
-            setExportMessage('Перерендериваем товар по актуальному таймлайну...');
-            await desktop.rerenderVideoExportItem(activeV2Run.run_id, itemId, manifestSlice);
-            await desktop.uploadVideoExportItem({ batchId: data.batch.id, runId: activeV2Run.run_id, itemId });
-            await refreshLocalRunSnapshot();
-            await refreshActiveV2Run(activeV2Run.run_id);
-        } catch (rerenderError) {
-            console.error(rerenderError);
-            setExportPhase('failed');
-            setExportMessage(rerenderError instanceof Error ? rerenderError.message : 'Не удалось перерендерить элемент.');
-        }
-    }, [activeV2Run, buildCurrentManifest, buildManifestSliceForItem, data, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
-
-    const handleCancelItem = useCallback(async (itemId: string) => {
-        if (!activeV2Run) {
-            return;
-        }
-
-        const desktop = getStonesDesktop();
-        if (!desktop) {
-            setExportPhase('failed');
-            setExportMessage('Desktop workflow недоступен.');
-            return;
-        }
-
-        try {
-            await desktop.cancelVideoExportItem(activeV2Run.run_id, itemId);
-            await refreshLocalRunSnapshot();
-            await refreshActiveV2Run(activeV2Run.run_id);
-            setExportPhase('cancelled');
-            setExportMessage('Элемент отменён.');
-        } catch (cancelError) {
-            console.error(cancelError);
-            setExportPhase('failed');
-            setExportMessage(cancelError instanceof Error ? cancelError.message : 'Не удалось отменить элемент.');
-        }
-    }, [activeV2Run, refreshActiveV2Run, refreshLocalRunSnapshot, setExportPhase]);
-
-    const handleManualReplace = useCallback(async (itemId: string, file: File) => {
-        if (!data || !activeV2Run) {
-            return;
-        }
-
-        const targetItem = activeV2Run.items.find((item) => item.item_id === itemId);
-        if (!targetItem) {
-            setExportPhase('failed');
-            setExportMessage('Элемент для ручной замены не найден.');
-            return;
-        }
-
-        try {
-            setExportPhase('uploading');
-            setExportMessage('Загружаем MP4 вручную...');
-            const updatedRun = await uploadVideoExportRunItemManual(
-                data.batch.id,
-                activeV2Run.run_id,
-                itemId,
-                targetItem.serial_number,
-                file
-            ) as VideoExportRunDetails;
-            setActiveV2Run(updatedRun);
-            setPendingSerials(updatedRun.items
-                .filter((item) => !['UPLOADED', 'SKIPPED', 'CANCELLED'].includes(item.status))
-                .map((item) => item.serial_number));
-            await refreshLocalRunSnapshot();
-            setExportPhase('completed');
-            setExportMessage('Файл заменён вручную.');
-        } catch (uploadError) {
-            console.error(uploadError);
-            setExportPhase('failed');
-            setExportMessage(uploadError instanceof Error ? uploadError.message : 'Не удалось заменить файл вручную.');
-        }
-    }, [activeV2Run, data, refreshLocalRunSnapshot, setExportPhase]);
-
-    const handleCommitRun = useCallback(async () => {
-        if (!data || !activeV2Run) {
-            return;
-        }
-
-        setIsCommitting(true);
-        try {
-            const updatedRun = await commitVideoExportRun(data.batch.id, activeV2Run.run_id) as VideoExportRunDetails;
-            setActiveV2Run(updatedRun);
-            setPendingSerials([]);
-            setData((current) => current ? {
-                ...current,
-                items: current.items.map((item) => {
-                    const runItem = updatedRun.items.find((entry) => entry.item_id === item.id);
-                    return runItem?.file_url
-                        ? { ...item, item_video_url: runItem.file_url }
-                        : item;
-                })
-            } : current);
-            clearSavedDraft();
-            setDraft(null);
-            setExportPhase('completed');
-            setExportMessage('Результаты V2 экспорта применены.');
-        } catch (commitError) {
-            console.error(commitError);
-            setExportPhase('failed');
-            setExportMessage(commitError instanceof Error ? commitError.message : 'Не удалось применить результаты экспорта.');
-        } finally {
-            setIsCommitting(false);
-        }
-    }, [activeV2Run, clearSavedDraft, data, setExportPhase]);
+    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, runPreflightCheck, setActiveV2Run, setExportPhase]);
 
     const handleCancelRun = useCallback(async () => {
         if (!data || !activeV2Run) {
             return;
         }
 
+        const desktop = getStonesDesktop();
+
         try {
-            const updatedRun = await cancelVideoExportRun(data.batch.id, activeV2Run.run_id) as VideoExportRunDetails;
+            await desktop?.cancelVideoExportRun(activeV2Run.run_id);
+            await refreshLocalRunSnapshot();
+        } catch (cancelLocalError) {
+            console.error(cancelLocalError);
+            setExportPhase('failed');
+            setExportMessage(cancelLocalError instanceof Error ? cancelLocalError.message : 'Не удалось отменить локальный запуск.');
+            return;
+        }
+
+        if (activeV2Run.version === 0) {
+            setActiveV2Run({
+                ...activeV2Run,
+                status: 'CANCELLED',
+                items: activeV2Run.items.map((item) => ({
+                    ...item,
+                    status: 'CANCELLED',
+                    render_status: 'CANCELLED',
+                    upload_status: 'CANCELLED'
+                }))
+            });
+            setExportPhase('cancelled');
+            setExportMessage('Локальный запуск отменён до выгрузки на сервер.');
+            return;
+        }
+
+        try {
+            const updatedRun = await cancelServerVideoExportRun(data.batch.id, activeV2Run.run_id) as VideoExportRunDetails;
             setActiveV2Run(updatedRun);
             await refreshLocalRunSnapshot();
             setExportPhase('cancelled');
@@ -1900,59 +1434,40 @@ export function VideoToolController() {
             setExportPhase('failed');
             setExportMessage(cancelError instanceof Error ? cancelError.message : 'Не удалось отменить запуск.');
         }
-    }, [activeV2Run, data, refreshLocalRunSnapshot, setExportPhase]);
+    }, [activeV2Run, data, refreshLocalRunSnapshot, setActiveV2Run, setExportPhase]);
 
     const helperNeedsAttention = helperStatus === 'unavailable' || helperStatus === 'version_mismatch';
     const helperSidebarStatus = isDesktopApp
         ? helperStatus === 'checking'
-            ? 'Проверяем встроенный helper.'
+            ? 'Проверяем внутренний video helper.'
             : helperStatus === 'version_mismatch'
-                ? 'Встроенный helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
+                ? 'Внутренний video helper устарел. Обновите ZAGARAMI admin и перепроверьте статус.'
                 : helperStatus === 'unavailable'
-                    ? 'Встроенный helper не запущен.'
-                    : 'Встроенный helper готов'
+                    ? 'Внутренний video helper не запущен.'
+                    : 'Внутренний video helper готов'
         : helperStatus === 'checking'
-            ? 'Проверяем локальный helper.'
+            ? 'Video Tool доступен только в ZAGARAMI admin.'
             : helperStatus === 'version_mismatch'
-                ? 'Локальный helper устарел. Обновите приложение и перепроверьте статус.'
+                ? 'Обновите ZAGARAMI admin.'
                 : helperStatus === 'unavailable'
-                    ? helperIssueKind === 'safari'
-                        ? 'Safari не поддерживает текущий доступ к helper.'
-                        : helperIssueKind === 'browser'
-                            ? 'Доступ к helper заблокирован браузером.'
-                            : 'Локальный helper не найден или не запущен.'
+                    ? 'Video Tool доступен только в ZAGARAMI admin.'
                     : 'Готово к работе';
     const helperProblemDescription = isDesktopApp
         ? helperStatus === 'version_mismatch'
             ? 'Установите актуальную версию ZAGARAMI admin и перепроверьте статус.'
-            : 'Перезапустите ZAGARAMI admin. Встроенный helper запускается вместе с приложением. Если проблема повторится, откройте Status Center и скопируйте диагностику.'
+            : 'Перезапустите ZAGARAMI admin. Внутренний video helper запускается вместе с приложением. Если проблема повторится, откройте Status Center и скопируйте диагностику.'
         : helperStatus === 'version_mismatch'
-            ? 'Скачайте актуальную версию для zagarami.com, откройте приложение и перепроверьте статус.'
-            : helperIssueKind === 'safari'
-                ? 'Safari блокирует локальный HTTP helper с production HTTPS-страницы. Для текущей версии инструмента используйте Chrome или Яндекс Браузер.'
-                : helperIssueKind === 'browser'
-                    ? 'Нажмите «Разрешить доступ», подтвердите запрос браузера к локальной сети или localhost, затем перепроверьте статус.'
-                    : helperIssueKind === 'old'
-                        ? 'Закройте Stones Video Helper, удалите старое приложение и запустите ZAGARAMI Video Helper.'
-                        : 'Откройте ZAGARAMI Video Helper на Mac. Если приложения нет, скачайте подходящий DMG.';
+            ? 'Обновите ZAGARAMI admin.'
+            : 'Откройте Video Tool в ZAGARAMI admin Desktop app.';
     const helperQuickActionTitle = isDesktopApp
-        ? helperStatus === 'version_mismatch' ? 'Обновите ZAGARAMI admin' : 'Встроенный helper требует внимания'
+        ? helperStatus === 'version_mismatch' ? 'Обновите ZAGARAMI admin' : 'Внутренний video helper требует внимания'
         : helperStatus === 'version_mismatch'
-            ? 'Обновите desktop helper'
-            : helperIssueKind === 'safari'
-                ? 'Safari блокирует helper'
-                : helperIssueKind === 'browser'
-                    ? 'Helper не отвечает в браузере'
-                    : 'Нужен ZAGARAMI Video Helper';
+            ? 'Обновите ZAGARAMI admin'
+            : 'Нужен ZAGARAMI admin';
     const helperQuickActionDescription = isDesktopApp
         ? helperProblemDescription
-        : helperIssueKind === 'safari'
-            ? 'Chrome уже поддерживает этот сценарий после последнего исправления. В Safari текущая HTTP-связка с локальным helper остаётся заблокированной.'
-            : helperIssueKind === 'browser'
-                ? 'Сайт может вызвать запрос доступа только по клику. Если браузер не покажет окно, разрешение уже заблокировано в настройках браузера или macOS.'
-                : helperProblemDescription;
+        : helperProblemDescription;
     const statusMessage = error
-        || (activeVideoWorkflow ? videoWorkflowStatusText : '')
         || exportMessage
         || notice?.message
         || helperIssueMessage
@@ -2048,40 +1563,6 @@ export function VideoToolController() {
                             <p className="mt-1 text-xs leading-5 text-amber-100/75">{helperQuickActionDescription}</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                            {helperIssueKind === 'browser' && (
-                                <button
-                                    type="button"
-                                    data-testid="helper-request-access-top"
-                                    onClick={() => void requestHelperBrowserAccess()}
-                                    disabled={helperAccessRequesting}
-                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    <RefreshCw size={14} />
-                                    {helperAccessRequesting ? 'Запрашиваем доступ' : 'Разрешить доступ'}
-                                </button>
-                            )}
-                            {helperNeedsDownload && helperDownloadArm64Configured && (
-                                <button
-                                    type="button"
-                                    data-testid="helper-download-arm64-top"
-                                    onClick={openHelperDownloadArm64}
-                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-amber-200 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-100"
-                                >
-                                    <HardDriveDownload size={14} />
-                                    Скачать Apple Silicon
-                                </button>
-                            )}
-                            {helperNeedsDownload && helperDownloadConfigured && (
-                                <button
-                                    type="button"
-                                    data-testid="helper-download-top"
-                                    onClick={openHelperDownload}
-                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-50 transition hover:bg-amber-200/15"
-                                >
-                                    <HardDriveDownload size={14} />
-                                    Скачать Intel
-                                </button>
-                            )}
                             {isDesktopApp && (
                                 <button
                                     type="button"
@@ -2189,16 +1670,9 @@ export function VideoToolController() {
                         run={exportMenuRun}
                         localRunSnapshot={localRunSnapshot}
                         preflightIssues={preflightIssues}
-                        onStartRender={handleStartRender}
-                        onRetryUpload={handleRetryUpload}
-                        onRerender={handleRerender}
-                        onCancelItem={handleCancelItem}
-                        onManualReplace={handleManualReplace}
-                        onCommitRun={handleCommitRun}
                         onCancelRun={handleCancelRun}
                         onStartRun={handleStartRun}
-                        isExporting={isExporting}
-                        isCommitting={isCommitting}
+                        serverAssetOrigin={serverAssetOrigin}
                     />
                 )}
             </div>

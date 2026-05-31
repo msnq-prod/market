@@ -37,18 +37,6 @@ type VideoProcessingState = {
     finished_at: string | null;
 };
 
-type VideoExportState = {
-    session_id: string;
-    status: string;
-    version: number;
-    expected_count: number;
-    uploaded_count: number;
-    crossfade_ms: number;
-    error_message: string | null;
-    started_at: string | null;
-    finished_at: string | null;
-};
-
 type BatchView = {
     id: string;
     status: string;
@@ -65,7 +53,6 @@ type BatchView = {
         requested_qty: number;
     } | null;
     video_processing?: VideoProcessingState | null;
-    video_export?: VideoExportState | null;
     product?: {
         id: string;
         country_code: string;
@@ -96,26 +83,7 @@ const videoProcessingClass: Record<string, string> = {
     FAILED: 'bg-red-500/15 text-red-200 border border-red-500/30'
 };
 
-const videoExportLabel: Record<string, string> = {
-    OPEN: 'Черновик',
-    UPLOADING: 'Загрузка',
-    COMPLETED: 'Готово',
-    FAILED: 'Ошибка',
-    CANCELLED: 'Отменено',
-    ABANDONED: 'Зависло'
-};
-
-const videoExportClass: Record<string, string> = {
-    OPEN: 'bg-sky-500/15 text-sky-200 border border-sky-500/30',
-    UPLOADING: 'bg-amber-500/15 text-amber-200 border border-amber-500/30',
-    COMPLETED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
-    FAILED: 'bg-red-500/15 text-red-200 border border-red-500/30',
-    CANCELLED: 'bg-gray-500/15 text-gray-200 border border-gray-500/30',
-    ABANDONED: 'bg-orange-500/15 text-orange-200 border border-orange-500/30'
-};
-
 const activeVideoProcessingStatuses = new Set(['QUEUED', 'PROCESSING']);
-const activeVideoExportStatuses = new Set(['OPEN', 'UPLOADING']);
 const isPublicPassportItem = (batchStatus: string, itemStatus: string) =>
     (batchStatus === 'RECEIVED' || batchStatus === 'FINISHED') && itemStatus !== 'REJECTED';
 
@@ -213,7 +181,6 @@ export function Acceptance() {
     useEffect(() => {
         const hasActiveVideoWork = relevantBatches.some((batch) =>
             (batch.video_processing && activeVideoProcessingStatuses.has(batch.video_processing.status))
-            || (batch.video_export && activeVideoExportStatuses.has(batch.video_export.status))
         );
         if (!hasActiveVideoWork) {
             return;
@@ -263,14 +230,10 @@ export function Acceptance() {
     const hasActiveVideoJob = Boolean(
         selectedBatch?.video_processing && activeVideoProcessingStatuses.has(selectedBatch.video_processing.status)
     );
-    const hasActiveVideoExport = Boolean(
-        selectedBatch?.video_export && activeVideoExportStatuses.has(selectedBatch.video_export.status)
-    );
     const canFinalize = Boolean(
         selectedBatch
         && canFinalizeBatch(selectedBatch.status)
         && !hasActiveVideoJob
-        && !hasActiveVideoExport
         && missingMediaCount === 0
     );
 
@@ -481,11 +444,6 @@ export function Acceptance() {
                                                 <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(selectedBatch.status).className}`}>
                                                     {getBatchStatusMeta(selectedBatch.status).label}
                                                 </span>
-                                                {selectedBatch.video_export && (
-                                                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoExportClass[selectedBatch.video_export.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                        Монтаж: {videoExportLabel[selectedBatch.video_export.status] || selectedBatch.video_export.status}
-                                                    </span>
-                                                )}
                                                 {selectedBatch.video_processing && (
                                                     <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoProcessingClass[selectedBatch.video_processing.status] || 'bg-gray-700 text-gray-200'}`}>
                                                         Legacy: {videoProcessingLabel[selectedBatch.video_processing.status] || selectedBatch.video_processing.status}
@@ -576,7 +534,7 @@ export function Acceptance() {
                                                 title="Готовность к складу"
                                                 text={canFinalize
                                                     ? 'Все позиции укомплектованы. Партию можно переводить на склад.'
-                                                    : hasActiveVideoJob || hasActiveVideoExport
+                                                    : hasActiveVideoJob
                                                     ? 'Активная видео-обработка еще идет. Перевод на склад временно заблокирован.'
                                                     : `Не хватает media для ${missingMediaCount} позиций.`}
                                                 tone={canFinalize ? 'success' : 'warning'}
