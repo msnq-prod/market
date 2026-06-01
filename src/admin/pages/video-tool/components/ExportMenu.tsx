@@ -7,8 +7,8 @@ interface VideoExportRunItem {
     item_id: string;
     serial_number: string;
     segment_seq: number;
-    status: string;
-    render_status: string;
+    status?: string;
+    render_status?: string | null;
     upload_status: string;
     file_url?: string | null;
     item_card_url?: string | null;
@@ -85,10 +85,10 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                     ? 'UPLOADING'
                     : local?.renderStatus === 'rendering'
                         ? 'RENDERING'
-                        : item.status,
-            renderStatus: local?.renderStatus || item.render_status || 'PENDING',
+                        : item.upload_status || item.status || 'PENDING',
+            renderStatus: local?.renderStatus || item.render_status || (item.upload_status === 'UPLOADED' ? 'completed' : 'pending'),
             uploadStatus: local?.uploadStatus || item.upload_status || 'PENDING',
-            renderProgress: local?.renderProgress ?? (item.render_status === 'RENDERED' ? 100 : 0),
+            renderProgress: local?.renderProgress ?? (item.upload_status === 'UPLOADED' ? 100 : 0),
             uploadProgress: local?.uploadProgress ?? (item.upload_status === 'UPLOADED' ? 100 : 0),
             fileUrl: item.file_url,
             itemCardUrl: item.item_card_url || `/clone/${encodeURIComponent(item.serial_number)}`,

@@ -84,8 +84,8 @@ export type VideoExportRunItemDetails = {
     item_id: string;
     serial_number: string;
     segment_seq: number;
-    status: VideoExportRunItemStatus;
-    render_status: VideoExportRunItemStatus | null;
+    status?: VideoExportRunItemStatus;
+    render_status?: VideoExportRunItemStatus | null;
     upload_status: VideoExportRunItemStatus | null;
     file_url?: string | null;
     item_card_url?: string | null;
@@ -97,11 +97,12 @@ export type VideoExportRunItemDetails = {
 
 export type VideoExportRunDetails = {
     run_id: string;
+    upload_session_id?: string;
     batch_id: string;
     created_by_user_id?: string;
     status: VideoExportRunStatus;
     version: number;
-    render_manifest: VideoExportManifest | null;
+    render_manifest?: VideoExportManifest | null;
     export_settings?: VideoExportSettings | null;
     committed_at?: string | null;
     created_at: string;
@@ -111,6 +112,18 @@ export type VideoExportRunDetails = {
 
 export type VideoExportRunListResponse = {
     runs: VideoExportRunDetails[];
+};
+
+export type VideoUploadStatusItem = {
+    item_id: string;
+    serial_number: string | null;
+    item_video_url: string | null;
+    status: 'uploaded' | 'missing';
+};
+
+export type VideoUploadStatusResponse = {
+    batch_id: string;
+    items: VideoUploadStatusItem[];
 };
 
 export type VideoExportManifestSlice = Pick<VideoExportManifest, 'segments' | 'outputs'>;

@@ -176,14 +176,15 @@ npm run dev
 - `GET /api/batches/:id/video-tool`
 - `POST /api/batches/:id/video-jobs`
 
-V2 export-run endpoints:
+Video upload/session endpoints:
 
+- `GET /api/batches/:id/video-uploads`
 - `GET /api/batches/:id/video-export-runs`
 - `GET /api/batches/:id/video-export-runs/:runId`
 - `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
 - `POST /api/batches/:id/video-export-runs/:runId/cancel`
 
-`video-tool` в Electron HQ использует внутренний video runtime через IPC с `protocol_version = stones-video-export-helper-v3`. В браузерном HQ `/admin/video-tool/:batchId` показывает заглушку скачивания `ZAGARAMI HQ`. Активный UI-flow Video Tool рендерит локально, создает backend `video-export-runs` лениво при первом upload без обязательного `render_manifest` и после upload показывает ссылку на файл и `/clone/:serialNumber`.
+`video-tool` в Electron HQ использует внутренний video runtime через IPC с `protocol_version = stones-video-export-helper-v3`. В браузерном HQ `/admin/video-tool/:batchId` показывает заглушку скачивания `ZAGARAMI HQ`. Активный UI-flow Video Tool рендерит локально, создает backend upload-session лениво при первом upload без обязательного `render_manifest`, читает загруженность через `/video-uploads` и после upload показывает ссылку на файл и `/clone/:serialNumber`. Backend response не отдает render-поля. Повтор upload с тем же checksum идемпотентен; другой checksum требует `overwrite=true`.
 
 ### Фото
 

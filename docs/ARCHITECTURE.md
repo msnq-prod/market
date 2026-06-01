@@ -217,12 +217,15 @@ ZAGARAMI состоит из четырех основных частей:
 
 - HQ открывает `/admin/video-tool/:batchId`
 - Electron HQ проверяет внутренний video runtime protocol `stones-video-export-helper-v3`
-- UI создает local runId
-- Electron создает local V2 run snapshot в desktop state
+- UI создает local upload session id
+- Electron создает local upload-session snapshot в desktop state
 - video runtime вызывается через IPC/helperRuntime без локального HTTP endpoint
 - backend `BatchVideoExportRun` создается при первом item-level upload как upload-session; `render_manifest` для upload не обязателен
+- серверный статус загруженности читается через `GET /api/batches/:id/video-uploads`
 - item-level upload идет через `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
-- upload валидирует `batchId`/`itemId`/`serial_number`/checksum, сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
+- upload валидирует `batchId`/`itemId`/`serial_number`/checksum, идемпотентен для того же checksum, требует `overwrite=true` для замены, пишет `AuditLog`, сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
+- backend response для upload-session не отдает `render_manifest` и `render_status`; UI берет render progress только из Desktop HQ
+- политика overwrite: новый файл кладется в путь текущей upload-session; прежний внутренний export-файл удаляется, если он был в `public/uploads/videos/exports`
 
 Код:
 
@@ -232,7 +235,7 @@ ZAGARAMI состоит из четырех основных частей:
 - `electron/hq/mediaQueue.cjs`
 - `src/admin/pages/video-tool/VideoToolController.tsx`
 
-Ограничение текущей реализации: историческая модель `BatchVideoExportSession` может оставаться в БД для старых данных, но активные роуты/UI используют V2 runs.
+Ограничение текущей реализации: историческая модель `BatchVideoExportSession` может оставаться в БД для старых данных, а endpoint names `video-export-runs` сохранены для совместимости; в рабочем флоу это upload sessions, render state остается локальным в Desktop HQ.
 
 ## 8. Публичный цифровой паспорт
 

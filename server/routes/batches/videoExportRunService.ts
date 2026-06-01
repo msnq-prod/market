@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { Prisma } from '@prisma/client';
 import {
+    VIDEO_EXPORT_PUBLIC_OUTPUT_ROOT,
+    VIDEO_EXPORT_PUBLIC_URL_ROOT,
     buildVideoExportFilename,
     buildVideoExportPublicOutputDir,
     buildVideoExportPublicUrl,
@@ -16,6 +18,7 @@ import {
     removeStagedVideoFile,
     sha256File
 } from './shared.ts';
+import { writeSecurityAuditLog } from '../../services/security.ts';
 
 export const buildVideoExportRunInclude = Prisma.validator<Prisma.BatchVideoExportRunInclude>()({
     batch: {
@@ -33,6 +36,11 @@ export const buildVideoExportRunInclude = Prisma.validator<Prisma.BatchVideoExpo
 
 type RunRecord = Prisma.BatchVideoExportRunGetPayload<{ include: typeof buildVideoExportRunInclude }>;
 
+const serializeVideoUploadSessionStatus = (status: RunRecord['status']) =>
+    status === 'DRAFT' || status === 'READY' || status === 'RENDERING'
+        ? 'UPLOADING'
+        : status;
+
 export const BLOCKING_VIDEO_EXPORT_RUN_STATUSES: Array<'DRAFT' | 'READY' | 'RENDERING' | 'UPLOADING' | 'PARTIAL'> = [
     'DRAFT',
     'READY',
@@ -41,13 +49,13 @@ export const BLOCKING_VIDEO_EXPORT_RUN_STATUSES: Array<'DRAFT' | 'READY' | 'REND
     'PARTIAL'
 ];
 
-export const serializeVideoExportRunDetails = (run: RunRecord) => ({
+export const serializeVideoUploadSessionDetails = (run: RunRecord) => ({
     run_id: run.id,
+    upload_session_id: run.id,
     batch_id: run.batch_id,
     created_by_user_id: run.created_by_user_id,
-    status: run.status,
+    status: serializeVideoUploadSessionStatus(run.status),
     version: run.version,
-    render_manifest: run.render_manifest,
     export_settings: run.export_settings,
     committed_at: run.committed_at,
     created_at: run.created_at,
@@ -56,9 +64,7 @@ export const serializeVideoExportRunDetails = (run: RunRecord) => ({
         item_id: item.item_id,
         serial_number: item.serial_number,
         segment_seq: item.segment_seq,
-        status: item.status,
-        render_status: item.render_status,
-        upload_status: item.upload_status,
+        upload_status: item.upload_status ?? item.status,
         file_url: item.file_url,
         item_card_url: `/clone/${encodeURIComponent(item.serial_number)}`,
         error_message: item.error_message,
@@ -67,6 +73,8 @@ export const serializeVideoExportRunDetails = (run: RunRecord) => ({
         created_at: item.created_at
     }))
 });
+
+export const serializeVideoExportRunDetails = serializeVideoUploadSessionDetails;
 
 const parseJsonBodyField = (value: unknown) => {
     if (typeof value === 'string') {
@@ -78,6 +86,49 @@ const parseJsonBodyField = (value: unknown) => {
     }
 
     return value ?? null;
+};
+
+const resolveInternalVideoExportPath = (fileUrl: string | null | undefined) => {
+    if (!fileUrl) {
+        return null;
+    }
+
+    let pathname = fileUrl;
+    try {
+        pathname = new URL(fileUrl).pathname;
+    } catch {
+        pathname = fileUrl;
+    }
+
+    if (!pathname.startsWith(`${VIDEO_EXPORT_PUBLIC_URL_ROOT}/`)) {
+        return null;
+    }
+
+    let relativeParts: string[];
+    try {
+        relativeParts = pathname
+            .slice(`${VIDEO_EXPORT_PUBLIC_URL_ROOT}/`.length)
+            .split('/')
+            .filter(Boolean)
+            .map((part) => decodeURIComponent(part));
+    } catch {
+        return null;
+    }
+    const resolvedPath = path.resolve(VIDEO_EXPORT_PUBLIC_OUTPUT_ROOT, ...relativeParts);
+    const outputRoot = path.resolve(VIDEO_EXPORT_PUBLIC_OUTPUT_ROOT);
+
+    return resolvedPath === outputRoot || !resolvedPath.startsWith(`${outputRoot}${path.sep}`)
+        ? null
+        : resolvedPath;
+};
+
+const removePreviousVideoExportArtifact = async (previousFileUrl: string | null | undefined, nextPath: string) => {
+    const previousPath = resolveInternalVideoExportPath(previousFileUrl);
+    if (!previousPath || previousPath === nextPath) {
+        return;
+    }
+
+    await fs.rm(previousPath, { force: true }).catch(() => undefined);
 };
 
 const normalizeVideoExportManifest = (
@@ -255,6 +306,40 @@ export const loadVideoExportRun = async (db: Prisma.TransactionClient | typeof p
     });
 };
 
+export const getVideoUploadStatus = async (batchId: string) => {
+    const batch = await prisma.batch.findFirst({
+        where: {
+            id: batchId,
+            deleted_at: null
+        },
+        include: {
+            items: {
+                where: { deleted_at: null },
+                orderBy: { item_seq: 'asc' },
+                select: {
+                    id: true,
+                    serial_number: true,
+                    item_video_url: true
+                }
+            }
+        }
+    });
+
+    if (!batch) {
+        throw createHttpError('Партия не найдена.', 404);
+    }
+
+    return {
+        batch_id: batch.id,
+        items: batch.items.map((item) => ({
+            item_id: item.id,
+            serial_number: item.serial_number,
+            item_video_url: item.item_video_url,
+            status: item.item_video_url ? 'uploaded' : 'missing'
+        }))
+    };
+};
+
 export const getVideoExportRuns = async (batchId: string) => {
     const runs = await prisma.batchVideoExportRun.findMany({
         where: {
@@ -377,42 +462,86 @@ export const uploadVideoExportItemFile = async (
                 }
             }
 
-            if (run.status === 'CANCELLED') {
-                throw createHttpError('Этот запуск уже закрыт.', 409);
-            }
-
             const targetItem = run.items.find((it) => it.item_id === itemId && it.serial_number.toUpperCase() === serialNumber);
             if (!targetItem) {
                 throw createHttpError('Товар не относится к текущему запуску экспорта.', 400);
             }
 
             const overwriteRequested = body?.overwrite === true || body?.overwrite === 'true';
-            if (targetItem.file_url && (targetItem.status === 'UPLOADED' || targetItem.upload_status === 'UPLOADED')) {
-                if (parsedChecksum && targetItem.checksum === parsedChecksum) {
-                    return {
-                        run: serializeVideoExportRunDetails(run),
-                        status: run.status,
-                        file_url: targetItem.file_url,
-                        item_card_url: `/clone/${encodeURIComponent(serialNumber)}`,
-                        uploaded: {
-                            item_id: itemId,
-                            serial_number: serialNumber,
-                            file_url: targetItem.file_url,
-                            item_card_url: `/clone/${encodeURIComponent(serialNumber)}`
+            const latestUploadedItem = await tx.batchVideoExportItem.findFirst({
+                where: {
+                    item_id: itemId,
+                    upload_status: 'UPLOADED',
+                    file_url: { not: null }
+                },
+                orderBy: { updated_at: 'desc' }
+            });
+            const previousFileUrl = targetItem.file_url || batchItem.item_video_url || latestUploadedItem?.file_url || null;
+            const previousChecksum = targetItem.checksum || latestUploadedItem?.checksum || null;
+            const hasExistingVideo = Boolean(previousFileUrl);
+
+            if (previousFileUrl && parsedChecksum && previousChecksum === parsedChecksum) {
+                await tx.batchVideoExportItem.update({
+                    where: { id: targetItem.id },
+                    data: {
+                        status: 'UPLOADED',
+                        upload_status: 'UPLOADED',
+                        file_url: previousFileUrl,
+                        checksum: previousChecksum,
+                        error_message: null
+                    }
+                });
+                await tx.item.update({
+                    where: { id: itemId },
+                    data: { item_video_url: previousFileUrl }
+                });
+
+                const currentItems = await tx.batchVideoExportItem.findMany({
+                    where: { run_id: run.id }
+                });
+                const allTerminal = currentItems.every((item) =>
+                    item.status === 'UPLOADED' || item.status === 'SKIPPED' || item.status === 'CANCELLED' || item.id === targetItem.id
+                );
+                if (allTerminal && run.status !== 'COMPLETED') {
+                    await tx.batchVideoExportRun.update({
+                        where: { id: run.id },
+                        data: {
+                            status: 'COMPLETED',
+                            committed_at: run.committed_at ?? new Date()
                         }
-                    };
+                    });
                 }
 
-                if (run.status === 'COMPLETED') {
-                    throw createHttpError('Этот запуск уже закрыт.', 409);
-                }
+                const updatedRun = await tx.batchVideoExportRun.findUniqueOrThrow({
+                    where: { id: run.id },
+                    include: buildVideoExportRunInclude
+                });
 
+                return {
+                    run: serializeVideoUploadSessionDetails(updatedRun),
+                    status: updatedRun.status,
+                    file_url: previousFileUrl,
+                    item_card_url: `/clone/${encodeURIComponent(serialNumber)}`,
+                    uploaded: {
+                        item_id: itemId,
+                        serial_number: serialNumber,
+                        file_url: previousFileUrl,
+                        item_card_url: `/clone/${encodeURIComponent(serialNumber)}`
+                    }
+                };
+            }
+
+            if (run.status === 'CANCELLED') {
+                throw createHttpError('Этот запуск уже закрыт.', 409);
+            }
+
+            if (hasExistingVideo) {
                 if (!overwriteRequested) {
                     throw createHttpError('Видео для этого Item уже загружено. Для замены нужен overwrite=true.', 409);
                 }
             }
 
-            if (run.status === 'COMPLETED') {
+            if (run.status === 'COMPLETED' && !hasExistingVideo) {
                 throw createHttpError('Этот запуск уже закрыт.', 409);
             }
 
@@ -423,6 +552,7 @@ export const uploadVideoExportItemFile = async (
             const targetPath = path.join(outputDir, fileName);
             await fs.rm(targetPath, { force: true });
             await moveFileSafely(uploadedFile.path, targetPath);
+            await removePreviousVideoExportArtifact(previousFileUrl, targetPath);
 
             const publicUrl = buildVideoExportPublicUrl(batchId, run.version, fileName);
 
@@ -443,6 +573,27 @@ export const uploadVideoExportItemFile = async (
             await tx.item.update({
                 where: { id: itemId },
                 data: { item_video_url: publicUrl }
+            });
+
+            await writeSecurityAuditLog(tx, {
+                action: hasExistingVideo ? 'VIDEO_ITEM_OVERWRITTEN' : 'VIDEO_ITEM_UPLOADED',
+                user_id: userId,
+                entity_type: 'item',
+                entity_id: itemId,
+                details: {
+                    batch_id: batchId,
+                    upload_session_id: run.id,
+                    item_id: itemId,
+                    serial_number: serialNumber,
+                    file_url: publicUrl,
+                    previous_file_url: previousFileUrl,
+                    overwritten: hasExistingVideo,
+                    file_size_bytes: uploadedFile.size,
+                    checksum_sha256: parsedChecksum,
+                    queue_job_id: typeof body?.queue_job_id === 'string' ? body.queue_job_id : null,
+                    queue_file_id: typeof body?.queue_file_id === 'string' ? body.queue_file_id : null,
+                    uploaded_at: new Date().toISOString()
+                }
             });
 
             // Reconcile run status
@@ -475,7 +626,7 @@ export const uploadVideoExportItemFile = async (
             });
 
             return {
-                run: serializeVideoExportRunDetails(updatedRun),
+                run: serializeVideoUploadSessionDetails(updatedRun),
                 status: nextRunStatus,
                 file_url: publicUrl,
                 item_card_url: `/clone/${encodeURIComponent(serialNumber)}`,
@@ -527,3 +678,8 @@ export const cancelVideoExportRun = async (batchId: string, runId: string) => {
         return { run: serializeVideoExportRunDetails(updatedRun) };
     });
 };
+
+export const getVideoUploadSessions = getVideoExportRuns;
+export const loadVideoUploadSession = loadVideoExportRun;
+export const uploadVideoUploadSessionItemFile = uploadVideoExportItemFile;
+export const cancelVideoUploadSession = cancelVideoExportRun;

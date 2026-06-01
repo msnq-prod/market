@@ -2,6 +2,7 @@ import { authFetch } from '../../../utils/authFetch';
 import type {
     VideoExportRunDetails,
     VideoExportRunListResponse,
+    VideoUploadStatusResponse,
     VideoToolPayload
 } from './types';
 
@@ -21,6 +22,14 @@ export const fetchVideoExportRuns = async (batchId: string) => {
         throw new Error('Не удалось загрузить список запусков.');
     }
     return await response.json() as VideoExportRunListResponse;
+};
+
+export const fetchVideoUploadStatus = async (batchId: string) => {
+    const response = await authFetch(`/api/batches/${batchId}/video-uploads`);
+    if (!response.ok) {
+        throw new Error('Не удалось загрузить статус видео.');
+    }
+    return await response.json() as VideoUploadStatusResponse;
 };
 
 export const fetchVideoExportRunDetails = async (batchId: string, runId: string) => {

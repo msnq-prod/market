@@ -25,8 +25,6 @@ import {
 import {
     buildRenderManifest,
     createSourceFromFingerprint,
-    createSourcesFromManifest,
-    hydrateSegmentsFromManifest,
     appendInitialSourceSegment,
     areSegmentsEqual,
     cloneSegments,
@@ -51,7 +49,8 @@ import { useVideoToolHotkeys } from './useVideoToolHotkeys';
 import {
     cancelVideoExportRun as cancelServerVideoExportRun,
     fetchVideoExportRuns,
-    fetchVideoToolPayload
+    fetchVideoToolPayload,
+    fetchVideoUploadStatus
 } from './videoExportClient';
 import { useVideoExportRunState } from './useVideoExportRunState';
 import {
@@ -83,6 +82,7 @@ import type {
     VideoToolPreviewResizeState,
     VideoToolSegmentRow,
     VideoToolDraft,
+    VideoUploadStatusItem,
     VideoToolPayload,
     VideoToolState,
     WorkingSource
@@ -112,6 +112,20 @@ const createInitialVideoToolState = (): VideoToolState => ({
     workflow: { snapshot: null }
 });
 
+const mergeVideoUploadsIntoToolPayload = (
+    payload: VideoToolPayload,
+    uploads: VideoUploadStatusItem[]
+): VideoToolPayload => {
+    const uploadsByItemId = new Map(uploads.map((item) => [item.item_id, item]));
+    return {
+        ...payload,
+        items: payload.items.map((item) => ({
+            ...item,
+            item_video_url: uploadsByItemId.get(item.id)?.item_video_url ?? item.item_video_url
+        }))
+    };
+};
+
 export function VideoToolController() {
     const navigate = useNavigate();
     const params = useParams<{ batchId: string }>();
@@ -123,11 +137,13 @@ export function VideoToolController() {
     const dragPlayheadRef = useRef(false);
     const panViewportRef = useRef<VideoToolPanViewportState | null>(null);
     const previewResizeRef = useRef<VideoToolPreviewResizeState | null>(null);
+    const suppressTimelineAutoScrollUntilRef = useRef(0);
     const segmentHistoryRef = useRef<Segment[][]>([]);
     const sourceObjectUrlsRef = useRef<Set<string>>(new Set());
 
     const [controllerState, dispatchVideoTool] = useReducer(videoToolReducer, undefined, createInitialVideoToolState);
     const [data, setData] = useState<VideoToolPayload | null>(null);
+    const [videoUploads, setVideoUploads] = useState<VideoUploadStatusItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const helperStatus = controllerState.helper.status;
@@ -198,6 +214,15 @@ export function VideoToolController() {
     });
 
     const expectedOutputCount = data?.batch.expected_output_count ?? 0;
+    const refreshVideoUploads = useCallback(async (nextBatchId = batchId) => {
+        const uploadStatus = await fetchVideoUploadStatus(nextBatchId);
+        setVideoUploads(uploadStatus.items);
+        setData((current) => current && current.batch.id === nextBatchId
+            ? mergeVideoUploadsIntoToolPayload(current, uploadStatus.items)
+            : current
+        );
+        return uploadStatus;
+    }, [batchId]);
     const durationMs = getTotalSourceDurationMs(sources);
     const activeSource = sources.find((source) => source.sourceIndex === activeSourceIndex) ?? sources[0] ?? null;
     const sourceUrl = activeSource?.previewUrl ?? '';
@@ -205,6 +230,9 @@ export function VideoToolController() {
     const visibleDurationMs = durationMs ? (timelineViewport.visibleDurationMs || durationMs) : 0;
     const visibleStartMs = durationMs ? clampVisibleStart(durationMs, timelineViewport.visibleStartMs, visibleDurationMs || durationMs) : 0;
     const visibleEndMs = visibleStartMs + visibleDurationMs;
+    const timelineWheelStateRef = useRef({ durationMs: 0, visibleStartMs: 0, visibleDurationMs: 0 });
+    timelineWheelStateRef.current = { durationMs, visibleStartMs, visibleDurationMs };
+
     const clampPreviewPanelWidth = useCallback((nextWidth: number) => {
         const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
         const leftRailWidth = 224;
@@ -252,11 +280,11 @@ export function VideoToolController() {
         : '';
     const sessionUploadedSerials = useMemo(
         () => new Set(
-            activeV2Run?.items
-                .filter((item) => item.status === 'UPLOADED' || item.upload_status === 'UPLOADED' || Boolean(item.file_url))
-                .map((item) => item.serial_number) ?? []
+            videoUploads
+                .filter((item) => item.status === 'uploaded' && item.serial_number)
+                .map((item) => item.serial_number as string)
         ),
-        [activeV2Run]
+        [videoUploads]
     );
     const pushSegmentsToHistory = useCallback((snapshot: Segment[]) => {
         const clonedSnapshot = cloneSegments(snapshot);
@@ -378,6 +406,56 @@ export function VideoToolController() {
 
         zoomTimelineTo(anchorMs, visibleDurationMs * factor);
     }, [durationMs, playheadMs, visibleDurationMs, zoomTimelineTo]);
+    const handleTimelineWheel = useCallback((event: WheelEvent, currentTarget: HTMLElement) => {
+        const wheelState = timelineWheelStateRef.current;
+        if (!wheelState.durationMs || !wheelState.visibleDurationMs) {
+            return;
+        }
+
+        const absDeltaX = Math.abs(event.deltaX);
+        const absDeltaY = Math.abs(event.deltaY);
+        if (absDeltaX < 1 && absDeltaY < 1) {
+            return;
+        }
+
+        event.preventDefault();
+        suppressTimelineAutoScrollUntilRef.current = Date.now() + 500;
+        const rect = currentTarget.getBoundingClientRect();
+        const anchorRatio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+        const anchorMs = wheelState.visibleStartMs + (anchorRatio * wheelState.visibleDurationMs);
+        const shouldZoom = event.ctrlKey || event.metaKey || (!event.shiftKey && absDeltaY >= absDeltaX);
+
+        if (shouldZoom) {
+            const zoomDelta = event.deltaY || event.deltaX;
+            const zoomFactor = Math.exp(zoomDelta * 0.002);
+            const nextVisibleDurationMs = clampVisibleDuration(wheelState.durationMs, wheelState.visibleDurationMs * zoomFactor);
+            const nextVisibleStartMs = clampVisibleStart(
+                wheelState.durationMs,
+                anchorMs - (nextVisibleDurationMs * anchorRatio),
+                nextVisibleDurationMs
+            );
+            setTimelineViewport({
+                zoom: Number((wheelState.durationMs / nextVisibleDurationMs).toFixed(3)),
+                visibleStartMs: nextVisibleStartMs,
+                visibleDurationMs: nextVisibleDurationMs,
+                isPanning: false
+            });
+            return;
+        }
+
+        const panDeltaPx = event.shiftKey && absDeltaY > absDeltaX ? event.deltaY : event.deltaX;
+        const nextVisibleStartMs = clampVisibleStart(
+            wheelState.durationMs,
+            wheelState.visibleStartMs + ((panDeltaPx / rect.width) * wheelState.visibleDurationMs),
+            wheelState.visibleDurationMs
+        );
+        setTimelineViewport({
+            zoom: Number((wheelState.durationMs / wheelState.visibleDurationMs).toFixed(3)),
+            visibleStartMs: nextVisibleStartMs,
+            visibleDurationMs: wheelState.visibleDurationMs,
+            isPanning: false
+        });
+    }, []);
     const timelineClientXToMs = useCallback((clientX: number, rect: DOMRect) => clamp(
         visibleStartMs + (((clientX - rect.left) / rect.width) * visibleDurationMs),
         0,
@@ -450,8 +528,12 @@ export function VideoToolController() {
         setError('');
         setNotice(null);
         try {
-            const payload = await fetchVideoToolPayload(batchId);
-            setData(payload);
+            const [payload, uploadStatus] = await Promise.all([
+                fetchVideoToolPayload(batchId),
+                fetchVideoUploadStatus(batchId)
+            ]);
+            setVideoUploads(uploadStatus.items);
+            setData(mergeVideoUploadsIntoToolPayload(payload, uploadStatus.items));
             const desktop = getStonesDesktop();
             const existingDraft = isDesktopApp && desktop
                 ? normalizeDesktopDraft(batchId, await desktop.getVideoDraft(batchId))
@@ -503,46 +585,11 @@ export function VideoToolController() {
             if (preferredRun) {
                 const latestRun = await refreshActiveV2Run(preferredRun.run_id);
                 if (!latestRun) {
-                    throw new Error('Не удалось загрузить активный video export run.');
+                    throw new Error('Не удалось загрузить активную video upload session.');
                 }
+            }
 
-                const manifestSources = latestRun.render_manifest
-                    ? await Promise.all(createSourcesFromManifest(latestRun.render_manifest).map(async (source) => {
-                        const draftSource = existingDraft?.sources.find((entry) =>
-                            entry.sourceIndex === source.sourceIndex
-                            && entry.fingerprint.name === source.name
-                            && entry.fingerprint.size === source.size
-                            && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
-                        );
-                        const helperSourceId = draftSource?.helperSourceId || '';
-                        const previewState = await resolveRestoredPreview(helperSourceId, draftSource);
-                        return {
-                            ...source,
-                            helperSourceId: helperSourceId,
-                            stagedSourceId: draftSource?.stagedSourceId || null,
-                            cachePath: draftSource?.cachePath || null,
-                            checksumSha256: draftSource?.checksumSha256 || null,
-                            ...previewState
-                        };
-                    }))
-                    : [];
-                if (manifestSources.length > 0) {
-                    setSources(manifestSources);
-                    setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);
-                    const manifestSegments = hydrateSegmentsFromManifest(latestRun.render_manifest, manifestSources);
-                    if (manifestSegments.length > 0) {
-                        setSegments(manifestSegments);
-                        setSelectedSegmentIndex(0);
-                        setPlayheadMs(0);
-                    }
-                }
-
-                setPendingSerials(
-                    latestRun.items
-                        .filter((item) => !['UPLOADED', 'SKIPPED', 'CANCELLED'].includes(item.status))
-                        .map((item) => item.serial_number)
-                );
-            } else if (existingDraft?.sources.length) {
+            if (existingDraft?.sources.length) {
                 const draftSources = await Promise.all(existingDraft.sources.map(async (source) => {
                     const helperSourceId = source.helperSourceId || '';
                     const previewState = await resolveRestoredPreview(helperSourceId, source);
@@ -565,8 +612,16 @@ export function VideoToolController() {
                 setPendingSerials(existingDraft.pendingSerials);
                 setIntroHelperSourceId(existingDraft.introHelperSourceId || '');
                 applyLoadedExportSettings(existingDraft.exportSettings);
-                setActiveV2Run(createRestoredLocalVideoExportRunDetails(batchId, existingDraft));
+                if (!preferredRun) {
+                    setActiveV2Run(createRestoredLocalVideoExportRunDetails(batchId, existingDraft));
+                }
             }
+
+            setPendingSerials(
+                uploadStatus.items
+                    .filter((item) => item.status === 'missing' && item.serial_number)
+                    .map((item) => item.serial_number as string)
+            );
 
             await refreshLocalRunSnapshot(batchId);
         } catch (loadError) {
@@ -776,11 +831,12 @@ export function VideoToolController() {
         void refreshLocalRunSnapshot();
         const intervalId = window.setInterval(() => {
             void refreshLocalRunSnapshot();
+            void refreshVideoUploads(batchId).catch(() => undefined);
             void refreshActiveV2Run(activeV2Run.run_id, { silent: true }).catch(() => undefined);
         }, 1500);
 
         return () => window.clearInterval(intervalId);
-    }, [activeV2Run?.run_id, isDesktopApp, refreshActiveV2Run, refreshLocalRunSnapshot]);
+    }, [activeV2Run?.run_id, batchId, isDesktopApp, refreshActiveV2Run, refreshLocalRunSnapshot, refreshVideoUploads]);
 
     useEffect(() => {
         let cancelled = false;
@@ -925,6 +981,10 @@ export function VideoToolController() {
             return;
         }
 
+        if (timelineViewport.isPanning || Date.now() < suppressTimelineAutoScrollUntilRef.current) {
+            return;
+        }
+
         if (playheadMs < visibleStartMs) {
             updateTimelineViewport(playheadMs - (visibleDurationMs * 0.08), visibleDurationMs);
             return;
@@ -933,7 +993,7 @@ export function VideoToolController() {
         if (playheadMs > visibleEndMs) {
             updateTimelineViewport(playheadMs - (visibleDurationMs * 0.92), visibleDurationMs);
         }
-    }, [durationMs, playheadMs, updateTimelineViewport, visibleDurationMs, visibleEndMs, visibleStartMs]);
+    }, [durationMs, playheadMs, timelineViewport.isPanning, updateTimelineViewport, visibleDurationMs, visibleEndMs, visibleStartMs]);
 
     useEffect(() => {
         const nextSelectedIndex = segments.findIndex((segment, index) => {
@@ -1378,6 +1438,7 @@ export function VideoToolController() {
                 sources: buildDesktopRunSources()
             });
             await refreshLocalRunSnapshot();
+            await refreshVideoUploads(data.batch.id).catch(() => null);
             await refreshActiveV2Run(localRunId, { silent: true }).catch(() => null);
 
             setExportPhase('ready');
@@ -1390,7 +1451,7 @@ export function VideoToolController() {
         } finally {
             setIsStartingRun(false);
         }
-    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, runPreflightCheck, setActiveV2Run, setExportPhase]);
+    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, refreshVideoUploads, runPreflightCheck, setActiveV2Run, setExportPhase]);
 
     const handleCancelRun = useCallback(async () => {
         if (!data || !activeV2Run) {
@@ -1486,20 +1547,28 @@ export function VideoToolController() {
             : notice?.tone === 'info'
                 ? 'border-white/12 bg-white/[0.06] text-gray-100'
                 : 'border-zinc-800 bg-zinc-950/80 text-zinc-300';
-    const exportMenuRun = useMemo(() => (
-        activeV2Run
-            ? {
-                run_id: activeV2Run.run_id,
-                status: activeV2Run.status,
-                version: activeV2Run.version,
-                items: activeV2Run.items.map((item) => ({
+    const exportMenuRun = useMemo(() => {
+        if (!activeV2Run) {
+            return null;
+        }
+
+        const uploadsByItemId = new Map(videoUploads.map((item) => [item.item_id, item]));
+        return {
+            run_id: activeV2Run.run_id,
+            status: activeV2Run.status,
+            version: activeV2Run.version,
+            items: activeV2Run.items.map((item) => {
+                const upload = uploadsByItemId.get(item.item_id);
+                const isUploaded = upload?.status === 'uploaded' && Boolean(upload.item_video_url);
+                return {
                     ...item,
-                    render_status: item.render_status || '',
-                    upload_status: item.upload_status || ''
-                }))
-            }
-            : null
-    ), [activeV2Run]);
+                    upload_status: isUploaded ? 'UPLOADED' : item.upload_status || 'PENDING',
+                    file_url: upload?.item_video_url ?? item.file_url ?? null,
+                    item_card_url: `/clone/${encodeURIComponent(item.serial_number)}`
+                };
+            })
+        };
+    }, [activeV2Run, videoUploads]);
 
     if (loading) {
         return (
@@ -1656,6 +1725,7 @@ export function VideoToolController() {
                         handleToggleDeleted={handleToggleDeleted}
                         handleRestoreAll={handleRestoreAllDeleted}
                         handleResetCuts={handleClearCuts}
+                        handleTimelineWheel={handleTimelineWheel}
                         zoomIn={zoomIn}
                         zoomOut={zoomOut}
                         zoomFit={zoomFit}

@@ -5,22 +5,37 @@ import type { AuthRequest } from '../../middleware/auth.ts';
 import { isStaffRole } from '../../utils/collectionWorkflow.ts';
 import { createHttpError, getErrorMessage, getErrorStatusCode } from './shared.ts';
 import {
-    getVideoExportRuns,
-    loadVideoExportRun,
-    uploadVideoExportItemFile,
-    cancelVideoExportRun,
-    serializeVideoExportRunDetails
+    getVideoUploadStatus,
+    getVideoUploadSessions,
+    loadVideoUploadSession,
+    uploadVideoUploadSessionItemFile,
+    cancelVideoUploadSession,
+    serializeVideoUploadSessionDetails
 } from './videoExportRunService.ts';
 import { prisma } from '../../services/prisma.ts';
 
 const router = express.Router();
+
+router.get('/:id/video-uploads', authenticateToken, async (req: AuthRequest, res) => {
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
+
+        res.json(await getVideoUploadStatus(req.params.id));
+    } catch (error) {
+        console.error(error);
+        const statusCode = getErrorStatusCode(error);
+        const message = getErrorMessage(error, 'Не удалось загрузить статус видео.');
+        res.status(statusCode).json({ error: message });
+    }
+});
 
 router.get('/:id/video-export-runs', authenticateToken, async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        res.json(await getVideoExportRuns(req.params.id));
+        res.json(await getVideoUploadSessions(req.params.id));
     } catch (error) {
         console.error(error);
         const statusCode = getErrorStatusCode(error);
@@ -34,12 +49,12 @@ router.get('/:id/video-export-runs/:runId', authenticateToken, async (req: AuthR
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const run = await loadVideoExportRun(prisma, req.params.id, req.params.runId);
+        const run = await loadVideoUploadSession(prisma, req.params.id, req.params.runId);
         if (!run) {
             throw createHttpError('Запуск экспорта не найден.', 404);
         }
 
-        res.json({ run: serializeVideoExportRunDetails(run) });
+        res.json({ run: serializeVideoUploadSessionDetails(run) });
     } catch (error) {
         console.error(error);
         const statusCode = getErrorStatusCode(error);
@@ -59,7 +74,7 @@ router.post('/:id/video-export-runs/:runId/items/:itemId/upload', authenticateTo
             throw createHttpError('Не передан медиафайл.', 400);
         }
 
-        res.json(await uploadVideoExportItemFile(req.params.id, req.params.runId, req.params.itemId, req.user.id, req.body as Record<string, unknown> | undefined, uploadedFile));
+        res.json(await uploadVideoUploadSessionItemFile(req.params.id, req.params.runId, req.params.itemId, req.user.id, req.body as Record<string, unknown> | undefined, uploadedFile));
     } catch (error) {
         console.error(error);
         const statusCode = getErrorStatusCode(error);
@@ -73,7 +88,7 @@ router.post('/:id/video-export-runs/:runId/cancel', authenticateToken, async (re
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        res.json(await cancelVideoExportRun(req.params.id, req.params.runId));
+        res.json(await cancelVideoUploadSession(req.params.id, req.params.runId));
     } catch (error) {
         console.error(error);
         const statusCode = getErrorStatusCode(error);

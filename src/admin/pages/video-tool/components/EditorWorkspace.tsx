@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Scissors, Trash2, RotateCcw, Plus, Minus, Maximize2, HelpCircle, AlertTriangle, CheckCircle2, Play, Pause } from 'lucide-react';
 import type {
     InlineNotice,
@@ -46,6 +46,7 @@ interface EditorWorkspaceProps {
     handleToggleDeleted: () => void;
     handleRestoreAll: () => void;
     handleResetCuts: () => void;
+    handleTimelineWheel: (event: WheelEvent, currentTarget: HTMLElement) => void;
     zoomIn: () => void;
     zoomOut: () => void;
     zoomFit: () => void;
@@ -90,6 +91,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     handleToggleDeleted,
     handleRestoreAll,
     handleResetCuts,
+    handleTimelineWheel,
     zoomIn,
     zoomOut,
     zoomFit,
@@ -111,6 +113,22 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     const handleLoadedMetadataInternal = (event: React.SyntheticEvent<HTMLVideoElement>) => {
         handleLoadedMetadata(event);
     };
+
+    useEffect(() => {
+        const handleWheel = (event: WheelEvent) => {
+            handleTimelineWheel(event, event.currentTarget as HTMLElement);
+        };
+        const timelineRuler = timelineRulerRef.current;
+        const timelineScrollbar = timelineScrollbarRef.current;
+
+        timelineRuler?.addEventListener('wheel', handleWheel, { passive: false });
+        timelineScrollbar?.addEventListener('wheel', handleWheel, { passive: false });
+
+        return () => {
+            timelineRuler?.removeEventListener('wheel', handleWheel);
+            timelineScrollbar?.removeEventListener('wheel', handleWheel);
+        };
+    }, [handleTimelineWheel, segments.length, timelineScrollbarRef]);
 
     return (
         <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden bg-[#0a0b0d]">
@@ -419,6 +437,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                     >
                                         <button
                                             type="button"
+                                            data-testid="timeline-scrollbar-thumb"
                                             className="absolute inset-y-0 rounded-full border border-zinc-700 bg-zinc-800 shadow-sm"
                                             style={{
                                                 left: `${durationMs ? (visibleStartMs / durationMs) * 100 : 0}%`,
