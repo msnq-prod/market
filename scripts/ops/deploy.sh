@@ -16,6 +16,12 @@ else
     echo "Skipping pre-deploy backup because the production database service is not running yet."
 fi
 
+echo "Pruning unused Docker build cache and images"
+docker builder prune -af || true
+docker image prune -af || true
+docker container prune -f || true
+docker network prune -f || true
+
 echo "Building and starting production stack"
 compose_prod up -d --build
 
