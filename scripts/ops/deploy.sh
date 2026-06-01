@@ -6,6 +6,13 @@ SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/common.sh"
 
 require_command curl
+require_command docker
+
+echo "Pruning unused Docker build cache and images before preflight"
+docker builder prune -af || true
+docker image prune -af || true
+docker container prune -f || true
+docker network prune -f || true
 
 "$SCRIPT_DIR/preflight.sh"
 load_prod_env
@@ -16,7 +23,7 @@ else
     echo "Skipping pre-deploy backup because the production database service is not running yet."
 fi
 
-echo "Pruning unused Docker build cache and images"
+echo "Pruning unused Docker build cache and images before rebuild"
 docker builder prune -af || true
 docker image prune -af || true
 docker container prune -f || true
