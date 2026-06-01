@@ -47,6 +47,7 @@ RUN npm run typecheck \
 
 FROM base AS prod-deps
 
+COPY --from=builder /app/build/server/index.js /tmp/build-server-index.js
 COPY package*.json ./
 COPY prisma ./prisma
 
