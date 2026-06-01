@@ -1,25 +1,10 @@
--- CreateTable
-CREATE TABLE `batch_video_export_runs` (
-    `id` VARCHAR(191) NOT NULL,
-    `batch_id` VARCHAR(191) NOT NULL,
-    `created_by_user_id` VARCHAR(191) NOT NULL,
-    `status` ENUM('DRAFT', 'READY', 'RENDERING', 'UPLOADING', 'PARTIAL', 'FAILED', 'COMPLETED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
-    `version` INTEGER NOT NULL,
-    `render_manifest` JSON NOT NULL,
-    `export_settings` JSON NULL,
-    `error_message` TEXT NULL,
-    `committed_at` DATETIME(3) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `updated_at` DATETIME(3) NOT NULL,
+-- Align the first video export run schema with the V2 API shape.
+-- Production may already have the earlier run/run_items migration applied.
 
-    INDEX `batch_video_export_runs_batch_id_created_at_idx`(`batch_id`, `created_at`),
-    INDEX `batch_video_export_runs_status_idx`(`status`),
-    UNIQUE INDEX `batch_video_export_runs_batch_id_version_key`(`batch_id`, `version`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+ALTER TABLE `batch_video_export_runs`
+    ADD COLUMN IF NOT EXISTS `error_message` TEXT NULL AFTER `export_settings`;
 
--- CreateTable
-CREATE TABLE `batch_video_export_items` (
+CREATE TABLE IF NOT EXISTS `batch_video_export_items` (
     `id` VARCHAR(191) NOT NULL,
     `run_id` VARCHAR(191) NOT NULL,
     `item_id` VARCHAR(191) NOT NULL,
@@ -38,25 +23,53 @@ CREATE TABLE `batch_video_export_items` (
     INDEX `batch_video_export_items_item_id_idx`(`item_id`),
     UNIQUE INDEX `batch_video_export_items_run_id_item_id_key`(`run_id`, `item_id`),
     UNIQUE INDEX `batch_video_export_items_run_id_segment_seq_key`(`run_id`, `segment_seq`),
-    PRIMARY KEY (`id`)
+    PRIMARY KEY (`id`),
+    CONSTRAINT `batch_video_export_items_run_id_fkey`
+        FOREIGN KEY (`run_id`) REFERENCES `batch_video_export_runs`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `batch_video_export_items_item_id_fkey`
+        FOREIGN KEY (`item_id`) REFERENCES `items`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- AddForeignKey
-ALTER TABLE `batch_video_export_runs`
-    ADD CONSTRAINT `batch_video_export_runs_batch_id_fkey`
-    FOREIGN KEY (`batch_id`) REFERENCES `batches`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `batch_video_export_runs`
-    ADD CONSTRAINT `batch_video_export_runs_created_by_user_id_fkey`
-    FOREIGN KEY (`created_by_user_id`) REFERENCES `users`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `batch_video_export_items`
-    ADD CONSTRAINT `batch_video_export_items_run_id_fkey`
-    FOREIGN KEY (`run_id`) REFERENCES `batch_video_export_runs`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `batch_video_export_items`
-    ADD CONSTRAINT `batch_video_export_items_item_id_fkey`
-    FOREIGN KEY (`item_id`) REFERENCES `items`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+INSERT IGNORE INTO `batch_video_export_items` (
+    `id`,
+    `run_id`,
+    `item_id`,
+    `serial_number`,
+    `segment_seq`,
+    `status`,
+    `render_status`,
+    `upload_status`,
+    `file_url`,
+    `checksum`,
+    `error_message`,
+    `created_at`,
+    `updated_at`
+)
+SELECT
+    `id`,
+    `run_id`,
+    `item_id`,
+    `serial_number`,
+    `segment_seq`,
+    CASE `status`
+        WHEN 'FAILED_RENDER' THEN 'FAILED'
+        WHEN 'FAILED_UPLOAD' THEN 'FAILED'
+        ELSE `status`
+    END,
+    CASE `render_status`
+        WHEN 'FAILED_RENDER' THEN 'FAILED'
+        WHEN 'FAILED_UPLOAD' THEN 'FAILED'
+        ELSE `render_status`
+    END,
+    CASE `upload_status`
+        WHEN 'FAILED_RENDER' THEN 'FAILED'
+        WHEN 'FAILED_UPLOAD' THEN 'FAILED'
+        ELSE `upload_status`
+    END,
+    `file_url`,
+    LEFT(`checksum`, 64),
+    `error_message`,
+    `created_at`,
+    `updated_at`
+FROM `batch_video_export_run_items`
+WHERE `item_id` IS NOT NULL;
