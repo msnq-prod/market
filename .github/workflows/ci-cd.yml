@@ -61,7 +61,7 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts || true
 
       - name: Deploy revision on server
         env:
@@ -79,5 +79,5 @@ jobs:
           echo "Deploying $GITHUB_SHA to $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR"
           echo "Minimum free disk before deploy: ${DEPLOY_MIN_FREE_GB} GiB"
 
-          ssh -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -o StrictHostKeyChecking=accept-new -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd '$DEPLOY_DIR' && STONES_MIN_FREE_GB='$DEPLOY_MIN_FREE_GB' ./scripts/ops/deploy-revision.sh '$GITHUB_SHA'"
