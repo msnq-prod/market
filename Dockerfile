@@ -45,11 +45,13 @@ RUN npm run typecheck \
     && npm run build:server \
     && npm run build:client
 
-FROM deps AS prod-deps
+FROM base AS prod-deps
+
+COPY package*.json ./
+COPY prisma ./prisma
 
 RUN --mount=type=cache,target=/tmp/.npm \
-    npm prune --omit=dev --no-audit --no-fund \
-    && npm uninstall electron electron-builder --no-save --no-audit --no-fund \
+    npm ci --omit=dev --prefer-offline --no-audit --no-fund \
     && npx prisma generate \
     && find node_modules -type f -name '*.map' -delete
 
