@@ -487,6 +487,10 @@ class MediaUploadQueue extends EventEmitter {
             return this.uploadVideoExportRunItem(job, token);
         }
 
+        if (job.type === 'VIDEO_EXPORT_RUN_ITEM_UPLOAD') {
+            return this.uploadVideoExportRunItem(job, token);
+        }
+
         throw new Error(`Неизвестный тип media queue job: ${job.type}`);
     }
 
@@ -581,6 +585,30 @@ class MediaUploadQueue extends EventEmitter {
         });
 
         return parseJsonResponse(response, 'Не удалось загрузить ролик элемента V2.');
+    }
+
+    async uploadVideoExportRunItem(job, token) {
+        const serialNumber = String(job.payload.serialNumber || '').trim().toUpperCase();
+        const file = await this.fetchHelperFile(
+            job,
+            `/render-jobs/${encodeURIComponent(job.payload.helperJobId)}/files/${encodeURIComponent(serialNumber)}`,
+            `${serialNumber}.mp4`,
+            'video/mp4'
+        );
+        const form = new FormData();
+        await appendFileToForm(form, 'file', file.cachePath, file.originalName, file.mimeType);
+        form.append('serial_number', serialNumber);
+        form.append('queue_job_id', job.id);
+        form.append('queue_file_id', file.fileId);
+        form.append('checksum_sha256', file.checksumSha256);
+
+        const response = await fetch(this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-runs/${encodeURIComponent(job.payload.runId)}/items/${encodeURIComponent(job.payload.itemId)}/upload`), {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: form
+        });
+
+        return parseJsonResponse(response, 'Не удалось загрузить финальный ролик.');
     }
 }
 
