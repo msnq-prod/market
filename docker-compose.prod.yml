@@ -73,9 +73,9 @@ services:
       RUN_MIGRATIONS: "1"
       NODE_ENV: production
     volumes:
-      - stones_uploads:/app/public/uploads
-      - stones_video_jobs:/app/storage/video-jobs
-      - stones_video_exports:/app/storage/video-export
+      - /media/stones/uploads:/app/public/uploads
+      - /media/stones/video-jobs:/app/storage/video-jobs
+      - /media/stones/video-export:/app/storage/video-export
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || '3001') + '/healthz').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))\""]
       interval: 10s
@@ -110,9 +110,9 @@ services:
       RUN_MIGRATIONS: "0"
       NODE_ENV: production
     volumes:
-      - stones_uploads:/app/public/uploads
-      - stones_video_jobs:/app/storage/video-jobs
-      - stones_video_exports:/app/storage/video-export
+      - /media/stones/uploads:/app/public/uploads
+      - /media/stones/video-jobs:/app/storage/video-jobs
+      - /media/stones/video-export:/app/storage/video-export
     healthcheck:
       test: ["CMD-SHELL", "ps -o args | grep -q '[n]ode build/server/videoProcessor.js'"]
       interval: 15s
@@ -200,6 +200,3 @@ volumes:
   loki_data:
   promtail_positions:
   stones_mysql_data:
-  stones_uploads:
-  stones_video_jobs:
-  stones_video_exports:
