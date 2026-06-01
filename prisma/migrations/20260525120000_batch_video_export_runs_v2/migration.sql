@@ -1,8 +1,21 @@
 -- Align the first video export run schema with the V2 API shape.
 -- Production may already have the earlier run/run_items migration applied.
 
-ALTER TABLE `batch_video_export_runs`
-    ADD COLUMN IF NOT EXISTS `error_message` TEXT NULL AFTER `export_settings`;
+SET @add_error_message_column := (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE `batch_video_export_runs` ADD COLUMN `error_message` TEXT NULL AFTER `export_settings`',
+        'SELECT 1'
+    )
+    FROM `INFORMATION_SCHEMA`.`COLUMNS`
+    WHERE `TABLE_SCHEMA` = DATABASE()
+      AND `TABLE_NAME` = 'batch_video_export_runs'
+      AND `COLUMN_NAME` = 'error_message'
+);
+
+PREPARE add_error_message_column_stmt FROM @add_error_message_column;
+EXECUTE add_error_message_column_stmt;
+DEALLOCATE PREPARE add_error_message_column_stmt;
 
 CREATE TABLE IF NOT EXISTS `batch_video_export_items` (
     `id` VARCHAR(191) NOT NULL,
