@@ -17,7 +17,7 @@ RUN apk add --no-cache openssl
 FROM base AS deps
 
 COPY package*.json ./
-COPY prisma ./prisma
+COPY prisma/schema.prisma ./prisma/schema.prisma
 
 RUN --mount=type=cache,target=/tmp/.npm \
     sh -lc 'attempt=1; \
@@ -49,7 +49,7 @@ FROM base AS prod-deps
 
 COPY --from=builder /app/build/server/index.js /tmp/build-server-index.js
 COPY package*.json ./
-COPY prisma ./prisma
+COPY prisma/schema.prisma ./prisma/schema.prisma
 
 RUN --mount=type=cache,target=/tmp/.npm \
     npm ci --omit=dev --prefer-offline --no-audit --no-fund \
