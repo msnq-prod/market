@@ -74,6 +74,7 @@ services:
       NODE_ENV: production
     volumes:
       - /media/stones/uploads:/app/public/uploads
+      - /media/stones/upload-staging:/app/storage/uploads
       - /media/stones/video-jobs:/app/storage/video-jobs
       - /media/stones/video-export:/app/storage/video-export
     healthcheck:
@@ -111,6 +112,7 @@ services:
       NODE_ENV: production
     volumes:
       - /media/stones/uploads:/app/public/uploads
+      - /media/stones/upload-staging:/app/storage/uploads
       - /media/stones/video-jobs:/app/storage/video-jobs
       - /media/stones/video-export:/app/storage/video-export
     healthcheck:
