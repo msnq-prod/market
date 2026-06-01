@@ -506,24 +506,26 @@ export function VideoToolController() {
                     throw new Error('Не удалось загрузить активный video export run.');
                 }
 
-                const manifestSources = await Promise.all(createSourcesFromManifest(latestRun.render_manifest).map(async (source) => {
-                    const draftSource = existingDraft?.sources.find((entry) =>
-                        entry.sourceIndex === source.sourceIndex
-                        && entry.fingerprint.name === source.name
-                        && entry.fingerprint.size === source.size
-                        && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
-                    );
-                    const helperSourceId = draftSource?.helperSourceId || '';
-                    const previewState = await resolveRestoredPreview(helperSourceId, draftSource);
-                    return {
-                        ...source,
-                        helperSourceId: helperSourceId,
-                        stagedSourceId: draftSource?.stagedSourceId || null,
-                        cachePath: draftSource?.cachePath || null,
-                        checksumSha256: draftSource?.checksumSha256 || null,
-                        ...previewState
-                    };
-                }));
+                const manifestSources = latestRun.render_manifest
+                    ? await Promise.all(createSourcesFromManifest(latestRun.render_manifest).map(async (source) => {
+                        const draftSource = existingDraft?.sources.find((entry) =>
+                            entry.sourceIndex === source.sourceIndex
+                            && entry.fingerprint.name === source.name
+                            && entry.fingerprint.size === source.size
+                            && Math.abs(entry.fingerprint.durationMs - source.durationMs) <= SOURCE_DURATION_TOLERANCE_MS
+                        );
+                        const helperSourceId = draftSource?.helperSourceId || '';
+                        const previewState = await resolveRestoredPreview(helperSourceId, draftSource);
+                        return {
+                            ...source,
+                            helperSourceId: helperSourceId,
+                            stagedSourceId: draftSource?.stagedSourceId || null,
+                            cachePath: draftSource?.cachePath || null,
+                            checksumSha256: draftSource?.checksumSha256 || null,
+                            ...previewState
+                        };
+                    }))
+                    : [];
                 if (manifestSources.length > 0) {
                     setSources(manifestSources);
                     setActiveSourceIndex(manifestSources[0]?.sourceIndex ?? 0);

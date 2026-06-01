@@ -101,7 +101,7 @@ export type VideoExportRunDetails = {
     created_by_user_id?: string;
     status: VideoExportRunStatus;
     version: number;
-    render_manifest: VideoExportManifest;
+    render_manifest: VideoExportManifest | null;
     export_settings?: VideoExportSettings | null;
     committed_at?: string | null;
     created_at: string;

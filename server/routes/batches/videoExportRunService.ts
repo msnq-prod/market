@@ -309,11 +309,23 @@ export const uploadVideoExportItemFile = async (
                 throw createHttpError('Загрузка видео доступна только для партии в статусе RECEIVED.', 400);
             }
 
-            const normalizedManifest = normalizeVideoExportManifest(parseJsonBodyField(body?.render_manifest), batch.items);
-            const manifestTarget = normalizedManifest.outputs.find((output) => (
+            const batchItem = batch.items.find((item) => item.id === itemId);
+            if (!batchItem || !batchItem.serial_number) {
+                throw createHttpError('Item не найден в выбранной партии или не имеет serial_number.', 400);
+            }
+
+            if (batchItem.serial_number.toUpperCase() !== serialNumber) {
+                throw createHttpError('serial_number не совпадает с Item.', 400);
+            }
+
+            const rawManifest = parseJsonBodyField(body?.render_manifest);
+            const normalizedManifest = rawManifest
+                ? normalizeVideoExportManifest(rawManifest, batch.items)
+                : null;
+            const manifestTarget = normalizedManifest?.outputs.find((output) => (
                 output.item_id === itemId && output.serial_number.toUpperCase() === serialNumber
             ));
-            if (!manifestTarget) {
+            if (normalizedManifest && !manifestTarget) {
                 throw createHttpError('render_manifest не содержит загружаемый Item.', 400);
             }
 
@@ -331,11 +343,18 @@ export const uploadVideoExportItemFile = async (
                         created_by_user_id: userId,
                         status: 'UPLOADING',
                         version: (latestVersionRecord?.version ?? 0) + 1,
-                        render_manifest: normalizedManifest as Prisma.InputJsonValue,
-                        export_settings: (parseJsonBodyField(body?.export_settings) || normalizedManifest.export_settings || {}) as Prisma.InputJsonValue
+                        render_manifest: normalizedManifest as Prisma.InputJsonValue | undefined,
+                        export_settings: (parseJsonBodyField(body?.export_settings) || normalizedManifest?.export_settings || {}) as Prisma.InputJsonValue
                     }
                 });
-                for (const output of normalizedManifest.outputs) {
+                const uploadTargets = normalizedManifest?.outputs ?? batch.items
+                    .filter((item) => item.serial_number)
+                    .map((item, index) => ({
+                        item_id: item.id,
+                        serial_number: item.serial_number as string,
+                        segment_seq: index + 1
+                    }));
+                for (const output of uploadTargets) {
                     await tx.batchVideoExportItem.create({
                         data: {
                             run_id: runId,
@@ -353,18 +372,48 @@ export const uploadVideoExportItemFile = async (
                 }
             } else {
                 const existingManifest = parseVideoExportManifest(run.render_manifest);
-                if (JSON.stringify(existingManifest) !== JSON.stringify(normalizedManifest)) {
+                if (normalizedManifest && existingManifest && JSON.stringify(existingManifest) !== JSON.stringify(normalizedManifest)) {
                     throw createHttpError('render_manifest не совпадает с серверным запуском экспорта.', 409);
                 }
             }
 
-            if (run.status === 'CANCELLED' || run.status === 'COMPLETED') {
+            if (run.status === 'CANCELLED') {
                 throw createHttpError('Этот запуск уже закрыт.', 409);
             }
 
             const targetItem = run.items.find((it) => it.item_id === itemId && it.serial_number.toUpperCase() === serialNumber);
             if (!targetItem) {
                 throw createHttpError('Товар не относится к текущему запуску экспорта.', 400);
+            }
+
+            const overwriteRequested = body?.overwrite === true || body?.overwrite === 'true';
+            if (targetItem.file_url && (targetItem.status === 'UPLOADED' || targetItem.upload_status === 'UPLOADED')) {
+                if (parsedChecksum && targetItem.checksum === parsedChecksum) {
+                    return {
+                        run: serializeVideoExportRunDetails(run),
+                        status: run.status,
+                        file_url: targetItem.file_url,
+                        item_card_url: `/clone/${encodeURIComponent(serialNumber)}`,
+                        uploaded: {
+                            item_id: itemId,
+                            serial_number: serialNumber,
+                            file_url: targetItem.file_url,
+                            item_card_url: `/clone/${encodeURIComponent(serialNumber)}`
+                        }
+                    };
+                }
+
+                if (run.status === 'COMPLETED') {
+                    throw createHttpError('Этот запуск уже закрыт.', 409);
+                }
+
+                if (!overwriteRequested) {
+                    throw createHttpError('Видео для этого Item уже загружено. Для замены нужен overwrite=true.', 409);
+                }
+            }
+
+            if (run.status === 'COMPLETED') {
+                throw createHttpError('Этот запуск уже закрыт.', 409);
             }
 
             const outputDir = buildVideoExportPublicOutputDir(batchId, run.version);
@@ -382,7 +431,7 @@ export const uploadVideoExportItemFile = async (
                 where: { id: targetItem.id },
                 data: {
                     status: 'UPLOADED',
-                    render_status: 'RENDERED',
+                    render_status: targetItem.render_status,
                     upload_status: 'UPLOADED',
                     file_url: publicUrl,
                     checksum: parsedChecksum || null,

@@ -570,9 +570,6 @@ class MediaUploadQueue extends EventEmitter {
         form.append('queue_job_id', job.id);
         form.append('queue_file_id', file.fileId);
         form.append('checksum_sha256', file.checksumSha256);
-        if (job.payload.renderManifest) {
-            form.append('render_manifest', JSON.stringify(job.payload.renderManifest));
-        }
         if (job.payload.exportSettings) {
             form.append('export_settings', JSON.stringify(job.payload.exportSettings));
         }

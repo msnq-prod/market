@@ -328,7 +328,7 @@ VIDEO_PROCESSOR_WORKERS=2 VIDEO_JOB_CONCURRENCY=2 VIDEO_JOB_FFMPEG_THREADS=1 npm
 - Video Tool проверяет внутренний video runtime и версию протокола `stones-video-export-helper-v3`;
 - отдельное helper-приложение и локальный HTTP helper в основном desktop-сценарии не используются;
 - черновик нарезки и текущий V2 run восстанавливаются после перезагрузки страницы;
-- V2 run хранит item-level render/upload state и обновляет `item_video_url` после загрузки item-файла;
+- V2 run в backend используется как upload-session: сервер фиксирует финальные item-файлы и обновляет `item_video_url`, render-прогресс остается в Desktop HQ;
 - при зависшей или частично загруженной session доступна append-only догрузка и `retry-tail` только для отсутствующих роликов;
 - уже загруженные `serial_number` не пересобираются и не переупорядочиваются;
 - после `CANCELLED` следующая попытка создает новую session.

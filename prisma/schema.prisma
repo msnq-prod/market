@@ -581,7 +581,7 @@ model BatchVideoExportRun {
   created_by_user_id String
   status             BatchVideoExportRunStatus @default(DRAFT)
   version            Int
-  render_manifest    Json
+  render_manifest    Json?
   export_settings    Json?
   error_message      String?                   @db.Text
   committed_at       DateTime?

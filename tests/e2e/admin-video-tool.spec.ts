@@ -112,7 +112,7 @@ test('UI: V2 happy path renders locally and uploads item result', async ({ page,
     expect(updatedToolPayload.items[0]?.item_video_url).toContain('/uploads/videos/exports/');
 });
 
-test('API: V2 upload требует render_manifest', async ({ request }) => {
+test('API: V2 upload принимает финальный ролик без render_manifest', async ({ request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
@@ -133,9 +133,18 @@ test('API: V2 upload требует render_manifest', async ({ request }) => {
         }
     });
 
-    expect(response.status()).toBe(400);
-    const payload = await response.json() as { error?: string };
-    expect(payload.error || '').toContain('render_manifest');
+    expect(response.ok()).toBeTruthy();
+    const payload = await response.json() as {
+        uploaded?: { item_id: string; serial_number: string; file_url: string };
+        run?: { render_manifest: unknown; items: Array<{ item_id: string; upload_status: string; render_status: string | null }> };
+    };
+    expect(payload.uploaded?.item_id).toBe(item.id);
+    expect(payload.uploaded?.serial_number).toBe(item.serial_number);
+    expect(payload.uploaded?.file_url).toContain('/uploads/videos/exports/');
+    expect(payload.run?.render_manifest).toBeNull();
+    const uploadedItem = payload.run?.items.find((entry) => entry.item_id === item.id);
+    expect(uploadedItem?.upload_status).toBe('UPLOADED');
+    expect(uploadedItem?.render_status).toBeNull();
 });
 
 test('UI: V2 existing run подхватывается после reload', async ({ page, request }) => {

@@ -220,9 +220,9 @@ ZAGARAMI состоит из четырех основных частей:
 - UI создает local runId
 - Electron создает local V2 run snapshot в desktop state
 - video runtime вызывается через IPC/helperRuntime без локального HTTP endpoint
-- backend `BatchVideoExportRun` создается при первом item-level upload
+- backend `BatchVideoExportRun` создается при первом item-level upload как upload-session; `render_manifest` для upload не обязателен
 - item-level upload идет через `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
-- upload сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
+- upload валидирует `batchId`/`itemId`/`serial_number`/checksum, сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
 
 Код:
 
