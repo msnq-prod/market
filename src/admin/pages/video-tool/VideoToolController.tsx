@@ -50,7 +50,8 @@ import {
     cancelVideoExportRun as cancelServerVideoExportRun,
     fetchVideoExportRuns,
     fetchVideoToolPayload,
-    fetchVideoUploadStatus
+    fetchVideoUploadStatus,
+    runVideoExportServerHealthcheck
 } from './videoExportClient';
 import { useVideoExportRunState } from './useVideoExportRunState';
 import {
@@ -461,6 +462,26 @@ export function VideoToolController() {
         0,
         durationMs
     ), [durationMs, visibleDurationMs, visibleStartMs]);
+
+    const rebuildSegmentsForSources = useCallback((nextSources: WorkingSource[]) => {
+        if (nextSources.length === 0) {
+            return [];
+        }
+
+        return nextSources.reduce<Segment[]>((nextSegments, source, index) => (
+            index === 0
+                ? createFirstSourceSegments(source)
+                : appendInitialSourceSegment(nextSegments, source, nextSources.slice(0, index + 1))
+        ), []);
+    }, []);
+
+    const reindexSources = useCallback((nextSources: WorkingSource[]) => nextSources
+        .sort((left, right) => left.sourceIndex - right.sourceIndex)
+        .map((source, index) => ({
+            ...source,
+            sourceIndex: index,
+            role: index === 0 ? 'WITH_INTRO' : 'NO_INTRO'
+        } satisfies WorkingSource)), []);
     const syncVideoTime = useCallback((nextMs: number) => {
         const sourceHit = getSourceForGlobalMs(sources, nextMs);
         if (sourceHit && sourceHit.source.sourceIndex !== activeSourceIndex) {
@@ -901,8 +922,7 @@ export function VideoToolController() {
             if (dragPlayheadRef.current && timelineRef.current && durationMs && visibleDurationMs) {
                 const rect = timelineRef.current.getBoundingClientRect();
                 const nextMs = timelineClientXToMs(event.clientX, rect);
-                const snappedMs = getSnappedMs(nextMs);
-                syncVideoTime(snappedMs);
+                syncVideoTime(nextMs);
                 return;
             }
 
@@ -1005,7 +1025,7 @@ export function VideoToolController() {
         }
     }, [durationMs, playheadMs, segments, selectedSegmentIndex]);
 
-    const handleSourcePicked = (file: File | null, mode: 'first' | 'append' = 'first', targetSourceIndex?: number) => {
+    const handleSourcePicked = (file: File | null, mode: 'first' | 'append' | 'rebind' | 'replace' = 'first', targetSourceIndex?: number) => {
         if (!file) {
             return;
         }
@@ -1013,7 +1033,7 @@ export function VideoToolController() {
         const sourceIndex = typeof targetSourceIndex === 'number' ? targetSourceIndex : mode === 'first' ? 0 : sources.length;
         const existingSource = sources.find((source) => source.sourceIndex === sourceIndex) ?? null;
         const role: SourceRole = existingSource?.role ?? (sourceIndex === 0 ? 'WITH_INTRO' : 'NO_INTRO');
-        const preserveExistingTimeline = Boolean(existingSource && (mode === 'first' || mode === 'append'));
+        const preserveExistingTimeline = Boolean(existingSource && mode === 'rebind');
         const nextObjectUrl = URL.createObjectURL(file);
         sourceObjectUrlsRef.current.add(nextObjectUrl);
 
@@ -1039,9 +1059,36 @@ export function VideoToolController() {
         setActiveSourceIndex(sourceIndex);
         void importSourceIntoHelper(file, sourceIndex, role, nextObjectUrl, {
             preserveTimeline: preserveExistingTimeline,
-            expectedFingerprint: existingSource
+            resetTimeline: mode === 'replace',
+            expectedFingerprint: preserveExistingTimeline ? existingSource : null
         });
     };
+
+    const handleSourceDeleted = useCallback((sourceIndex: number) => {
+        const nextSources = reindexSources(sources.filter((source) => source.sourceIndex !== sourceIndex));
+        sourceObjectUrlsRef.current.forEach((objectUrl) => revokeObjectUrl(objectUrl));
+        sourceObjectUrlsRef.current.clear();
+        pushSegmentsToHistory(segments);
+        setSources(nextSources);
+        setActiveSourceIndex(nextSources[0]?.sourceIndex ?? 0);
+        setSegments(rebuildSegmentsForSources(nextSources));
+        setSelectedSegmentIndex(0);
+        setPlayheadMs(0);
+        setPendingSerials([]);
+        setIntroHelperSourceId('');
+        setExportPhase('idle');
+        setExportMessage('');
+        setNotice({
+            tone: 'warning',
+            message: 'Исходник удалён. Монтаж пересобран по оставшимся файлам.'
+        });
+        setTimelineViewport({
+            zoom: 1,
+            visibleStartMs: 0,
+            visibleDurationMs: getTotalSourceDurationMs(nextSources),
+            isPanning: false
+        });
+    }, [rebuildSegmentsForSources, reindexSources, segments, setExportPhase, sources, pushSegmentsToHistory]);
 
     const handleLoadedMetadata = () => {
         if (!activeSource || !videoRef.current || !Number.isFinite(videoRef.current.duration) || videoRef.current.duration <= 0) {
@@ -1074,6 +1121,7 @@ export function VideoToolController() {
         fallbackPreviewUrl = '',
         options?: {
             preserveTimeline?: boolean;
+            resetTimeline?: boolean;
             expectedFingerprint?: SourceFingerprint | null;
         }
     ) => {
@@ -1126,7 +1174,7 @@ export function VideoToolController() {
                 throw new Error(payload.preview_error || 'Helper не создал desktop preview для исходника.');
             }
 
-            const nextSource = createSourceFromFingerprint(sourceIndex, role, expectedFingerprint || nextFingerprint, {
+            const nextSource = createSourceFromFingerprint(sourceIndex, role, nextFingerprint, {
                 file,
                 helperSourceId: payload.source_id,
                 stagedSourceId: stagedSource?.stagedSourceId || null,
@@ -1147,16 +1195,20 @@ export function VideoToolController() {
                 return payload.source_id;
             }
 
-            const baseSources = sourceIndex === 0
-                ? []
-                : sources.filter((source) => source.sourceIndex !== sourceIndex);
-            const nextSources = [...baseSources, nextSource].sort((left, right) => left.sourceIndex - right.sourceIndex);
+            const hasExistingSource = sources.some((source) => source.sourceIndex === sourceIndex);
+            const baseSources = hasExistingSource || sourceIndex !== 0
+                ? sources.filter((source) => source.sourceIndex !== sourceIndex)
+                : [];
+            const nextSources = reindexSources([...baseSources, nextSource]);
             setSources(nextSources);
-            setSegments((currentSegments) => (
-                sourceIndex === 0
-                    ? createFirstSourceSegments(nextSource)
-                    : appendInitialSourceSegment(currentSegments, nextSource, nextSources)
-            ));
+            setSegments((currentSegments) => {
+                if (options?.resetTimeline || sourceIndex === 0) {
+                    pushSegmentsToHistory(currentSegments);
+                    return rebuildSegmentsForSources(nextSources);
+                }
+
+                return appendInitialSourceSegment(currentSegments, nextSource, nextSources);
+            });
             setTimelineViewport({
                 zoom: 1,
                 visibleStartMs: 0,
@@ -1165,6 +1217,12 @@ export function VideoToolController() {
             });
             setSelectedSegmentIndex(0);
             setPlayheadMs(0);
+            if (options?.resetTimeline) {
+                setNotice({
+                    tone: 'warning',
+                    message: `Исходник ${nextSource.name} заменён. Монтаж пересобран по текущим файлам.`
+                });
+            }
 
             if (isHevcMov) {
                 setNotice({
@@ -1421,8 +1479,10 @@ export function VideoToolController() {
             setError('');
             setNotice(null);
             setExportPhase('preflight');
-            setExportMessage('Подготавливаем V2 запуск экспорта...');
+            setExportMessage('Проверяем готовность сервера к video upload...');
             runPreflightCheck();
+            await runVideoExportServerHealthcheck(data.batch.id);
+            setExportMessage('Подготавливаем V2 запуск экспорта...');
 
             const manifest = buildCurrentManifest();
             setIsStartingRun(true);
@@ -1667,6 +1727,7 @@ export function VideoToolController() {
                         activeSourceIndex={activeSourceIndex}
                         setActiveSourceIndex={setActiveSourceIndex}
                         onSourcePicked={handleSourcePicked}
+                        onSourceDeleted={handleSourceDeleted}
                         exportResolution={exportResolution}
                         setExportResolution={setExportResolution}
                         exportQuality={exportQuality}
@@ -1713,6 +1774,7 @@ export function VideoToolController() {
                         setNotice={setNotice}
                         handleLoadedMetadata={handleLoadedMetadata}
                         videoRef={videoRef}
+                        timelineRef={timelineRef}
                         timelineScrollbarRef={timelineScrollbarRef}
                         dragPlayheadRef={dragPlayheadRef}
                         dragBoundaryIndexRef={dragBoundaryIndexRef}

@@ -34,6 +34,7 @@ interface EditorWorkspaceProps {
     setNotice: React.Dispatch<React.SetStateAction<InlineNotice | null>>;
     handleLoadedMetadata: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
     videoRef: React.RefObject<HTMLVideoElement | null>;
+    timelineRef: React.RefObject<HTMLDivElement | null>;
     timelineScrollbarRef: React.RefObject<HTMLDivElement | null>;
     dragPlayheadRef: React.MutableRefObject<boolean>;
     dragBoundaryIndexRef: React.MutableRefObject<number | null>;
@@ -79,6 +80,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setNotice: _setNotice,
     handleLoadedMetadata,
     videoRef,
+    timelineRef,
     timelineScrollbarRef,
     dragPlayheadRef,
     dragBoundaryIndexRef,
@@ -319,12 +321,21 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                     ref={timelineRulerRef}
                                     data-testid="timeline-region"
                                     className="relative h-20 w-full select-none overflow-hidden rounded-xl bg-zinc-950/80 border border-zinc-900"
+                                    onPointerMove={(event) => {
+                                        if (!dragPlayheadRef.current) return;
+                                        const rect = event.currentTarget.getBoundingClientRect();
+                                        const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+                                        syncVideoTime(visibleStartMs + (ratio * visibleDurationMs));
+                                    }}
                                     onPointerDown={(event) => {
+                                        event.preventDefault();
+                                        timelineRef.current = event.currentTarget;
                                         const rect = event.currentTarget.getBoundingClientRect();
                                         const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
                                         const targetMs = visibleStartMs + (ratio * visibleDurationMs);
                                         syncVideoTime(targetMs);
                                         dragPlayheadRef.current = true;
+                                        event.currentTarget.setPointerCapture?.(event.pointerId);
                                     }}
                                 >
                                     {/* Segment blocks in timeline */}
@@ -408,9 +419,13 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                                 className="absolute top-1.5 z-30 h-3.5 w-3.5 -translate-x-1/2 rounded-full border border-red-500 bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]"
                                                 style={{ left: `${((playheadMs - visibleStartMs) / visibleDurationMs) * 100}%` }}
                                                 onPointerDown={(event) => {
+                                                    event.preventDefault();
                                                     event.stopPropagation();
+                                                    timelineRef.current = timelineRulerRef.current;
                                                     dragPlayheadRef.current = true;
+                                                    event.currentTarget.setPointerCapture?.(event.pointerId);
                                                 }}
+                                                data-testid="timeline-playhead-handle"
                                                 aria-label="Переместить плейхед"
                                             />
                                             <div

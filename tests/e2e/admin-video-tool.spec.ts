@@ -59,6 +59,10 @@ async function getTimelineThumbStyle(page: Page) {
     });
 }
 
+async function getPlayheadLeft(page: Page) {
+    return page.getByTestId('timeline-playhead-handle').evaluate((element) => (element as HTMLElement).style.left);
+}
+
 async function wheelTimeline(page: Page, deltaX: number, deltaY: number) {
     await page.getByTestId('timeline-region').evaluate((element, deltas) => {
         const rect = element.getBoundingClientRect();
@@ -320,6 +324,56 @@ test('UI: V2 existing run подхватывается после reload', async
     await expect(page.getByTestId(`export-item-${targetItemId}`)).toBeVisible();
 });
 
+test('UI: плейхед следует за drag мышью на таймлайне', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+
+    await openDesktopVideoTool(page, admin, toolPayload.batch.id);
+    await page.getByTestId('source-input').setInputFiles({
+        name: 'source-1.mp4',
+        mimeType: 'video/mp4',
+        buffer: makeFakeMp4('source-drag'),
+        lastModified: 123457
+    });
+    await page.getByRole('button', { name: 'Монтаж' }).click();
+    await expect(page.getByTestId('timeline-region')).toBeVisible();
+
+    const box = await page.getByTestId('timeline-region').boundingBox();
+    expect(box).toBeTruthy();
+    await page.mouse.move(box!.x + box!.width * 0.25, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await expect.poll(() => getPlayheadLeft(page)).not.toBe('0%');
+    const beforeLeft = await getPlayheadLeft(page);
+    await page.mouse.move(box!.x + box!.width * 0.78, box!.y + box!.height / 2, { steps: 6 });
+    await page.mouse.up();
+
+    await expect.poll(() => getPlayheadLeft(page)).not.toBe(beforeLeft);
+    expect(await getPlayheadLeft(page)).not.toBe('0%');
+});
+
+test('UI: source можно заменить с пересборкой таймлайна', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+
+    await openDesktopVideoTool(page, admin, toolPayload.batch.id);
+    await uploadSourceAndCreateSingleClip(page, 'source-before-replace');
+    await page.getByRole('button', { name: 'Подготовка' }).click();
+    await page.getByTestId('source-replace-0').setInputFiles({
+        name: 'source-replacement.mp4',
+        mimeType: 'video/mp4',
+        buffer: makeFakeMp4('source-replacement'),
+        lastModified: 123999
+    });
+
+    await expect(page.getByTestId('source-list')).toContainText('source-replacement.mp4');
+    await page.getByRole('button', { name: 'Монтаж' }).click();
+    await expect(page.getByTestId('clip-counter')).toHaveText('Товарных клипов: 0 / 0');
+});
+
 test('UI: V2 item-level ручные действия не отображаются', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
@@ -350,7 +404,46 @@ test('UI: V2 cancel run меняет статус запуска', async ({ page
     await startRunFromExportTab(page);
 
     await page.getByTestId('cancel-run').click();
-    await expect(page.getByText(/Статус: CANCELLED/)).toBeVisible();
+    await expect(page.getByText(/Статус: Отменено/)).toBeVisible();
+    await expect(page.getByTestId('start-run')).toBeVisible();
+    await page.getByTestId('start-run').click();
+    await expect(page.getByText(/Статус: В работе/)).toBeVisible();
+});
+
+test('API: video export healthcheck загружает, скачивает и удаляет probe', async ({ request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+    const buffer = makeFakeMp4('healthcheck-probe');
+    const checksum = sha256(buffer);
+
+    const uploadResponse = await request.post(`/api/batches/${toolPayload.batch.id}/video-export-healthcheck`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            checksum_sha256: checksum,
+            file: {
+                name: 'probe.mp4',
+                mimeType: 'video/mp4',
+                buffer
+            }
+        }
+    });
+    expect(uploadResponse.ok()).toBeTruthy();
+    const uploadPayload = await uploadResponse.json() as { check_id: string; file_url: string; checksum_sha256: string };
+    expect(uploadPayload.checksum_sha256).toBe(checksum);
+
+    const downloadResponse = await request.get(uploadPayload.file_url);
+    expect(downloadResponse.ok()).toBeTruthy();
+    expect(sha256(await downloadResponse.body())).toBe(checksum);
+
+    const deleteResponse = await request.delete(`/api/batches/${toolPayload.batch.id}/video-export-healthcheck/${uploadPayload.check_id}`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(deleteResponse.ok()).toBeTruthy();
+
+    const afterDeleteResponse = await request.get(uploadPayload.file_url);
+    expect(afterDeleteResponse.status()).toBe(404);
 });
 
 test('UI: desktop hotkeys работают на V2 экране', async ({ page, request }) => {

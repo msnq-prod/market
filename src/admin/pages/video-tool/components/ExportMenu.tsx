@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, XCircle, ExternalLink } from 'lucide-react';
+import { AlertTriangle, XCircle, ExternalLink, RotateCcw } from 'lucide-react';
 import { resolveServerUrl } from '../../../../utils/serverUrls';
 import type { PreflightIssue } from '../engine/preflight';
 
@@ -97,6 +97,27 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
     };
 
     const mergedItems = run.items.map(getMergedItem);
+    const normalizedRunStatus = String(localRunSnapshot?.status || run.status || '').toUpperCase();
+    const canRestart = normalizedRunStatus === 'CANCELLED' || normalizedRunStatus === 'FAILED';
+    const runStatusLabel = (() => {
+        switch (normalizedRunStatus) {
+            case 'IMPORTING_SOURCES':
+                return 'Подготовка источников';
+            case 'RENDERING_INTRO':
+                return 'Рендер интро';
+            case 'READY':
+            case 'UPLOADING':
+                return 'В работе';
+            case 'COMPLETED':
+                return 'Завершено';
+            case 'CANCELLED':
+                return 'Отменено';
+            case 'FAILED':
+                return 'Ошибка';
+            default:
+                return run.status;
+        }
+    })();
     const allTerminal = mergedItems.every(
         (it) => it.status === 'UPLOADED' || it.status === 'SKIPPED' || it.status === 'CANCELLED' || it.uploadStatus === 'completed'
     );
@@ -107,7 +128,7 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-4">
                 <div>
                     <h2 className="text-sm font-semibold text-zinc-100 uppercase tracking-wider">
-                        Версия запуска #{run.version} · Статус: {run.status}
+                        Версия запуска #{run.version} · Статус: {runStatusLabel}
                     </h2>
                     <p className="text-xs text-zinc-400 mt-1">
                         Всего роликов для выгрузки: {run.items.length}. Рендеринг и загрузка происходят поштучно.
@@ -115,6 +136,17 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                 </div>
                 
                 <div className="flex items-center gap-2">
+                    {canRestart && (
+                        <button
+                            type="button"
+                            data-testid="start-run"
+                            onClick={onStartRun}
+                            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3.5 py-2 text-xs font-bold text-zinc-950 transition hover:bg-emerald-400"
+                        >
+                            <RotateCcw size={14} />
+                            Запустить заново
+                        </button>
+                    )}
                     {run.status !== 'COMPLETED' && run.status !== 'CANCELLED' && (
                         <button
                             type="button"
@@ -143,8 +175,33 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                         || item.uploadStatus === 'UPLOADING'
                     );
                     const isFailed = item.renderStatus === 'failed' || item.renderStatus === 'FAILED' || item.uploadStatus === 'failed' || item.uploadStatus === 'FAILED';
+                    const isCancelled = item.renderStatus === 'cancelled' || item.renderStatus === 'CANCELLED' || item.uploadStatus === 'cancelled' || item.uploadStatus === 'CANCELLED';
                     const resolvedFileUrl = resolveServerUrl(item.fileUrl, { serverOrigin: serverAssetOrigin });
                     const resolvedCardUrl = resolveServerUrl(item.itemCardUrl, { serverOrigin: serverAssetOrigin });
+                    const itemStatusLabel = isCompleted
+                        ? 'Загружено'
+                        : isFailed
+                            ? 'Ошибка'
+                            : isCancelled
+                                ? 'Отменено'
+                                : isRendering
+                                    ? 'Рендеринг'
+                                    : isReadyToUpload
+                                        ? 'Загрузка'
+                                        : normalizedRunStatus === 'IMPORTING_SOURCES'
+                                            ? 'Подготовка'
+                                            : normalizedRunStatus === 'RENDERING_INTRO'
+                                                ? 'Интро'
+                                                : 'Ожидает';
+                    const renderLabel = isCompleted
+                        ? 'Рендеринг готов'
+                        : isFailed
+                            ? 'Рендеринг ошибка'
+                            : isCancelled
+                                ? 'Рендеринг отменён'
+                                : isRendering
+                                    ? 'Рендеринг видео'
+                                    : 'Ожидает рендер';
 
                     return (
                         <div
@@ -155,7 +212,7 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                                     ? 'border-emerald-500/20 bg-emerald-950/5 shadow-[0_0_15px_rgba(16,185,129,0.02)]'
                                     : isRendering
                                         ? 'border-blue-500/30 bg-blue-950/5 shadow-[0_0_15px_rgba(59,130,246,0.02)]'
-                                        : isFailed
+                                        : isFailed || isCancelled
                                             ? 'border-red-500/20 bg-red-950/5'
                                             : 'border-zinc-800'
                             }`}
@@ -174,13 +231,15 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
                                         isCompleted
                                             ? 'bg-emerald-950 text-emerald-400'
-                                            : isRendering
+                                            : isFailed || isCancelled
+                                                ? 'bg-red-950 text-red-300'
+                                                : isRendering
                                                 ? 'bg-blue-950 text-blue-400 animate-pulse'
                                                 : isReadyToUpload
                                                     ? 'bg-emerald-950 text-emerald-400'
                                                     : 'bg-zinc-900 text-zinc-500'
                                     }`}>
-                                        {isRendering ? 'Рендеринг' : isReadyToUpload ? 'Готов к загрузке' : 'В очереди'}
+                                        {itemStatusLabel}
                                     </span>
                                 </div>
                             </div>
@@ -190,7 +249,7 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                                 {/* Render progress */}
                                 <div className="space-y-1">
                                     <div className="flex justify-between text-[11px] font-mono text-zinc-400">
-                                        <span>Рендеринг видео:</span>
+                                        <span>{renderLabel}:</span>
                                         <span>{item.renderProgress}%</span>
                                     </div>
                                     <div className="h-1.5 w-full bg-zinc-950 rounded-full overflow-hidden">

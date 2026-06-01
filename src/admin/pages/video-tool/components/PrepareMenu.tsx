@@ -1,5 +1,5 @@
 import React from 'react';
-import { Upload, Plus, RefreshCw, HardDrive, Clipboard, AlertTriangle } from 'lucide-react';
+import { Upload, Plus, RefreshCw, HardDrive, Clipboard, AlertTriangle, Repeat2, Trash2 } from 'lucide-react';
 import type { HelperDiagnosticEntry, VideoToolDraft, WorkingSource } from '../types';
 import type { PreflightIssue } from '../engine/preflight';
 
@@ -7,7 +7,8 @@ interface PrepareMenuProps {
     sources: WorkingSource[];
     activeSourceIndex: number;
     setActiveSourceIndex: (idx: number) => void;
-    onSourcePicked: (file: File | null, role: 'first' | 'append', sourceIndex?: number) => void;
+    onSourcePicked: (file: File | null, role: 'first' | 'append' | 'rebind' | 'replace', sourceIndex?: number) => void;
+    onSourceDeleted: (sourceIndex: number) => void;
     exportResolution: '1080p' | '720p';
     setExportResolution: (res: '1080p' | '720p') => void;
     exportQuality: 'high' | 'medium' | 'low';
@@ -35,6 +36,7 @@ export const PrepareMenu: React.FC<PrepareMenuProps> = ({
     activeSourceIndex,
     setActiveSourceIndex,
     onSourcePicked,
+    onSourceDeleted,
     exportResolution,
     setExportResolution,
     exportQuality,
@@ -137,25 +139,57 @@ export const PrepareMenu: React.FC<PrepareMenuProps> = ({
                                                 {statusBadge(source)}
                                             </div>
 
-                                            {sourceNeedsLocalFile && (
-                                                <div className="mt-3 flex items-center justify-between gap-4 bg-amber-500/10 rounded-lg border border-amber-500/20 px-3 py-2 text-xs text-amber-100">
-                                                    <span>Локальный кэш отсутствует</span>
-                                                    <label className="shrink-0 inline-flex cursor-pointer items-center rounded-lg bg-amber-400 px-2.5 py-1 text-[11px] font-semibold text-zinc-950 transition hover:bg-amber-300">
-                                                        <Upload size={12} className="mr-1" />
-                                                        Привязать
-                                                        <input
-                                                            data-testid={`source-rebind-${source.sourceIndex}`}
-                                                            type="file"
-                                                            accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm"
-                                                            className="hidden"
-                                                            onChange={(e) => {
-                                                                onSourcePicked(e.target.files?.[0] || null, source.sourceIndex === 0 ? 'first' : 'append', source.sourceIndex);
-                                                                e.currentTarget.value = '';
+                                            <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                                                sourceNeedsLocalFile
+                                                    ? 'border-amber-500/20 bg-amber-500/10 text-amber-100'
+                                                    : 'border-zinc-800 bg-zinc-950/60 text-zinc-300'
+                                            }`}>
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <span>{sourceNeedsLocalFile ? 'Локальный кэш отсутствует' : 'Источник готов'}</span>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <label className="inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-semibold text-zinc-100 transition hover:border-zinc-500">
+                                                            <Upload size={12} className="mr-1" />
+                                                            Перепривязать
+                                                            <input
+                                                                data-testid={`source-rebind-${source.sourceIndex}`}
+                                                                type="file"
+                                                                accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm"
+                                                                className="hidden"
+                                                                onChange={(e) => {
+                                                                    onSourcePicked(e.target.files?.[0] || null, 'rebind', source.sourceIndex);
+                                                                    e.currentTarget.value = '';
+                                                                }}
+                                                            />
+                                                        </label>
+                                                        <label className="inline-flex cursor-pointer items-center rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20">
+                                                            <Repeat2 size={12} className="mr-1" />
+                                                            Заменить
+                                                            <input
+                                                                data-testid={`source-replace-${source.sourceIndex}`}
+                                                                type="file"
+                                                                accept="video/mp4,video/quicktime,.mov,video/x-m4v,video/webm"
+                                                                className="hidden"
+                                                                onChange={(e) => {
+                                                                    onSourcePicked(e.target.files?.[0] || null, 'replace', source.sourceIndex);
+                                                                    e.currentTarget.value = '';
+                                                                }}
+                                                            />
+                                                        </label>
+                                                        <button
+                                                            type="button"
+                                                            data-testid={`source-delete-${source.sourceIndex}`}
+                                                            onClick={(event) => {
+                                                                event.stopPropagation();
+                                                                onSourceDeleted(source.sourceIndex);
                                                             }}
-                                                        />
-                                                    </label>
+                                                            className="inline-flex items-center rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11px] font-semibold text-red-200 transition hover:bg-red-500/20"
+                                                        >
+                                                            <Trash2 size={12} className="mr-1" />
+                                                            Удалить
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                            )}
+                                            </div>
                                         </div>
                                     );
                                 })}
