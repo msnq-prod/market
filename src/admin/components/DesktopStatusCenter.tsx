@@ -256,6 +256,17 @@ type BackgroundProgress = {
 
 const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
+const getQueueJobProgressPercent = (job: StonesMediaQueueJob) => {
+    if (job.status === 'done') {
+        return 100;
+    }
+    const percent = Number(job.progress?.percent);
+    if (Number.isFinite(percent)) {
+        return clampPercent(percent);
+    }
+    return activeQueueStatuses.has(job.status) ? 5 : 0;
+};
+
 const roleLabel: Record<string, string> = {
     ADMIN: 'Админ',
     MANAGER: 'Менеджер HQ',
@@ -330,8 +341,9 @@ function JobRow({
 }) {
     const isPhotoToolStale = job.blockingReason === 'photo_tool_state_stale';
     const canRetry = !isPhotoToolStale && (job.status === 'failed' || job.status === 'auth_required');
-    const canCancel = job.status === 'queued' || job.status === 'retrying' || job.status === 'failed' || job.status === 'auth_required';
+    const canCancel = job.status === 'queued' || job.status === 'uploading' || job.status === 'retrying' || job.status === 'failed' || job.status === 'auth_required';
     const normalizedLastError = normalizeQueueOrWorkflowError(job.lastError);
+    const progress = getQueueJobProgressPercent(job);
 
     return (
         <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
@@ -381,6 +393,11 @@ function JobRow({
                     ) : null}
                 </div>
             </div>
+            {(job.status === 'uploading' || job.status === 'queued' || job.status === 'retrying' || progress > 0) ? (
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/30">
+                    <div className="h-full rounded-full bg-white/70 transition-[width]" style={{ width: `${progress}%` }} />
+                </div>
+            ) : null}
             {job.lastError ? (
                 <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
                     {isPhotoToolStale
@@ -483,13 +500,14 @@ function VideoUploadGroupCard({
     onRetry: (jobId: string) => void;
     onCancel: (jobId: string) => void;
 }) {
-    const progress = group.total > 0 ? Math.round((group.done / group.total) * 100) : 0;
+    const completedUnits = group.jobs.reduce((total, job) => total + (getQueueJobProgressPercent(job) / 100), 0);
+    const progress = group.total > 0 ? clampPercent((completedUnits / group.total) * 100) : 0;
     const activeJob = group.jobs.find((job) => job.status === 'uploading')
         || group.jobs.find((job) => activeQueueStatuses.has(job.status))
         || group.jobs.find((job) => job.status === 'failed' || job.status === 'auth_required')
         || group.jobs[0];
     const retryableJobs = group.jobs.filter((job) => job.status === 'failed' || job.status === 'auth_required');
-    const cancellableJobs = group.jobs.filter((job) => job.status === 'queued' || job.status === 'retrying' || job.status === 'failed' || job.status === 'auth_required');
+    const cancellableJobs = group.jobs.filter((job) => job.status === 'queued' || job.status === 'uploading' || job.status === 'retrying' || job.status === 'failed' || job.status === 'auth_required');
     const tone = group.failed > 0
         ? 'border-red-400/25 bg-red-500/10'
         : group.done === group.total
@@ -509,7 +527,7 @@ function VideoUploadGroupCard({
                     </p>
                     {activeJob?.summary?.serialNumber ? (
                         <p className="mt-1 text-xs text-gray-400">
-                            Текущий serial: {activeJob.summary.serialNumber} · {jobStatusLabel[activeJob.status] || activeJob.status}
+                            Текущий serial: {activeJob.summary.serialNumber} · {jobStatusLabel[activeJob.status] || activeJob.status} · {getQueueJobProgressPercent(activeJob)}%
                         </p>
                     ) : null}
                 </div>
@@ -654,9 +672,9 @@ export function DesktopStatusCenter() {
             + photoWorkflows.filter((workflow) => workflow.phase === 'auth_required' || workflow.phase === 'paused_offline').length;
 
         const videoGroupTotal = videoUploadGroups.reduce((total, group) => total + Math.max(group.total, group.jobs.length), 0);
-        const videoGroupDone = videoUploadGroups.reduce((total, group) => total + group.done, 0);
+        const videoGroupDone = videoUploadGroups.reduce((total, group) => total + group.jobs.reduce((sum, job) => sum + (getQueueJobProgressPercent(job) / 100), 0), 0);
         const videoQueueTotal = videoQueueJobs.length;
-        const videoQueueDone = videoQueueJobs.filter((job) => job.status === 'done').length;
+        const videoQueueDone = videoQueueJobs.reduce((total, job) => total + (getQueueJobProgressPercent(job) / 100), 0);
         const videoTotal = videoGroupTotal + videoQueueTotal;
         const videoDone = videoGroupDone + videoQueueDone;
         const videoActive = videoQueueJobs.filter((job) => activeQueueStatuses.has(job.status)).length
@@ -679,7 +697,7 @@ export function DesktopStatusCenter() {
             {
                 key: 'video' as const,
                 label: 'Видео',
-                detail: videoFailed > 0 ? `ошибок ${videoFailed}` : videoBlocked > 0 ? `блокировок ${videoBlocked}` : videoActive > 0 ? `в работе ${videoActive}` : `готово ${videoDone}/${videoTotal}`,
+                detail: videoFailed > 0 ? `ошибок ${videoFailed}` : videoBlocked > 0 ? `блокировок ${videoBlocked}` : videoActive > 0 ? `в работе ${videoActive}` : `готово ${Math.round(videoDone)}/${videoTotal}`,
                 percent: videoTotal > 0 ? clampPercent((videoDone / videoTotal) * 100) : 0,
                 active: videoActive,
                 failed: videoFailed,

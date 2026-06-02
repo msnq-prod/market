@@ -3,6 +3,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 
 const ACTIVE_QUEUE_STATUSES = new Set(['queued', 'uploading', 'retrying', 'auth_required']);
+const DONE_QUEUE_STATUSES = new Set(['done', 'cancelled', 'failed']);
 const VIDEO_EXPORT_CROSSFADE_MS = 200;
 const STATE_VERSION = 1;
 
@@ -56,6 +57,34 @@ const normalizeFailure = (error, fallbackMessage) => {
     }
 
     return error instanceof Error ? error : new Error(fallbackMessage);
+};
+
+const normalizeHelperProgress = (payload, fallbackProgress = 0) => {
+    if (payload?.status === 'COMPLETED') {
+        return 100;
+    }
+    if (payload?.status === 'FAILED') {
+        return fallbackProgress;
+    }
+
+    const total = Math.max(1, Number(payload?.total_count || payload?.outputs?.length || 1));
+    const processed = Math.max(0, Number(payload?.processed_count || 0));
+    const countProgress = Math.round((processed / total) * 100);
+    if (countProgress > 0) {
+        return Math.max(fallbackProgress, Math.min(95, countProgress));
+    }
+
+    const outputStatuses = Array.isArray(payload?.outputs)
+        ? payload.outputs.map((output) => String(output?.status || '').toUpperCase())
+        : [];
+    if (payload?.status === 'PROCESSING' || outputStatuses.includes('PROCESSING')) {
+        return Math.max(fallbackProgress, 50);
+    }
+    if (payload?.status === 'QUEUED' || outputStatuses.includes('QUEUED')) {
+        return Math.max(fallbackProgress, 8);
+    }
+
+    return fallbackProgress;
 };
 
 class VideoExportRunManager extends EventEmitter {
@@ -301,7 +330,7 @@ class VideoExportRunManager extends EventEmitter {
 
         item.renderStatus = 'rendering';
         item.renderJobId = renderJob.job_id;
-        item.renderProgress = 0;
+        item.renderProgress = normalizeHelperProgress(renderJob, 8);
         item.uploadStatus = 'pending';
         item.uploadJobId = '';
         item.uploadProgress = 0;
@@ -447,6 +476,9 @@ class VideoExportRunManager extends EventEmitter {
                 }
             }
 
+            const itemsChanged = await this.processRunItems(run);
+            changed = itemsChanged || changed;
+
             if (run.status === 'ready') {
                 const items = Object.values(run.items || {});
                 const hasActiveItem = items.some((item) => (
@@ -466,12 +498,8 @@ class VideoExportRunManager extends EventEmitter {
                         itemId: nextPendingItem.itemId
                     });
                     changed = true;
-                    continue;
                 }
             }
-
-            const itemsChanged = await this.processRunItems(run);
-            changed = itemsChanged || changed;
 
             const runItems = Object.values(run.items || {});
             if (runItems.length > 0 && runItems.every((item) => item.uploadStatus === 'completed' || item.uploadStatus === 'cancelled')) {
@@ -550,6 +578,11 @@ class VideoExportRunManager extends EventEmitter {
         for (const itemId of Object.keys(run.items)) {
             const item = run.items[itemId];
 
+            if (item.uploadJobId) {
+                const uploadChanged = this.refreshItemUploadStatus(item);
+                changed = uploadChanged || changed;
+            }
+
             if (item.renderStatus === 'rendering' && item.renderJobId) {
                 const renderChanged = await this.refreshItemRender(run, item);
                 changed = renderChanged || changed;
@@ -566,10 +599,6 @@ class VideoExportRunManager extends EventEmitter {
                 changed = queued || changed;
             }
 
-            if (item.uploadStatus === 'uploading' && item.uploadJobId) {
-                const uploadChanged = this.refreshItemUploadStatus(item);
-                changed = uploadChanged || changed;
-            }
         }
 
         return changed;
@@ -590,7 +619,7 @@ class VideoExportRunManager extends EventEmitter {
                 return true;
             }
 
-            const progress = Number(payload.progress || 0);
+            const progress = normalizeHelperProgress(payload, Number(item.renderProgress || 0));
             if (progress !== item.renderProgress) {
                 item.renderProgress = progress;
                 return true;
@@ -610,9 +639,24 @@ class VideoExportRunManager extends EventEmitter {
         const existingJob = item.uploadJobId
             ? this.mediaQueue.jobs.find((job) => job.id === item.uploadJobId)
             : null;
-        const hasActiveUpload = existingJob && ACTIVE_QUEUE_STATUSES.has(existingJob.status);
 
-        if (hasActiveUpload) {
+        if (existingJob?.status === 'done') {
+            item.uploadStatus = 'completed';
+            item.uploadProgress = 100;
+            item.errorMessage = '';
+            return true;
+        }
+        if (existingJob?.status === 'failed') {
+            item.uploadStatus = 'failed';
+            item.errorMessage = existingJob.lastError || 'Ошибка загрузки.';
+            return true;
+        }
+        if (existingJob?.status === 'cancelled') {
+            item.uploadStatus = 'cancelled';
+            item.errorMessage = existingJob.lastError || 'Загрузка отменена.';
+            return true;
+        }
+        if (existingJob && ACTIVE_QUEUE_STATUSES.has(existingJob.status)) {
             return false;
         }
 
@@ -633,10 +677,12 @@ class VideoExportRunManager extends EventEmitter {
             renderManifest: run.renderManifest,
             exportSettings: run.renderManifest?.export_settings || {}
         }, [], {
-            title: `${item.serialNumber}.mp4`,
+            title: `Видео партии ${String(run.batchId || '').slice(0, 8)}`,
             batchId: run.batchId,
+            runId: run.runId,
             fileName: `${item.serialNumber}.mp4`,
-            serialNumber: item.serialNumber
+            serialNumber: item.serialNumber,
+            total: Object.keys(run.items || {}).length
         });
     }
 
@@ -672,6 +718,13 @@ class VideoExportRunManager extends EventEmitter {
             return false;
         }
 
+        const queueProgress = Number(queueJob.progress?.percent);
+        let changed = false;
+        if (Number.isFinite(queueProgress) && queueProgress !== item.uploadProgress) {
+            item.uploadProgress = Math.max(item.uploadProgress || 0, Math.min(99, queueProgress));
+            changed = true;
+        }
+
         if (queueJob.status === 'done') {
             item.uploadStatus = 'completed';
             item.uploadProgress = 100;
@@ -682,8 +735,20 @@ class VideoExportRunManager extends EventEmitter {
             item.errorMessage = queueJob.lastError || 'Ошибка загрузки.';
             return true;
         }
+        if (queueJob.status === 'cancelled') {
+            item.uploadStatus = 'cancelled';
+            item.errorMessage = queueJob.lastError || 'Загрузка отменена.';
+            return true;
+        }
+        if (ACTIVE_QUEUE_STATUSES.has(queueJob.status) && item.uploadStatus !== 'uploading') {
+            item.uploadStatus = 'uploading';
+            return true;
+        }
+        if (DONE_QUEUE_STATUSES.has(queueJob.status)) {
+            return true;
+        }
 
-        return false;
+        return changed;
     }
 }
 

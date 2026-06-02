@@ -63,6 +63,10 @@ async function getPlayheadLeft(page: Page) {
     return page.getByTestId('timeline-playhead-handle').evaluate((element) => (element as HTMLElement).style.left);
 }
 
+async function getPlayheadLeftPercent(page: Page) {
+    return page.getByTestId('timeline-playhead-handle').evaluate((element) => parseFloat((element as HTMLElement).style.left));
+}
+
 async function wheelTimeline(page: Page, deltaX: number, deltaY: number) {
     await page.getByTestId('timeline-region').evaluate((element, deltas) => {
         const rect = element.getBoundingClientRect();
@@ -325,6 +329,13 @@ test('UI: V2 existing run подхватывается после reload', async
 });
 
 test('UI: плейхед следует за drag мышью на таймлайне', async ({ page, request }) => {
+    await page.addInitScript(() => {
+        window.addEventListener('error', (event) => {
+            if (event.target instanceof HTMLVideoElement) {
+                event.stopImmediatePropagation();
+            }
+        }, true);
+    });
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
@@ -337,8 +348,17 @@ test('UI: плейхед следует за drag мышью на таймлай
         buffer: makeFakeMp4('source-drag'),
         lastModified: 123457
     });
+    await page.getByTestId('append-source-input').setInputFiles({
+        name: 'source-2.mp4',
+        mimeType: 'video/mp4',
+        buffer: makeFakeMp4('source-drag-second'),
+        lastModified: 123458
+    });
     await page.getByRole('button', { name: 'Монтаж' }).click();
     await expect(page.getByTestId('timeline-region')).toBeVisible();
+
+    await seekTimelineToRatio(page, 0.18);
+    await expect.poll(() => getPlayheadLeftPercent(page)).toBeGreaterThan(10);
 
     const box = await page.getByTestId('timeline-region').boundingBox();
     expect(box).toBeTruthy();
@@ -347,6 +367,16 @@ test('UI: плейхед следует за drag мышью на таймлай
     await expect.poll(() => getPlayheadLeft(page)).not.toBe('0%');
     const beforeLeft = await getPlayheadLeft(page);
     await page.mouse.move(box!.x + box!.width * 0.78, box!.y + box!.height / 2, { steps: 6 });
+    await page.locator('video').evaluate((element) => {
+        const video = element as HTMLVideoElement;
+        try {
+            video.currentTime = 0;
+        } catch {
+            // Ignore media engine errors in the browser test shim.
+        }
+        video.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+    });
+    await expect.poll(() => getPlayheadLeftPercent(page)).toBeGreaterThan(65);
     await page.mouse.up();
 
     await expect.poll(() => getPlayheadLeft(page)).not.toBe(beforeLeft);

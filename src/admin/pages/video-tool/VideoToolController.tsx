@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState, type SyntheticEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { RefreshCw, Clipboard } from 'lucide-react';
 import {
@@ -89,6 +89,21 @@ import type {
     WorkingSource
 } from './types';
 
+type PlayheadDragSession = {
+    pointerId: number;
+    timelineRect: {
+        left: number;
+        width: number;
+    };
+    visibleStartMs: number;
+    visibleDurationMs: number;
+};
+
+type PendingPreviewSeek = {
+    sourceIndex: number;
+    localMs: number;
+};
+
 const createInitialVideoToolState = (): VideoToolState => ({
     data: { payload: null, loading: true, error: '' },
     sources: { items: [], activeSourceIndex: 0, introHelperSourceId: '' },
@@ -135,7 +150,8 @@ export function VideoToolController() {
     const timelineRef = useRef<HTMLDivElement | null>(null);
     const timelineScrollbarRef = useRef<HTMLDivElement | null>(null);
     const dragBoundaryIndexRef = useRef<number | null>(null);
-    const dragPlayheadRef = useRef(false);
+    const dragPlayheadRef = useRef<PlayheadDragSession | null>(null);
+    const pendingPreviewSeekRef = useRef<PendingPreviewSeek | null>(null);
     const panViewportRef = useRef<VideoToolPanViewportState | null>(null);
     const previewResizeRef = useRef<VideoToolPreviewResizeState | null>(null);
     const suppressTimelineAutoScrollUntilRef = useRef(0);
@@ -457,11 +473,17 @@ export function VideoToolController() {
             isPanning: false
         });
     }, []);
-    const timelineClientXToMs = useCallback((clientX: number, rect: DOMRect) => clamp(
+    const timelineClientXToMs = useCallback((clientX: number, rect: Pick<DOMRect, 'left' | 'width'>) => clamp(
         visibleStartMs + (((clientX - rect.left) / rect.width) * visibleDurationMs),
         0,
         durationMs
     ), [durationMs, visibleDurationMs, visibleStartMs]);
+
+    const playheadDragClientXToMs = useCallback((clientX: number, session: PlayheadDragSession) => clamp(
+        session.visibleStartMs + (((clientX - session.timelineRect.left) / session.timelineRect.width) * session.visibleDurationMs),
+        0,
+        durationMs
+    ), [durationMs]);
 
     const rebuildSegmentsForSources = useCallback((nextSources: WorkingSource[]) => {
         if (nextSources.length === 0) {
@@ -482,40 +504,60 @@ export function VideoToolController() {
             sourceIndex: index,
             role: index === 0 ? 'WITH_INTRO' : 'NO_INTRO'
         } satisfies WorkingSource)), []);
-    const syncVideoTime = useCallback((nextMs: number) => {
-        const sourceHit = getSourceForGlobalMs(sources, nextMs);
-        if (sourceHit && sourceHit.source.sourceIndex !== activeSourceIndex) {
-            setActiveSourceIndex(sourceHit.source.sourceIndex);
-        }
+    const seekPlayhead = useCallback((nextMs: number, options: { syncPreview?: boolean } = {}) => {
+        const clampedMs = clamp(Math.round(nextMs), 0, durationMs);
+        setPlayheadMs(clampedMs);
 
-        if (!videoRef.current) {
-            setPlayheadMs(nextMs);
+        if (options.syncPreview === false) {
             return;
         }
 
-        videoRef.current.currentTime = Math.max(0, (sourceHit?.localMs ?? nextMs) / 1000);
-        setPlayheadMs(nextMs);
-    }, [activeSourceIndex, sources]);
-    const getSnappedMs = useCallback((targetMs: number) => {
-        if (segments.length === 0) return targetMs;
-        const boundaries = new Set<number>([0, durationMs]);
-        segments.forEach((seg) => {
-            boundaries.add(seg.startMs);
-            boundaries.add(seg.endMs);
-        });
-
-        let closest = targetMs;
-        let minDiff = 150; // 150ms snapping threshold
-
-        for (const boundary of boundaries) {
-            const diff = Math.abs(boundary - targetMs);
-            if (diff < minDiff) {
-                minDiff = diff;
-                closest = boundary;
-            }
+        const sourceHit = getSourceForGlobalMs(sources, clampedMs);
+        if (!sourceHit) {
+            return;
         }
-        return closest;
-    }, [segments, durationMs]);
+
+        const nextSourceIndex = sourceHit.source.sourceIndex;
+        if (nextSourceIndex !== activeSourceIndex) {
+            pendingPreviewSeekRef.current = {
+                sourceIndex: nextSourceIndex,
+                localMs: sourceHit.localMs
+            };
+            setActiveSourceIndex(nextSourceIndex);
+            return;
+        }
+
+        pendingPreviewSeekRef.current = null;
+        if (videoRef.current) {
+            videoRef.current.currentTime = Math.max(0, sourceHit.localMs / 1000);
+        }
+    }, [activeSourceIndex, durationMs, sources]);
+
+    const syncVideoTime = seekPlayhead;
+
+    const beginPlayheadDrag = useCallback((clientX: number, pointerId: number) => {
+        if (!durationMs || !visibleDurationMs || !timelineRef.current) {
+            return;
+        }
+
+        const rect = timelineRef.current.getBoundingClientRect();
+        if (!rect.width) {
+            return;
+        }
+
+        const session: PlayheadDragSession = {
+            pointerId,
+            timelineRect: {
+                left: rect.left,
+                width: rect.width
+            },
+            visibleStartMs,
+            visibleDurationMs
+        };
+        dragPlayheadRef.current = session;
+        suppressTimelineAutoScrollUntilRef.current = Date.now() + 1000;
+        seekPlayhead(playheadDragClientXToMs(clientX, session));
+    }, [durationMs, playheadDragClientXToMs, seekPlayhead, visibleDurationMs, visibleStartMs]);
 
     const togglePlayback = useCallback(async () => {
         if (!videoRef.current || !sourceUrl || sourcePreviewUnavailable) {
@@ -919,9 +961,14 @@ export function VideoToolController() {
                 return;
             }
 
-            if (dragPlayheadRef.current && timelineRef.current && durationMs && visibleDurationMs) {
-                const rect = timelineRef.current.getBoundingClientRect();
-                const nextMs = timelineClientXToMs(event.clientX, rect);
+            const playheadDrag = dragPlayheadRef.current;
+            if (playheadDrag && durationMs) {
+                if (playheadDrag.pointerId !== event.pointerId) {
+                    return;
+                }
+
+                const nextMs = playheadDragClientXToMs(event.clientX, playheadDrag);
+                suppressTimelineAutoScrollUntilRef.current = Date.now() + 1000;
                 syncVideoTime(nextMs);
                 return;
             }
@@ -960,7 +1007,7 @@ export function VideoToolController() {
 
         const handlePointerUp = () => {
             previewResizeRef.current = null;
-            dragPlayheadRef.current = false;
+            dragPlayheadRef.current = null;
             dragBoundaryIndexRef.current = null;
             if (panViewportRef.current) {
                 panViewportRef.current = null;
@@ -975,7 +1022,7 @@ export function VideoToolController() {
             window.removeEventListener('pointermove', handlePointerMove);
             window.removeEventListener('pointerup', handlePointerUp);
         };
-    }, [clampPreviewPanelWidth, durationMs, getSnappedMs, segments, setPreviewPanelWidth, syncVideoTime, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
+    }, [clampPreviewPanelWidth, durationMs, playheadDragClientXToMs, segments, setPreviewPanelWidth, syncVideoTime, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
 
     const timelineCuts = useMemo(
         () => segments.slice(1).map((segment) => segment.startMs),
@@ -1095,10 +1142,29 @@ export function VideoToolController() {
             return;
         }
 
+        const pendingSeek = pendingPreviewSeekRef.current;
+        if (pendingSeek?.sourceIndex === activeSource.sourceIndex) {
+            videoRef.current.currentTime = Math.max(0, pendingSeek.localMs / 1000);
+            pendingPreviewSeekRef.current = null;
+        }
+
         setSources((current) => current.map((source) => source.sourceIndex === activeSource.sourceIndex
             ? { ...source, previewUnavailable: false }
             : source));
     };
+
+    const handlePreviewTimeUpdate = useCallback((event: SyntheticEvent<HTMLVideoElement>) => {
+        if (dragPlayheadRef.current || pendingPreviewSeekRef.current) {
+            return;
+        }
+
+        const offsetMs = activeSource
+            ? sources
+                .filter((source) => source.sourceIndex < activeSource.sourceIndex)
+                .reduce((sum, source) => sum + source.durationMs, 0)
+            : 0;
+        setPlayheadMs(clamp(offsetMs + Math.round(event.currentTarget.currentTime * 1000), 0, durationMs));
+    }, [activeSource, durationMs, sources]);
 
     const handleVideoError = () => {
         if (!activeSource) {
@@ -1760,7 +1826,6 @@ export function VideoToolController() {
                         selectedSegmentIndex={selectedSegmentIndex}
                         setSelectedSegmentIndex={setSelectedSegmentIndex}
                         playheadMs={playheadMs}
-                        setPlayheadMs={setPlayheadMs}
                         durationMs={durationMs}
                         timelineViewport={timelineViewport}
                         setTimelineViewport={setTimelineViewport}
@@ -1773,15 +1838,16 @@ export function VideoToolController() {
                         setSources={setSources}
                         setNotice={setNotice}
                         handleLoadedMetadata={handleLoadedMetadata}
+                        handlePreviewTimeUpdate={handlePreviewTimeUpdate}
                         videoRef={videoRef}
                         timelineRef={timelineRef}
                         timelineScrollbarRef={timelineScrollbarRef}
-                        dragPlayheadRef={dragPlayheadRef}
                         dragBoundaryIndexRef={dragBoundaryIndexRef}
                         panViewportRef={panViewportRef}
                         previewResizeRef={previewResizeRef}
                         segmentRows={segmentRows}
                         syncVideoTime={syncVideoTime}
+                        beginPlayheadDrag={beginPlayheadDrag}
                         pushSegmentsToHistory={pushSegmentsToHistory}
                         handleCut={handleCut}
                         handleToggleDeleted={handleToggleDeleted}

@@ -108,6 +108,11 @@ export type StonesMediaQueueJob = {
     result?: unknown;
     blockingReason?: string | null;
     recentEvents?: Array<{ type: string; at: string; detail?: unknown }>;
+    progress?: {
+        percent?: number;
+        uploadedBytes?: number;
+        totalBytes?: number;
+    } | null;
     stuck?: boolean;
     summary?: {
         title?: string;

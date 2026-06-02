@@ -89,6 +89,13 @@ export async function seekTimelineToRatio(page: Page, ratio: number) {
             pointerId: 1,
             pointerType: 'mouse'
         }));
+        target.dispatchEvent(new PointerEvent('pointerup', {
+            bubbles: true,
+            clientX,
+            clientY,
+            pointerId: 1,
+            pointerType: 'mouse'
+        }));
         target.dispatchEvent(new MouseEvent('click', {
             bubbles: true,
             clientX,

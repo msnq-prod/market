@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const http = require('http');
+const https = require('https');
 const path = require('path');
 const { EventEmitter } = require('events');
 
@@ -106,6 +108,147 @@ const parseJsonResponse = async (response, fallbackMessage) => {
     return payload;
 };
 
+const buildMultipartParts = async ({ fields = {}, files = [] }) => {
+    const boundary = `stones-${crypto.randomUUID()}`;
+    const parts = [];
+    let contentLength = 0;
+
+    for (const [name, value] of Object.entries(fields)) {
+        if (value === undefined || value === null) {
+            continue;
+        }
+
+        const body = Buffer.from(String(value));
+        const header = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n`);
+        const footer = Buffer.from('\r\n');
+        parts.push({ type: 'buffer', header, body, footer });
+        contentLength += header.length + body.length + footer.length;
+    }
+
+    for (const file of files) {
+        const stat = await fsp.stat(file.filePath);
+        const safeName = safeFileName(file.fileName);
+        const header = Buffer.from([
+            `--${boundary}`,
+            `Content-Disposition: form-data; name="${file.fieldName}"; filename="${safeName}"`,
+            `Content-Type: ${file.mimeType || 'application/octet-stream'}`,
+            ''
+        ].join('\r\n') + '\r\n');
+        const footer = Buffer.from('\r\n');
+        parts.push({ type: 'file', header, filePath: file.filePath, size: stat.size, footer });
+        contentLength += header.length + stat.size + footer.length;
+    }
+
+    const finalBoundary = Buffer.from(`--${boundary}--\r\n`);
+    contentLength += finalBoundary.length;
+    return { boundary, parts, finalBoundary, contentLength };
+};
+
+const uploadMultipart = async ({
+    url,
+    headers = {},
+    fields,
+    files,
+    signal,
+    onProgress,
+    fallbackMessage
+}) => {
+    const targetUrl = new URL(url);
+    const transport = targetUrl.protocol === 'https:' ? https : http;
+    const { boundary, parts, finalBoundary, contentLength } = await buildMultipartParts({ fields, files });
+    let uploadedBytes = 0;
+
+    return new Promise((resolve, reject) => {
+        const request = transport.request(targetUrl, {
+            method: 'POST',
+            headers: {
+                ...headers,
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': String(contentLength)
+            },
+            signal
+        }, (response) => {
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+            response.on('end', () => {
+                const text = Buffer.concat(chunks).toString('utf8');
+                let payload = null;
+                try {
+                    payload = text ? JSON.parse(text) : null;
+                } catch {
+                    payload = null;
+                }
+
+                if (response.statusCode < 200 || response.statusCode >= 300) {
+                    const message = isRecord(payload) && typeof payload.error === 'string'
+                        ? payload.error
+                        : fallbackMessage;
+                    const error = new Error(message);
+                    error.statusCode = response.statusCode;
+                    error.payload = payload;
+                    reject(error);
+                    return;
+                }
+
+                resolve(payload);
+            });
+        });
+
+        const fail = (error) => reject(error);
+        request.on('error', fail);
+
+        const writeChunk = (chunk) => new Promise((resolveWrite, rejectWrite) => {
+            if (signal?.aborted) {
+                rejectWrite(Object.assign(new Error('Upload cancelled.'), { name: 'AbortError' }));
+                return;
+            }
+
+            request.write(chunk, (error) => {
+                if (error) {
+                    rejectWrite(error);
+                    return;
+                }
+
+                uploadedBytes += chunk.length;
+                Promise.resolve(onProgress?.(uploadedBytes, contentLength))
+                    .then(resolveWrite)
+                    .catch(rejectWrite);
+            });
+        });
+
+        const streamFile = async (filePath) => {
+            const stream = fs.createReadStream(filePath);
+            if (signal) {
+                signal.addEventListener('abort', () => stream.destroy(Object.assign(new Error('Upload cancelled.'), { name: 'AbortError' })), { once: true });
+            }
+
+            for await (const chunk of stream) {
+                await writeChunk(Buffer.from(chunk));
+            }
+        };
+
+        (async () => {
+            try {
+                await onProgress?.(0, contentLength);
+                for (const part of parts) {
+                    await writeChunk(part.header);
+                    if (part.type === 'buffer') {
+                        await writeChunk(part.body);
+                    } else {
+                        await streamFile(part.filePath);
+                    }
+                    await writeChunk(part.footer);
+                }
+                await writeChunk(finalBoundary);
+                request.end();
+            } catch (error) {
+                request.destroy(error);
+                fail(error);
+            }
+        })();
+    });
+};
+
 class MediaUploadQueue extends EventEmitter {
     constructor({ rootDir, getApiOrigin, getAccessToken, helperRuntime = null }) {
         super();
@@ -117,6 +260,7 @@ class MediaUploadQueue extends EventEmitter {
         this.helperRuntime = helperRuntime;
         this.jobs = [];
         this.stagedFiles = new Map();
+        this.abortControllers = new Map();
         this.processing = false;
         this.timer = null;
         this.persistPromise = Promise.resolve();
@@ -160,6 +304,7 @@ class MediaUploadQueue extends EventEmitter {
                 ? job.blockingReason
                 : isLegacyPhotoToolStale ? 'photo_tool_state_stale' : null,
             recentEvents: Array.isArray(job.recentEvents) ? job.recentEvents.slice(-EVENT_BUFFER_SIZE) : [],
+            progress: isRecord(job.progress) ? job.progress : null,
             summary: normalizeSummary(job.summary)
         };
     }
@@ -186,6 +331,7 @@ class MediaUploadQueue extends EventEmitter {
             result: job.result ?? null,
             blockingReason: getBlockingReason(job),
             recentEvents: Array.isArray(job.recentEvents) ? job.recentEvents : [],
+            progress: isRecord(job.progress) ? job.progress : null,
             stuck: isStuckJob(job),
             summary: job.summary ?? null
         }));
@@ -333,6 +479,7 @@ class MediaUploadQueue extends EventEmitter {
         job.nextAttemptAt = Date.now();
         job.lastError = null;
         job.blockingReason = null;
+        job.progress = null;
         job.updatedAt = nowIso();
         appendEvent(job, 'retry_scheduled');
         await this.persist();
@@ -347,11 +494,15 @@ class MediaUploadQueue extends EventEmitter {
             return this.getSnapshot();
         }
 
+        const wasUploading = job.status === 'uploading';
+        this.abortControllers.get(job.id)?.abort();
         job.status = 'cancelled';
         job.updatedAt = nowIso();
         job.blockingReason = null;
         appendEvent(job, 'cancelled');
-        await this.cleanupJobFiles(job);
+        if (!wasUploading) {
+            await this.cleanupJobFiles(job);
+        }
         await this.persist();
         this.emitChange();
         return this.getSnapshot();
@@ -428,17 +579,34 @@ class MediaUploadQueue extends EventEmitter {
         job.status = 'uploading';
         job.attempts = Number(job.attempts || 0) + 1;
         job.blockingReason = null;
+        job.progress = {
+            percent: 0,
+            uploadedBytes: 0,
+            totalBytes: Number(job.progress?.totalBytes || 0)
+        };
         job.updatedAt = nowIso();
         appendEvent(job, 'started');
         await this.persist();
         this.emitChange();
 
+        const abortController = new AbortController();
+        this.abortControllers.set(job.id, abortController);
         try {
-            const result = await this.performJob(job, token);
+            const result = await this.performJob(job, token, abortController.signal);
+            if (job.status === 'cancelled' || abortController.signal.aborted) {
+                await this.cleanupJobFiles(job);
+                await this.persist();
+                this.emitChange();
+                return;
+            }
             job.status = 'done';
             job.result = result;
             job.lastError = null;
             job.blockingReason = null;
+            job.progress = {
+                ...(isRecord(job.progress) ? job.progress : {}),
+                percent: 100
+            };
             job.doneAt = nowIso();
             job.updatedAt = nowIso();
             appendEvent(job, 'completed');
@@ -446,6 +614,18 @@ class MediaUploadQueue extends EventEmitter {
             await this.persist();
             this.emitChange();
         } catch (error) {
+            if (job.status === 'cancelled' || abortController.signal.aborted || error?.name === 'AbortError') {
+                job.status = 'cancelled';
+                job.blockingReason = null;
+                job.lastError = 'Cancelled by user';
+                job.updatedAt = nowIso();
+                appendEvent(job, 'cancelled');
+                await this.cleanupJobFiles(job);
+                await this.persist();
+                this.emitChange();
+                return;
+            }
+
             const statusCode = Number(error?.statusCode || 0);
             const errorCode = getErrorCode(error);
             job.lastError = error instanceof Error ? error.message : 'Загрузка не выполнена.';
@@ -475,20 +655,18 @@ class MediaUploadQueue extends EventEmitter {
 
             await this.persist();
             this.emitChange();
+        } finally {
+            this.abortControllers.delete(job.id);
         }
     }
 
-    async performJob(job, token) {
+    async performJob(job, token, signal) {
         if (job.type === 'PHOTO_TOOL_APPLY') {
             return this.uploadPhotoToolApply(job, token);
         }
 
         if (job.type === 'VIDEO_EXPORT_RUN_ITEM_UPLOAD') {
-            return this.uploadVideoExportRunItem(job, token);
-        }
-
-        if (job.type === 'VIDEO_EXPORT_RUN_ITEM_UPLOAD') {
-            return this.uploadVideoExportRunItem(job, token);
+            return this.uploadVideoExportRunItem(job, token, signal);
         }
 
         throw new Error(`Неизвестный тип media queue job: ${job.type}`);
@@ -560,34 +738,22 @@ class MediaUploadQueue extends EventEmitter {
         return file;
     }
 
-    async uploadVideoExportRunItem(job, token) {
-        const serialNumber = String(job.payload.serialNumber || '').trim().toUpperCase();
-        const file = await this.fetchHelperFile(
-            job,
-            `/render-jobs/${encodeURIComponent(job.payload.helperJobId)}/files/${encodeURIComponent(serialNumber)}`,
-            `${serialNumber}.mp4`,
-            'video/mp4'
-        );
-        const form = new FormData();
-        await appendFileToForm(form, 'file', file.cachePath, file.originalName, file.mimeType);
-        form.append('serial_number', serialNumber);
-        form.append('queue_job_id', job.id);
-        form.append('queue_file_id', file.fileId);
-        form.append('checksum_sha256', file.checksumSha256);
-        if (job.payload.exportSettings) {
-            form.append('export_settings', JSON.stringify(job.payload.exportSettings));
+    async updateUploadProgress(job, uploadedBytes, totalBytes, force = false) {
+        const percent = totalBytes > 0 ? Math.max(0, Math.min(100, Math.round((uploadedBytes / totalBytes) * 100))) : 0;
+        const previousPercent = Number(job.progress?.percent ?? -1);
+        const previousUpdatedAt = Date.parse(job.updatedAt || '');
+        const enoughTimePassed = !Number.isFinite(previousUpdatedAt) || Date.now() - previousUpdatedAt > 500;
+        if (!force && percent === previousPercent && !enoughTimePassed) {
+            return;
         }
 
-        const response = await fetch(this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-runs/${encodeURIComponent(job.payload.runId)}/items/${encodeURIComponent(job.payload.itemId)}/upload`), {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: form
-        });
-
-        return parseJsonResponse(response, 'Не удалось загрузить ролик элемента V2.');
+        job.progress = { percent, uploadedBytes, totalBytes };
+        job.updatedAt = nowIso();
+        await this.persist();
+        this.emitChange();
     }
 
-    async uploadVideoExportRunItem(job, token) {
+    async uploadVideoExportRunItem(job, token, signal) {
         const serialNumber = String(job.payload.serialNumber || '').trim().toUpperCase();
         const file = await this.fetchHelperFile(
             job,
@@ -595,20 +761,28 @@ class MediaUploadQueue extends EventEmitter {
             `${serialNumber}.mp4`,
             'video/mp4'
         );
-        const form = new FormData();
-        await appendFileToForm(form, 'file', file.cachePath, file.originalName, file.mimeType);
-        form.append('serial_number', serialNumber);
-        form.append('queue_job_id', job.id);
-        form.append('queue_file_id', file.fileId);
-        form.append('checksum_sha256', file.checksumSha256);
+        await this.updateUploadProgress(job, 0, Number(file.size || 0), true);
 
-        const response = await fetch(this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-runs/${encodeURIComponent(job.payload.runId)}/items/${encodeURIComponent(job.payload.itemId)}/upload`), {
-            method: 'POST',
+        return uploadMultipart({
+            url: this.buildApiUrl(`/api/batches/${encodeURIComponent(job.payload.batchId)}/video-export-runs/${encodeURIComponent(job.payload.runId)}/items/${encodeURIComponent(job.payload.itemId)}/upload`),
             headers: { Authorization: `Bearer ${token}` },
-            body: form
+            signal,
+            fallbackMessage: 'Не удалось загрузить ролик элемента V2.',
+            fields: {
+                serial_number: serialNumber,
+                queue_job_id: job.id,
+                queue_file_id: file.fileId,
+                checksum_sha256: file.checksumSha256,
+                ...(job.payload.exportSettings ? { export_settings: JSON.stringify(job.payload.exportSettings) } : {})
+            },
+            files: [{
+                fieldName: 'file',
+                filePath: file.cachePath,
+                fileName: file.originalName,
+                mimeType: file.mimeType
+            }],
+            onProgress: (uploadedBytes, totalBytes) => this.updateUploadProgress(job, uploadedBytes, totalBytes)
         });
-
-        return parseJsonResponse(response, 'Не удалось загрузить финальный ролик.');
     }
 }
 

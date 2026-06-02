@@ -9,7 +9,7 @@ import type {
     VideoToolSegmentRow,
     WorkingSource
 } from '../types';
-import { formatDuration, getSourceTimelineStartMs, isSourceBoundaryBetween } from '../timelineUtils';
+import { formatDuration, isSourceBoundaryBetween } from '../timelineUtils';
 import { clamp } from '../engine';
 
 interface EditorWorkspaceProps {
@@ -20,7 +20,6 @@ interface EditorWorkspaceProps {
     selectedSegmentIndex: number;
     setSelectedSegmentIndex: (idx: number) => void;
     playheadMs: number;
-    setPlayheadMs: (ms: number) => void;
     durationMs: number;
     timelineViewport: TimelineViewport;
     setTimelineViewport: React.Dispatch<React.SetStateAction<TimelineViewport>>;
@@ -33,15 +32,16 @@ interface EditorWorkspaceProps {
     setSources: React.Dispatch<React.SetStateAction<WorkingSource[]>>;
     setNotice: React.Dispatch<React.SetStateAction<InlineNotice | null>>;
     handleLoadedMetadata: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
+    handlePreviewTimeUpdate: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
     videoRef: React.RefObject<HTMLVideoElement | null>;
     timelineRef: React.RefObject<HTMLDivElement | null>;
     timelineScrollbarRef: React.RefObject<HTMLDivElement | null>;
-    dragPlayheadRef: React.MutableRefObject<boolean>;
     dragBoundaryIndexRef: React.MutableRefObject<number | null>;
     panViewportRef: React.MutableRefObject<VideoToolPanViewportState | null>;
     previewResizeRef: React.MutableRefObject<VideoToolPreviewResizeState | null>;
     segmentRows: VideoToolSegmentRow[];
     syncVideoTime: (timeMs: number) => void;
+    beginPlayheadDrag: (clientX: number, pointerId: number) => void;
     pushSegmentsToHistory: (segs: Segment[]) => void;
     handleCut: () => void;
     handleToggleDeleted: () => void;
@@ -66,7 +66,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     selectedSegmentIndex,
     setSelectedSegmentIndex,
     playheadMs,
-    setPlayheadMs,
     durationMs,
     timelineViewport,
     setTimelineViewport,
@@ -79,15 +78,16 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setSources: _setSources,
     setNotice: _setNotice,
     handleLoadedMetadata,
+    handlePreviewTimeUpdate,
     videoRef,
     timelineRef,
     timelineScrollbarRef,
-    dragPlayheadRef,
     dragBoundaryIndexRef,
     panViewportRef,
     previewResizeRef,
     segmentRows,
     syncVideoTime,
+    beginPlayheadDrag,
     pushSegmentsToHistory,
     handleCut,
     handleToggleDeleted,
@@ -318,23 +318,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                             {/* Timeline ruler & playhead */}
                             <div className="shrink-0 rounded-2xl border border-zinc-800 bg-[#131418] p-3 shadow-inner">
                                 <div
-                                    ref={timelineRulerRef}
+                                    ref={(node) => {
+                                        timelineRulerRef.current = node;
+                                        timelineRef.current = node;
+                                    }}
                                     data-testid="timeline-region"
                                     className="relative h-20 w-full select-none overflow-hidden rounded-xl bg-zinc-950/80 border border-zinc-900"
-                                    onPointerMove={(event) => {
-                                        if (!dragPlayheadRef.current) return;
-                                        const rect = event.currentTarget.getBoundingClientRect();
-                                        const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-                                        syncVideoTime(visibleStartMs + (ratio * visibleDurationMs));
-                                    }}
                                     onPointerDown={(event) => {
                                         event.preventDefault();
-                                        timelineRef.current = event.currentTarget;
-                                        const rect = event.currentTarget.getBoundingClientRect();
-                                        const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-                                        const targetMs = visibleStartMs + (ratio * visibleDurationMs);
-                                        syncVideoTime(targetMs);
-                                        dragPlayheadRef.current = true;
+                                        beginPlayheadDrag(event.clientX, event.pointerId);
                                         event.currentTarget.setPointerCapture?.(event.pointerId);
                                     }}
                                 >
@@ -403,6 +395,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                                 style={{ left: `${leftPercent}%` }}
                                                 onPointerDown={(event) => {
                                                     event.stopPropagation();
+                                                    timelineRef.current = timelineRulerRef.current;
                                                     pushSegmentsToHistory(segments);
                                                     dragBoundaryIndexRef.current = index;
                                                 }}
@@ -421,8 +414,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                                 onPointerDown={(event) => {
                                                     event.preventDefault();
                                                     event.stopPropagation();
-                                                    timelineRef.current = timelineRulerRef.current;
-                                                    dragPlayheadRef.current = true;
+                                                    beginPlayheadDrag(event.clientX, event.pointerId);
                                                     event.currentTarget.setPointerCapture?.(event.pointerId);
                                                 }}
                                                 data-testid="timeline-playhead-handle"
@@ -527,12 +519,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                         onCanPlay={handleLoadedMetadataInternal}
                                         onPlay={() => setIsPlaying(true)}
                                         onPause={() => setIsPlaying(false)}
-                                        onTimeUpdate={(event) => {
-                                            const offsetMs = activeSource
-                                                ? getSourceTimelineStartMs(sources, activeSource.sourceIndex)
-                                                : 0;
-                                            setPlayheadMs(offsetMs + Math.round(event.currentTarget.currentTime * 1000));
-                                        }}
+                                        onTimeUpdate={handlePreviewTimeUpdate}
                                         onError={() => onVideoError?.()}
                                     />
                                 ) : (
