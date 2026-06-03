@@ -775,7 +775,7 @@ class MediaUploadQueue extends EventEmitter {
                 checksum_sha256: file.checksumSha256,
                 ...(job.payload.overwrite ? { overwrite: 'true' } : {}),
                 ...(job.payload.exportSettings ? { export_settings: JSON.stringify(job.payload.exportSettings) } : {}),
-                ...(job.payload.renderManifest ? { manifest: JSON.stringify(job.payload.renderManifest) } : {})
+                ...(job.payload.renderManifest ? { render_manifest: JSON.stringify(job.payload.renderManifest) } : {})
             },
             files: [{
                 fieldName: 'file',

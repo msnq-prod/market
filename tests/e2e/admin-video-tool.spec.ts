@@ -177,12 +177,12 @@ test('API: V2 upload принимает финальный ролик без ren
     expect(response.ok()).toBeTruthy();
     const payload = await response.json() as {
         uploaded?: { item_id: string; serial_number: string; file_url: string };
-        run?: { items: Array<{ item_id: string; upload_status: string }> };
+        run?: { render_manifest?: unknown; items: Array<{ item_id: string; upload_status: string }> };
     };
     expect(payload.uploaded?.item_id).toBe(item.id);
     expect(payload.uploaded?.serial_number).toBe(item.serial_number);
     expect(payload.uploaded?.file_url).toContain('/uploads/videos/exports/');
-    expect(payload.run).not.toHaveProperty('render_manifest');
+    expect(payload.run?.render_manifest).toBeNull();
     const uploadedItem = payload.run?.items.find((entry) => entry.item_id === item.id);
     expect(uploadedItem?.upload_status).toBe('UPLOADED');
     expect(uploadedItem).not.toHaveProperty('render_status');
@@ -381,6 +381,59 @@ test('UI: плейхед следует за drag мышью на таймлай
 
     await expect.poll(() => getPlayheadLeft(page)).not.toBe(beforeLeft);
     expect(await getPlayheadLeft(page)).not.toBe('0%');
+});
+
+test('UI: play и стрелки не сбрасывают плейхед в начало', async ({ page, request }) => {
+    await page.addInitScript(() => {
+        window.addEventListener('error', (event) => {
+            if (event.target instanceof HTMLVideoElement) {
+                event.stopImmediatePropagation();
+            }
+        }, true);
+
+        Object.defineProperty(HTMLMediaElement.prototype, 'paused', {
+            configurable: true,
+            get() {
+                return !(this as HTMLMediaElement & { __testPlaying?: boolean }).__testPlaying;
+            }
+        });
+        HTMLMediaElement.prototype.play = function play() {
+            const video = this as HTMLMediaElement & { __testPlaying?: boolean };
+            video.__testPlaying = true;
+            window.localStorage.setItem('__lastVideoPlayCurrentTime', String(video.currentTime));
+            video.dispatchEvent(new Event('play'));
+            return Promise.resolve();
+        };
+        HTMLMediaElement.prototype.pause = function pause() {
+            const video = this as HTMLMediaElement & { __testPlaying?: boolean };
+            video.__testPlaying = false;
+            video.dispatchEvent(new Event('pause'));
+        };
+    });
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+
+    await openDesktopVideoTool(page, admin, toolPayload.batch.id);
+    await page.getByTestId('source-input').setInputFiles({
+        name: 'source-playhead.mp4',
+        mimeType: 'video/mp4',
+        buffer: makeFakeMp4('source-playhead'),
+        lastModified: 123459
+    });
+    await page.getByRole('button', { name: 'Монтаж' }).click();
+    await expect(page.getByTestId('timeline-region')).toBeVisible();
+
+    await seekTimelineToRatio(page, 0.5);
+    await expect.poll(() => getPlayheadLeftPercent(page)).toBeGreaterThan(45);
+
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(() => getPlayheadLeftPercent(page)).toBeGreaterThan(45);
+
+    await page.keyboard.press('Space');
+    await expect.poll(async () => Number(await page.evaluate(() => window.localStorage.getItem('__lastVideoPlayCurrentTime') || '0'))).toBeGreaterThan(0.4);
+    await expect.poll(() => getPlayheadLeftPercent(page)).toBeGreaterThan(45);
 });
 
 test('UI: source можно заменить с пересборкой таймлайна', async ({ page, request }) => {

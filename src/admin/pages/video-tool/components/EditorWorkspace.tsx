@@ -48,6 +48,7 @@ interface EditorWorkspaceProps {
     handleRestoreAll: () => void;
     handleResetCuts: () => void;
     handleTimelineWheel: (event: WheelEvent, currentTarget: HTMLElement) => void;
+    togglePlayback: () => void | Promise<void>;
     zoomIn: () => void;
     zoomOut: () => void;
     zoomFit: () => void;
@@ -94,6 +95,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     handleRestoreAll,
     handleResetCuts,
     handleTimelineWheel,
+    togglePlayback,
     zoomIn,
     zoomOut,
     zoomFit,
@@ -540,7 +542,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                                     if (isPlaying) {
                                         videoRef.current.pause();
                                     } else {
-                                        videoRef.current.play().catch(() => undefined);
+                                        void togglePlayback();
                                     }
                                 }}
                                 className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 border border-zinc-800 text-zinc-200 transition hover:border-zinc-600 hover:text-white"

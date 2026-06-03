@@ -13,7 +13,6 @@ type UseVideoToolHotkeysOptions = {
     selectedSegmentIndex: number;
     segmentsLength: number;
     syncVideoTime: (nextMs: number) => void;
-    timelineCuts: number[];
     togglePlayback: () => void | Promise<void>;
     zoomTimelineByFactor: (factor: number, anchorMs?: number) => void;
 };
@@ -27,7 +26,6 @@ export const useVideoToolHotkeys = ({
     selectedSegmentIndex,
     segmentsLength,
     syncVideoTime,
-    timelineCuts,
     togglePlayback,
     zoomTimelineByFactor
 }: UseVideoToolHotkeysOptions) => {
@@ -94,28 +92,18 @@ export const useVideoToolHotkeys = ({
 
             if (event.key === 'ArrowLeft') {
                 event.preventDefault();
-                if (event.shiftKey) {
-                    syncVideoTime(Math.max(0, playheadMs - 1000));
-                } else {
-                    const previousCut = [...timelineCuts].reverse().find((cutMs) => cutMs < playheadMs - 1);
-                    syncVideoTime(previousCut ?? 0);
-                }
+                syncVideoTime(Math.max(0, playheadMs - (event.shiftKey ? 1000 : 33)));
                 return;
             }
 
             if (event.key === 'ArrowRight') {
                 event.preventDefault();
-                if (event.shiftKey) {
-                    syncVideoTime(Math.min(durationMs, playheadMs + 1000));
-                } else {
-                    const nextCut = timelineCuts.find((cutMs) => cutMs > playheadMs + 1);
-                    syncVideoTime(nextCut ?? durationMs);
-                }
+                syncVideoTime(Math.min(durationMs, playheadMs + (event.shiftKey ? 1000 : 33)));
                 return;
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [applySegmentEdit, durationMs, hardDeleteSelectedSegment, playheadMs, restorePreviousSegments, selectedSegmentIndex, segmentsLength, syncVideoTime, timelineCuts, togglePlayback, zoomTimelineByFactor]);
+    }, [applySegmentEdit, durationMs, hardDeleteSelectedSegment, playheadMs, restorePreviousSegments, selectedSegmentIndex, segmentsLength, syncVideoTime, togglePlayback, zoomTimelineByFactor]);
 };

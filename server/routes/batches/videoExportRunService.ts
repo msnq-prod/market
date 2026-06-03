@@ -48,6 +48,7 @@ export const BLOCKING_VIDEO_EXPORT_RUN_STATUSES: Array<'DRAFT' | 'READY' | 'REND
     'UPLOADING',
     'PARTIAL'
 ];
+const BLOCKING_VIDEO_EXPORT_RUN_STATUS_SET = new Set<RunRecord['status']>(BLOCKING_VIDEO_EXPORT_RUN_STATUSES);
 
 export const serializeVideoUploadSessionDetails = (run: RunRecord) => ({
     run_id: run.id,
@@ -356,7 +357,7 @@ export const getVideoExportRuns = async (batchId: string) => {
     let hasStale = false;
 
     for (const run of runs) {
-        if (BLOCKING_VIDEO_EXPORT_RUN_STATUSES.includes(run.status as any)) {
+        if (BLOCKING_VIDEO_EXPORT_RUN_STATUS_SET.has(run.status)) {
             const lastUpdated = Math.max(
                 run.updated_at.getTime(),
                 ...run.items.map((item) => item.updated_at.getTime())
@@ -750,4 +751,3 @@ export const getVideoUploadSessions = getVideoExportRuns;
 export const loadVideoUploadSession = loadVideoExportRun;
 export const uploadVideoUploadSessionItemFile = uploadVideoExportItemFile;
 export const cancelVideoUploadSession = cancelVideoExportRun;
-

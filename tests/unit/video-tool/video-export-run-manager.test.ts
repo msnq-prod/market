@@ -9,6 +9,11 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { VideoExportRunManager } = require('../../../electron/hq/videoExportRunManager.cjs');
 
+type RenderJobPayload = {
+    segments: Array<{ sequence: number }>;
+    outputs: Array<{ segment_seq: number }>;
+};
+
 const makeRun = () => ({
     runId: 'run-1',
     batchId: 'batch-1',
@@ -86,7 +91,7 @@ const createManager = async () => {
             this.jobs.push(job);
             return job;
         },
-        cancel: async function cancel(jobId: string) {
+        cancel: async function cancel(_jobId: string) {
             return { success: true };
         }
     });
@@ -144,7 +149,7 @@ test('VideoExportRunManager marks stale done upload as completed before starting
     assert.equal(mediaQueue.enqueueCalls.length, 0);
     assert.equal(renderJobs.length, 1);
     
-    const renderJobPayload = renderJobs[0] as any;
+    const renderJobPayload = renderJobs[0] as RenderJobPayload;
     assert.equal(renderJobPayload.segments[1].sequence, 1);
     assert.equal(renderJobPayload.outputs[0].segment_seq, 1);
 });
@@ -175,12 +180,12 @@ test('VideoExportRunManager transitions run status to failed and notifies server
 
     let apiCalled = false;
     let apiPathname = '';
-    let apiBody: any = null;
+    let apiBody: { error_message?: string } | null = null;
 
-    manager.apiRequest = async (pathname: string, init: any) => {
+    manager.apiRequest = async (pathname: string, init: { body: string }) => {
         apiCalled = true;
         apiPathname = pathname;
-        apiBody = JSON.parse(init.body);
+        apiBody = JSON.parse(init.body) as { error_message?: string };
         return { success: true };
     };
 
@@ -193,6 +198,5 @@ test('VideoExportRunManager transitions run status to failed and notifies server
     assert.equal(run.items['item-2'].uploadStatus, 'cancelled');
     assert.equal(apiCalled, true);
     assert.equal(apiPathname, '/api/batches/batch-1/video-export-runs/run-1/fail');
-    assert.equal(apiBody.error_message, 'ffmpeg crash');
+    assert.equal(apiBody?.error_message, 'ffmpeg crash');
 });
-

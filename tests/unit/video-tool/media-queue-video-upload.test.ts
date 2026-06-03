@@ -64,7 +64,16 @@ test('MediaUploadQueue streams video export upload with progress and export sett
                 runId: 'run-1',
                 itemId: 'item-1',
                 serialNumber: 'SERIAL001',
-                exportSettings: { resolution: '1080p', quality: 'high', fps: 30, audio_normalize: true }
+                exportSettings: { resolution: '1080p', quality: 'high', fps: 30, audio_normalize: true },
+                renderManifest: {
+                    segments: [
+                        { sequence: 0, source_index: 0, start_ms: 0, end_ms: 1000 },
+                        { sequence: 1, source_index: 0, start_ms: 1000, end_ms: 2000 }
+                    ],
+                    outputs: [
+                        { item_id: 'item-1', serial_number: 'SERIAL001', segment_seq: 1 }
+                    ]
+                }
             },
             files: [{
                 fileId: 'file-1',
@@ -84,6 +93,9 @@ test('MediaUploadQueue streams video export upload with progress and export sett
         assert.match(requestBody, /name="checksum_sha256"\r\n\r\nchecksum-1/);
         assert.match(requestBody, /name="export_settings"/);
         assert.match(requestBody, /"resolution":"1080p"/);
+        assert.match(requestBody, /name="render_manifest"/);
+        assert.match(requestBody, /"serial_number":"SERIAL001"/);
+        assert.doesNotMatch(requestBody, /name="manifest"/);
         assert.match(requestBody, /fake-rendered-video/);
         assert.equal(job.progress?.percent, 100);
     } finally {
@@ -159,4 +171,3 @@ test('MediaUploadQueue forwards overwrite parameter if truthy', async () => {
         http.request = originalRequest;
     }
 });
-

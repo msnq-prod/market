@@ -140,6 +140,9 @@ export async function installDesktopVideoMock(page: Page, batchId: string, optio
 
             const form = new FormData();
             form.append('serial_number', item.serialNumber || itemId);
+            if (run.renderManifest) {
+                form.append('render_manifest', JSON.stringify(run.renderManifest));
+            }
             form.append('file', new Blob([`fake-run-item-${itemId}`], { type: 'video/mp4' }), `${item.serialNumber || itemId}.mp4`);
             await fetch(`/api/batches/${requestedBatchId}/video-export-runs/${runId}/items/${itemId}/upload`, {
                 method: 'POST',

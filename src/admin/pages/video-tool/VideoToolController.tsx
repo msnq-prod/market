@@ -152,6 +152,7 @@ export function VideoToolController() {
     const dragBoundaryIndexRef = useRef<number | null>(null);
     const dragPlayheadRef = useRef<PlayheadDragSession | null>(null);
     const pendingPreviewSeekRef = useRef<PendingPreviewSeek | null>(null);
+    const pendingPreviewPlayRef = useRef(false);
     const panViewportRef = useRef<VideoToolPanViewportState | null>(null);
     const previewResizeRef = useRef<VideoToolPreviewResizeState | null>(null);
     const suppressTimelineAutoScrollUntilRef = useRef(0);
@@ -561,26 +562,64 @@ export function VideoToolController() {
         seekPlayhead(playheadDragClientXToMs(clientX, session));
     }, [durationMs, playheadDragClientXToMs, seekPlayhead, visibleDurationMs, visibleStartMs]);
 
+    const waitForVideoSeek = useCallback(async () => {
+        if (!videoRef.current?.seeking) {
+            return;
+        }
+
+        await new Promise<void>((resolve) => {
+            const onSeeked = () => {
+                videoRef.current?.removeEventListener('seeked', onSeeked);
+                resolve();
+            };
+            videoRef.current?.addEventListener('seeked', onSeeked);
+        });
+    }, []);
+
+    const playPreviewVideo = useCallback(async () => {
+        if (!videoRef.current || !sourceUrl || sourcePreviewUnavailable) {
+            return;
+        }
+
+        try {
+            await waitForVideoSeek();
+            await videoRef.current?.play();
+            pendingPreviewPlayRef.current = false;
+        } catch (playError) {
+            pendingPreviewPlayRef.current = false;
+            console.error(playError);
+            setNotice({
+                tone: 'warning',
+                message: 'Браузер заблокировал воспроизведение. Кликните по области просмотра и повторите.'
+            });
+        }
+    }, [sourcePreviewUnavailable, sourceUrl, waitForVideoSeek]);
+
     const togglePlayback = useCallback(async () => {
         if (!videoRef.current || !sourceUrl || sourcePreviewUnavailable) {
             return;
         }
 
         if (videoRef.current.paused) {
-            try {
-                await videoRef.current.play();
-            } catch (playError) {
-                console.error(playError);
-                setNotice({
-                    tone: 'warning',
-                    message: 'Браузер заблокировал воспроизведение. Кликните по области просмотра и повторите.'
-                });
+            const sourceHit = getSourceForGlobalMs(sources, playheadMs);
+            if (!sourceHit) {
+                return;
             }
+
+            pendingPreviewPlayRef.current = true;
+            syncVideoTime(playheadMs);
+
+            if (sourceHit.source.sourceIndex !== activeSourceIndex) {
+                return;
+            }
+
+            await playPreviewVideo();
             return;
         }
 
+        pendingPreviewPlayRef.current = false;
         videoRef.current.pause();
-    }, [sourcePreviewUnavailable, sourceUrl]);
+    }, [activeSourceIndex, playPreviewVideo, playheadMs, sourcePreviewUnavailable, sourceUrl, sources, syncVideoTime]);
 
     const loadPageData = useEffectEvent(async () => {
         if (!batchId) {
@@ -1139,11 +1178,6 @@ export function VideoToolController() {
         };
     }, [clampPreviewPanelWidth, durationMs, playheadDragClientXToMs, segments, setPreviewPanelWidth, syncVideoTime, timelineClientXToMs, updateTimelineViewport, visibleDurationMs]);
 
-    const timelineCuts = useMemo(
-        () => segments.slice(1).map((segment) => segment.startMs),
-        [segments]
-    );
-
     useVideoToolHotkeys({
         applySegmentEdit,
         durationMs,
@@ -1153,7 +1187,6 @@ export function VideoToolController() {
         selectedSegmentIndex,
         segmentsLength: segments.length,
         syncVideoTime,
-        timelineCuts,
         togglePlayback,
         zoomTimelineByFactor
     });
@@ -1266,6 +1299,10 @@ export function VideoToolController() {
         if (pendingSeek?.sourceIndex === activeSource.sourceIndex) {
             videoRef.current.currentTime = Math.max(0, pendingSeek.localMs / 1000);
             pendingPreviewSeekRef.current = null;
+        }
+
+        if (pendingPreviewPlayRef.current) {
+            void playPreviewVideo();
         }
 
         setSources((current) => current.map((source) => source.sourceIndex === activeSource.sourceIndex
@@ -1981,6 +2018,7 @@ export function VideoToolController() {
                         handleRestoreAll={handleRestoreAllDeleted}
                         handleResetCuts={handleClearCuts}
                         handleTimelineWheel={handleTimelineWheel}
+                        togglePlayback={togglePlayback}
                         zoomIn={zoomIn}
                         zoomOut={zoomOut}
                         zoomFit={zoomFit}
