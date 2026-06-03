@@ -160,6 +160,7 @@ export function VideoToolController() {
 
     const [controllerState, dispatchVideoTool] = useReducer(videoToolReducer, undefined, createInitialVideoToolState);
     const [data, setData] = useState<VideoToolPayload | null>(null);
+    const [isImportingSource, setIsImportingSource] = useState(false);
     const [videoUploads, setVideoUploads] = useState<VideoUploadStatusItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -1072,7 +1073,7 @@ export function VideoToolController() {
         }
     }, [durationMs, playheadMs, segments, selectedSegmentIndex]);
 
-    const handleSourcePicked = (file: File | null, mode: 'first' | 'append' | 'rebind' | 'replace' = 'first', targetSourceIndex?: number) => {
+    const handleSourcePicked = async (file: File | null, mode: 'first' | 'append' | 'rebind' | 'replace' = 'first', targetSourceIndex?: number) => {
         if (!file) {
             return;
         }
@@ -1104,11 +1105,16 @@ export function VideoToolController() {
         }
 
         setActiveSourceIndex(sourceIndex);
-        void importSourceIntoHelper(file, sourceIndex, role, nextObjectUrl, {
-            preserveTimeline: preserveExistingTimeline,
-            resetTimeline: mode === 'replace',
-            expectedFingerprint: preserveExistingTimeline ? existingSource : null
-        });
+        try {
+            setIsImportingSource(true);
+            await importSourceIntoHelper(file, sourceIndex, role, nextObjectUrl, {
+                preserveTimeline: preserveExistingTimeline,
+                resetTimeline: mode === 'replace',
+                expectedFingerprint: preserveExistingTimeline ? existingSource : null
+            });
+        } finally {
+            setIsImportingSource(false);
+        }
     };
 
     const handleSourceDeleted = useCallback((sourceIndex: number) => {
@@ -1876,6 +1882,20 @@ export function VideoToolController() {
                     />
                 )}
             </div>
+
+            {isImportingSource && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+                    <div className="flex flex-col items-center justify-center space-y-4 rounded-2xl border border-zinc-800 bg-[#17181c] p-8 shadow-2xl">
+                        <RefreshCw className="h-8 w-8 animate-spin text-zinc-400" />
+                        <div className="text-sm font-medium tracking-[0.12em] text-zinc-200 uppercase">
+                            Копирование исходника...
+                        </div>
+                        <div className="text-xs text-zinc-500">
+                            Пожалуйста, подождите. Это может занять несколько минут.
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
