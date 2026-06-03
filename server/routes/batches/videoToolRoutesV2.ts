@@ -13,7 +13,8 @@ import {
     loadVideoUploadSession,
     uploadVideoUploadSessionItemFile,
     cancelVideoUploadSession,
-    serializeVideoUploadSessionDetails
+    serializeVideoUploadSessionDetails,
+    failVideoExportRun
 } from './videoExportRunService.ts';
 import { prisma } from '../../services/prisma.ts';
 import {
@@ -190,6 +191,21 @@ router.post('/:id/video-export-runs/:runId/cancel', authenticateToken, async (re
         console.error(error);
         const statusCode = getErrorStatusCode(error);
         const message = getErrorMessage(error, 'Не удалось отменить запуск экспорта.');
+        res.status(statusCode).json({ error: message });
+    }
+});
+
+router.post('/:id/video-export-runs/:runId/fail', authenticateToken, async (req: AuthRequest, res) => {
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
+
+        const { error_message } = req.body as { error_message?: string };
+        res.json(await failVideoExportRun(req.params.id, req.params.runId, error_message));
+    } catch (error) {
+        console.error(error);
+        const statusCode = getErrorStatusCode(error);
+        const message = getErrorMessage(error, 'Не удалось перевести запуск в статус ошибки.');
         res.status(statusCode).json({ error: message });
     }
 });

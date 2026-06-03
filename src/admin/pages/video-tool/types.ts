@@ -337,6 +337,7 @@ export type DesktopStartVideoExportRunPayload = {
     runId: string;
     renderManifest: VideoExportManifest;
     sources: DesktopVideoExportSource[];
+    overwrite?: boolean;
 };
 
 export type DesktopVideoExportItemPayload = {

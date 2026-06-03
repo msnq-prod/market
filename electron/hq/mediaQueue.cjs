@@ -773,6 +773,7 @@ class MediaUploadQueue extends EventEmitter {
                 queue_job_id: job.id,
                 queue_file_id: file.fileId,
                 checksum_sha256: file.checksumSha256,
+                ...(job.payload.overwrite ? { overwrite: 'true' } : {}),
                 ...(job.payload.exportSettings ? { export_settings: JSON.stringify(job.payload.exportSettings) } : {})
             },
             files: [{

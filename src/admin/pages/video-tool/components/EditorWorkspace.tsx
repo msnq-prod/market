@@ -508,7 +508,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                             <div className="relative aspect-[9/16] w-full max-w-[280px] max-h-full overflow-hidden rounded-[20px] border border-zinc-900 bg-black shadow-lg">
                                 {sourceUrl && !sourcePreviewUnavailable ? (
                                     <video
-                                        key={sourceUrl}
+                                        key={activeSourceIndex}
                                         ref={videoRef}
                                         src={sourceUrl}
                                         preload="metadata"

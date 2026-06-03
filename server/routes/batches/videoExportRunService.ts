@@ -709,7 +709,44 @@ export const cancelVideoExportRun = async (batchId: string, runId: string) => {
     });
 };
 
+export const failVideoExportRun = async (batchId: string, runId: string, errorMessage?: string) => {
+    return withVideoExportBatchLock(batchId, async (tx) => {
+        const run = await loadVideoExportRun(tx, batchId, runId);
+        if (!run) {
+            throw createHttpError('Запуск экспорта не найден.', 404);
+        }
+
+        if (run.status === 'COMPLETED') {
+            throw createHttpError('Завершенный запуск нельзя перевести в статус ошибки.', 400);
+        }
+
+        await tx.batchVideoExportRun.update({
+            where: { id: run.id },
+            data: {
+                status: 'FAILED',
+                error_message: errorMessage || 'Ошибка при обработке ролика.'
+            }
+        });
+
+        await tx.batchVideoExportItem.updateMany({
+            where: { run_id: run.id, status: { notIn: ['UPLOADED', 'SKIPPED', 'CANCELLED'] } },
+            data: {
+                status: 'FAILED',
+                error_message: errorMessage || 'Не удалось обработать/загрузить ролик.'
+            }
+        });
+
+        const updatedRun = await tx.batchVideoExportRun.findUniqueOrThrow({
+            where: { id: run.id },
+            include: buildVideoExportRunInclude
+        });
+
+        return { run: serializeVideoExportRunDetails(updatedRun) };
+    });
+};
+
 export const getVideoUploadSessions = getVideoExportRuns;
 export const loadVideoUploadSession = loadVideoExportRun;
 export const uploadVideoUploadSessionItemFile = uploadVideoExportItemFile;
 export const cancelVideoUploadSession = cancelVideoExportRun;
+

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState, type SyntheticEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { RefreshCw, Clipboard } from 'lucide-react';
+import { RefreshCw, Clipboard, AlertTriangle } from 'lucide-react';
 import {
     getStonesDesktop,
     isStonesDesktop,
@@ -194,6 +194,7 @@ export function VideoToolController() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
     const [showHotkeyHelp, setShowHotkeyHelp] = useState(false);
+    const [showOverwriteModal, setShowOverwriteModal] = useState(false);
     const [exportResolution, setExportResolution] = useState<'1080p' | '720p'>('1080p');
     const [exportQuality, setExportQuality] = useState<'high' | 'medium' | 'low'>('high');
     const [exportFps, setExportFps] = useState<30 | 60>(30);
@@ -903,6 +904,119 @@ export function VideoToolController() {
     }, [activeV2Run?.run_id, batchId, isDesktopApp, refreshActiveV2Run, refreshLocalRunSnapshot, refreshVideoUploads]);
 
     useEffect(() => {
+        if (loading || !activeV2Run) {
+            return;
+        }
+
+        let currentRenderManifest: VideoExportManifest | null = null;
+        try {
+            currentRenderManifest = data ? buildRenderManifest(segments, sources, data.items) : null;
+        } catch {
+            currentRenderManifest = null;
+        }
+
+        const currentExportSettings: VideoExportSettings = {
+            resolution: exportResolution,
+            quality: exportQuality,
+            fps: exportFps,
+            audio_normalize: exportAudioNormalize
+        };
+
+        const isMatch = (() => {
+            if (!currentRenderManifest) {
+                return false;
+            }
+
+            const runManifest = activeV2Run.render_manifest;
+            const runSettings = activeV2Run.export_settings ?? activeV2Run.render_manifest?.export_settings;
+
+            // Compare settings
+            if (runSettings) {
+                if (runSettings.resolution !== currentExportSettings.resolution) return false;
+                if (runSettings.quality !== currentExportSettings.quality) return false;
+                if (runSettings.fps !== currentExportSettings.fps) return false;
+                if (runSettings.audio_normalize !== currentExportSettings.audio_normalize) return false;
+            } else {
+                return false;
+            }
+
+            // Compare manifest sources
+            if (runManifest?.sources?.length !== currentRenderManifest.sources?.length) return false;
+            if (runManifest?.sources && currentRenderManifest.sources) {
+                for (let i = 0; i < runManifest.sources.length; i++) {
+                    const sa = runManifest.sources[i];
+                    const sb = currentRenderManifest.sources[i];
+                    if (sa.source_index !== sb.source_index) return false;
+                    if (sa.role !== sb.role) return false;
+                    if (sa.fingerprint?.name !== sb.fingerprint?.name) return false;
+                    if (sa.fingerprint?.size !== sb.fingerprint?.size) return false;
+
+                    const durA = sa.fingerprint?.durationMs;
+                    const durB = sb.fingerprint?.durationMs;
+                    if (durA !== durB) return false;
+                }
+            }
+
+            // Compare manifest segments
+            if (runManifest?.segments?.length !== currentRenderManifest.segments.length) return false;
+            if (runManifest?.segments) {
+                for (let i = 0; i < runManifest.segments.length; i++) {
+                    const sega = runManifest.segments[i];
+                    const segb = currentRenderManifest.segments[i];
+                    if (sega.sequence !== segb.sequence) return false;
+                    if ((sega.source_index ?? 0) !== (segb.source_index ?? 0)) return false;
+                    if (sega.start_ms !== segb.start_ms) return false;
+                    if (sega.end_ms !== segb.end_ms) return false;
+                }
+            }
+
+            // Compare manifest outputs
+            if (runManifest?.outputs?.length !== currentRenderManifest.outputs.length) return false;
+            if (runManifest?.outputs) {
+                for (let i = 0; i < runManifest.outputs.length; i++) {
+                    const outa = runManifest.outputs[i];
+                    const outb = currentRenderManifest.outputs[i];
+                    if (outa.segment_seq !== outb.segment_seq) return false;
+                    if (outa.serial_number !== outb.serial_number) return false;
+                    if (outa.item_id !== outb.item_id) return false;
+                }
+            }
+
+            return true;
+        })();
+
+        if (!isMatch) {
+            const isActive = !['COMPLETED', 'CANCELLED', 'FAILED'].includes(activeV2Run.status.toUpperCase());
+            if (isActive) {
+                const runId = activeV2Run.run_id;
+                const version = activeV2Run.version;
+                const activeBatchId = data?.batch?.id;
+
+                // Cancel locally in desktop app
+                const desktop = getStonesDesktop();
+                void desktop?.cancelVideoExportRun(runId).catch((err) => console.error('Failed to cancel local run upon edit:', err));
+
+                // Cancel on server if it's not a local-only draft (version > 0)
+                if (version > 0 && activeBatchId) {
+                    void cancelServerVideoExportRun(activeBatchId, runId).catch((err) => console.error('Failed to cancel server run upon edit:', err));
+                }
+            }
+            setActiveV2Run(null);
+        }
+    }, [
+        loading,
+        activeV2Run,
+        segments,
+        sources,
+        data,
+        exportResolution,
+        exportQuality,
+        exportFps,
+        exportAudioNormalize,
+        setActiveV2Run
+    ]);
+
+    useEffect(() => {
         let cancelled = false;
 
         const loadServerAssetOrigin = async () => {
@@ -1529,8 +1643,14 @@ export function VideoToolController() {
         setNotice({ tone: 'info', message: 'Нарезка сброшена. Шкала объединена.' });
     };
 
-    const handleStartRun = useCallback(async () => {
+    const handleStartRun = useCallback(async (options?: { forceOverwrite?: boolean }) => {
         if (!data) {
+            return;
+        }
+
+        const hasExistingVideos = videoUploads.some((item) => item.status === 'uploaded' || item.item_video_url);
+        if (hasExistingVideos && !options?.forceOverwrite) {
+            setShowOverwriteModal(true);
             return;
         }
 
@@ -1567,7 +1687,8 @@ export function VideoToolController() {
                 batchId: data.batch.id,
                 runId: localRunId,
                 renderManifest: manifest,
-                sources: buildDesktopRunSources()
+                sources: buildDesktopRunSources(),
+                overwrite: Boolean(options?.forceOverwrite)
             });
             await refreshLocalRunSnapshot();
             await refreshVideoUploads(data.batch.id).catch(() => null);
@@ -1583,7 +1704,7 @@ export function VideoToolController() {
         } finally {
             setIsStartingRun(false);
         }
-    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, refreshVideoUploads, runPreflightCheck, setActiveV2Run, setExportPhase]);
+    }, [buildCurrentManifest, buildDesktopRunSources, data, exportBlockedReason, refreshActiveV2Run, refreshLocalRunSnapshot, refreshVideoUploads, runPreflightCheck, setActiveV2Run, setExportPhase, videoUploads]);
 
     const handleCancelRun = useCallback(async () => {
         if (!data || !activeV2Run) {
@@ -1892,6 +2013,48 @@ export function VideoToolController() {
                         </div>
                         <div className="text-xs text-zinc-500">
                             Пожалуйста, подождите. Это может занять несколько минут.
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showOverwriteModal && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+                    <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#17181c] p-6 shadow-2xl space-y-6">
+                        <div className="flex items-start gap-4">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-500">
+                                <AlertTriangle size={20} />
+                            </div>
+                            <div className="space-y-1">
+                                <h3 className="text-sm font-semibold text-zinc-100 uppercase tracking-wider">
+                                    Перезапись видео
+                                </h3>
+                                <p className="text-xs text-zinc-400 leading-relaxed">
+                                    У некоторых товаров в этой партии уже есть загруженные видео. Вы хотите перезаписать все видео?
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row-reverse gap-2">
+                            <button
+                                type="button"
+                                data-testid="confirm-overwrite"
+                                onClick={async () => {
+                                    setShowOverwriteModal(false);
+                                    await handleStartRun({ forceOverwrite: true });
+                                }}
+                                className="inline-flex h-10 items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold text-zinc-950 hover:bg-emerald-400 transition"
+                            >
+                                Да, перезаписать все видео
+                            </button>
+                            <button
+                                type="button"
+                                data-testid="cancel-overwrite"
+                                onClick={() => setShowOverwriteModal(false)}
+                                className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900/50 px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+                            >
+                                Нет
+                            </button>
                         </div>
                     </div>
                 </div>

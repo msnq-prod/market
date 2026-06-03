@@ -90,3 +90,73 @@ test('MediaUploadQueue streams video export upload with progress and export sett
         http.request = originalRequest;
     }
 });
+
+test('MediaUploadQueue forwards overwrite parameter if truthy', async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), 'stones-media-queue-'));
+    const filePath = path.join(rootDir, 'rendered.mp4');
+    await writeFile(filePath, Buffer.from('fake-rendered-video'));
+
+    let requestBody = '';
+    const originalRequest = http.request;
+    http.request = ((url: URL, options: http.RequestOptions, callback: (response: EventEmitter & { statusCode: number }) => void) => {
+        const chunks: Buffer[] = [];
+        const request = new EventEmitter() as EventEmitter & {
+            write: (chunk: Buffer, callback?: (error?: Error) => void) => boolean;
+            end: () => void;
+            destroy: (error?: Error) => void;
+        };
+
+        request.write = (chunk, writeCallback) => {
+            chunks.push(Buffer.from(chunk));
+            writeCallback?.();
+            return true;
+        };
+        request.end = () => {
+            requestBody = Buffer.concat(chunks).toString('utf8');
+            const response = new EventEmitter() as EventEmitter & { statusCode: number };
+            response.statusCode = 200;
+            callback(response);
+            response.emit('data', Buffer.from(JSON.stringify({ ok: true })));
+            response.emit('end');
+        };
+        request.destroy = () => {};
+        return request;
+    }) as typeof http.request;
+
+    try {
+        const queue = new MediaUploadQueue({
+            rootDir,
+            getApiOrigin: () => 'http://127.0.0.1:3101',
+            getAccessToken: () => 'token'
+        });
+        const job = {
+            id: 'queue-job-2',
+            type: 'VIDEO_EXPORT_RUN_ITEM_UPLOAD',
+            status: 'uploading',
+            updatedAt: new Date().toISOString(),
+            payload: {
+                batchId: 'batch-1',
+                runId: 'run-1',
+                itemId: 'item-1',
+                serialNumber: 'SERIAL001',
+                overwrite: true
+            },
+            files: [{
+                fileId: 'file-1',
+                cachePath: filePath,
+                originalName: 'SERIAL001.mp4',
+                mimeType: 'video/mp4',
+                checksumSha256: 'checksum-1',
+                size: Buffer.byteLength('fake-rendered-video')
+            }],
+            progress: null
+        };
+
+        await queue.uploadVideoExportRunItem(job, 'token', new AbortController().signal);
+
+        assert.match(requestBody, /name="overwrite"\r\n\r\ntrue/);
+    } finally {
+        http.request = originalRequest;
+    }
+});
+

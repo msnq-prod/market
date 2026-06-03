@@ -85,6 +85,9 @@ const createManager = async () => {
             this.enqueueCalls.push(job);
             this.jobs.push(job);
             return job;
+        },
+        cancel: async function cancel(jobId: string) {
+            return { success: true };
         }
     });
     const renderJobs: unknown[] = [];
@@ -116,6 +119,7 @@ const createManager = async () => {
         helperRuntime
     });
     manager.schedule = () => undefined;
+    manager.apiRequest = async () => ({ success: true });
 
     return { manager, mediaQueue, renderJobs };
 };
@@ -148,7 +152,7 @@ test('VideoExportRunManager marks stale done upload as completed before starting
 test('VideoExportRunManager copies active upload queue progress into local snapshot', async () => {
     const { manager, mediaQueue } = await createManager();
     manager.runs['batch-1'] = makeRun();
-    manager.runs['batch-1'].items['item-2'].renderStatus = 'failed';
+    manager.runs['batch-1'].items['item-2'].renderStatus = 'completed';
     mediaQueue.jobs = [{
         id: 'upload-1',
         type: 'VIDEO_EXPORT_RUN_ITEM_UPLOAD',
@@ -162,3 +166,33 @@ test('VideoExportRunManager copies active upload queue progress into local snaps
     assert.equal(run.items['item-1'].uploadStatus, 'uploading');
     assert.equal(run.items['item-1'].uploadProgress, 47);
 });
+
+test('VideoExportRunManager transitions run status to failed and notifies server when an item fails', async () => {
+    const { manager } = await createManager();
+    manager.runs['batch-1'] = makeRun();
+    manager.runs['batch-1'].items['item-1'].renderStatus = 'failed';
+    manager.runs['batch-1'].items['item-1'].errorMessage = 'ffmpeg crash';
+
+    let apiCalled = false;
+    let apiPathname = '';
+    let apiBody: any = null;
+
+    manager.apiRequest = async (pathname: string, init: any) => {
+        apiCalled = true;
+        apiPathname = pathname;
+        apiBody = JSON.parse(init.body);
+        return { success: true };
+    };
+
+    await manager.processRuns();
+
+    const run = manager.runs['batch-1'];
+    assert.equal(run.status, 'failed');
+    assert.equal(run.errorMessage, 'ffmpeg crash');
+    assert.equal(run.items['item-2'].renderStatus, 'cancelled');
+    assert.equal(run.items['item-2'].uploadStatus, 'cancelled');
+    assert.equal(apiCalled, true);
+    assert.equal(apiPathname, '/api/batches/batch-1/video-export-runs/run-1/fail');
+    assert.equal(apiBody.error_message, 'ffmpeg crash');
+});
+

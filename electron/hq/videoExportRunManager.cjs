@@ -225,6 +225,7 @@ class VideoExportRunManager extends EventEmitter {
             runId,
             batchId,
             status: 'importing_sources',
+            overwrite: payload.overwrite || false,
             sources: (sources || []).map((s) => ({
                 sourceIndex: s.sourceIndex,
                 role: s.role,
@@ -431,7 +432,7 @@ class VideoExportRunManager extends EventEmitter {
 
         for (const batchId of Object.keys(this.runs)) {
             const run = this.runs[batchId];
-            if (run.status === 'cancelled' || run.status === 'completed') {
+            if (run.status === 'cancelled' || run.status === 'completed' || run.status === 'failed') {
                 continue;
             }
 
@@ -481,6 +482,43 @@ class VideoExportRunManager extends EventEmitter {
                 const itemsChanged = await this.processRunItems(run);
                 changed = itemsChanged || changed;
 
+                const runItems = Object.values(run.items || {});
+                const hasFailedItem = runItems.some((item) => (
+                    item.renderStatus === 'failed'
+                    || item.uploadStatus === 'failed'
+                ));
+
+                if (hasFailedItem) {
+                    if (run.status !== 'failed') {
+                        run.status = 'failed';
+                        const failedItem = runItems.find((item) => item.renderStatus === 'failed' || item.uploadStatus === 'failed');
+                        run.errorMessage = failedItem?.errorMessage || 'Ошибка обработки ролика.';
+                        
+                        // Cancel other active/pending jobs
+                        for (const item of runItems) {
+                            if (item.uploadJobId && (item.uploadStatus === 'uploading' || item.uploadStatus === 'pending' || item.uploadStatus === 'queued' || item.uploadStatus === 'retrying')) {
+                                await this.mediaQueue.cancel(item.uploadJobId).catch(() => undefined);
+                            }
+                            if (item.renderStatus === 'rendering' || item.renderStatus === 'pending') {
+                                if (item.renderStatus === 'pending') {
+                                    item.renderStatus = 'cancelled';
+                                }
+                            }
+                            if (item.uploadStatus === 'pending' || item.uploadStatus === 'queued' || item.uploadStatus === 'retrying') {
+                                item.uploadStatus = 'cancelled';
+                            }
+                        }
+                        changed = true;
+
+                        // Notify API
+                        await this.apiRequest(`/api/batches/${run.batchId}/video-export-runs/${run.runId}/fail`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ error_message: run.errorMessage })
+                        }).catch((apiErr) => console.error('Failed to notify server of fail:', apiErr));
+                    }
+                }
+
                 if (run.status === 'ready') {
                     const items = Object.values(run.items || {});
                     const hasActiveItem = items.some((item) => (
@@ -503,7 +541,6 @@ class VideoExportRunManager extends EventEmitter {
                     }
                 }
 
-                const runItems = Object.values(run.items || {});
                 if (runItems.length > 0 && runItems.every((item) => item.uploadStatus === 'completed' || item.uploadStatus === 'cancelled')) {
                     if (run.status !== 'completed') {
                         run.status = 'completed';
@@ -680,6 +717,7 @@ class VideoExportRunManager extends EventEmitter {
             serialNumber: item.serialNumber,
             helperJobId: item.renderJobId,
             renderManifest: run.renderManifest,
+            overwrite: run.overwrite || false,
             exportSettings: run.renderManifest?.export_settings || {}
         }, [], {
             title: `Видео партии ${String(run.batchId || '').slice(0, 8)}`,
