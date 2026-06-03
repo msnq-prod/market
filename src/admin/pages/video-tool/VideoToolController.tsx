@@ -1274,7 +1274,7 @@ export function VideoToolController() {
     };
 
     const handlePreviewTimeUpdate = useCallback((event: SyntheticEvent<HTMLVideoElement>) => {
-        if (dragPlayheadRef.current || pendingPreviewSeekRef.current) {
+        if (dragPlayheadRef.current || pendingPreviewSeekRef.current || event.currentTarget.seeking) {
             return;
         }
 

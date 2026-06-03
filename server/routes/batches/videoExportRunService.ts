@@ -56,6 +56,7 @@ export const serializeVideoUploadSessionDetails = (run: RunRecord) => ({
     created_by_user_id: run.created_by_user_id,
     status: serializeVideoUploadSessionStatus(run.status),
     version: run.version,
+    render_manifest: run.render_manifest,
     export_settings: run.export_settings,
     committed_at: run.committed_at,
     created_at: run.created_at,
