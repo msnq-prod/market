@@ -341,7 +341,7 @@ export const getVideoUploadStatus = async (batchId: string) => {
 };
 
 export const getVideoExportRuns = async (batchId: string) => {
-    const runs = await prisma.batchVideoExportRun.findMany({
+    let runs = await prisma.batchVideoExportRun.findMany({
         where: {
             batch_id: batchId,
             batch: { deleted_at: null }
@@ -349,6 +349,36 @@ export const getVideoExportRuns = async (batchId: string) => {
         include: buildVideoExportRunInclude,
         orderBy: { version: 'desc' }
     });
+
+    const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+    const now = Date.now();
+    let hasStale = false;
+
+    for (const run of runs) {
+        if (BLOCKING_VIDEO_EXPORT_RUN_STATUSES.includes(run.status as any)) {
+            const lastUpdated = Math.max(
+                run.updated_at.getTime(),
+                ...run.items.map((item) => item.updated_at.getTime())
+            );
+            if (now - lastUpdated > STALE_TIMEOUT_MS) {
+                hasStale = true;
+                await cancelVideoExportRun(batchId, run.id).catch((err) => {
+                    console.error('Failed to auto-cancel stale video export run:', err);
+                });
+            }
+        }
+    }
+
+    if (hasStale) {
+        runs = await prisma.batchVideoExportRun.findMany({
+            where: {
+                batch_id: batchId,
+                batch: { deleted_at: null }
+            },
+            include: buildVideoExportRunInclude,
+            orderBy: { version: 'desc' }
+        });
+    }
 
     return { runs: runs.map(serializeVideoExportRunDetails) };
 };

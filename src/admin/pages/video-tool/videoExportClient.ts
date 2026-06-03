@@ -41,15 +41,26 @@ export const fetchVideoExportRunDetails = async (batchId: string, runId: string)
     return payload.run;
 };
 
-export const cancelVideoExportRun = async (batchId: string, runId: string) => {
-    const response = await authFetch(`/api/batches/${batchId}/video-export-runs/${runId}/cancel`, {
-        method: 'POST'
-    });
-    const payload = await response.json().catch(() => ({ error: 'Не удалось отменить запуск.' }));
-    if (!response.ok || !payload.run) {
-        throw new Error(payload.error || 'Не удалось отменить запуск.');
+export const cancelVideoExportRun = async (batchId: string, runId: string, maxRetries = 3) => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/video-export-runs/${runId}/cancel`, {
+                method: 'POST'
+            });
+            const payload = await response.json().catch(() => ({ error: 'Не удалось отменить запуск.' }));
+            if (!response.ok || !payload.run) {
+                throw new Error(payload.error || 'Не удалось отменить запуск.');
+            }
+            return payload.run as VideoExportRunDetails;
+        } catch (error) {
+            lastError = error;
+            if (attempt < maxRetries) {
+                await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+            }
+        }
     }
-    return payload.run as VideoExportRunDetails;
+    throw lastError;
 };
 
 const sha256Hex = async (buffer: ArrayBuffer) => {

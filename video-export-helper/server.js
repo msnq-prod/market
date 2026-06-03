@@ -392,6 +392,7 @@ const normalizeSegments = (segments) => {
         }
 
         const sequence = typeof entry.sequence === 'number' ? entry.sequence : Number(entry.sequence);
+        const sourceIndex = typeof entry.source_index === 'number' ? entry.source_index : Number(entry.source_index);
         const startMs = typeof entry.start_ms === 'number' ? entry.start_ms : Number(entry.start_ms);
         const endMs = typeof entry.end_ms === 'number' ? entry.end_ms : Number(entry.end_ms);
 
@@ -401,6 +402,7 @@ const normalizeSegments = (segments) => {
 
         return {
             sequence,
+            ...(Number.isFinite(sourceIndex) ? { source_index: sourceIndex } : {}),
             start_ms: startMs,
             end_ms: endMs
         };

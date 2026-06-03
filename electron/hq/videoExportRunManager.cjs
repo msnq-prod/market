@@ -311,6 +311,7 @@ class VideoExportRunManager extends EventEmitter {
                     },
                     {
                         ...itemSegment,
+                        sequence: 1,
                         source_index: itemSourceIndex + 1
                     }
                 ],
@@ -318,7 +319,7 @@ class VideoExportRunManager extends EventEmitter {
                     {
                         item_id: itemId,
                         serial_number: output.serial_number,
-                        segment_seq: output.segment_seq
+                        segment_seq: 1
                     }
                 ]
             })
@@ -434,79 +435,83 @@ class VideoExportRunManager extends EventEmitter {
                 continue;
             }
 
-            if (run.status === 'importing_sources') {
-                const nextSource = run.sources.find((source) => !source.helperSourceId);
-                if (nextSource) {
-                    try {
-                        await this.importSourceToHelper(run, nextSource);
-                        changed = true;
-                    } catch (err) {
-                        console.error(`Error importing source for run ${run.runId}:`, err);
-                        run.status = 'failed';
-                        run.errorMessage = `Ошибка импорта исходника: ${err.message}`;
-                        changed = true;
-                    }
-                } else {
-                    run.status = 'rendering_intro';
-                    changed = true;
-                }
-            }
-
-            if (run.status === 'rendering_intro') {
-                if (!run.introJobId) {
-                    try {
-                        await this.startIntroRender(run);
-                        changed = true;
-                    } catch (err) {
-                        console.error(`Error starting intro job for run ${run.runId}:`, err);
-                        run.status = 'failed';
-                        run.errorMessage = `Ошибка запуска рендера интро: ${err.message}`;
-                        changed = true;
-                    }
-                } else {
-                    try {
-                        const introChanged = await this.refreshIntroRender(run);
-                        changed = introChanged || changed;
-                    } catch (err) {
-                        console.error(`Error checking/importing intro job for run ${run.runId}:`, err);
-                        run.status = 'failed';
-                        run.errorMessage = `Ошибка рендера/импорта интро: ${err.message}`;
+            try {
+                if (run.status === 'importing_sources') {
+                    const nextSource = run.sources.find((source) => !source.helperSourceId);
+                    if (nextSource) {
+                        try {
+                            await this.importSourceToHelper(run, nextSource);
+                            changed = true;
+                        } catch (err) {
+                            console.error(`Error importing source for run ${run.runId}:`, err);
+                            run.status = 'failed';
+                            run.errorMessage = `Ошибка импорта исходника: ${err.message}`;
+                            changed = true;
+                        }
+                    } else {
+                        run.status = 'rendering_intro';
                         changed = true;
                     }
                 }
-            }
 
-            const itemsChanged = await this.processRunItems(run);
-            changed = itemsChanged || changed;
-
-            if (run.status === 'ready') {
-                const items = Object.values(run.items || {});
-                const hasActiveItem = items.some((item) => (
-                    item.renderStatus === 'rendering'
-                    || item.uploadStatus === 'uploading'
-                ));
-                const nextPendingItem = items.find((item) => (
-                    item.renderStatus === 'pending'
-                    && item.uploadStatus !== 'completed'
-                    && item.uploadStatus !== 'cancelled'
-                ));
-
-                if (!hasActiveItem && nextPendingItem) {
-                    await this.renderVideoExportItem({
-                        batchId: run.batchId,
-                        runId: run.runId,
-                        itemId: nextPendingItem.itemId
-                    });
-                    changed = true;
+                if (run.status === 'rendering_intro') {
+                    if (!run.introJobId) {
+                        try {
+                            await this.startIntroRender(run);
+                            changed = true;
+                        } catch (err) {
+                            console.error(`Error starting intro job for run ${run.runId}:`, err);
+                            run.status = 'failed';
+                            run.errorMessage = `Ошибка запуска рендера интро: ${err.message}`;
+                            changed = true;
+                        }
+                    } else {
+                        try {
+                            const introChanged = await this.refreshIntroRender(run);
+                            changed = introChanged || changed;
+                        } catch (err) {
+                            console.error(`Error checking/importing intro job for run ${run.runId}:`, err);
+                            run.status = 'failed';
+                            run.errorMessage = `Ошибка рендера/импорта интро: ${err.message}`;
+                            changed = true;
+                        }
+                    }
                 }
-            }
 
-            const runItems = Object.values(run.items || {});
-            if (runItems.length > 0 && runItems.every((item) => item.uploadStatus === 'completed' || item.uploadStatus === 'cancelled')) {
-                if (run.status !== 'completed') {
-                    run.status = 'completed';
-                    changed = true;
+                const itemsChanged = await this.processRunItems(run);
+                changed = itemsChanged || changed;
+
+                if (run.status === 'ready') {
+                    const items = Object.values(run.items || {});
+                    const hasActiveItem = items.some((item) => (
+                        item.renderStatus === 'rendering'
+                        || item.uploadStatus === 'uploading'
+                    ));
+                    const nextPendingItem = items.find((item) => (
+                        item.renderStatus === 'pending'
+                        && item.uploadStatus !== 'completed'
+                        && item.uploadStatus !== 'cancelled'
+                    ));
+
+                    if (!hasActiveItem && nextPendingItem) {
+                        await this.renderVideoExportItem({
+                            batchId: run.batchId,
+                            runId: run.runId,
+                            itemId: nextPendingItem.itemId
+                        });
+                        changed = true;
+                    }
                 }
+
+                const runItems = Object.values(run.items || {});
+                if (runItems.length > 0 && runItems.every((item) => item.uploadStatus === 'completed' || item.uploadStatus === 'cancelled')) {
+                    if (run.status !== 'completed') {
+                        run.status = 'completed';
+                        changed = true;
+                    }
+                }
+            } catch (err) {
+                console.error(`Error processing run ${run.runId} for batch ${batchId}:`, err);
             }
         }
 

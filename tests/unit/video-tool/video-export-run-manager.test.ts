@@ -139,6 +139,10 @@ test('VideoExportRunManager marks stale done upload as completed before starting
     assert.equal(run.items['item-2'].renderProgress, 8);
     assert.equal(mediaQueue.enqueueCalls.length, 0);
     assert.equal(renderJobs.length, 1);
+    
+    const renderJobPayload = renderJobs[0] as any;
+    assert.equal(renderJobPayload.segments[1].sequence, 1);
+    assert.equal(renderJobPayload.outputs[0].segment_seq, 1);
 });
 
 test('VideoExportRunManager copies active upload queue progress into local snapshot', async () => {
