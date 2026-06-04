@@ -7,11 +7,9 @@ import type { AuthRequest } from '../../middleware/auth.ts';
 import { buildCloneUrl, buildQrUrl } from '../../utils/cloneUrls.ts';
 import { formatItemSeq } from '../../utils/collectionWorkflow.ts';
 import { resolveProjectPath } from '../../utils/projectPaths.ts';
-import { serializeVideoProcessingJob } from '../../services/videoProcessing.ts';
 import { prisma } from '../../services/prisma.ts';
 
 export { prisma };
-export const ACTIVE_VIDEO_JOB_STATUSES: Array<'QUEUED' | 'PROCESSING'> = ['QUEUED', 'PROCESSING'];
 export const PHOTO_TOOL_PUBLIC_OUTPUT_ROOT = resolveProjectPath('public', 'uploads', 'photos');
 export const PHOTO_TOOL_PUBLIC_URL_ROOT = '/uploads/photos';
 
@@ -48,10 +46,6 @@ export const BATCH_INCLUDE = Prisma.validator<Prisma.BatchInclude>()({
         },
         orderBy: { item_seq: 'asc' }
     },
-    video_processing_jobs: {
-        orderBy: { created_at: 'desc' },
-        take: 1
-    },
 });
 
 export type BatchRecord = Prisma.BatchGetPayload<{ include: typeof BATCH_INCLUDE }>;
@@ -69,7 +63,7 @@ export const serializeBatch = (req: AuthRequest, batch: BatchRecord) => ({
     daily_batch_seq: batch.daily_batch_seq,
     owner: batch.owner,
     collection_request: batch.collection_request,
-    video_processing: serializeVideoProcessingJob(batch.video_processing_jobs[0]),
+    video_processing: null,
     product: batch.product ? {
         id: batch.product.id,
         price: Number(batch.product.price),

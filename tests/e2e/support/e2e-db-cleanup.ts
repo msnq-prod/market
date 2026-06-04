@@ -1,4 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const prisma = new PrismaClient();
 
@@ -33,10 +35,8 @@ type CleanupSummary = {
     ledger: number;
     auditLogs: number;
     qrPrintPresets: number;
-    videoProcessingJobs: number;
-    batchVideoExportSessions: number;
-    batchVideoExportRunItems: number;
-    batchVideoExportRuns: number;
+    videoToolV3Items: number;
+    videoToolV3Runs: number;
     items: number;
     batches: number;
     collectionRequests: number;
@@ -59,10 +59,8 @@ const emptySummary = (): CleanupSummary => ({
     ledger: 0,
     auditLogs: 0,
     qrPrintPresets: 0,
-    videoProcessingJobs: 0,
-    batchVideoExportSessions: 0,
-    batchVideoExportRunItems: 0,
-    batchVideoExportRuns: 0,
+    videoToolV3Items: 0,
+    videoToolV3Runs: 0,
     items: 0,
     batches: 0,
     collectionRequests: 0,
@@ -299,9 +297,16 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
         })).count;
     }
 
-    if (hasValues(buyerUserIds)) {
+    if (hasValues(buyerUserIds) || hasValues(itemIds)) {
+        const auditOr: Prisma.AuditLogWhereInput[] = [];
+        if (hasValues(buyerUserIds)) {
+            auditOr.push({ user_id: { in: buyerUserIds } });
+        }
+        if (hasValues(itemIds)) {
+            auditOr.push({ entity_type: 'item', entity_id: { in: itemIds } });
+        }
         summary.auditLogs = (await prisma.auditLog.deleteMany({
-            where: { user_id: { in: buyerUserIds } },
+            where: { OR: auditOr },
         })).count;
     }
 
@@ -310,21 +315,19 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
     })).count;
 
     if (hasValues(batchIds)) {
-        summary.videoProcessingJobs = (await prisma.videoProcessingJob.deleteMany({
-            where: { batch_id: { in: batchIds } },
-        })).count;
+        await Promise.all(batchIds.map((batchId) => fs.rm(
+            path.join(process.cwd(), 'public', 'uploads', 'videos', 'v3', batchId),
+            { recursive: true, force: true },
+        )));
 
-        summary.batchVideoExportRunItems = await deleteManyIfTableExists(() => prisma.batchVideoExportItem.deleteMany({
+        summary.videoToolV3Items = await deleteManyIfTableExists(() => prisma.videoToolV3Item.deleteMany({
             where: { run: { batch_id: { in: batchIds } } },
         }));
 
-        summary.batchVideoExportRuns = await deleteManyIfTableExists(() => prisma.batchVideoExportRun.deleteMany({
+        summary.videoToolV3Runs = await deleteManyIfTableExists(() => prisma.videoToolV3Run.deleteMany({
             where: { batch_id: { in: batchIds } },
         }));
 
-        summary.batchVideoExportSessions = (await prisma.batchVideoExportSession.deleteMany({
-            where: { batch_id: { in: batchIds } },
-        })).count;
     }
 
     if (hasValues(itemIds)) {

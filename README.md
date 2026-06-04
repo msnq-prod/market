@@ -109,8 +109,6 @@ Playwright по умолчанию использует:
 - `VITE_HOST=127.0.0.1`
 - `VITE_PORT=5173`
 - `VITE_API_TARGET=http://127.0.0.1:3001`
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL=https://zagarami.com/uploads/downloads/ZAGARAMI-Video-Helper.dmg` (опционально; без него используется `/uploads/downloads/ZAGARAMI-Video-Helper.dmg`)
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL_ARM64=https://zagarami.com/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg` (опционально; без него используется `/uploads/downloads/ZAGARAMI-Video-Helper-arm64.dmg`)
 
 ## Основные скрипты
 
@@ -122,8 +120,6 @@ npm run build:server
 npm run lint
 npm run server
 npm run start:prod
-npm run video-processor
-npm run video-processor:prod
 npm run db:migrate
 npm run db:seed:languages
 npm run db:seed
@@ -154,7 +150,7 @@ npm run db:repair:item-serials -- --apply
 - `tests/e2e/` — сценарии Playwright
 - `docs/` — продуктовая, пользовательская и эксплуатационная документация
 - `scripts/ops/` — production deploy / backup / restore
-- `video-export-helper/` — локальный desktop helper для видеоэкспорта
+- `electron/hq/videoToolV3/` — локальный runtime Video Tool v3 для HQ Desktop
 
 ## Что важно знать о текущей реализации
 

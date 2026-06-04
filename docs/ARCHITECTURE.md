@@ -21,7 +21,6 @@ ZAGARAMI состоит из четырех основных частей:
 
 - клиент собирается в `dist/`;
 - Express раздает API, статические uploads и собранный SPA;
-- отдельный процесс `video-processor` обрабатывает задания по видео;
 - в production compose трафик идет через Caddy.
 
 ## 2. Frontend
@@ -181,9 +180,9 @@ ZAGARAMI состоит из четырех основных частей:
 - HQ-фото item: `public/uploads/photos`
 - generic/source video uploads: `public/uploads/videos`
 - legacy generated videos: `public/uploads/videos/generated`
-- финальные export-flow ролики: `public/uploads/videos/exports`
+- финальные Video Tool v3 ролики: `public/uploads/videos/v3`
 - изображения локаций: `public/locations`
-- staging и служебные каталоги: `storage/uploads/staging`, `storage/video-jobs`, `storage/video-export`
+- staging и служебные каталоги: `storage/uploads/staging`, `storage/video-tool-v3/upload-intents`
 
 ### Публичные URL
 
@@ -202,40 +201,24 @@ ZAGARAMI состоит из четырех основных частей:
 - сохранение идет по полному manifest и контролируется через `photo_state_token`
 - итог сохраняется в `Item.item_photo_url`
 
-В проекте есть два активных сценария работы с видео:
-
-1. server-side processing через `server/videoProcessor.ts`
-2. V2 export-run flow через HQ Video Tool, Electron desktop state и внутренний video runtime
-
-### Backend video processing
-
-- задания создаются через `/api/batches/:id/video-jobs`
-- worker читает задания из БД
-- результат может обновлять `item_video_url`
-
-### V2 export-run flow
+Активный сценарий работы с видео: Video Tool v3 через HQ Desktop.
 
 - HQ открывает `/admin/video-tool/:batchId`
-- Electron HQ проверяет внутренний video runtime protocol `stones-video-export-helper-v3`
-- UI создает local upload session id
-- Electron создает local upload-session snapshot в desktop state
-- video runtime вызывается через IPC/helperRuntime без локального HTTP endpoint
-- backend `BatchVideoExportRun` создается при первом item-level upload как upload-session; `render_manifest` для upload не обязателен
-- серверный статус загруженности читается через `GET /api/batches/:id/video-uploads`
-- item-level upload идет через `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
-- upload валидирует `batchId`/`itemId`/`serial_number`/checksum, идемпотентен для того же checksum, требует `overwrite=true` для замены, пишет `AuditLog`, сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
-- backend response для upload-session не отдает `render_manifest` и `render_status`; UI берет render progress только из Desktop HQ
-- политика overwrite: новый файл кладется в путь текущей upload-session; прежний внутренний export-файл удаляется, если он был в `public/uploads/videos/exports`
+- Electron HQ вызывает локальный runtime через IPC `window.stones.videoToolV3`
+- подготовка и рендер выполняются локально, сеть нужна только для upload
+- backend API: `/api/video-tool-v3/*`
+- финальный upload сохраняет `Item.item_video_url` и возвращает ссылки на файл и `/clone/:serialNumber`
+- публичный цифровой паспорт и QR endpoints остаются привязаны к `Item.serial_number`
 
 Код:
 
-- `server/routes/batches/videoToolRoutesV2.ts`
-- `server/routes/batches/videoExportRunService.ts`
-- `electron/hq/mediaWorkflowManager.cjs`
-- `electron/hq/mediaQueue.cjs`
-- `src/admin/pages/video-tool/VideoToolController.tsx`
+- `server/routes/videoToolV3.ts`
+- `server/services/videoToolV3RunService.ts`
+- `server/services/videoToolV3UploadIntentService.ts`
+- `electron/hq/videoToolV3/*`
+- `src/admin/pages/video-tool-v3/*`
 
-Ограничение текущей реализации: историческая модель `BatchVideoExportSession` может оставаться в БД для старых данных, а endpoint names `video-export-runs` сохранены для совместимости; в рабочем флоу это upload sessions, render state остается локальным в Desktop HQ.
+Исторические Prisma-модели `VideoProcessingJob` и `BatchVideoExport*` оставлены только для archival data до отдельного решения владельца проекта.
 
 ## 8. Публичный цифровой паспорт
 
@@ -263,14 +246,12 @@ Media в паспорте собираются так:
 
 - `db`
 - `app`
-- `video-processor`
 
 ### Production compose
 
 - `caddy`
 - `db`
 - `app`
-- `video-processor`
 
 ## 10. Тестирование
 

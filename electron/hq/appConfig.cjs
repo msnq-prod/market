@@ -5,12 +5,10 @@ const projectRoot = path.resolve(__dirname, '..', '..');
 const APP_DISPLAY_NAME = 'ZAGARAMI admin';
 const DESKTOP_ADMIN_AUTO_LOGIN = Object.freeze({
     email: 'admin@stones.com',
-    password: 'Parol.228'
+    password: 'admin123'
 });
 const DEFAULT_API_ORIGIN = 'http://127.0.0.1:3001';
 const DEFAULT_DEV_SERVER_URL = 'http://127.0.0.1:5173';
-const HELPER_PORT = 3012;
-const HELPER_PROTOCOL_VERSION = 'stones-video-export-helper-v3';
 const UPDATE_MANIFEST_FILE = 'ZAGARAMI-HQ-update.json';
 const PROXY_PREFIXES = ['/api', '/auth', '/uploads', '/healthz'];
 const TEXT_EXTENSIONS = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt', '.map']);
@@ -75,8 +73,6 @@ const createAppConfig = ({ app }) => {
         DESKTOP_ADMIN_AUTO_LOGIN,
         DEFAULT_API_ORIGIN,
         DEFAULT_DEV_SERVER_URL,
-        HELPER_PORT,
-        HELPER_PROTOCOL_VERSION,
         UPDATE_MANIFEST_FILE,
         PROXY_PREFIXES,
         TEXT_EXTENSIONS,
@@ -92,7 +88,6 @@ const createAppConfig = ({ app }) => {
                 ? path.join(app.getAppPath(), 'dist')
                 : path.join(projectRoot, 'dist')
         ),
-        getHelperStorageRoot: () => path.join(app.getPath('userData'), 'video-helper'),
         getMediaQueueRoot: () => path.join(app.getPath('userData'), 'media-upload-queue'),
         getMediaWorkflowRoot: () => path.join(app.getPath('userData'), 'media-workflows'),
         getUpdateStorageRoot: () => path.join(app.getPath('userData'), 'updates'),

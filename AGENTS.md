@@ -56,13 +56,12 @@ E2E-окружение:
 - `server/` — Express API, middleware, services, utils и worker entrypoints.
   - `server/routes/*` — route-модули API.
   - `server/services/*` — вынесенная backend-логика.
-  - `server/videoProcessor.ts` — worker обработки batch-видео.
   - `server/telegramWorker.ts` — worker Telegram-уведомлений.
 - `prisma/` — схема, миграции, seed.
 - `tests/e2e/` — Playwright e2e.
 - `docs/` — документация продукта и эксплуатации.
 - `scripts/ops/` — production deploy / backup / restore.
-- `video-export-helper/` — локальный desktop helper для HQ Video Tool.
+- `electron/hq/videoToolV3/` — локальный runtime Video Tool v3 для HQ Desktop.
 - `docker-compose.yml`, `docker-compose.prod.yml` — local/prod compose topology.
 
 ## 5. Бизнес-домен (обязательно учитывать)

@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const mode = process.argv.includes('--dist') ? 'dist' : 'vite';
-const prodOrigin = process.env.STONES_HQ_API_ORIGIN || 'https://zagarami.com';
+const apiOrigin = process.env.STONES_HQ_API_ORIGIN || 'http://127.0.0.1:3001';
 const viteOrigin = process.env.STONES_HQ_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 const viteBin = path.join(projectRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite');
 const electronBin = path.join(projectRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
@@ -65,11 +65,11 @@ const runViteMode = async () => {
     const viteHost = viteUrl.hostname || '127.0.0.1';
 
     spawnChild(viteBin, ['--host', viteHost, '--port', String(vitePort)], {
-        VITE_API_TARGET: prodOrigin
+        VITE_API_TARGET: apiOrigin
     });
     await waitForPort(vitePort, viteHost);
     spawnChild(electronBin, ['electron/hq/main.cjs'], {
-        STONES_HQ_API_ORIGIN: prodOrigin,
+        STONES_HQ_API_ORIGIN: apiOrigin,
         STONES_HQ_DEV_SERVER_URL: viteOrigin
     });
 };
@@ -83,7 +83,7 @@ const runDistMode = async () => {
     }
 
     spawnChild(electronBin, ['electron/hq/main.cjs'], {
-        STONES_HQ_API_ORIGIN: prodOrigin,
+        STONES_HQ_API_ORIGIN: apiOrigin,
         STONES_HQ_USE_DIST: '1'
     });
 };

@@ -135,7 +135,7 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
                     embedded: true,
                     ok: true,
                     helper_version: 'e2e',
-                    protocol_version: 'stones-video-export-helper-v3'
+                    protocol_version: 'stones-video-tool-v3-ipc'
                 },
                 queue: {
                     counts: {},
@@ -174,9 +174,6 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
             getAdminAutoLoginCredentials: async () => ({ email: 'admin@stones.com', password: 'admin123' }),
             syncAuthToken: async () => ({ ok: true }),
             exportStatusCenterLogs: async () => ({ success: true, path: '/tmp/zagarami-status-center-logs.json' }),
-            getVideoHelperStatus: async () => ({ embedded: true, ok: true }),
-            cleanupVideoHelper: async () => ({ success: true }),
-            showVideoHelperStorage: async () => ({ success: true }),
             exportDiagnosticsMarkdown: async () => ({ success: true, path: '/tmp/zagarami-diagnostics.md' }),
             selectBatchDiagnosticsMediaFolder: async () => ({
                 cancelled: false,

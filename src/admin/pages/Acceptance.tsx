@@ -25,18 +25,6 @@ type BatchItem = {
     qr_url: string | null;
 };
 
-type VideoProcessingState = {
-    job_id: string;
-    status: string;
-    version: number;
-    source_count: number;
-    output_count: number;
-    processed_output_count: number;
-    error_message: string | null;
-    started_at: string | null;
-    finished_at: string | null;
-};
-
 type BatchView = {
     id: string;
     status: string;
@@ -52,7 +40,6 @@ type BatchView = {
         status: string;
         requested_qty: number;
     } | null;
-    video_processing?: VideoProcessingState | null;
     product?: {
         id: string;
         country_code: string;
@@ -67,23 +54,6 @@ type BatchView = {
     items: BatchItem[];
 };
 
-const videoProcessingLabel: Record<string, string> = {
-    UPLOADED: 'Загружено',
-    QUEUED: 'В очереди',
-    PROCESSING: 'Обработка',
-    COMPLETED: 'Готово',
-    FAILED: 'Ошибка'
-};
-
-const videoProcessingClass: Record<string, string> = {
-    UPLOADED: 'bg-gray-500/15 text-gray-200 border border-gray-500/30',
-    QUEUED: 'bg-blue-500/15 text-blue-200 border border-blue-500/30',
-    PROCESSING: 'bg-amber-500/15 text-amber-200 border border-amber-500/30',
-    COMPLETED: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30',
-    FAILED: 'bg-red-500/15 text-red-200 border border-red-500/30'
-};
-
-const activeVideoProcessingStatuses = new Set(['QUEUED', 'PROCESSING']);
 const isPublicPassportItem = (batchStatus: string, itemStatus: string) =>
     (batchStatus === 'RECEIVED' || batchStatus === 'FINISHED') && itemStatus !== 'REJECTED';
 
@@ -178,23 +148,6 @@ export function Acceptance() {
         }
     }, [relevantBatches, selectedBatchId]);
 
-    useEffect(() => {
-        const hasActiveVideoWork = relevantBatches.some((batch) =>
-            (batch.video_processing && activeVideoProcessingStatuses.has(batch.video_processing.status))
-        );
-        if (!hasActiveVideoWork) {
-            return;
-        }
-
-        const intervalId = window.setInterval(() => {
-            void loadBatches(false);
-        }, 4000);
-
-        return () => {
-            window.clearInterval(intervalId);
-        };
-    }, [relevantBatches]);
-
     const filteredBatches = useMemo(() => {
         const normalizedQuery = batchQuery.trim().toLowerCase();
         if (!normalizedQuery) {
@@ -227,13 +180,9 @@ export function Acceptance() {
 
     const mediaStats = useMemo(() => countBatchMedia(selectedBatch), [selectedBatch]);
     const missingMediaCount = Math.max(0, mediaStats.total - mediaStats.fullyReady);
-    const hasActiveVideoJob = Boolean(
-        selectedBatch?.video_processing && activeVideoProcessingStatuses.has(selectedBatch.video_processing.status)
-    );
     const canFinalize = Boolean(
         selectedBatch
         && canFinalizeBatch(selectedBatch.status)
-        && !hasActiveVideoJob
         && missingMediaCount === 0
     );
 
@@ -444,11 +393,6 @@ export function Acceptance() {
                                                 <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(selectedBatch.status).className}`}>
                                                     {getBatchStatusMeta(selectedBatch.status).label}
                                                 </span>
-                                                {selectedBatch.video_processing && (
-                                                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${videoProcessingClass[selectedBatch.video_processing.status] || 'bg-gray-700 text-gray-200'}`}>
-                                                        Legacy: {videoProcessingLabel[selectedBatch.video_processing.status] || selectedBatch.video_processing.status}
-                                                    </span>
-                                                )}
                                             </div>
 
                                             <div className="space-y-1 text-sm text-gray-400">
@@ -534,8 +478,6 @@ export function Acceptance() {
                                                 title="Готовность к складу"
                                                 text={canFinalize
                                                     ? 'Все позиции укомплектованы. Партию можно переводить на склад.'
-                                                    : hasActiveVideoJob
-                                                    ? 'Активная видео-обработка еще идет. Перевод на склад временно заблокирован.'
                                                     : `Не хватает media для ${missingMediaCount} позиций.`}
                                                 tone={canFinalize ? 'success' : 'warning'}
                                             />

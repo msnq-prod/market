@@ -74,45 +74,6 @@ type VideoToolPayload = {
     items: BatchItem[];
 };
 
-type DiagnosticsVideoSource = {
-    source_index: number;
-    duration_ms: number;
-    fingerprint: {
-        name: string;
-        size: number;
-        lastModified: number;
-        durationMs: number;
-    };
-};
-
-type VideoSegment = {
-    sequence: number;
-    source_index?: number;
-    start_ms: number;
-    end_ms: number;
-};
-
-type VideoManifest = {
-    manifest_version?: number;
-    sources?: Array<{
-        source_index: number;
-        role: 'WITH_INTRO' | 'NO_INTRO';
-        fingerprint: DiagnosticsVideoSource['fingerprint'];
-    }>;
-    segments: VideoSegment[];
-    outputs: Array<{
-        segment_seq: number;
-        serial_number: string;
-        item_id: string;
-    }>;
-    export_settings?: {
-        resolution: '1080p';
-        quality: 'high';
-        fps: 30;
-        audio_normalize: true;
-    };
-};
-
 export type BatchDiagnosticsCallbacks = {
     onLog: (log: BatchDiagnosticsLog) => void;
 };
@@ -169,63 +130,6 @@ const loginWithPasswordCandidates = async (email: string, passwords: string[]) =
     }
 
     throw new Error(lastError);
-};
-
-const buildAdvancedSegments = (
-    videoSources: DiagnosticsVideoSource[],
-    items: BatchItem[]
-): VideoManifest => {
-    const segmentCount = items.length + 1;
-    const hasMultipleSources = videoSources.length > 1;
-    const midPoint = 6;
-
-    const duration0 = videoSources[0].duration_ms;
-    const duration1 = hasMultipleSources ? videoSources[1].duration_ms : 0;
-
-    const segmentDuration0 = Math.max(250, Math.floor(duration0 / midPoint));
-    const segmentDuration1 = hasMultipleSources ? Math.max(250, Math.floor(duration1 / (segmentCount - midPoint))) : 0;
-
-    const segments = Array.from({ length: segmentCount }, (_entry, index) => {
-        const useSource1 = hasMultipleSources && index >= midPoint;
-        const sourceIndex = useSource1 ? 1 : 0;
-        const duration = useSource1 ? duration1 : duration0;
-        const segDuration = useSource1 ? segmentDuration1 : segmentDuration0;
-        const offsetIndex = useSource1 ? index - midPoint : index;
-        const totalSegs = useSource1 ? segmentCount - midPoint : midPoint;
-
-        const startMs = Math.min(duration - 1, offsetIndex * segDuration);
-        const endMs = offsetIndex === totalSegs - 1
-            ? duration
-            : Math.min(duration, (offsetIndex + 1) * segDuration);
-
-        return {
-            sequence: index,
-            source_index: sourceIndex,
-            start_ms: startMs,
-            end_ms: Math.max(startMs + 1, endMs)
-        };
-    });
-
-    return {
-        manifest_version: 2,
-        sources: videoSources.map((source) => ({
-            source_index: source.source_index,
-            role: source.source_index === 0 ? 'WITH_INTRO' : 'NO_INTRO',
-            fingerprint: source.fingerprint
-        })),
-        segments,
-        outputs: items.map((item, index) => ({
-            segment_seq: index + 1,
-            serial_number: item.serial_number || '',
-            item_id: item.id
-        })),
-        export_settings: {
-            resolution: '1080p',
-            quality: 'high',
-            fps: 30,
-            audio_normalize: true
-        }
-    };
 };
 
 export async function runBatchCreationDiagnostics(
@@ -442,52 +346,37 @@ export async function runBatchCreationDiagnostics(
         }, (result) => ({ photoReady: result.items.filter((item) => item.item_photo_url).length }));
 
         const videoTool = await runStep('video-tool-load', 'Загрузка Video Tool', async () => {
-            logPrefix('PROCESS', `Запрос конфигурации Video Tool для партии ${batchId}...`);
-            const response = await apiFetch(`/api/batches/${batchId}/video-tool`, {
+            logPrefix('PROCESS', `Запрос конфигурации Video Tool v3 для партии ${batchId}...`);
+            const response = await apiFetch(`/api/video-tool-v3/batches/${batchId}`, {
                 headers: { Authorization: `Bearer ${admin.accessToken}` }
             });
-            return readJson<VideoToolPayload>(response, 'Не удалось загрузить Video Tool.');
+            return readJson<VideoToolPayload>(response, 'Не удалось загрузить Video Tool v3.');
         }, (result) => ({ expected: result.batch.expected_output_count }));
 
-        const videoSources: DiagnosticsVideoSource[] = [];
-        const limitVideos = Math.min(2, videos.length);
-        logPrefix('INFO', `Будет описано исходных видео для V2 manifest: ${limitVideos}`);
-
-        for (let i = 0; i < limitVideos; i++) {
-            const currentVideo = videos[i];
-            const source = await runStep(`video-source-${i}`, `Подготовка source ${i + 1}`, async () => {
-                const form = new FormData();
-                const f = toFile(currentVideo);
-                form.append('file', f, currentVideo.name); // keeps browser File construction covered by diagnostics
-                logPrefix('PROCESS', `Source #${i + 1}: ${currentVideo.name} (${f.size} байт, ${f.type}).`);
-                return {
-                    source_index: i,
-                    duration_ms: 60_000,
-                    fingerprint: {
-                        name: currentVideo.name,
-                        size: f.size,
-                        lastModified: currentVideo.lastModified || Date.now(),
-                        durationMs: 60_000
-                    }
-                } satisfies DiagnosticsVideoSource;
-            }, (result) => ({ durationMs: result.duration_ms }));
-            
-            logPrefix('INFO', `Source описан: ${source.fingerprint.name}, длительность для диагностики: ${source.duration_ms}мс`);
-            videoSources.push(source);
-        }
-
-        logPrefix('INFO', 'Эмуляция интерактивных функций Video Tool:');
-        logPrefix('INFO', `1. Нарезка таймлайна на ${videoTool.items.length + 1} сегментов (с учетом переходов и интро).`);
-        logPrefix('INFO', '2. Имитация удаления клипа #2 (сегмент 3 помечен как исключенный).');
-        logPrefix('INFO', '3. Имитация восстановления клипа #3 (сегмент 4 возвращен в активную линию).');
-        logPrefix('INFO', '4. Генерация V2 render manifest для 10 товарных клипов.');
-
-        const manifest = await runStep('video-manifest', 'Проверка V2 render manifest', async () => {
-            logPrefix('PROCESS', 'Генерация manifest без раннего server run. Backend подключается только на item upload.');
-            return buildAdvancedSegments(videoSources, videoTool.items);
-        }, (result) => ({ outputs: result.outputs.length, segments: result.segments.length }));
-
-        logPrefix('SUCCESS', `V2 Video Tool manifest проверен: ${manifest.outputs.length} outputs. Server run создается лениво при upload.`);
+        await runStep('video-media-sync', 'Проверка item video binding', async () => {
+            const firstItem = videoTool.items.find((item) => item.serial_number);
+            if (!firstItem?.serial_number) {
+                throw new Error('В партии нет item с serial_number для video smoke.');
+            }
+            const firstVideo = videos[0];
+            const sourceFile = toFile(firstVideo);
+            logPrefix('PROCESS', `Video smoke source: ${firstVideo.name} (${sourceFile.size} байт, ${sourceFile.type}).`);
+            const response = await apiFetch(`/api/batches/${batchId}/media-sync`, {
+                method: 'POST',
+                headers: authHeaders(admin.accessToken),
+                body: JSON.stringify({
+                    files: [{
+                        name: `${firstItem.serial_number}.mp4`,
+                        url: `/uploads/videos/v3/diagnostics/${firstItem.serial_number}.mp4`
+                    }]
+                })
+            });
+            const result = await readJson<{ matched: string[]; unmatched: string[] }>(response, 'Не удалось привязать диагностическое видео.');
+            if (result.matched.length !== 1) {
+                throw new Error(`Диагностическое видео не сопоставлено: ${result.unmatched.join(', ')}`);
+            }
+            return result;
+        }, (result) => ({ matched: result.matched.length }));
 
         const finalItems = await runStep('items-check', 'Проверка item media', async () => {
             logPrefix('PROCESS', 'Проверка медиа-файлов привязанных к items партии в БД...');

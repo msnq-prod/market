@@ -11,7 +11,6 @@ import {
     Server,
     TestTube2,
     UploadCloud,
-    Video,
     Wifi,
     X,
     CheckCircle2,
@@ -37,7 +36,7 @@ import { getBufferedClientLogs } from '../../utils/clientLogger';
 import { runBatchCreationDiagnostics, type BatchDiagnosticsLog } from '../services/batchDiagnostics';
 
 type StatusTone = 'ok' | 'warning' | 'error' | 'checking' | 'offline';
-type StatusTab = 'overview' | 'queue' | 'helper' | 'updates' | 'diagnostics';
+type StatusTab = 'overview' | 'queue' | 'updates' | 'diagnostics';
 type OpenStatusCenterDetail = {
     tab?: StatusTab;
     focus?: {
@@ -90,8 +89,7 @@ const jobStatusLabel: Record<string, string> = {
 };
 
 const jobTypeLabel: Record<string, string> = {
-    PHOTO_TOOL_APPLY: 'Photo Tool',
-    VIDEO_EXPORT_RUN_ITEM_UPLOAD: 'Video Tool'
+    PHOTO_TOOL_APPLY: 'Photo Tool'
 };
 
 const workflowPhaseLabel: Record<string, string> = {
@@ -152,60 +150,6 @@ const getQueueCounts = (queue: StonesMediaQueueSnapshot) => {
 };
 
 const activeQueueStatuses = new Set(['queued', 'uploading', 'retrying']);
-
-type VideoUploadGroup = {
-    id: string;
-    title: string;
-    total: number;
-    done: number;
-    active: number;
-    failed: number;
-    blockedAuth: number;
-    jobs: StonesMediaQueueJob[];
-};
-
-const getVideoUploadGroups = (jobs: StonesMediaQueueJob[]) => {
-    const groups = new Map<string, VideoUploadGroup>();
-    for (const job of jobs) {
-        const summary = job.summary;
-        if (job.type !== 'VIDEO_EXPORT_RUN_ITEM_UPLOAD') {
-            continue;
-        }
-
-        const groupId = summary?.runId || summary?.batchId || job.id;
-        const group = groups.get(groupId) || {
-            id: groupId,
-            title: summary?.title || 'Видео партии',
-            total: summary?.total || 0,
-            done: 0,
-            active: 0,
-            failed: 0,
-            blockedAuth: 0,
-            jobs: []
-        };
-        group.jobs.push(job);
-        group.total = Math.max(group.total, group.jobs.length);
-        if (job.status === 'done') {
-            group.done += 1;
-        }
-        if (activeQueueStatuses.has(job.status)) {
-            group.active += 1;
-        }
-        if (job.status === 'failed') {
-            group.failed += 1;
-        }
-        if (job.status === 'auth_required') {
-            group.blockedAuth += 1;
-        }
-        groups.set(groupId, group);
-    }
-
-    return Array.from(groups.values()).sort((left, right) => {
-        const leftUpdated = left.jobs[0]?.updatedAt || '';
-        const rightUpdated = right.jobs[0]?.updatedAt || '';
-        return rightUpdated.localeCompare(leftUpdated);
-    });
-};
 
 function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
     return (
@@ -491,85 +435,6 @@ function WorkflowRow({
     );
 }
 
-function VideoUploadGroupCard({
-    group,
-    onRetry,
-    onCancel
-}: {
-    group: VideoUploadGroup;
-    onRetry: (jobId: string) => void;
-    onCancel: (jobId: string) => void;
-}) {
-    const completedUnits = group.jobs.reduce((total, job) => total + (getQueueJobProgressPercent(job) / 100), 0);
-    const progress = group.total > 0 ? clampPercent((completedUnits / group.total) * 100) : 0;
-    const activeJob = group.jobs.find((job) => job.status === 'uploading')
-        || group.jobs.find((job) => activeQueueStatuses.has(job.status))
-        || group.jobs.find((job) => job.status === 'failed' || job.status === 'auth_required')
-        || group.jobs[0];
-    const retryableJobs = group.jobs.filter((job) => job.status === 'failed' || job.status === 'auth_required');
-    const cancellableJobs = group.jobs.filter((job) => job.status === 'queued' || job.status === 'uploading' || job.status === 'retrying' || job.status === 'failed' || job.status === 'auth_required');
-    const tone = group.failed > 0
-        ? 'border-red-400/25 bg-red-500/10'
-        : group.done === group.total
-            ? 'border-emerald-400/20 bg-emerald-400/10'
-            : 'border-sky-400/20 bg-sky-400/10';
-
-    return (
-        <div className={`rounded-2xl border p-3 ${tone}`}>
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">{group.title}</p>
-                    <p className="mt-1 text-xs text-gray-300">
-                        Видео партии: {group.done}/{group.total} MP4
-                        {group.active > 0 ? `, активных ${group.active}` : ''}
-                        {group.failed > 0 ? `, ошибок ${group.failed}` : ''}
-                        {group.blockedAuth > 0 ? `, нужен вход ${group.blockedAuth}` : ''}
-                    </p>
-                    {activeJob?.summary?.serialNumber ? (
-                        <p className="mt-1 text-xs text-gray-400">
-                            Текущий serial: {activeJob.summary.serialNumber} · {jobStatusLabel[activeJob.status] || activeJob.status} · {getQueueJobProgressPercent(activeJob)}%
-                        </p>
-                    ) : null}
-                </div>
-                <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-                    {retryableJobs.length > 0 ? (
-                        <button
-                            type="button"
-                            onClick={() => retryableJobs.forEach((job) => onRetry(job.id))}
-                            className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 text-[11px] text-gray-200 transition hover:bg-white/5"
-                        >
-                            <RefreshCw size={12} />
-                            Повторить ошибки
-                        </button>
-                    ) : null}
-                    {cancellableJobs.length > 0 ? (
-                        <button
-                            type="button"
-                            onClick={() => cancellableJobs.forEach((job) => onCancel(job.id))}
-                            className="inline-flex min-h-8 items-center rounded-lg border border-red-400/25 px-2.5 text-[11px] text-red-100 transition hover:bg-red-500/10"
-                        >
-                            Отменить группу
-                        </button>
-                    ) : null}
-                </div>
-            </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/30">
-                <div className="h-full rounded-full bg-white/70 transition-[width]" style={{ width: `${progress}%` }} />
-            </div>
-            {group.jobs.some((job) => job.lastError) ? (
-                <div className="mt-3 grid gap-2">
-                    {group.jobs.filter((job) => job.lastError).slice(0, 3).map((job) => (
-                        <p key={job.id} className="rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
-                            {job.summary?.serialNumber ? `${job.summary.serialNumber}: ` : ''}{job.lastError}
-                        </p>
-                    ))}
-                </div>
-            ) : null}
-            <p className="mt-2 text-[11px] text-gray-500">Показано {group.jobs.length} из {group.total}</p>
-        </div>
-    );
-}
-
 export function DesktopStatusCenter() {
     const location = useLocation();
     const desktop = getStonesDesktop();
@@ -607,11 +472,8 @@ export function DesktopStatusCenter() {
     const workflows = workflowSnapshot.workflows;
     const activeWorkflowCount = workflows.filter((workflow) => !['completed', 'cancelled', 'failed'].includes(workflow.phase)).length;
     const failedWorkflowCount = workflows.filter((workflow) => workflow.phase === 'failed').length;
-    const videoUploadGroups = useMemo(() => getVideoUploadGroups(queue.jobs), [queue.jobs]);
-    const groupedJobIds = useMemo(() => new Set(videoUploadGroups.flatMap((group) => group.jobs.map((job) => job.id))), [videoUploadGroups]);
-    const standaloneQueueJobs = useMemo(() => queue.jobs.filter((job) => !groupedJobIds.has(job.id)), [groupedJobIds, queue.jobs]);
+    const standaloneQueueJobs = queue.jobs;
     const networkTone: StatusTone = diagnostics?.network.apiReachable ? 'ok' : diagnostics?.network.online ? 'warning' : 'offline';
-    const helperTone: StatusTone = diagnostics?.helper.ok ? 'ok' : 'error';
     const queueTone: StatusTone = queueCounts.failed > 0 || queueCounts.stuck > 0 ? 'error' : queueCounts.blockedAuth > 0 ? 'warning' : queueCounts.active > 0 ? 'checking' : 'ok';
     const workflowTone: StatusTone = failedWorkflowCount > 0 || (diagnostics?.workflows?.stuck || 0) > 0 ? 'error' : (diagnostics?.workflows?.blockedAuth || diagnostics?.workflows?.blockedOffline || 0) > 0 ? 'warning' : activeWorkflowCount > 0 ? 'checking' : 'ok';
     const cachedUpdate = diagnostics?.update || null;
@@ -649,10 +511,8 @@ export function DesktopStatusCenter() {
             : updateChecked
                 ? 'Актуально'
                 : 'Не проверено';
-    const activeVideoUploads = videoUploadGroups.reduce((total, group) => total + group.active, 0);
     const backgroundProgress = useMemo<BackgroundProgress[]>(() => {
         const photoQueueJobs = queue.jobs.filter((job) => job.type === 'PHOTO_TOOL_APPLY');
-        const videoQueueJobs = queue.jobs.filter((job) => job.type === 'VIDEO_EXPORT_RUN_ITEM_UPLOAD' && !groupedJobIds.has(job.id));
         const photoWorkflows = workflows.filter((workflow) => workflow.kind === 'PHOTO_APPLY_WORKFLOW');
 
         const photoQueueTotal = photoQueueJobs.reduce((total, job) => total + Math.max(1, Number(job.summary?.total || 1)), 0);
@@ -671,19 +531,6 @@ export function DesktopStatusCenter() {
         const photoBlocked = photoQueueJobs.filter((job) => job.status === 'auth_required').length
             + photoWorkflows.filter((workflow) => workflow.phase === 'auth_required' || workflow.phase === 'paused_offline').length;
 
-        const videoGroupTotal = videoUploadGroups.reduce((total, group) => total + Math.max(group.total, group.jobs.length), 0);
-        const videoGroupDone = videoUploadGroups.reduce((total, group) => total + group.jobs.reduce((sum, job) => sum + (getQueueJobProgressPercent(job) / 100), 0), 0);
-        const videoQueueTotal = videoQueueJobs.length;
-        const videoQueueDone = videoQueueJobs.reduce((total, job) => total + (getQueueJobProgressPercent(job) / 100), 0);
-        const videoTotal = videoGroupTotal + videoQueueTotal;
-        const videoDone = videoGroupDone + videoQueueDone;
-        const videoActive = videoQueueJobs.filter((job) => activeQueueStatuses.has(job.status)).length
-            + videoUploadGroups.reduce((total, group) => total + group.active, 0);
-        const videoFailed = videoQueueJobs.filter((job) => job.status === 'failed').length
-            + videoUploadGroups.reduce((total, group) => total + group.failed, 0);
-        const videoBlocked = videoQueueJobs.filter((job) => job.status === 'auth_required').length
-            + videoUploadGroups.reduce((total, group) => total + group.blockedAuth, 0);
-
         return [
             {
                 key: 'photo' as const,
@@ -693,18 +540,9 @@ export function DesktopStatusCenter() {
                 active: photoActive,
                 failed: photoFailed,
                 blocked: photoBlocked
-            },
-            {
-                key: 'video' as const,
-                label: 'Видео',
-                detail: videoFailed > 0 ? `ошибок ${videoFailed}` : videoBlocked > 0 ? `блокировок ${videoBlocked}` : videoActive > 0 ? `в работе ${videoActive}` : `готово ${Math.round(videoDone)}/${videoTotal}`,
-                percent: videoTotal > 0 ? clampPercent((videoDone / videoTotal) * 100) : 0,
-                active: videoActive,
-                failed: videoFailed,
-                blocked: videoBlocked
             }
         ].filter((item) => item.active > 0 || item.failed > 0 || item.blocked > 0 || item.percent > 0);
-    }, [groupedJobIds, queue.jobs, videoUploadGroups, workflows]);
+    }, [queue.jobs, workflows]);
 
     const headerSummary = useMemo(() => {
         if (!isDesktopRuntime) {
@@ -734,12 +572,6 @@ export function DesktopStatusCenter() {
         if (queueCounts.stuck > 0 || (diagnostics.workflows?.stuck || 0) > 0) {
             return `Stuck: ${queueCounts.stuck + (diagnostics.workflows?.stuck || 0)}`;
         }
-        if (!diagnostics?.helper.ok) {
-            return 'Helper требует внимания';
-        }
-        if (activeVideoUploads > 0) {
-            return `Видео в фоне: ${activeVideoUploads}`;
-        }
         if (activeWorkflowCount > 0) {
             return `Workflow: ${activeWorkflowCount}`;
         }
@@ -750,7 +582,7 @@ export function DesktopStatusCenter() {
             return `Доступна ${updateVersion}`;
         }
         return 'Все системы в норме';
-    }, [activeVideoUploads, activeWorkflowCount, currentRoleLabel, diagnostics, failedWorkflowCount, isDesktopRuntime, queueCounts.active, queueCounts.blockedAuth, queueCounts.failed, queueCounts.stuck, updateAvailable, updateVersion, webStatus.apiReachable, webStatus.online]);
+    }, [activeWorkflowCount, currentRoleLabel, diagnostics, failedWorkflowCount, isDesktopRuntime, queueCounts.active, queueCounts.blockedAuth, queueCounts.failed, queueCounts.stuck, updateAvailable, updateVersion, webStatus.apiReachable, webStatus.online]);
 
     const refresh = useCallback(async () => {
         if (!desktop || !isDesktopRuntime) {
@@ -905,50 +737,20 @@ export function DesktopStatusCenter() {
         setOpen(false);
     }, []);
 
-    const cleanupHelper = useCallback(() => {
-        if (!desktop) {
-            return;
-        }
-
-        setActionError('');
-        void desktop.cleanupVideoHelper()
-            .then(() => refresh())
-            .catch((error) => setActionError(error instanceof Error ? error.message : 'Не удалось очистить helper.'));
-    }, [desktop, refresh]);
-
     const buildDiagnosticsExportPayload = useCallback((nextDiagnostics: StonesDesktopDiagnostics | null = diagnostics) => ({
         diagnostics: nextDiagnostics,
         update: update || nextDiagnostics?.update || null,
         queue: nextDiagnostics?.queue || diagnostics?.queue || null,
         workflows: workflowSnapshot,
-        queueGroups: videoUploadGroups.map((group) => ({
-            id: group.id,
-            title: group.title,
-            total: group.total,
-            done: group.done,
-            active: group.active,
-            failed: group.failed,
-            serialNumbers: group.jobs.map((job) => job.summary?.serialNumber).filter(Boolean)
-        })),
         queueJobs: queue.jobs,
         batchDiagnosticsLog
-    }), [batchDiagnosticsLog, diagnostics, queue.jobs, update, videoUploadGroups, workflowSnapshot]);
+    }), [batchDiagnosticsLog, diagnostics, queue.jobs, update, workflowSnapshot]);
 
     const buildStatusCenterLogsPayload = useCallback((nextDiagnostics: StonesDesktopDiagnostics | null = diagnostics) => ({
         diagnostics: nextDiagnostics,
         update: update || nextDiagnostics?.update || null,
         queue: nextDiagnostics?.queue || diagnostics?.queue || null,
         workflows: workflowSnapshot,
-        queueGroups: videoUploadGroups.map((group) => ({
-            id: group.id,
-            title: group.title,
-            total: group.total,
-            done: group.done,
-            active: group.active,
-            failed: group.failed,
-            blockedAuth: group.blockedAuth,
-            serialNumbers: group.jobs.map((job) => job.summary?.serialNumber).filter(Boolean)
-        })),
         queueJobs: queue.jobs,
         batchDiagnosticsLog,
         clientLogs: getBufferedClientLogs(),
@@ -956,7 +758,7 @@ export function DesktopStatusCenter() {
             route: location.pathname,
             activeTab
         }
-    }), [activeTab, batchDiagnosticsLog, diagnostics, location.pathname, queue.jobs, update, videoUploadGroups, workflowSnapshot]);
+    }), [activeTab, batchDiagnosticsLog, diagnostics, location.pathname, queue.jobs, update, workflowSnapshot]);
 
     const exportDiagnostics = useCallback(async () => {
         if (!desktop) {
@@ -1106,7 +908,6 @@ export function DesktopStatusCenter() {
         { id: 'overview', label: 'Обзор', icon: <Activity size={14} /> },
         ...(isDesktopRuntime ? [
             { id: 'queue' as StatusTab, label: 'Загрузки', icon: <UploadCloud size={14} /> },
-            { id: 'helper' as StatusTab, label: 'Видео helper', icon: <Video size={14} /> },
             { id: 'updates' as StatusTab, label: 'Обновления', icon: <Download size={14} /> },
             { id: 'diagnostics' as StatusTab, label: 'Диагностика', icon: <Download size={14} /> }
         ] : [])
@@ -1122,7 +923,7 @@ export function DesktopStatusCenter() {
                     : 'ok'
         : !diagnostics
             ? 'checking'
-            : queueCounts.failed > 0 || !diagnostics.helper.ok
+            : queueCounts.failed > 0
                 ? 'error'
                 : !diagnostics.network.apiReachable
                     ? 'warning'
@@ -1165,7 +966,7 @@ export function DesktopStatusCenter() {
                                     <h2 className="mt-1 text-xl font-semibold text-white">Status Center</h2>
                                     <p className="mt-1 text-sm text-gray-400">
                                         {isDesktopRuntime
-                                            ? 'Сеть, helper, загрузки, обновления и диагностика приложения.'
+                                            ? 'Сеть, загрузки, обновления и диагностика приложения.'
                                             : 'Состояние web-сессии, API и текущего рабочего контекста.'}
                                     </p>
                                 </div>
@@ -1188,10 +989,6 @@ export function DesktopStatusCenter() {
                                 </StatusBadge>
                                 {isDesktopRuntime ? (
                                     <>
-                                        <StatusBadge tone={helperTone}>
-                                            <Video size={13} />
-                                            {diagnostics?.helper.ok ? 'Helper готов' : 'Helper ошибка'}
-                                        </StatusBadge>
                                         <StatusBadge tone={queueTone}>
                                             <UploadCloud size={13} />
                                             {queueCounts.blockedAuth > 0 ? `Нужен вход: ${queueCounts.blockedAuth}` : queueCounts.failed > 0 ? `Ошибки загрузки: ${queueCounts.failed}` : queueCounts.stuck > 0 ? `Stuck: ${queueCounts.stuck}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : 'Очередь чистая'}
@@ -1263,24 +1060,17 @@ export function DesktopStatusCenter() {
                                                 tone={networkTone}
                                             />
                                             <StatusCard
-                                                icon={<Video size={18} />}
-                                                title="Видео helper"
-                                                value={diagnostics?.helper.ok ? 'Встроенный helper готов' : 'Требует внимания'}
-                                                detail={diagnostics?.helper.startup_error ? `Startup: ${diagnostics.helper.startup_error}` : diagnostics?.helper.error ? `Runtime: ${diagnostics.helper.error}` : diagnostics?.helper.helper_version}
-                                                tone={helperTone}
-                                            />
-                                            <StatusCard
                                                 icon={<Activity size={18} />}
                                                 title="Media workflows"
                                                 value={(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Ожидает вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Пауза offline: ${diagnostics?.workflows?.blockedOffline}` : activeWorkflowCount > 0 ? `В работе: ${activeWorkflowCount}` : failedWorkflowCount > 0 ? `Workflow с ошибкой: ${failedWorkflowCount}` : 'Фоновых workflow нет'}
-                                                detail="Photo Tool и Video Tool продолжают работу после закрытия страницы и поднимаются после перезапуска HQ."
+                                                detail="Photo Tool продолжает работу после закрытия страницы и поднимается после перезапуска HQ."
                                                 tone={workflowTone}
                                             />
                                             <StatusCard
                                                 icon={<UploadCloud size={18} />}
                                                 title="Media uploads"
                                                 value={queueCounts.blockedAuth > 0 ? `Ожидает вход: ${queueCounts.blockedAuth}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : queueCounts.failed > 0 ? `Ошибок: ${queueCounts.failed}` : 'Очередь без активных задач'}
-                                                detail="Photo Tool и Video Tool загружают медиа через локальную очередь."
+                                                detail="Photo Tool загружает медиа через локальную очередь."
                                                 tone={queueTone}
                                             />
                                             <StatusCard
@@ -1332,7 +1122,7 @@ export function DesktopStatusCenter() {
                                                 icon={<HardDrive size={18} />}
                                                 title="Режим запуска"
                                                 value="Обычный браузер"
-                                                detail="Фоновые desktop-очереди, helper и локальные workflow доступны только в HQ desktop app."
+                                                detail="Фоновые desktop-очереди и локальные workflow доступны только в HQ desktop app."
                                                 tone="warning"
                                             />
                                         </>
@@ -1383,61 +1173,14 @@ export function DesktopStatusCenter() {
                                         </div>
                                     ) : (
                                         <div className="space-y-2">
-                                            {videoUploadGroups.length > 0 ? (
-                                                <div className="space-y-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.18em] text-gray-500">Видео партии</p>
-                                                    {videoUploadGroups.map((group) => (
-                                                        <VideoUploadGroupCard key={group.id} group={group} onRetry={retryJob} onCancel={cancelJob} />
-                                                    ))}
-                                                </div>
-                                            ) : null}
                                             {standaloneQueueJobs.length > 0 ? (
-                                                <p className="pt-2 text-[11px] uppercase tracking-[0.18em] text-gray-500">Остальные задачи · Показано {Math.min(standaloneQueueJobs.length, 30)} из {standaloneQueueJobs.length}</p>
+                                                <p className="pt-2 text-[11px] uppercase tracking-[0.18em] text-gray-500">Задачи · Показано {Math.min(standaloneQueueJobs.length, 30)} из {standaloneQueueJobs.length}</p>
                                             ) : null}
                                             {standaloneQueueJobs.slice(0, 30).map((job) => (
                                                 <JobRow key={job.id} job={job} onRetry={retryJob} onCancel={cancelJob} onOpenPhotoTool={openPhotoToolJob} />
                                             ))}
                                         </div>
                                     )}
-                                </div>
-                            ) : null}
-
-                            {isDesktopRuntime && activeTab === 'helper' ? (
-                                <div className="space-y-3">
-                                    <StatusCard
-                                        icon={<Video size={18} />}
-                                        title="Встроенный helper"
-                                        value={diagnostics?.helper.ok ? 'Готов к монтажу' : 'Не запущен или недоступен'}
-                                        detail={diagnostics?.helper.startup_error ? `Startup: ${diagnostics.helper.startup_error}` : diagnostics?.helper.error ? `Runtime: ${diagnostics.helper.error}` : 'Используется внутри ZAGARAMI admin.'}
-                                        tone={helperTone}
-                                    />
-                                    <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 rounded-2xl border border-white/8 bg-black/20 p-3 text-sm">
-                                        <dt className="text-gray-500">Версия</dt>
-                                        <dd className="truncate text-gray-200">{diagnostics?.helper.helper_version || 'Не определена'}</dd>
-                                        <dt className="text-gray-500">Протокол</dt>
-                                        <dd className="truncate text-gray-200">{diagnostics?.helper.protocol_version || 'Не определен'}</dd>
-                                        <dt className="text-gray-500">Режим</dt>
-                                        <dd className="truncate text-gray-200">{diagnostics?.helper.embedded ? 'Встроенный' : 'Совместимый процесс'}</dd>
-                                        <dt className="text-gray-500">Свободно</dt>
-                                        <dd className="truncate text-gray-200">{formatBytes(diagnostics?.helper.free_bytes)}</dd>
-                                    </dl>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <button type="button" onClick={() => void refresh()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/10 px-3 text-xs text-gray-200 transition hover:bg-white/5">
-                                            <RefreshCw size={14} />
-                                            Проверить
-                                        </button>
-                                        <button type="button" onClick={cleanupHelper} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/10 px-3 text-xs text-gray-200 transition hover:bg-white/5">
-                                            <HardDrive size={14} />
-                                            Очистить cache
-                                        </button>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => void desktop?.showVideoHelperStorage()}
-                                        className="w-full rounded-xl border border-white/10 px-3 py-2 text-xs text-gray-300 transition hover:bg-white/5 hover:text-white"
-                                    >
-                                        Открыть папку helper
-                                    </button>
                                 </div>
                             ) : null}
 
@@ -1505,7 +1248,7 @@ export function DesktopStatusCenter() {
                                                     <span className="inline-flex items-center rounded-md bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 ring-1 ring-inset ring-emerald-400/20 animate-pulse">HQ</span>
                                                 </h3>
                                                 <p className="mt-1 text-xs leading-relaxed text-gray-400">
-                                                    Интерактивный запуск полной цепочки создания партии (10 товаров). Стенд загружает фото, выполняет физический рендеринг видео на helper, тестирует QR, публичные страницы и цифровые двойники.
+                                                    Интерактивный запуск полной цепочки создания партии (10 товаров). Стенд загружает фото, тестирует QR, публичные страницы и цифровые двойники.
                                                 </p>
                                             </div>
                                         </div>
@@ -1721,7 +1464,7 @@ export function DesktopStatusCenter() {
                                             <div>
                                                 <h4 className="text-xs font-bold text-white">Экспорт отчетов & логов</h4>
                                                 <p className="mt-0.5 text-[11px] leading-relaxed text-gray-400">
-                                                    При возникновении ошибок сети или проблем с рендерингом на helper экспортируйте полные логи для последующего аудита.
+                                                    При возникновении ошибок сети или фоновых загрузок экспортируйте полные логи для последующего аудита.
                                                 </p>
                                             </div>
                                         </div>
@@ -1762,14 +1505,6 @@ export function DesktopStatusCenter() {
                                             network: diagnostics?.network,
                                             helper: diagnostics?.helper,
                                             queue: diagnostics?.queue,
-                                            queueGroups: videoUploadGroups.map((group) => ({
-                                                id: group.id,
-                                                title: group.title,
-                                                total: group.total,
-                                                done: group.done,
-                                                active: group.active,
-                                                failed: group.failed
-                                            })),
                                             update: diagnostics?.update,
                                             queueJobs: queue.jobs
                                         }, null, 2)}

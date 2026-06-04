@@ -3,7 +3,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { Prisma } from '@prisma/client';
 import { loadBatchMediaSnapshot, queueBatchMediaReadyNotifications, runTelegramSideEffect } from '../../services/telegramNotifications.ts';
-import { moveFileSafely } from '../../services/videoExport.ts';
 import {
     PHOTO_TOOL_PUBLIC_OUTPUT_ROOT,
     PHOTO_TOOL_PUBLIC_URL_ROOT,
@@ -18,6 +17,20 @@ import {
     removeStagedFiles,
     sha256File
 } from './shared.ts';
+
+const moveFileSafely = async (sourcePath: string, targetPath: string) => {
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    try {
+        await fs.rename(sourcePath, targetPath);
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'EXDEV') {
+            throw error;
+        }
+        await fs.copyFile(sourcePath, targetPath);
+        await fs.rm(sourcePath, { force: true });
+    }
+};
 
 type PhotoToolApplyManifestEntry = {
     item_id: string;

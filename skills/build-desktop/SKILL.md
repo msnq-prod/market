@@ -50,32 +50,4 @@ npm run admin:desktop:dist
 
 ---
 
-## 2. Сборка Video Export Helper
-
-Video Export Helper — это специализированная утилита для обработки и экспорта видеоматериалов HQ.
-
-### Переменные окружения
-* `STONES_HELPER_ALLOWED_ORIGIN` (**обязательно**) — разрешенный CORS-origin бэкенда (например, `https://zagarami.com`).
-* `STONES_HELPER_VERSION` (опционально) — версия хелпера (по умолчанию генерируется на основе текущей даты `YYYY.M.D`).
-* `STONES_HELPER_UPDATE_BASE_URL` (опционально) — URL для скачивания обновлений (по умолчанию `${allowedOrigin}/uploads/downloads`).
-* `STONES_HELPER_SENTRY_DSN` (опционально) — DSN для мониторинга ошибок Sentry.
-* `STONES_HELPER_SENTRY_ENVIRONMENT` (опционально) — окружение Sentry (по умолчанию `production`).
-
-### Команда сборки
-Перед сборкой необходимо экспортировать обязательную переменную `STONES_HELPER_ALLOWED_ORIGIN`, после чего запустить скрипт сборки:
-```bash
-export STONES_HELPER_ALLOWED_ORIGIN="https://zagarami.com"
-npm run video-export-helper:desktop:dist
-```
-
-### Что делает скрипт сборки (`video-export-helper/build-desktop.mjs`):
-1. Валидирует переданную переменную `STONES_HELPER_ALLOWED_ORIGIN`.
-2. Запускает сборку Electron-приложения через `electron-builder` с временным конфигурационным файлом.
-3. Копирует полученные DMG в стабильные файлы `ZAGARAMI-Video-Helper.dmg` и `ZAGARAMI-Video-Helper-arm64.dmg`.
-4. Генерирует манифест обновлений `ZAGARAMI-Video-Helper-update.json`.
-
-### Выходные артефакты
-Все собранные файлы сохраняются в директорию `dist-electron/`:
-* `ZAGARAMI-Video-Helper-arm64.dmg` — для Apple Silicon.
-* `ZAGARAMI-Video-Helper.dmg` — для Intel.
 * `ZAGARAMI-Video-Helper-update.json` — манифест обновлений.

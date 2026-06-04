@@ -33,10 +33,8 @@ RUN npx prisma generate
 
 FROM deps AS builder
 
-ARG VITE_VIDEO_HELPER_DOWNLOAD_URL=""
 ARG VITE_SENTRY_DSN_FRONTEND=""
 ARG VITE_SENTRY_ENVIRONMENT="production"
-ENV VITE_VIDEO_HELPER_DOWNLOAD_URL=${VITE_VIDEO_HELPER_DOWNLOAD_URL}
 ENV VITE_SENTRY_DSN_FRONTEND=${VITE_SENTRY_DSN_FRONTEND}
 ENV VITE_SENTRY_ENVIRONMENT=${VITE_SENTRY_ENVIRONMENT}
 
@@ -74,7 +72,7 @@ COPY public ./public
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/build ./build
 
-RUN mkdir -p /app/public/uploads /app/storage/video-jobs /app/storage/video-export \
+RUN mkdir -p /app/public/uploads \
     && chmod +x /app/docker/entrypoint.sh \
     && chown -R node:node /app/public /app/storage /app/dist /app/build
 
@@ -82,7 +80,5 @@ EXPOSE 3001
 
 ENTRYPOINT ["/bin/sh", "./docker/entrypoint.sh"]
 CMD ["node", "build/server/index.js"]
-
-FROM runtime AS video-runtime
 
 RUN apk add --no-cache ffmpeg

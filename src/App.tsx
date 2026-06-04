@@ -24,7 +24,7 @@ import { hasWebGLSupport } from './utils/webgl'
 import { logReactError, logRouteChange } from './utils/clientLogger'
 import { isStonesDesktop } from './utils/desktop'
 
-const VideoTool = React.lazy(() => import('./admin/pages/VideoTool').then((module) => ({ default: module.VideoTool })))
+const VideoToolV3Page = React.lazy(() => import('./admin/pages/video-tool-v3/VideoToolV3Page').then((module) => ({ default: module.VideoToolV3Page })))
 const PhotoTool = React.lazy(() => import('./admin/pages/PhotoTool').then((module) => ({ default: module.PhotoTool })))
 
 type StonesDebugWindow = Window & {
@@ -645,7 +645,7 @@ function App() {
           element={(
             <AdminFullscreenRoute>
               <DesktopOnlyToolRoute toolName="Video Tool">
-                <VideoTool />
+                <VideoToolV3Page />
               </DesktopOnlyToolRoute>
             </AdminFullscreenRoute>
           )}

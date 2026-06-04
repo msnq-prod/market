@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-mkdir -p /app/public/uploads /app/storage/video-jobs /app/storage/video-export
-chown -R node:node /app/public/uploads /app/storage/video-jobs /app/storage/video-export
+mkdir -p /app/public/uploads
+chown -R node:node /app/public/uploads
 
 if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
     printf '\n[entrypoint] Applying Prisma migrations...\n'

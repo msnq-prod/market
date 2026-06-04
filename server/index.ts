@@ -20,6 +20,7 @@ import ordersRoutes from './routes/orders.ts';
 import salesRoutes from './routes/sales.ts';
 import telegramRoutes from './routes/telegram.ts';
 import qrPrintPresetRoutes from './routes/qrPrintPresets.ts';
+import videoToolV3Routes from './routes/videoToolV3.ts';
 import { setUploadedMediaResponseHeaders } from './middleware/upload.ts';
 import { HQ_IMMEDIATE_BATCH_OWNER_EMAIL, isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
@@ -236,6 +237,7 @@ app.use('/api/orders', ordersRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/qr-print-presets', qrPrintPresetRoutes);
+app.use('/api/video-tool-v3', videoToolV3Routes);
 app.use('/api/client-logs', express.json({ limit: '256kb' }), (req, res) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const entries = Array.isArray((body as { entries?: unknown[] }).entries)

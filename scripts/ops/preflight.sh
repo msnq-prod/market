@@ -24,8 +24,6 @@ required_vars=(
     ACCESS_TOKEN_SECRET
     REFRESH_TOKEN_SECRET
     TELEGRAM_TOKEN_ENCRYPTION_KEY
-    VIDEO_PROCESSOR_POLL_MS
-    STONES_HELPER_ALLOWED_ORIGIN
 )
 
 for name in "${required_vars[@]}"; do
@@ -40,7 +38,6 @@ require_not_placeholder ACCESS_TOKEN_SECRET "$ACCESS_TOKEN_SECRET"
 require_not_placeholder REFRESH_TOKEN_SECRET "$REFRESH_TOKEN_SECRET"
 require_not_placeholder TELEGRAM_TOKEN_ENCRYPTION_KEY "$TELEGRAM_TOKEN_ENCRYPTION_KEY"
 client_url_normalized="$(normalize_url "$CLIENT_URL")"
-helper_origin_normalized="$(normalize_url "$STONES_HELPER_ALLOWED_ORIGIN")"
 expected_client_url="https://$APP_DOMAIN"
 
 if [[ "$client_url_normalized" != "$expected_client_url" ]]; then
@@ -48,23 +45,9 @@ if [[ "$client_url_normalized" != "$expected_client_url" ]]; then
     exit 1
 fi
 
-if [[ "$helper_origin_normalized" != "$client_url_normalized" ]]; then
-    echo "STONES_HELPER_ALLOWED_ORIGIN must match CLIENT_URL exactly." >&2
-    exit 1
-fi
-
 if [[ "$DATABASE_URL" != *"@db:3306/"* ]]; then
     echo "DATABASE_URL must target the internal db service at db:3306." >&2
     exit 1
-fi
-
-if [[ -n "${VITE_VIDEO_HELPER_DOWNLOAD_URL:-}" ]]; then
-    require_not_placeholder VITE_VIDEO_HELPER_DOWNLOAD_URL "$VITE_VIDEO_HELPER_DOWNLOAD_URL"
-
-    if [[ "$VITE_VIDEO_HELPER_DOWNLOAD_URL" != https://* ]]; then
-        echo "VITE_VIDEO_HELPER_DOWNLOAD_URL must use https when it is configured." >&2
-        exit 1
-    fi
 fi
 
 mkdir -p "$MYSQL_BACKUP_DIR"

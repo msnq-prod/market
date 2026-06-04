@@ -45,7 +45,7 @@ const buildDiagnosticsMarkdown = (payload) => {
         '',
         renderMarkdownSection('Приложение', diagnostics.app),
         renderMarkdownSection('Сеть', diagnostics.network),
-        renderMarkdownSection('Видео helper', diagnostics.helper),
+        renderMarkdownSection('Video Tool v3', diagnostics.helper),
         renderMarkdownSection('Обновления', diagnostics.update || payload?.update),
         renderMarkdownSection('Очередь', {
             activeJobs: diagnostics.queue?.activeJobs ?? queue.activeJobs,
@@ -61,15 +61,12 @@ const buildDiagnosticsMarkdown = (payload) => {
         renderMarkdownSection('Video Tool', {
             batchId: videoTool.batchId,
             pageOrigin: videoTool.pageOrigin,
-            helperStatus: videoTool.helperStatus,
-            helperIssueMessage: videoTool.helperIssueMessage,
-            helperUrlCandidates: videoTool.helperUrlCandidates,
-            helperAllowedOrigins: videoTool.helperHealth?.allowed_origins
+            runtimeStatus: videoTool.runtimeStatus
         }),
-        '### Проверки helper из Video Tool',
+        '### Проверки Video Tool',
         '',
         helperDiagnostics.length
-            ? helperDiagnostics.map((entry) => `- ${entry.url || 'helper'} ${entry.mode || 'standard'}: ${entry.status || 'unknown'}${entry.httpStatus ? ` [HTTP ${entry.httpStatus}]` : ''}${entry.detail ? ` (${entry.detail})` : ''}`).join('\n')
+            ? helperDiagnostics.map((entry) => `- ${entry.url || 'runtime'} ${entry.mode || 'standard'}: ${entry.status || 'unknown'}${entry.httpStatus ? ` [HTTP ${entry.httpStatus}]` : ''}${entry.detail ? ` (${entry.detail})` : ''}`).join('\n')
             : 'Нет проверок.',
         '',
         '## Проверка создания партии',
@@ -124,9 +121,6 @@ const createDiagnosticsRuntime = ({
     getMimeType,
     getAppInfo,
     getNetworkStatus,
-    getVideoHelperStatus,
-    getHelperController,
-    getHelperStartupError,
     getMediaQueue,
     getMediaWorkflowManager,
     getLastUpdateStatus,
@@ -218,12 +212,12 @@ const createDiagnosticsRuntime = ({
         },
         async getDesktopDiagnostics() {
             const [appInfo, network] = await Promise.all([getAppInfo(), getNetworkStatus()]);
-            const helper = await getVideoHelperStatus().catch((error) => ({
-                embedded: Boolean(getHelperController()),
-                ok: false,
-                startup_error: getHelperStartupError() || undefined,
-                error: error instanceof Error ? error.message : 'Не удалось проверить встроенный helper.'
-            }));
+            const helper = {
+                embedded: true,
+                ok: true,
+                helper_version: 'Video Tool v3',
+                protocol_version: 'stones-video-tool-v3-ipc'
+            };
             const queueSnapshot = getMediaQueue() ? getMediaQueue().getSnapshot() : { jobs: [], counts: {} };
             const workflowSnapshot = getMediaWorkflowManager() ? getMediaWorkflowManager().getSnapshot() : { workflows: [], counts: {} };
             const activeJobs = (queueSnapshot.counts.queued || 0) + (queueSnapshot.counts.uploading || 0) + (queueSnapshot.counts.retrying || 0);

@@ -16,7 +16,6 @@ npm run ops:deploy
 - загружает `.env.production`
 - проверяет обязательные env vars
 - проверяет, что значения не похожи на placeholder
-- сверяет `CLIENT_URL` и `STONES_HELPER_ALLOWED_ORIGIN`
 - проверяет `DATABASE_URL -> db:3306`
 - проверяет Docker и `docker compose`
 - проверяет свободное место на диске
@@ -146,10 +145,10 @@ npm run ops:backup
 Поведение:
 
 1. поднимает `db`, если нужно
-2. останавливает `app` и `video-processor`
+2. останавливает `app`
 3. удаляет и создает БД заново
 4. разворачивает backup
-5. поднимает `app` и `video-processor`
+5. поднимает `app`
 6. ждет healthcheck `app`
 
 Важно:

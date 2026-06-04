@@ -7,8 +7,7 @@ import { logDomainEvent } from '../../services/logger.ts';
 import { writeSecurityAuditLog } from '../../services/security.ts';
 import { getDefaultProductTranslation, hasAllBatchMedia, isPublicPassportAvailable, isStaffRole } from '../../utils/collectionWorkflow.ts';
 import { softDeleteBatch } from '../../utils/softDelete.ts';
-import { BATCH_INCLUDE, ACTIVE_VIDEO_JOB_STATUSES, createHttpError, getFileType, getSerialFromFilename, prisma, serializeBatch } from './shared.ts';
-import { BLOCKING_VIDEO_EXPORT_RUN_STATUSES, withVideoExportBatchLock } from './videoExportRunService.ts';
+import { BATCH_INCLUDE, createHttpError, getFileType, getSerialFromFilename, prisma, serializeBatch } from './shared.ts';
 import { canFinalizeBatch, canReceiveBatch, isPartnerRole } from '../../../shared/domain/policy.ts';
 
 const router = express.Router();
@@ -276,7 +275,7 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
         if (!req.user) return res.sendStatus(401);
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
-        const updated = await withVideoExportBatchLock(req.params.id, async (tx) => {
+        const updated = await prisma.$transaction(async (tx) => {
             const batch = await tx.batch.findFirst({
                 where: {
                     id: req.params.id,
@@ -289,18 +288,10 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
                         }
                     },
                     collection_request: true,
-                    video_processing_jobs: {
+                    video_tool_v3_runs: {
                         where: {
                             status: {
-                                in: ACTIVE_VIDEO_JOB_STATUSES
-                            }
-                        },
-                        take: 1
-                    },
-                    video_export_runs: {
-                        where: {
-                            status: {
-                                in: BLOCKING_VIDEO_EXPORT_RUN_STATUSES
+                                in: ['OPEN', 'PARTIAL']
                             }
                         },
                         take: 1
@@ -316,11 +307,7 @@ router.post('/:id/finalize', authenticateToken, async (req: AuthRequest, res) =>
                 throw createHttpError('Завершить можно только партию в статусе RECEIVED.', 400);
             }
 
-            if (batch.video_processing_jobs.length > 0) {
-                throw createHttpError('Нельзя завершить партию, пока идет обработка видео-комплекта.', 400);
-            }
-
-            if (batch.video_export_runs.length > 0) {
+            if (batch.video_tool_v3_runs.length > 0) {
                 throw createHttpError('Нельзя завершить партию, пока идёт экспорт видео.', 400);
             }
 

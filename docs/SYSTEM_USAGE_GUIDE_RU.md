@@ -87,7 +87,6 @@ npm run build
 npm run test:e2e
 npm run test:e2e:headed
 npm run server
-npm run video-processor
 npm run telegram-worker
 ```
 
@@ -95,19 +94,6 @@ npm run telegram-worker
 
 ```bash
 npm run dev:e2e
-```
-
-Для server-side video processing можно отдельно настраивать worker через env:
-
-- `VIDEO_PROCESSOR_WORKERS` — сколько polling loop работает в одном процессе `video-processor`
-- `VIDEO_JOB_CONCURRENCY` — сколько tail clips одного job обрабатываются параллельно после подготовки base clip
-- `VIDEO_JOB_FFMPEG_THREADS` — лимит `ffmpeg` threads на encode/re-encode операцию
-- `VIDEO_PIPELINE_DIAGNOSTICS=1` — включает короткие `key=value` diagnostics для `video-export-helper`, `video-processor` и photo normalization upload pipeline
-
-Консервативные значения по умолчанию: `1 / 2 / 1`. Для локального smoke test удобно запускать:
-
-```bash
-VIDEO_PROCESSOR_WORKERS=2 VIDEO_JOB_CONCURRENCY=2 VIDEO_JOB_FFMPEG_THREADS=1 npm run video-processor
 ```
 
 ## 5. Роли и доступ
@@ -310,30 +296,25 @@ VIDEO_PROCESSOR_WORKERS=2 VIDEO_JOB_CONCURRENCY=2 VIDEO_JOB_FFMPEG_THREADS=1 npm
 
 ## 9.7 Video Tool
 
-Используется HQ для подготовки финальных item-видео. Рабочий интерфейс доступен только в desktop-приложении `ZAGARAMI HQ`; браузерный маршрут показывает заглушку со скачиванием DMG.
+Используется HQ для подготовки финальных item-видео. Активный интерфейс — Video Tool v3 в desktop-приложении `ZAGARAMI HQ`.
 
 Сценарий:
 
 1. открыть `/admin/video-tool/:batchId`
 2. выбрать первое исходное видео партии с intro
-3. дождаться проверки внутреннего video runtime и совместимости исходника
+3. дождаться подготовки исходника локальным runtime v3
 4. разрезать таймлайн на intro и доступные товарные фрагменты `001..NNN`
-5. создать или продолжить V2 export-run
+5. запустить v3 export
 6. дождаться рендера финальных `.mp4`
-7. загрузить готовые ролики обратно в backend
-8. если снята только часть партии, позже нажать `Добавить ещё видео` и догрузить следующие исходники без intro
+7. дождаться upload готовых роликов в backend
 
 Особенности:
 
-- Video Tool проверяет внутренний video runtime и версию протокола `stones-video-export-helper-v3`;
-- отдельное helper-приложение и локальный HTTP helper в основном desktop-сценарии не используются;
-- черновик нарезки и текущая upload-session восстанавливаются после перезагрузки страницы из Desktop HQ;
-- backend используется как upload-session: сервер фиксирует финальные item-файлы, отдает загруженность через `/api/batches/:id/video-uploads` и обновляет `item_video_url`, render-прогресс остается в Desktop HQ;
-- повтор upload с тем же checksum возвращает успех; замена другим checksum требует `overwrite=true`, пишет `AuditLog` и удаляет прежний внутренний export-файл;
-- при зависшей или частично загруженной session доступна append-only догрузка и `retry-tail` только для отсутствующих роликов;
-- уже загруженные `serial_number` не пересобираются и не переупорядочиваются;
-- после `CANCELLED` следующая попытка создает новую session.
-- в Electron HQ upload готовых `.mp4` идет через desktop media queue; failed-задачи можно повторить или отменить из индикатора очереди.
+- Video Tool v3 работает через IPC `window.stones.videoToolV3`;
+- подготовка и рендер выполняются локально в HQ Desktop и не зависят от сети;
+- сеть нужна только для upload готовых файлов через `/api/video-tool-v3`;
+- backend фиксирует финальные item-файлы и обновляет `Item.item_video_url`;
+- failed render/upload можно повторить на уровне item.
 
 ## 9.8 QR Print
 
@@ -555,8 +536,6 @@ Endpoint:
 - `public/uploads/videos/generated`
 - `public/uploads/videos/exports`
 - `storage/uploads/staging`
-- `storage/video-jobs`
-- `storage/video-export`
 
 Заметка по безопасности:
 - `POST /api/upload/photo` принимает только raster-изображения (`png/jpg/gif/webp`), canonicalizes extension и блокирует HTML/SVG/XML payload.

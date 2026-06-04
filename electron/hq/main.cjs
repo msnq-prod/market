@@ -1,50 +1,28 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, protocol, net } = require('electron');
-const { pathToFileURL } = require('url');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
 const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
-const { VideoExportRunManager } = require('./videoExportRunManager.cjs');
-const { VideoWorkflowStore } = require('./videoWorkflowStore.cjs');
 const { createAppConfig } = require('./appConfig.cjs');
 const { createLocalServerRuntime } = require('./localServer.cjs');
-const { createHelperRuntime } = require('./helperRuntime.cjs');
 const { createUpdatesRuntime } = require('./updates.cjs');
 const { createDiagnosticsRuntime } = require('./diagnostics.cjs');
 const { createWindowRuntime } = require('./windows.cjs');
 const { registerIpcHandlers } = require('./ipcHandlers.cjs');
+const { createVideoToolV3App } = require('./videoToolV3/index.cjs');
+const { registerVideoToolV3Ipc, sendVideoToolV3Event } = require('./videoToolV3/ipc.cjs');
 
 const config = createAppConfig({ app });
 app.setName(config.APP_DISPLAY_NAME);
-protocol.registerSchemesAsPrivileged([{
-    scheme: 'zagarami-media',
-    privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        stream: true
-    }
-}]);
 
-let isQuitting = false;
 let accessToken = null;
 let mediaQueue = null;
 let mediaWorkflowManager = null;
-let videoExportRunManager = null;
-let videoWorkflowStore = null;
+let videoToolV3App = null;
 
 const localServerRuntime = createLocalServerRuntime({
     getDistRoot: config.getDistRoot,
     getMimeType: config.getMimeType,
     proxyPrefixes: config.PROXY_PREFIXES
-});
-
-const helperRuntime = createHelperRuntime({
-    appVersion: () => app.getVersion(),
-    appDisplayName: config.APP_DISPLAY_NAME,
-    helperPort: config.HELPER_PORT,
-    helperProtocolVersion: config.HELPER_PROTOCOL_VERSION,
-    helperStorageRoot: config.getHelperStorageRoot,
-    projectRoot: config.projectRoot
 });
 
 const updatesRuntime = createUpdatesRuntime({
@@ -114,22 +92,18 @@ const diagnosticsRuntime = createDiagnosticsRuntime({
     getMimeType: config.getMimeType,
     getAppInfo,
     getNetworkStatus,
-    getVideoHelperStatus: () => helperRuntime.getStatus(),
-    getHelperController: () => helperRuntime.getController(),
-    getHelperStartupError: () => helperRuntime.getStartupError(),
     getMediaQueue: () => mediaQueue,
     getMediaWorkflowManager: () => mediaWorkflowManager,
     getLastUpdateStatus: () => updatesRuntime.getLastStatus(),
     getMainWindow: () => windowsRuntime.getMainWindow()
 });
 
-const ensureMediaRuntimes = async (apiOrigin, appOrigin) => {
+const ensureMediaRuntimes = async (apiOrigin) => {
     if (!mediaQueue) {
         mediaQueue = new MediaUploadQueue({
             rootDir: config.getMediaQueueRoot(),
             getApiOrigin: () => apiOrigin,
-            getAccessToken: () => accessToken,
-            helperRuntime
+            getAccessToken: () => accessToken
         });
         mediaQueue.on('change', (snapshot) => {
             BrowserWindow.getAllWindows().forEach((window) => {
@@ -155,30 +129,22 @@ const ensureMediaRuntimes = async (apiOrigin, appOrigin) => {
         });
         await mediaWorkflowManager.init();
     }
+};
 
-    if (!videoExportRunManager) {
-        videoExportRunManager = new VideoExportRunManager({
-            rootDir: config.getMediaWorkflowRoot(),
-            mediaQueue,
-            getApiOrigin: () => apiOrigin,
-            getAccessToken: () => accessToken,
-            helperRuntime
+const ensureVideoToolV3Runtime = async () => {
+    if (!videoToolV3App) {
+        videoToolV3App = createVideoToolV3App({
+            app,
+            getApiOrigin: config.resolveApiOrigin,
+            getNetworkStatus,
+            getAccessToken: () => accessToken
         });
-        videoExportRunManager.on('change', () => {
-            const snapshot = mediaWorkflowManager ? mediaWorkflowManager.getSnapshot() : { workflows: [], counts: {} };
-            BrowserWindow.getAllWindows().forEach((window) => {
-                window.webContents.send('stones:media-workflows-updated', snapshot);
-            });
+        videoToolV3App.on('event', (event) => {
+            sendVideoToolV3Event(BrowserWindow.getAllWindows(), event);
         });
-        await videoExportRunManager.init();
+        await videoToolV3App.init();
     }
-
-    if (!videoWorkflowStore) {
-        videoWorkflowStore = new VideoWorkflowStore({
-            rootDir: config.getMediaWorkflowRoot()
-        });
-        await videoWorkflowStore.init();
-    }
+    return videoToolV3App;
 };
 
 const resolveAppUrl = async (apiOrigin) => (
@@ -191,14 +157,8 @@ const createWindow = async () => {
     const apiOrigin = await config.resolveApiOrigin();
     const appUrl = await resolveAppUrl(apiOrigin);
     const appOrigin = new URL(appUrl).origin;
-    await ensureMediaRuntimes(apiOrigin, appOrigin);
-
-    try {
-        await helperRuntime.start(appOrigin);
-    } catch (error) {
-        await helperRuntime.handleStartupError(error, appOrigin);
-        console.error('[zagarami-hq] failed to start embedded helper', error);
-    }
+    await ensureMediaRuntimes(apiOrigin);
+    await ensureVideoToolV3Runtime();
 
     return windowsRuntime.createOrGet({ appUrl, appOrigin, apiOrigin });
 };
@@ -210,51 +170,28 @@ const showMainWindow = async () => {
     return windowsRuntime.show({ appUrl, appOrigin: new URL(appUrl).origin, apiOrigin });
 };
 
-let mediaProtocolRegistered = false;
-const registerMediaProtocol = () => {
-    if (mediaProtocolRegistered) {
-        return;
-    }
-
-    protocol.handle('zagarami-media', async (request) => {
-        const parsed = new URL(request.url);
-        if (parsed.hostname !== 'video-preview') {
-            return new Response('Unsupported media endpoint', { status: 404 });
-        }
-
-        const sourceId = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-        if (!sourceId || !/^[0-9a-f-]{36}$/i.test(sourceId)) {
-            return new Response('Invalid preview id', { status: 400 });
-        }
-
-        try {
-            const previewPath = await helperRuntime.getPreviewFilePath(sourceId);
-            return net.fetch(pathToFileURL(previewPath).toString());
-        } catch (error) {
-            return new Response(error instanceof Error ? error.message : 'Preview unavailable', { status: 404 });
-        }
-    });
-    mediaProtocolRegistered = true;
-};
-
 registerIpcHandlers({
     ipcMain,
     shell,
     config,
     diagnosticsRuntime,
     updatesRuntime,
-    helperRuntime,
-    windowsRuntime,
     getAppInfo,
     getNetworkStatus,
     getAccessToken: () => accessToken,
     setAccessToken: (nextToken) => {
         accessToken = nextToken;
+        videoToolV3App?.setAccessToken(nextToken);
     },
     getMediaQueue: () => mediaQueue,
-    getMediaWorkflowManager: () => mediaWorkflowManager,
-    getVideoExportRunManager: () => videoExportRunManager,
-    getVideoWorkflowStore: () => videoWorkflowStore
+    getMediaWorkflowManager: () => mediaWorkflowManager
+});
+
+registerVideoToolV3Ipc({
+    ipcMain,
+    dialog,
+    getMainWindow: () => windowsRuntime.getMainWindow(),
+    getVideoToolV3App: () => videoToolV3App
 });
 
 if (!app.requestSingleInstanceLock()) {
@@ -275,30 +212,13 @@ app.on('activate', () => {
     void showMainWindow();
 });
 
-app.on('before-quit', (event) => {
-    if (isQuitting) {
-        return;
-    }
-
+app.on('before-quit', () => {
     localServerRuntime.stop();
-    if (!helperRuntime.getController()) {
-        return;
-    }
-
-    event.preventDefault();
-    isQuitting = true;
-    helperRuntime.stop()
-        .catch((error) => {
-            console.error('[zagarami-hq] failed to stop embedded helper', error);
-        })
-        .finally(() => app.exit(0));
+    void videoToolV3App?.stop();
 });
 
 app.whenReady()
-    .then(() => {
-        registerMediaProtocol();
-        return showMainWindow();
-    })
+    .then(() => showMainWindow())
     .catch((error) => {
         console.error('[zagarami-hq] failed to start', error);
         app.quit();

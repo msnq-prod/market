@@ -38,7 +38,7 @@ load_prod_env
 compose_prod up -d db
 wait_for_service_health db 120
 
-compose_prod stop app video-processor >/dev/null 2>&1 || true
+compose_prod stop app >/dev/null 2>&1 || true
 
 echo "Dropping and recreating database $MYSQL_DATABASE"
 compose_prod exec -T db sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS \`$MYSQL_DATABASE\`; CREATE DATABASE \`$MYSQL_DATABASE\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"'
@@ -50,7 +50,7 @@ else
     cat "$backup_path" | compose_prod exec -T db sh -lc 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 fi
 
-compose_prod up -d app video-processor
+compose_prod up -d app
 wait_for_service_health app 180
 
 echo "Database restore completed."

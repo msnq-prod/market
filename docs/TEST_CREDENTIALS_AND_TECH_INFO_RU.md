@@ -173,18 +173,15 @@ npm run dev
 
 ### Видео
 
-- `GET /api/batches/:id/video-tool`
-- `POST /api/batches/:id/video-jobs`
+- `GET /api/video-tool-v3/batches/:batchId`
+- `POST /api/video-tool-v3/batches/:batchId/runs`
+- `GET /api/video-tool-v3/runs/:runId`
+- `POST /api/video-tool-v3/runs/:runId/items/:itemId/upload-intent`
+- `PUT /api/video-tool-v3/runs/:runId/items/:itemId/upload-intent/:uploadId/chunks/:chunkIndex`
+- `POST /api/video-tool-v3/runs/:runId/items/:itemId/upload-intent/:uploadId/complete`
+- `POST /api/video-tool-v3/runs/:runId/cancel`
 
-Video upload/session endpoints:
-
-- `GET /api/batches/:id/video-uploads`
-- `GET /api/batches/:id/video-export-runs`
-- `GET /api/batches/:id/video-export-runs/:runId`
-- `POST /api/batches/:id/video-export-runs/:runId/items/:itemId/upload`
-- `POST /api/batches/:id/video-export-runs/:runId/cancel`
-
-`video-tool` в Electron HQ использует внутренний video runtime через IPC с `protocol_version = stones-video-export-helper-v3`. В браузерном HQ `/admin/video-tool/:batchId` показывает заглушку скачивания `ZAGARAMI HQ`. Активный UI-flow Video Tool рендерит локально, создает backend upload-session лениво при первом upload без обязательного `render_manifest`, читает загруженность через `/video-uploads` и после upload показывает ссылку на файл и `/clone/:serialNumber`. Backend response не отдает render-поля. Повтор upload с тем же checksum идемпотентен; другой checksum требует `overwrite=true`.
+`/admin/video-tool/:batchId` открывает Video Tool v3. Рендер и подготовка выполняются локально в Electron HQ через IPC `window.stones.videoToolV3`; backend нужен для run metadata и upload готовых item-видео в `Item.item_video_url`.
 
 ### Фото
 

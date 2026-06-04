@@ -1,9 +1,3 @@
-import type {
-    DesktopStartVideoExportRunPayload,
-    DesktopVideoExportItemPayload,
-    LocalVideoExportRunSnapshot
-} from '../admin/pages/video-tool/types';
-
 export type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
 
 export type StonesDesktopAppInfo = {
@@ -93,7 +87,7 @@ export type StonesHqUpdateDownloadResult = StonesHqUpdateInfo & {
 };
 
 export type StonesMediaQueueJobStatus = 'staging' | 'queued' | 'uploading' | 'retrying' | 'failed' | 'done' | 'cancelled' | 'auth_required';
-export type StonesMediaQueueJobType = 'PHOTO_TOOL_APPLY' | 'VIDEO_EXPORT_RUN_ITEM_UPLOAD';
+export type StonesMediaQueueJobType = 'PHOTO_TOOL_APPLY';
 
 export type StonesMediaQueueJob = {
     id: string;
@@ -196,33 +190,6 @@ export type StonesDesktopVideoHelperStatus = {
     error?: string;
 };
 
-export type StonesDesktopVideoHelperCleanupResult = {
-    success?: boolean;
-    removed_sources?: number;
-    removed_jobs?: number;
-    removed_bytes?: number;
-    health?: unknown;
-};
-
-export type StonesDesktopVideoSourceImportPayload = {
-    source_id: string;
-    duration_ms: number;
-    has_audio: boolean;
-    video_codec?: string;
-    format_name?: string;
-    preview_url?: string;
-    preview_file_id?: string;
-    preview_path?: string;
-    preview_created?: boolean;
-    preview_error?: string | null;
-    fingerprint: {
-        name: string;
-        size: number;
-        lastModified: number;
-        durationMs: number;
-    };
-};
-
 export type StonesBatchDiagnosticsMediaFile = {
     name: string;
     mimeType: string;
@@ -249,29 +216,11 @@ export type StonesDesktopApi = {
     exportStatusCenterLogs: (payload: unknown) => Promise<{ success: true; path: string }>;
     getAdminAutoLoginCredentials: () => Promise<{ email: string; password: string }>;
     syncAuthToken: (accessToken: string | null) => Promise<{ ok: true }>;
-    getVideoHelperStatus: () => Promise<StonesDesktopVideoHelperStatus>;
-    cleanupVideoHelper: () => Promise<StonesDesktopVideoHelperCleanupResult>;
-    importVideoSource: (payload: {
-        stagedSourceId: string;
-        cachePath: string;
-        originalName: string;
-        mimeType: string;
-        size: number;
-        lastModified: number;
-    }) => Promise<StonesDesktopVideoSourceImportPayload>;
-    getVideoSourcePreview: (sourceId: string) => Promise<{ ok: true; previewFileId: string; previewUrl: string }>;
-    showVideoHelperStorage: () => Promise<{ success: true }>;
     selectBatchDiagnosticsMediaFolder: () => Promise<StonesBatchDiagnosticsMediaFolder>;
     exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string; jsonPath?: string }>;
     stageMediaQueueFileStart: (fileMeta: { fileId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
     stageMediaQueueFileChunk: (fileId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
     stageMediaQueueFileFinish: (fileId: string) => Promise<{ fileId: string; size: number; checksumSha256: string }>;
-    stageVideoSourceStart: (fileMeta: { stagedSourceId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
-    stageVideoSourceChunk: (stagedSourceId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
-    stageVideoSourceFinish: (stagedSourceId: string) => Promise<{ stagedSourceId: string; cachePath: string; size: number; checksumSha256: string }>;
-    saveVideoDraft: (payload: unknown) => Promise<unknown>;
-    getVideoDraft: (batchId: string) => Promise<unknown>;
-    discardVideoDraft?: (batchId: string) => Promise<{ ok: true }>;
     getMediaQueueSnapshot: () => Promise<StonesMediaQueueSnapshot>;
     getMediaWorkflowSnapshot: () => Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue: (callback: (snapshot: StonesMediaQueueSnapshot) => void) => () => void;
@@ -283,11 +232,6 @@ export type StonesDesktopApi = {
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     cancelMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
     clearCompletedMediaQueueJobs: () => Promise<StonesMediaQueueSnapshot>;
-    startVideoExportRun: (payload: DesktopStartVideoExportRunPayload) => Promise<{ run?: LocalVideoExportRunSnapshot }>;
-    renderVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
-    uploadVideoExportItem: (payload: DesktopVideoExportItemPayload) => Promise<{ success: boolean }>;
-    cancelVideoExportRun: (runId: string) => Promise<{ success: boolean }>;
-    getVideoExportRunSnapshot: (batchId: string) => Promise<LocalVideoExportRunSnapshot | null>;
     openExternal: (url: string) => Promise<{ ok: true }>;
 };
 
@@ -336,36 +280,6 @@ export const stageDesktopFile = async (file: File) => {
 };
 
 export const stageFileForMediaQueue = stageDesktopFile;
-
-export const stageDesktopVideoSourceFile = async (file: File) => {
-    const desktop = window.stonesDesktop;
-    if (!desktop) {
-        throw new Error('Desktop staging недоступен.');
-    }
-
-    const { fileId } = await desktop.stageVideoSourceStart({
-        name: file.name,
-        mimeType: file.type || 'application/octet-stream',
-        size: file.size
-    });
-    const reader = file.stream().getReader();
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-                break;
-            }
-
-            const chunk = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-            await desktop.stageVideoSourceChunk(fileId, chunk);
-        }
-    } finally {
-        reader.releaseLock();
-    }
-
-    return desktop.stageVideoSourceFinish(fileId);
-};
 
 export const waitForMediaQueueJob = (jobId: string) => new Promise<StonesMediaQueueJob>((resolve, reject) => {
     const desktop = window.stonesDesktop;

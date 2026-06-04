@@ -1,7 +1,7 @@
 {
   "name": "stones",
   "private": true,
-  "version": "1.6.3-6",
+  "version": "1.6.3-10",
   "type": "module",
   "packageManager": "npm@10.9.3",
   "engines": {
@@ -22,8 +22,6 @@
     "preview": "vite preview",
     "server": "npm run prisma:generate && tsx server/index.ts",
     "start:prod": "node build/server/index.js",
-    "video-processor": "tsx server/videoProcessor.ts",
-    "video-processor:prod": "node build/server/videoProcessor.js",
     "telegram-worker": "npm run prisma:generate && tsx server/telegramWorker.ts",
     "telegram-worker:prod": "node build/server/telegramWorker.js",
     "admin:desktop": "electron electron/hq/main.cjs",
@@ -54,6 +52,7 @@
     "@sentry/react": "^10.53.1",
     "@tailwindcss/postcss": "^4.1.17",
     "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.10.0",
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "ffmpeg-static": "^5.2.0",

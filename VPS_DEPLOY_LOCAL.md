@@ -14,7 +14,6 @@
 - `SSH_USER`
 - `APP_DOMAIN`
 - `ACME_EMAIL`
-- `VITE_VIDEO_HELPER_DOWNLOAD_URL` (опционально)
 - `MYSQL_PASSWORD`
 - `MYSQL_ROOT_PASSWORD`
 - `ACCESS_TOKEN_SECRET`
@@ -39,11 +38,6 @@ DATABASE_URL=mysql://stones:<GENERATE_STRONG_PASSWORD>@db:3306/stones?connection
 ACCESS_TOKEN_SECRET=<GENERATE_LONG_RANDOM_SECRET>
 REFRESH_TOKEN_SECRET=<GENERATE_LONG_RANDOM_SECRET>
 
-VIDEO_PROCESSOR_POLL_MS=3000
-
-# Optional: only if production DMG is already published
-VITE_VIDEO_HELPER_DOWNLOAD_URL=<VITE_VIDEO_HELPER_DOWNLOAD_URL>
-STONES_HELPER_ALLOWED_ORIGIN=https://<APP_DOMAIN>
 ```
 
 ## 3. DNS
@@ -98,7 +92,6 @@ docker compose --env-file .env.production -f docker-compose.prod.yml ps
 curl -k -I https://<APP_DOMAIN>/healthz
 docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail 100 app
 docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail 100 caddy
-docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail 100 video-processor
 ```
 
 Ручной smoke:
