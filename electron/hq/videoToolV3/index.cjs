@@ -15,6 +15,7 @@ const { UploadService } = require('./uploadService.cjs');
 const { UploadWorker } = require('./uploadWorker.cjs');
 
 const DEFAULT_STORAGE_FOLDER = 'ZAGARAMI HQ';
+const PREVIEW_PROTOCOL = 'stones-video-v3-preview';
 
 class VideoToolV3App extends EventEmitter {
     constructor({
@@ -221,6 +222,19 @@ class VideoToolV3App extends EventEmitter {
         };
     }
 
+    async getSourcePreviewUrl(sourceId) {
+        this.ensureInitialized();
+        await this.projectService.getSourcePreviewPath(sourceId);
+        return {
+            previewUrl: `${PREVIEW_PROTOCOL}://source/${encodeURIComponent(sourceId)}`
+        };
+    }
+
+    async getSourcePreviewPath(sourceId) {
+        this.ensureInitialized();
+        return this.projectService.getSourcePreviewPath(sourceId);
+    }
+
     async startExport(projectId, options = {}) {
         this.ensureInitialized();
         await this.exportService.startRun(projectId, options);
@@ -368,5 +382,6 @@ const createVideoToolV3App = (options) => new VideoToolV3App(options);
 
 module.exports = {
     VideoToolV3App,
-    createVideoToolV3App
+    createVideoToolV3App,
+    PREVIEW_PROTOCOL
 };

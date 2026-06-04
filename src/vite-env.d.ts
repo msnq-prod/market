@@ -52,6 +52,10 @@ type StonesVideoToolV3Api = {
         import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
         | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
     >;
+    getSourcePreviewUrl(sourceId: string): Promise<
+        import('./admin/pages/video-tool-v3/types').SourcePreviewUrlResponse
+        | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
+    >;
     startExport(projectId: string, replaceExisting?: boolean): Promise<
         import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
         | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError

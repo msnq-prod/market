@@ -124,6 +124,10 @@ export type VideoToolV3IpcError = {
     code: string;
 };
 
+export type SourcePreviewUrlResponse = {
+    previewUrl: string;
+};
+
 export type VideoToolV3Event =
     | { type: 'snapshot'; batchId: string; snapshot: VideoToolV3Snapshot }
     | { type: 'job-progress'; jobId: string; sourceId?: string | null; exportItemId?: string | null; progress: number }
@@ -137,6 +141,7 @@ export type VideoToolV3Api = {
     selectSources(batchId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     retryPrepareSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     saveSegments(batchId: string, segments: VideoToolV3Segment[]): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+    getSourcePreviewUrl(sourceId: string): Promise<SourcePreviewUrlResponse | VideoToolV3IpcError>;
     startExport(projectId: string, replaceExisting?: boolean): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     retryItemRender(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     retryItemUpload(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;

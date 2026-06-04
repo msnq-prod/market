@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require('electron');
 
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
 const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
@@ -9,10 +9,21 @@ const { createDiagnosticsRuntime } = require('./diagnostics.cjs');
 const { createWindowRuntime } = require('./windows.cjs');
 const { registerIpcHandlers } = require('./ipcHandlers.cjs');
 const { createVideoToolV3App } = require('./videoToolV3/index.cjs');
-const { registerVideoToolV3Ipc, sendVideoToolV3Event } = require('./videoToolV3/ipc.cjs');
+const { registerVideoToolV3Ipc, registerVideoToolV3PreviewProtocol, sendVideoToolV3Event } = require('./videoToolV3/ipc.cjs');
+const { PREVIEW_PROTOCOL } = require('./videoToolV3/index.cjs');
 
 const config = createAppConfig({ app });
 app.setName(config.APP_DISPLAY_NAME);
+
+protocol.registerSchemesAsPrivileged([{
+    scheme: PREVIEW_PROTOCOL,
+    privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        stream: true
+    }
+}]);
 
 let accessToken = null;
 let mediaQueue = null;
@@ -218,7 +229,14 @@ app.on('before-quit', () => {
 });
 
 app.whenReady()
-    .then(() => showMainWindow())
+    .then(() => {
+        registerVideoToolV3PreviewProtocol({
+            protocol,
+            net,
+            getVideoToolV3App: () => videoToolV3App
+        });
+        return showMainWindow();
+    })
     .catch((error) => {
         console.error('[zagarami-hq] failed to start', error);
         app.quit();

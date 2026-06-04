@@ -92,19 +92,19 @@ electron/hq/videoToolV3/ipc.cjs
 
 ## 2. Целевой вид
 
-Окно монтажа должно быть как упрощенный DaVinci-like workspace:
+Окно монтажа должно быть как упрощенный DaVinci-like workspace без левой source/bin-панели:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ Top toolbar: Подготовка | Монтаж | Экспорт, cut/delete/undo/zoom/status    │
-├───────────────┬───────────────────────────────────────────┬────────────────┤
-│ Sources/Batch │ Segment blocks: Интро, SN-001, SN-002...  │ Preview 9:16   │
-│ prepared list │                                           │ current frame  │
-│ item summary  ├───────────────────────────────────────────┤ controls/time  │
-│               │ Timeline ruler + red playhead             │                │
-│               │ Prepared video track + cut boundaries     │                │
-│               │ horizontal scroll + zoom                  │                │
-└───────────────┴───────────────────────────────────────────┴────────────────┘
+├───────────────────────────────────────────────┬────────────────────────────┤
+│ Segment blocks: Интро, SN-001, SN-002...      │ Preview 9:16 current frame │
+│ text-only cards, no thumbnails                │ controls/time              │
+├───────────────────────────────────────────────┤                            │
+│ Timeline ruler + red playhead                 │                            │
+│ Prepared video track + cut boundaries         │                            │
+│ horizontal scroll + zoom                      │                            │
+└───────────────────────────────────────────────┴────────────────────────────┘
 ```
 
 ## 3. Целевые UX-правила
@@ -127,27 +127,7 @@ electron/hq/videoToolV3/ipc.cjs
 
 ## 4. Layout
 
-### 4.1 Левая колонка
-
-Ширина: 260-320 px.
-
-Содержимое:
-
-- `Источники`;
-- prepared source cards:
-  - thumbnail или placeholder;
-  - filename;
-  - duration;
-  - `720p · 24fps`;
-  - status;
-- блок `Партия`:
-  - batch id/seq;
-  - status;
-  - expected items;
-  - active segments count;
-  - export blockers count.
-
-### 4.2 Центральная область
+### 4.1 Центральная область
 
 Состоит из:
 
@@ -169,6 +149,7 @@ Segment strip:
 
 - карточки business segments;
 - alignment по timeline positions;
+- только текст, без изображений;
 - label:
   - `Интро`;
   - `SN-001`, `SN-002`, ...
@@ -186,7 +167,7 @@ Timeline:
 - zoom slider;
 - horizontal scrollbar.
 
-### 4.3 Правая preview-панель
+### 4.2 Правая preview-панель
 
 Ширина: 360-460 px.
 
@@ -452,3 +433,13 @@ MVP можно держать в одном `EditorTimeline.tsx`, но лучш�
 - Не добавлять multi-track editing.
 - Не добавлять audio editing.
 - Не усложнять модель beyond intro + item tails.
+- Не возвращать левую source/bin-панель в монтаж.
+- Не добавлять thumbnails в segment strip.
+
+## 13. Подробная документация для реализации
+
+Детальная UX/UI-спецификация, задачи и промпты для ИИ-агента вынесены в:
+
+```text
+docs/video-tool-v3/edit-workspace/
+```

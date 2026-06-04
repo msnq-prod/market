@@ -609,7 +609,10 @@ import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
 import { TelegramBots } from './admin/pages/TelegramBots'
 
 function DesktopOnlyToolRoute({ toolName, children }: { toolName: string; children: React.ReactNode }) {
-  if (!isStonesDesktop()) {
+  const location = useLocation()
+  const isVideoToolDevMock = import.meta.env.DEV && toolName === 'Video Tool' && new URLSearchParams(location.search).has('videoV3Mock')
+
+  if (!isStonesDesktop() && !isVideoToolDevMock) {
     return <HqDesktopDownloadPlaceholder toolName={toolName} fullscreen />
   }
 

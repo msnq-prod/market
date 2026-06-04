@@ -5,6 +5,7 @@ const videoToolV3Api = {
     selectSources: (batchId) => ipcRenderer.invoke('videoV3:selectSources', { batchId }),
     retryPrepareSource: (batchId, sourceId) => ipcRenderer.invoke('videoV3:retryPrepareSource', { batchId, sourceId }),
     saveSegments: (batchId, segments) => ipcRenderer.invoke('videoV3:saveSegments', { batchId, segments }),
+    getSourcePreviewUrl: (sourceId) => ipcRenderer.invoke('videoV3:getSourcePreviewUrl', { sourceId }),
     startExport: (projectId, replaceExisting = false) => ipcRenderer.invoke('videoV3:startExport', { projectId, replaceExisting }),
     retryItemRender: (exportItemId) => ipcRenderer.invoke('videoV3:retryItemRender', { exportItemId }),
     retryItemUpload: (exportItemId) => ipcRenderer.invoke('videoV3:retryItemUpload', { exportItemId }),

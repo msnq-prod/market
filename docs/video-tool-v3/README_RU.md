@@ -17,6 +17,7 @@
 - `IPC_SPEC_RU.md` — IPC-контракты Electron Main/Renderer.
 - `UI_FLOW_RU.md` — точное поведение экранов и кнопок.
 - `EDIT_WORKSPACE_REDESIGN_RU.md` — проект переработки окна монтажа с DaVinci-like таймлайном и preview.
+- `edit-workspace/` — подробный UX/UI-план меню монтажа и инструкции для ИИ-агента.
 - `ERROR_MATRIX_RU.md` — матрица ошибок и ожидаемое поведение.
 - `MIGRATION_DECISIONS_RU.md` — решения по удалению старых таблиц/кода.
 - `DIAGRAMS_RU.md` — Mermaid-диаграммы потоков.

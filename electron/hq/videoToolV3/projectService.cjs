@@ -393,6 +393,39 @@ class ProjectService {
         return this.db.getSnapshot(safeBatchId);
     }
 
+    async getSourcePreviewPath(sourceId) {
+        const safeSourceId = typeof sourceId === 'string' ? sourceId.trim() : '';
+        if (!safeSourceId) {
+            const error = new Error('sourceId is required.');
+            error.code = 'VALIDATION_FAILED';
+            throw error;
+        }
+
+        const source = this.db.get(`
+            SELECT source_assets.*, projects.batch_id
+            FROM source_assets
+            JOIN projects ON projects.id = source_assets.project_id
+            WHERE source_assets.id = ?
+            LIMIT 1
+        `, [safeSourceId]);
+        if (!source) {
+            throw new Error('Source не найден.');
+        }
+        if (source.status !== 'READY') {
+            throw new Error('Preview доступен только для READY source.');
+        }
+        if (!source.prepared_path) {
+            throw new Error('Prepared-файл не задан.');
+        }
+
+        const preparedPath = this.fileStore.assertInsideRoot(source.prepared_path);
+        if (!(await this.fileStore.fileExists(preparedPath))) {
+            throw new Error('Prepared-файл не найден на диске.');
+        }
+
+        return preparedPath;
+    }
+
     async recoverSourcesOnStartup() {
         const now = nowIso();
         this.db.transaction(() => {

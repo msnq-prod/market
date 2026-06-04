@@ -1,4 +1,6 @@
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const { pathToFileURL } = require('url');
+const { PREVIEW_PROTOCOL } = require('./index.cjs');
 
 const normalizeString = (value, label) => {
     const safeValue = typeof value === 'string' ? value.trim() : '';
@@ -59,6 +61,16 @@ const normalizeProjectIdInput = (payload) => {
         return normalizeString(payload.projectId, 'projectId');
     }
     return normalizeString('', 'projectId');
+};
+
+const normalizeSourcePreviewInput = (payload) => {
+    if (typeof payload === 'string') {
+        return normalizeString(payload, 'sourceId');
+    }
+    if (isRecord(payload)) {
+        return normalizeString(payload.sourceId, 'sourceId');
+    }
+    return normalizeString('', 'sourceId');
 };
 
 const normalizeStartExportInput = (payload) => ({
@@ -147,6 +159,14 @@ const registerVideoToolV3Ipc = ({ ipcMain, dialog = null, getMainWindow = null, 
         }
     });
 
+    ipcMain.handle('videoV3:getSourcePreviewUrl', async (_event, payload) => {
+        try {
+            return await requireApp(getVideoToolV3App).getSourcePreviewUrl(normalizeSourcePreviewInput(payload));
+        } catch (error) {
+            return toIpcError(error);
+        }
+    });
+
     ipcMain.handle('videoV3:startExport', async (_event, payload) => {
         try {
             const { projectId, replaceExisting } = normalizeStartExportInput(payload);
@@ -190,6 +210,41 @@ const registerVideoToolV3Ipc = ({ ipcMain, dialog = null, getMainWindow = null, 
     });
 };
 
+const getSourceIdFromPreviewUrl = (rawUrl) => {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== `${PREVIEW_PROTOCOL}:`) {
+        throw new Error('Invalid preview protocol.');
+    }
+    if (parsed.hostname === 'source') {
+        return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    }
+    return decodeURIComponent(parsed.hostname || parsed.pathname.replace(/^\/+/, ''));
+};
+
+const registerVideoToolV3PreviewProtocol = ({ protocol, net, getVideoToolV3App }) => {
+    if (!protocol?.handle || !net?.fetch) {
+        throw new Error('registerVideoToolV3PreviewProtocol requires Electron protocol and net.');
+    }
+    if (typeof getVideoToolV3App !== 'function') {
+        throw new Error('registerVideoToolV3PreviewProtocol requires getVideoToolV3App.');
+    }
+
+    protocol.handle(PREVIEW_PROTOCOL, async (request) => {
+        try {
+            const sourceId = getSourceIdFromPreviewUrl(request.url);
+            const filePath = await requireApp(getVideoToolV3App).getSourcePreviewPath(sourceId);
+            return net.fetch(pathToFileURL(filePath).toString(), {
+                headers: request.headers
+            });
+        } catch (error) {
+            return new Response(error instanceof Error ? error.message : 'Preview not found.', {
+                status: 404,
+                headers: { 'content-type': 'text/plain; charset=utf-8' }
+            });
+        }
+    });
+};
+
 const sendVideoToolV3Event = (windows, event) => {
     for (const window of windows) {
         if (!window?.isDestroyed?.()) {
@@ -200,5 +255,6 @@ const sendVideoToolV3Event = (windows, event) => {
 
 module.exports = {
     registerVideoToolV3Ipc,
+    registerVideoToolV3PreviewProtocol,
     sendVideoToolV3Event
 };

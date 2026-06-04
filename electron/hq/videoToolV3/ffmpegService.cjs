@@ -17,15 +17,22 @@ const QUALITY_PRESETS = {
     high: { preset: 'slow', crf: 20 }
 };
 
+const isAsarPath = (value) => typeof value === 'string' && /(^|[\\/])app\.asar([\\/]|$)/.test(value);
+const toUnpackedAsarPath = (value) => String(value || '').replace(/(^|[\\/])app\.asar([\\/]|$)/, (match) => match.replace('app.asar', 'app.asar.unpacked'));
+
 const resolveBinaryPath = (configuredPath, fallback) => {
     const candidate = configuredPath || fallback;
-    if (candidate && fs.existsSync(candidate)) {
-        return candidate;
+    const unpacked = isAsarPath(candidate) ? toUnpackedAsarPath(candidate) : '';
+
+    if (unpacked) {
+        if (fs.existsSync(unpacked)) {
+            return unpacked;
+        }
+        return unpacked;
     }
 
-    const unpacked = typeof candidate === 'string' ? candidate.replace('app.asar', 'app.asar.unpacked') : '';
-    if (unpacked && fs.existsSync(unpacked)) {
-        return unpacked;
+    if (candidate && fs.existsSync(candidate)) {
+        return candidate;
     }
 
     return fallback;
@@ -55,6 +62,9 @@ const getDurationMs = (format, stream) => {
 };
 
 const classifyFfmpegError = (message) => {
+    if (/spawn .*?(ENOENT|ENOTDIR|EACCES)|ENOENT|ENOTDIR|EACCES/i.test(message)) {
+        return 'FFmpeg не найден или недоступен. Переустановите HQ Desktop или проверьте сборку приложения.';
+    }
     if (/No space left on device|ENOSPC/i.test(message)) {
         return 'Недостаточно места для обработки видео.';
     }
@@ -357,6 +367,7 @@ class FfmpegService {
 
 module.exports = {
     FfmpegService,
+    resolveBinaryPath,
     QUALITY_PRESETS,
     OUTPUT_WIDTH,
     OUTPUT_HEIGHT,

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { EditorView } from './components/EditorView';
 import { ExportView } from './components/ExportView';
 import { PrepareView } from './components/PrepareView';
+import { createVideoToolV3DevMock } from './devMock';
 import type { VideoToolV3Api, VideoToolV3Event, VideoToolV3IpcError, VideoToolV3Snapshot, VideoToolV3Tab, VideoToolV3UiState } from './types';
 
 const initialUiState: VideoToolV3UiState = {
@@ -22,7 +23,12 @@ const tabs: Array<{ id: VideoToolV3Tab; label: string }> = [
 const isIpcError = (value: VideoToolV3Snapshot | VideoToolV3IpcError): value is VideoToolV3IpcError =>
     'error' in value && typeof value.error === 'string';
 
-const getApi = (): VideoToolV3Api | null => window.stones?.videoToolV3 ?? window.stonesDesktop?.videoToolV3 ?? null;
+const getApi = (): VideoToolV3Api | null => {
+    if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('videoV3Mock')) {
+        return createVideoToolV3DevMock();
+    }
+    return window.stones?.videoToolV3 ?? window.stonesDesktop?.videoToolV3 ?? null;
+};
 
 export function VideoToolV3Controller() {
     const { batchId = '' } = useParams();
@@ -170,7 +176,7 @@ export function VideoToolV3Controller() {
         } finally {
             setActionLoading(false);
         }
-    }, [api, applySnapshotResult, snapshot?.project]);
+    }, [api, applySnapshotResult, snapshot?.items, snapshot?.project]);
 
     const handleRetryItemRender = useCallback(async (exportItemId: string) => {
         if (!api) return;
@@ -227,23 +233,16 @@ export function VideoToolV3Controller() {
     const activeTab = uiState.activeTab;
 
     return (
-        <div className="min-h-screen bg-[#0f1115] text-white">
-            <header className="border-b border-white/10 bg-[#111318] px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                        <p className="text-sm text-gray-400">Video Tool v3</p>
-                        <h1 className="mt-1 text-2xl font-semibold">Партия {batchId}</h1>
-                    </div>
-                    {snapshot?.network ? (
-                        <div className="rounded-lg border border-white/10 bg-black/20 px-4 py-2 text-sm text-gray-300">
-                            {snapshot.network.online ? 'Сеть доступна' : 'Нет сети'} · {snapshot.network.authenticated ? 'auth ok' : 'нужен вход'}
-                        </div>
-                    ) : null}
-                </div>
-            </header>
-
-            <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-5 py-5">
-                <nav className="flex gap-2 rounded-lg border border-white/10 bg-[#15171b] p-1">
+        <div className="h-screen overflow-hidden bg-[#0f1115] text-white">
+            <main className="mx-auto flex h-full w-full max-w-none flex-col gap-2 px-3 py-2">
+                <nav className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-[#15171b] p-1">
+                    <Link
+                        to="/admin/video-tool"
+                        className="rounded-md border border-white/10 px-4 py-2 text-sm text-gray-300 transition hover:bg-white/10 hover:text-white"
+                    >
+                        ← Главное меню
+                    </Link>
+                    <span className="h-7 w-px bg-white/10" />
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}
@@ -269,12 +268,14 @@ export function VideoToolV3Controller() {
                     </div>
                 ) : snapshot ? (
                     <>
-                        <section className="grid gap-3 rounded-lg border border-white/10 bg-[#15171b] p-5 text-sm text-gray-300 sm:grid-cols-4">
+                        {activeTab !== 'editor' ? (
+                        <section className="grid shrink-0 gap-3 rounded-lg border border-white/10 bg-[#15171b] p-5 text-sm text-gray-300 sm:grid-cols-4">
                             <div>Items: {snapshot.items.length}</div>
                             <div>Sources: {snapshot.sources.length}</div>
                             <div>Jobs: {snapshot.counts.queuedJobs + snapshot.counts.runningJobs}</div>
                             <div>Run: {snapshot.activeRun?.status ?? 'нет'}</div>
                         </section>
+                        ) : null}
 
                         {activeTab === 'prepare' ? (
                             <PrepareView
@@ -289,8 +290,8 @@ export function VideoToolV3Controller() {
                             <EditorView
                                 snapshot={snapshot}
                                 uiState={uiState}
-                                actionLoading={actionLoading}
                                 onSaveSegments={handleSaveSegments}
+                                onUiStateChange={(patch) => setUiState((current) => ({ ...current, ...patch }))}
                             />
                         ) : null}
                         {activeTab === 'export' ? (
