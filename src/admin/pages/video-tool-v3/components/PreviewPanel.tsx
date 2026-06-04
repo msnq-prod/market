@@ -1,5 +1,6 @@
 import { Camera, Maximize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { PREVIEW_SEEK_TOLERANCE_MS, resolvePreviewTimeUpdate } from '../previewSync';
 import { formatTimecode } from '../timelineModel';
 
 type PreviewPanelProps = {
@@ -32,23 +33,40 @@ export function PreviewPanel({
     onNextCut
 }: PreviewPanelProps) {
     const videoRef = useRef<HTMLVideoElement | null>(null);
+    const pendingSeekMsRef = useRef<number | null>(null);
+
+    const applyPendingSeek = useCallback((video: HTMLVideoElement) => {
+        const pendingSeekMs = pendingSeekMsRef.current;
+        if (pendingSeekMs === null || video.readyState < 1) return;
+
+        const targetSeconds = pendingSeekMs / 1_000;
+        if (Math.abs(video.currentTime - targetSeconds) <= PREVIEW_SEEK_TOLERANCE_MS / 1_000) {
+            pendingSeekMsRef.current = null;
+            return;
+        }
+
+        video.currentTime = targetSeconds;
+    }, []);
 
     useEffect(() => {
         const video = videoRef.current;
         if (!video || !sourcePreviewUrl) return;
         if (video.src !== sourcePreviewUrl) {
+            pendingSeekMsRef.current = sourceLocalMs;
             video.src = sourcePreviewUrl;
+            video.load();
         }
-    }, [sourcePreviewUrl]);
+    }, [sourceLocalMs, sourcePreviewUrl]);
 
     useEffect(() => {
         const video = videoRef.current;
         if (!video || !sourcePreviewUrl) return;
         const nextSeconds = sourceLocalMs / 1_000;
         if (Math.abs(video.currentTime - nextSeconds) > 0.06) {
-            video.currentTime = nextSeconds;
+            pendingSeekMsRef.current = sourceLocalMs;
+            applyPendingSeek(video);
         }
-    }, [sourceLocalMs, sourcePreviewUrl]);
+    }, [applyPendingSeek, sourceLocalMs, sourcePreviewUrl]);
 
     useEffect(() => {
         const video = videoRef.current;
@@ -61,8 +79,23 @@ export function PreviewPanel({
     }, [isPlaying, sourcePreviewUrl]);
 
     const handleTimeUpdate = () => {
-        if (!isPlaying || !videoRef.current) return;
-        onSeek(sourceGlobalStartMs + Math.round(videoRef.current.currentTime * 1_000));
+        const video = videoRef.current;
+        if (!video) return;
+
+        const currentLocalMs = Math.round(video.currentTime * 1_000);
+        const decision = resolvePreviewTimeUpdate({
+            isPlaying,
+            mediaSeeking: video.seeking,
+            pendingSeekMs: pendingSeekMsRef.current,
+            currentLocalMs
+        });
+
+        if (decision.clearPendingSeek) {
+            pendingSeekMsRef.current = null;
+        }
+        if (decision.publish) {
+            onSeek(sourceGlobalStartMs + currentLocalMs);
+        }
     };
 
     return (
@@ -81,6 +114,16 @@ export function PreviewPanel({
                             muted
                             playsInline
                             preload="metadata"
+                            onLoadedMetadata={(event) => applyPendingSeek(event.currentTarget)}
+                            onSeeked={(event) => {
+                                const currentLocalMs = Math.round(event.currentTarget.currentTime * 1_000);
+                                if (
+                                    pendingSeekMsRef.current !== null
+                                    && Math.abs(currentLocalMs - pendingSeekMsRef.current) <= PREVIEW_SEEK_TOLERANCE_MS
+                                ) {
+                                    pendingSeekMsRef.current = null;
+                                }
+                            }}
                             onTimeUpdate={handleTimeUpdate}
                         />
                     ) : (

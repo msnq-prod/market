@@ -246,6 +246,32 @@ export const clampViewport = (
     return { startMs, durationMs };
 };
 
+export const followPlayheadViewport = (
+    playheadMs: number,
+    viewport: TimelineViewport,
+    totalDurationMs: number
+): TimelineViewport => {
+    const clampedViewport = clampViewport(viewport, totalDurationMs);
+    const safePlayheadMs = clamp(toMs(playheadMs), 0, Math.max(0, toMs(totalDurationMs)));
+    const viewportEndMs = clampedViewport.startMs + clampedViewport.durationMs;
+
+    if (safePlayheadMs < clampedViewport.startMs) {
+        return clampViewport({
+            startMs: safePlayheadMs - clampedViewport.durationMs * 0.08,
+            durationMs: clampedViewport.durationMs
+        }, totalDurationMs);
+    }
+
+    if (safePlayheadMs > viewportEndMs) {
+        return clampViewport({
+            startMs: safePlayheadMs - clampedViewport.durationMs * 0.92,
+            durationMs: clampedViewport.durationMs
+        }, totalDurationMs);
+    }
+
+    return clampedViewport;
+};
+
 export const timeToPercent = (timeMs: number, viewport: TimelineViewport) => {
     if (viewport.durationMs <= 0) return 0;
     return ((timeMs - viewport.startMs) / viewport.durationMs) * 100;

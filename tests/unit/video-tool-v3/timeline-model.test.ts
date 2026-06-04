@@ -4,6 +4,7 @@ import {
     buildSegmentDisplayMeta,
     canCutAtPlayhead,
     clampViewport,
+    followPlayheadViewport,
     getPlayhead,
     getSourceOffsets,
     getTotalTimelineDuration,
@@ -141,5 +142,20 @@ test('timeline model clamps viewport to total duration', () => {
     assert.deepEqual(clampViewport({ startMs: -1_000, durationMs: 30_000 }, 15_000), {
         startMs: 0,
         durationMs: 15_000
+    });
+});
+
+test('timeline model follows playhead only after it leaves viewport', () => {
+    assert.deepEqual(followPlayheadViewport(7_000, { startMs: 5_000, durationMs: 4_000 }, 15_000), {
+        startMs: 5_000,
+        durationMs: 4_000
+    });
+    assert.deepEqual(followPlayheadViewport(2_000, { startMs: 5_000, durationMs: 4_000 }, 15_000), {
+        startMs: 1_680,
+        durationMs: 4_000
+    });
+    assert.deepEqual(followPlayheadViewport(12_000, { startMs: 5_000, durationMs: 4_000 }, 15_000), {
+        startMs: 8_320,
+        durationMs: 4_000
     });
 });

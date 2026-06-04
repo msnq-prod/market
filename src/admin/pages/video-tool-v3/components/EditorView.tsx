@@ -4,6 +4,7 @@ import {
     buildSegmentDisplayMeta,
     canCutAtPlayhead,
     clampViewport,
+    followPlayheadViewport,
     getOrderedSegments,
     getPlayhead,
     getSegmentDuration,
@@ -171,24 +172,33 @@ export function EditorView({
         void saveNext(previousSegments);
     }, [saveNext, undoStack]);
 
+    const followPlayhead = useCallback((globalMs: number) => {
+        setViewportState((current) => {
+            const next = followPlayheadViewport(globalMs, current, totalTimelineDuration);
+            return next.startMs === current.startMs && next.durationMs === current.durationMs ? current : next;
+        });
+    }, [totalTimelineDuration]);
+
     const handleSeek = useCallback((globalMs: number) => {
         const nextPlayhead = getPlayhead(globalMs, orderedSegments, snapshot.sources);
+        followPlayhead(nextPlayhead.globalMs);
         onUiStateChange({
             playheadMs: nextPlayhead.globalMs,
             selectedSegmentId: nextPlayhead.segmentId ?? uiState.selectedSegmentId
         });
-    }, [onUiStateChange, orderedSegments, snapshot.sources, uiState.selectedSegmentId]);
+    }, [followPlayhead, onUiStateChange, orderedSegments, snapshot.sources, uiState.selectedSegmentId]);
 
     const handleSelectSegment = useCallback((segmentId: string) => {
         const segment = orderedSegments.find((entry) => entry.id === segmentId);
         if (!segment) return;
         const globalBounds = segmentLocalToGlobal(segment, offsets);
+        followPlayhead(globalBounds.startMs);
         onUiStateChange({
             selectedSegmentId: segment.id,
             playheadMs: globalBounds.startMs,
             selectedSourceId: segment.source_id
         });
-    }, [offsets, onUiStateChange, orderedSegments]);
+    }, [followPlayhead, offsets, onUiStateChange, orderedSegments]);
 
     const handleSelectTimelineSegment = useCallback((segmentId: string) => {
         const segment = orderedSegments.find((entry) => entry.id === segmentId);

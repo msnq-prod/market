@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, protocol, shell } = require('electron');
 
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
 const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
@@ -232,7 +232,6 @@ app.whenReady()
     .then(() => {
         registerVideoToolV3PreviewProtocol({
             protocol,
-            net,
             getVideoToolV3App: () => videoToolV3App
         });
         return showMainWindow();

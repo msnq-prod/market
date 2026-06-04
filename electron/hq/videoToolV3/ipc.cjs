@@ -1,6 +1,6 @@
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
-const { pathToFileURL } = require('url');
 const { PREVIEW_PROTOCOL } = require('./index.cjs');
+const { createPreviewFileResponse } = require('./previewProtocol.cjs');
 
 const normalizeString = (value, label) => {
     const safeValue = typeof value === 'string' ? value.trim() : '';
@@ -221,9 +221,9 @@ const getSourceIdFromPreviewUrl = (rawUrl) => {
     return decodeURIComponent(parsed.hostname || parsed.pathname.replace(/^\/+/, ''));
 };
 
-const registerVideoToolV3PreviewProtocol = ({ protocol, net, getVideoToolV3App }) => {
-    if (!protocol?.handle || !net?.fetch) {
-        throw new Error('registerVideoToolV3PreviewProtocol requires Electron protocol and net.');
+const registerVideoToolV3PreviewProtocol = ({ protocol, getVideoToolV3App }) => {
+    if (!protocol?.handle) {
+        throw new Error('registerVideoToolV3PreviewProtocol requires Electron protocol.');
     }
     if (typeof getVideoToolV3App !== 'function') {
         throw new Error('registerVideoToolV3PreviewProtocol requires getVideoToolV3App.');
@@ -233,9 +233,7 @@ const registerVideoToolV3PreviewProtocol = ({ protocol, net, getVideoToolV3App }
         try {
             const sourceId = getSourceIdFromPreviewUrl(request.url);
             const filePath = await requireApp(getVideoToolV3App).getSourcePreviewPath(sourceId);
-            return net.fetch(pathToFileURL(filePath).toString(), {
-                headers: request.headers
-            });
+            return await createPreviewFileResponse({ filePath, request });
         } catch (error) {
             return new Response(error instanceof Error ? error.message : 'Preview not found.', {
                 status: 404,
