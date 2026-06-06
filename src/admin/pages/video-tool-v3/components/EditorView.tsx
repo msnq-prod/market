@@ -357,9 +357,9 @@ export function EditorView({
     }
 
     return (
-        <section data-testid="video-v3-editor-root" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0f141a] shadow-2xl">
-            <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-                <div className="flex min-w-0 flex-1 flex-col">
+        <section data-testid="video-v3-editor-root" className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0f141a] shadow-2xl">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                     <SegmentStrip
                         segments={segmentMeta}
                         totalDurationMs={activeDurationMs}

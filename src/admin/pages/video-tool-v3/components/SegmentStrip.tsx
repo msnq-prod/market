@@ -51,7 +51,10 @@ export function SegmentStrip({ segments, totalDurationMs, onSelect }: SegmentStr
                 </div>
             </div>
 
-            <div className="mt-4 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div
+                data-testid="video-v3-segment-scroll"
+                className="mt-4 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 pr-1">
                     {segments.map((segment) => (
                         <SegmentBlock

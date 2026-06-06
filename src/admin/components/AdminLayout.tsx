@@ -103,7 +103,7 @@ export function AdminLayout() {
         title: 'Рабочая область',
         description: ''
     };
-    const isWideWorkspace = location.pathname === '/admin/inventory';
+    const isWideWorkspace = location.pathname === '/admin/inventory' || location.pathname === '/admin/acceptance';
 
     return (
         <div className="admin-shell min-h-screen text-gray-100 font-sans lg:h-screen lg:overflow-hidden">

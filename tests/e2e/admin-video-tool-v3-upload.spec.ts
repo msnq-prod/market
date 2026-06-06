@@ -18,9 +18,13 @@ test.afterAll(async () => {
 
 const installVideoToolV3Mock = async (
     page: Page,
-    { firstStatus = 'PAUSED_OFFLINE', existingVideo = false }: { firstStatus?: UploadStatus; existingVideo?: boolean } = {}
+    {
+        firstStatus = 'PAUSED_OFFLINE',
+        existingVideo = false,
+        segmentCount = 3
+    }: { firstStatus?: UploadStatus; existingVideo?: boolean; segmentCount?: number } = {}
 ) => {
-    await page.addInitScript(({ mockFirstStatus, mockExistingVideo }) => {
+    await page.addInitScript(({ mockFirstStatus, mockExistingVideo, mockSegmentCount }) => {
         type Snapshot = {
             batchId: string;
             project: Record<string, unknown>;
@@ -59,6 +63,7 @@ const installVideoToolV3Mock = async (
             clone_url: `/clone/SERIAL-${index}`,
             error_message: status === 'UPLOAD_FAILED' ? 'upload failed' : null
         });
+        const sourceDurationMs = mockSegmentCount * 1000;
         const buildSnapshot = (): Snapshot => ({
             batchId,
             project: {
@@ -85,11 +90,11 @@ const installVideoToolV3Mock = async (
                 position: 0,
                 original_name: 'source.mp4',
                 original_size_bytes: 1,
-                duration_ms: 3000,
+                duration_ms: sourceDurationMs,
                 status: 'READY',
                 error_message: null
             }],
-            segments: [0, 1, 2].map((index) => ({
+            segments: Array.from({ length: mockSegmentCount }, (_, index) => ({
                 id: `segment-${index}`,
                 project_id: 'project-v3-e2e',
                 source_id: 'source-v3-e2e',
@@ -110,7 +115,7 @@ const installVideoToolV3Mock = async (
             },
             exportItems: mockExistingVideo ? [] : [item(1, mockFirstStatus), item(2, 'UPLOAD_FAILED')],
             jobs: [],
-            counts: { items: 2, sources: 1, activeSegments: 3, queuedJobs: 0, runningJobs: 0 },
+            counts: { items: 2, sources: 1, activeSegments: mockSegmentCount, queuedJobs: 0, runningJobs: 0 },
             network: {
                 online: mockFirstStatus !== 'PAUSED_OFFLINE',
                 apiReachable: mockFirstStatus !== 'PAUSED_OFFLINE',
@@ -152,12 +157,17 @@ const installVideoToolV3Mock = async (
         };
         localStorage.setItem('accessToken', 'e2e-token');
         localStorage.setItem('userRole', 'ADMIN');
-    }, { mockFirstStatus: firstStatus, mockExistingVideo: existingVideo });
+    }, { mockFirstStatus: firstStatus, mockExistingVideo: existingVideo, mockSegmentCount: segmentCount });
 };
 
 const openExportTab = async (page: Page) => {
     await page.goto('/admin/video-tool/batch-v3-e2e');
     await page.getByRole('button', { name: 'Экспорт', exact: true }).click();
+};
+
+const openEditorTab = async (page: Page) => {
+    await page.goto('/admin/video-tool/batch-v3-e2e');
+    await page.getByRole('button', { name: 'Монтаж', exact: true }).click();
 };
 
 test('Video Tool v3: offline pause is visible and retry is disabled', async ({ page }) => {
@@ -194,6 +204,37 @@ test('Video Tool v3: existing video requires replace confirmation', async ({ pag
 
     await expect.poll(() => page.evaluate(() => (window as Window & { __videoV3StartCalls: boolean[] }).__videoV3StartCalls))
         .toEqual([true]);
+});
+
+test('Video Tool v3: editor keeps timeline visible with many segments', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await installVideoToolV3Mock(page, { segmentCount: 80 });
+    await openEditorTab(page);
+
+    await expect(page.getByTestId('video-v3-editor-timeline')).toBeVisible();
+    const metrics = await page.evaluate(() => {
+        const timeline = document.querySelector('[data-testid="video-v3-editor-timeline"]') as HTMLElement | null;
+        const segmentScroll = document.querySelector('[data-testid="video-v3-segment-scroll"]') as HTMLElement | null;
+        if (!timeline || !segmentScroll) {
+            throw new Error('Editor layout nodes are missing.');
+        }
+        const timelineRect = timeline.getBoundingClientRect();
+        const scrollingElement = document.scrollingElement ?? document.documentElement;
+        const segmentStyle = window.getComputedStyle(segmentScroll);
+
+        return {
+            viewportHeight: window.innerHeight,
+            documentScrollHeight: scrollingElement.scrollHeight,
+            timelineBottom: timelineRect.bottom,
+            segmentCanScroll: segmentScroll.scrollHeight > segmentScroll.clientHeight,
+            segmentScrollbarWidth: segmentStyle.scrollbarWidth
+        };
+    });
+
+    expect(metrics.timelineBottom).toBeLessThanOrEqual(metrics.viewportHeight);
+    expect(metrics.documentScrollHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+    expect(metrics.segmentCanScroll).toBe(true);
+    expect(metrics.segmentScrollbarWidth).toBe('none');
 });
 
 test('Video Tool v3 API: resumable chunks complete and publish clone video', async ({ page, request }) => {

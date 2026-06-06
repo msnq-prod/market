@@ -440,7 +440,10 @@ export function VideoToolV3Controller() {
                         {error}
                     </div>
                 ) : snapshot ? (
-                    <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+                    <div className={[
+                        'min-h-0 flex-1',
+                        activeTab === 'editor' ? 'overflow-hidden' : 'overflow-y-auto pb-4'
+                    ].join(' ')}>
                         {error ? (
                             <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                                 <span className="inline-flex items-start gap-2">
