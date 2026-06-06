@@ -45,6 +45,18 @@ type StonesVideoToolV3Api = {
         import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
         | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
     >;
+    replaceSource(batchId: string, sourceId: string): Promise<
+        import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
+        | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
+    >;
+    deleteSource(batchId: string, sourceId: string): Promise<
+        import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
+        | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
+    >;
+    updateQuality(projectId: string, preset: import('./admin/pages/video-tool-v3/types').VideoQualityPreset): Promise<
+        import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
+        | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
+    >;
     saveSegments(
         batchId: string,
         segments: import('./admin/pages/video-tool-v3/types').VideoToolV3Segment[]
@@ -76,6 +88,8 @@ type StonesVideoToolV3Api = {
         import('./admin/pages/video-tool-v3/types').VideoToolV3Snapshot
         | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError
     >;
+    openClone(cloneUrl: string): Promise<{ ok: true } | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError>;
+    showProjectFolder(projectId: string): Promise<{ ok: true } | import('./admin/pages/video-tool-v3/types').VideoToolV3IpcError>;
     onEvent(callback: (event: import('./admin/pages/video-tool-v3/types').VideoToolV3Event) => void): () => void;
 };
 

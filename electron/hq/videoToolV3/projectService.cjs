@@ -7,9 +7,20 @@ const { nowIso } = require('./db.cjs');
 const { TimelineService } = require('./timelineService.cjs');
 
 const DEFAULT_QUALITY_PRESET = 'standard';
+const QUALITY_PRESETS = new Set(['fast', 'standard', 'high']);
 const SUPPORTED_SOURCE_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 const normalizeSerial = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const normalizeQualityPreset = (value) => {
+    const preset = typeof value === 'string' ? value.trim() : '';
+    if (!QUALITY_PRESETS.has(preset)) {
+        const error = new Error('Некорректное качество видео.');
+        error.code = 'VALIDATION_FAILED';
+        throw error;
+    }
+    return preset;
+};
 
 class ProjectService {
     constructor({ db, serverClient, fileStore, getQueueEngine = null }) {
@@ -227,6 +238,206 @@ class ProjectService {
         return this.db.getSnapshot(batchId);
     }
 
+    async updateQuality(projectId, preset) {
+        const safeProjectId = typeof projectId === 'string' ? projectId.trim() : '';
+        const qualityPreset = normalizeQualityPreset(preset);
+        if (!safeProjectId) {
+            const error = new Error('projectId is required.');
+            error.code = 'VALIDATION_FAILED';
+            throw error;
+        }
+
+        const project = this.db.get('SELECT * FROM projects WHERE id = ?', [safeProjectId]);
+        if (!project) {
+            throw new Error('Проект не найден.');
+        }
+        if (project.quality_preset === qualityPreset) {
+            return this.db.getSnapshot(project.batch_id);
+        }
+
+        const sources = this.db.all(`
+            SELECT *
+            FROM source_assets
+            WHERE project_id = ? AND status != 'DELETED'
+        `, [project.id]);
+        const needsReprepare = sources.some((source) => source.status === 'READY' || source.prepared_path);
+        const queueEngine = this.getQueueEngine?.();
+        if (needsReprepare && !queueEngine) {
+            throw new Error('Очередь подготовки не запущена.');
+        }
+
+        const timestamp = nowIso();
+        this.db.transaction(() => {
+            this.db.run(`
+                UPDATE projects
+                SET quality_preset = ?,
+                    updated_at = ?
+                WHERE id = ?
+            `, [qualityPreset, timestamp, project.id]);
+
+            if (needsReprepare) {
+                this.db.run(`
+                    UPDATE jobs
+                    SET status = 'CANCELLED',
+                        locked_at = NULL,
+                        locked_by = NULL,
+                        updated_at = ?
+                    WHERE project_id = ?
+                      AND type = 'PREPARE_SOURCE'
+                      AND status IN ('QUEUED', 'RUNNING', 'FAILED', 'CANCELLED')
+                `, [timestamp, project.id]);
+                this.db.run(`
+                    UPDATE source_assets
+                    SET status = 'NEW',
+                        prepared_path = NULL,
+                        prepared_checksum_sha256 = NULL,
+                        duration_ms = 0,
+                        error_message = NULL,
+                        updated_at = ?
+                    WHERE project_id = ?
+                      AND status != 'DELETED'
+                `, [timestamp, project.id]);
+            }
+
+            this.markActiveRunStale(project, timestamp);
+        });
+
+        if (needsReprepare) {
+            for (const source of sources) {
+                if (source.original_external_path) {
+                    queueEngine.enqueue({
+                        projectId: project.id,
+                        sourceId: source.id,
+                        type: 'PREPARE_SOURCE',
+                        priority: 10,
+                        maxAttempts: 1
+                    });
+                }
+            }
+            queueEngine.schedule(0);
+        }
+
+        return this.db.getSnapshot(project.batch_id);
+    }
+
+    async deleteSource(batchId, sourceId) {
+        const { project, source } = this.getProjectSource(batchId, sourceId);
+        const queueEngine = this.getQueueEngine?.();
+        const jobs = this.db.all(`
+            SELECT id
+            FROM jobs
+            WHERE source_id = ?
+              AND type = 'PREPARE_SOURCE'
+              AND status IN ('QUEUED', 'RUNNING')
+        `, [source.id]);
+        for (const job of jobs) {
+            queueEngine?.cancelJob?.(job.id);
+        }
+
+        const timestamp = nowIso();
+        this.db.transaction(() => {
+            this.db.run(`
+                UPDATE jobs
+                SET status = 'CANCELLED',
+                    locked_at = NULL,
+                    locked_by = NULL,
+                    updated_at = ?
+                WHERE source_id = ?
+                  AND type = 'PREPARE_SOURCE'
+                  AND status IN ('QUEUED', 'RUNNING', 'FAILED')
+            `, [timestamp, source.id]);
+            this.db.run(`
+                UPDATE timeline_segments
+                SET deleted = 1,
+                    updated_at = ?
+                WHERE source_id = ?
+            `, [timestamp, source.id]);
+            this.db.run(`
+                UPDATE source_assets
+                SET status = 'DELETED',
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+            `, [timestamp, source.id]);
+            this.markActiveRunStale(project, timestamp);
+            this.db.run('UPDATE projects SET updated_at = ? WHERE id = ?', [timestamp, project.id]);
+        });
+
+        return this.db.getSnapshot(project.batch_id);
+    }
+
+    async replaceSource(batchId, sourceId, filePath) {
+        const { project, source } = this.getProjectSource(batchId, sourceId);
+        const entry = await this.inspectSourceFile(filePath, source.position);
+        const queueEngine = this.getQueueEngine?.();
+        if (entry.shouldEnqueue && !queueEngine) {
+            throw new Error('Очередь подготовки не запущена.');
+        }
+
+        const jobs = this.db.all(`
+            SELECT id
+            FROM jobs
+            WHERE source_id = ?
+              AND type = 'PREPARE_SOURCE'
+              AND status IN ('QUEUED', 'RUNNING')
+        `, [source.id]);
+        for (const job of jobs) {
+            queueEngine?.cancelJob?.(job.id);
+        }
+
+        const timestamp = nowIso();
+        this.db.transaction(() => {
+            this.db.run(`
+                UPDATE jobs
+                SET status = 'CANCELLED',
+                    locked_at = NULL,
+                    locked_by = NULL,
+                    updated_at = ?
+                WHERE source_id = ?
+                  AND type = 'PREPARE_SOURCE'
+                  AND status IN ('QUEUED', 'RUNNING', 'FAILED', 'CANCELLED')
+            `, [timestamp, source.id]);
+            this.db.run(`
+                UPDATE source_assets
+                SET original_name = ?,
+                    original_external_path = ?,
+                    original_size_bytes = ?,
+                    original_last_modified = ?,
+                    prepared_path = NULL,
+                    prepared_checksum_sha256 = NULL,
+                    duration_ms = 0,
+                    status = ?,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE id = ?
+            `, [
+                entry.originalName,
+                entry.originalExternalPath,
+                entry.originalSizeBytes,
+                entry.originalLastModified,
+                entry.status,
+                entry.errorMessage,
+                timestamp,
+                source.id
+            ]);
+            this.markActiveRunStale(project, timestamp);
+            this.db.run('UPDATE projects SET updated_at = ? WHERE id = ?', [timestamp, project.id]);
+        });
+
+        if (entry.shouldEnqueue) {
+            queueEngine.enqueue({
+                projectId: project.id,
+                sourceId: source.id,
+                type: 'PREPARE_SOURCE',
+                priority: 10,
+                maxAttempts: 1
+            });
+            queueEngine.schedule(0);
+        }
+
+        return this.db.getSnapshot(project.batch_id);
+    }
+
     async retryPrepareSource(batchId, sourceId) {
         const safeBatchId = typeof batchId === 'string' ? batchId.trim() : '';
         const safeSourceId = typeof sourceId === 'string' ? sourceId.trim() : '';
@@ -284,6 +495,88 @@ class ProjectService {
         queueEngine.schedule(0);
 
         return this.db.getSnapshot(safeBatchId);
+    }
+
+    getProjectSource(batchId, sourceId) {
+        const safeBatchId = typeof batchId === 'string' ? batchId.trim() : '';
+        const safeSourceId = typeof sourceId === 'string' ? sourceId.trim() : '';
+        if (!safeBatchId || !safeSourceId) {
+            const error = new Error('batchId и sourceId обязательны.');
+            error.code = 'VALIDATION_FAILED';
+            throw error;
+        }
+
+        const project = this.db.get('SELECT * FROM projects WHERE batch_id = ? ORDER BY created_at DESC LIMIT 1', [safeBatchId]);
+        if (!project) {
+            throw new Error('Проект не найден.');
+        }
+        const source = this.db.get('SELECT * FROM source_assets WHERE id = ? AND project_id = ?', [safeSourceId, project.id]);
+        if (!source) {
+            throw new Error('Source не найден.');
+        }
+        return { project, source };
+    }
+
+    async inspectSourceFile(filePath, position = 0) {
+        const rawPath = typeof filePath === 'string' ? filePath.trim() : '';
+        if (!rawPath) {
+            const error = new Error('filePath is required.');
+            error.code = 'VALIDATION_FAILED';
+            throw error;
+        }
+        const absolutePath = path.resolve(rawPath);
+        const extension = path.extname(absolutePath).toLowerCase();
+        const base = {
+            position,
+            originalName: path.basename(absolutePath),
+            originalExternalPath: absolutePath,
+            originalSizeBytes: 0,
+            originalLastModified: 0,
+            status: 'NEW',
+            errorMessage: null,
+            shouldEnqueue: true
+        };
+
+        if (!absolutePath || !SUPPORTED_SOURCE_EXTENSIONS.has(extension)) {
+            return {
+                ...base,
+                status: 'PREPARE_FAILED',
+                errorMessage: 'Неподдерживаемый формат. Выберите mp4, mov, m4v или webm.',
+                shouldEnqueue: false
+            };
+        }
+
+        try {
+            const stat = await fsp.stat(absolutePath);
+            return {
+                ...base,
+                originalSizeBytes: stat.size,
+                originalLastModified: Math.round(stat.mtimeMs),
+                status: stat.isFile() && stat.size > 0 ? 'NEW' : 'MISSING',
+                errorMessage: stat.isFile() && stat.size > 0 ? null : 'Исходный файл не найден.',
+                shouldEnqueue: stat.isFile() && stat.size > 0
+            };
+        } catch {
+            return {
+                ...base,
+                status: 'MISSING',
+                errorMessage: 'Исходный файл не найден.',
+                shouldEnqueue: false
+            };
+        }
+    }
+
+    markActiveRunStale(project, timestamp = nowIso()) {
+        if (!project?.active_run_id) {
+            return;
+        }
+        this.db.run(`
+            UPDATE export_runs
+            SET status = 'STALE',
+                updated_at = ?
+            WHERE id = ?
+              AND status NOT IN ('COMPLETED', 'CANCELLED', 'STALE')
+        `, [timestamp, project.active_run_id]);
     }
 
     async saveSegments(batchId, segments) {

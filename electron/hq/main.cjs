@@ -201,6 +201,7 @@ registerIpcHandlers({
 registerVideoToolV3Ipc({
     ipcMain,
     dialog,
+    shell,
     getMainWindow: () => windowsRuntime.getMainWindow(),
     getVideoToolV3App: () => videoToolV3App
 });

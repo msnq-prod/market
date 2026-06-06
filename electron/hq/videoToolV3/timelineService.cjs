@@ -276,7 +276,7 @@ class TimelineService {
         } else if (project.batch_status !== 'RECEIVED') {
             blockers.push({ code: 'BATCH_NOT_RECEIVED', message: 'Партия должна быть в статусе RECEIVED.' });
         }
-        if (sources.some((source) => source.status !== 'READY')) {
+        if (sources.some((source) => source.status !== 'DELETED' && source.status !== 'READY')) {
             blockers.push({ code: 'SOURCE_NOT_READY', message: 'Все sources должны быть READY.' });
         }
         if (!intro) {

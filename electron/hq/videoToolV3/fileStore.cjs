@@ -166,6 +166,30 @@ class VideoToolV3FileStore {
         return stat.size;
     }
 
+    async getDiskSnapshot() {
+        try {
+            await fsp.mkdir(this.rootDir, { recursive: true });
+            if (typeof fsp.statfs !== 'function') {
+                return { freeBytes: null, totalBytes: null, checkedAt: new Date().toISOString(), error: null };
+            }
+            const stat = await fsp.statfs(this.rootDir);
+            const blockSize = Number(stat.bsize || 0);
+            return {
+                freeBytes: Number(stat.bavail || 0) * blockSize,
+                totalBytes: Number(stat.blocks || 0) * blockSize,
+                checkedAt: new Date().toISOString(),
+                error: null
+            };
+        } catch (error) {
+            return {
+                freeBytes: null,
+                totalBytes: null,
+                checkedAt: new Date().toISOString(),
+                error: error instanceof Error ? error.message : 'Disk status unavailable.'
+            };
+        }
+    }
+
     async sha256(filePath) {
         return new Promise((resolve, reject) => {
             const hash = crypto.createHash('sha256');

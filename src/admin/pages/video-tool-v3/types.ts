@@ -117,6 +117,12 @@ export type VideoToolV3Snapshot = {
         checkedAt?: string | null;
         error?: string | null;
     };
+    disk?: {
+        freeBytes: number | null;
+        totalBytes: number | null;
+        checkedAt?: string | null;
+        error?: string | null;
+    };
 };
 
 export type VideoToolV3IpcError = {
@@ -126,6 +132,10 @@ export type VideoToolV3IpcError = {
 
 export type SourcePreviewUrlResponse = {
     previewUrl: string;
+};
+
+export type VideoToolV3ActionResponse = {
+    ok: true;
 };
 
 export type VideoToolV3Event =
@@ -140,6 +150,9 @@ export type VideoToolV3Api = {
     getSnapshot(batchId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     selectSources(batchId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     retryPrepareSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+    replaceSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+    deleteSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+    updateQuality(projectId: string, preset: VideoQualityPreset): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     saveSegments(batchId: string, segments: VideoToolV3Segment[]): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     getSourcePreviewUrl(sourceId: string): Promise<SourcePreviewUrlResponse | VideoToolV3IpcError>;
     startExport(projectId: string, replaceExisting?: boolean): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
@@ -147,5 +160,7 @@ export type VideoToolV3Api = {
     retryItemUpload(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     cancelItem(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
     cancelRun(runId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+    openClone(cloneUrl: string): Promise<VideoToolV3ActionResponse | VideoToolV3IpcError>;
+    showProjectFolder(projectId: string): Promise<VideoToolV3ActionResponse | VideoToolV3IpcError>;
     onEvent(callback: (event: VideoToolV3Event) => void): () => void;
 };

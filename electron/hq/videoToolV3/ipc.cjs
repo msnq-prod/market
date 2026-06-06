@@ -35,6 +35,21 @@ const normalizeSourceRetryInput = (payload) => {
     };
 };
 
+const normalizeSourceActionInput = normalizeSourceRetryInput;
+
+const normalizeQualityInput = (payload) => {
+    if (!isRecord(payload)) {
+        return {
+            projectId: normalizeString('', 'projectId'),
+            preset: normalizeString('', 'preset')
+        };
+    }
+    return {
+        projectId: normalizeString(payload.projectId, 'projectId'),
+        preset: normalizeString(payload.preset, 'preset')
+    };
+};
+
 const normalizeSaveSegmentsInput = (payload) => {
     if (!isRecord(payload)) {
         return {
@@ -73,6 +88,16 @@ const normalizeSourcePreviewInput = (payload) => {
     return normalizeString('', 'sourceId');
 };
 
+const normalizeOpenCloneInput = (payload) => {
+    if (typeof payload === 'string') {
+        return normalizeString(payload, 'cloneUrl');
+    }
+    if (isRecord(payload)) {
+        return normalizeString(payload.cloneUrl, 'cloneUrl');
+    }
+    return normalizeString('', 'cloneUrl');
+};
+
 const normalizeStartExportInput = (payload) => ({
     projectId: normalizeProjectIdInput(payload),
     replaceExisting: isRecord(payload) && payload.replaceExisting === true
@@ -103,7 +128,31 @@ const requireApp = (getVideoToolV3App) => {
     return app;
 };
 
-const registerVideoToolV3Ipc = ({ ipcMain, dialog = null, getMainWindow = null, getVideoToolV3App }) => {
+const getSingleVideoFilePath = async ({ dialog, getMainWindow, title }) => {
+    if (!dialog?.showOpenDialog) {
+        throw new Error('Electron dialog недоступен.');
+    }
+    const result = await dialog.showOpenDialog(getMainWindow?.() || undefined, {
+        title,
+        properties: ['openFile'],
+        filters: [
+            { name: 'Видео', extensions: ['mp4', 'mov', 'm4v', 'webm'] }
+        ]
+    });
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+};
+
+const resolveCloneUrl = async (app, rawUrl) => {
+    const value = normalizeString(rawUrl, 'cloneUrl');
+    const baseOrigin = await app.getApiOrigin();
+    const url = value.startsWith('/') ? new URL(value, baseOrigin) : new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+        throw new Error('Clone URL должен быть http/https.');
+    }
+    return url.toString();
+};
+
+const registerVideoToolV3Ipc = ({ ipcMain, dialog = null, shell = null, getMainWindow = null, getVideoToolV3App }) => {
     if (!ipcMain || typeof ipcMain.handle !== 'function') {
         throw new Error('registerVideoToolV3Ipc requires ipcMain.');
     }
@@ -145,6 +194,41 @@ const registerVideoToolV3Ipc = ({ ipcMain, dialog = null, getMainWindow = null, 
         try {
             const { batchId, sourceId } = normalizeSourceRetryInput(payload);
             return await requireApp(getVideoToolV3App).retryPrepareSource(batchId, sourceId);
+        } catch (error) {
+            return toIpcError(error);
+        }
+    });
+
+    ipcMain.handle('videoV3:replaceSource', async (_event, payload) => {
+        try {
+            const { batchId, sourceId } = normalizeSourceActionInput(payload);
+            const filePath = await getSingleVideoFilePath({
+                dialog,
+                getMainWindow,
+                title: 'Заменить исходное видео'
+            });
+            if (!filePath) {
+                return await requireApp(getVideoToolV3App).getSnapshot(batchId);
+            }
+            return await requireApp(getVideoToolV3App).replaceSource(batchId, sourceId, filePath);
+        } catch (error) {
+            return toIpcError(error);
+        }
+    });
+
+    ipcMain.handle('videoV3:deleteSource', async (_event, payload) => {
+        try {
+            const { batchId, sourceId } = normalizeSourceActionInput(payload);
+            return await requireApp(getVideoToolV3App).deleteSource(batchId, sourceId);
+        } catch (error) {
+            return toIpcError(error);
+        }
+    });
+
+    ipcMain.handle('videoV3:updateQuality', async (_event, payload) => {
+        try {
+            const { projectId, preset } = normalizeQualityInput(payload);
+            return await requireApp(getVideoToolV3App).updateQuality(projectId, preset);
         } catch (error) {
             return toIpcError(error);
         }
@@ -204,6 +288,37 @@ const registerVideoToolV3Ipc = ({ ipcMain, dialog = null, getMainWindow = null, 
         try {
             const runId = isRecord(payload) ? normalizeString(payload.runId, 'runId') : normalizeString(payload, 'runId');
             return await requireApp(getVideoToolV3App).cancelRun(runId);
+        } catch (error) {
+            return toIpcError(error);
+        }
+    });
+
+    ipcMain.handle('videoV3:openClone', async (_event, payload) => {
+        try {
+            if (!shell?.openExternal) {
+                throw new Error('Electron shell недоступен.');
+            }
+            const app = requireApp(getVideoToolV3App);
+            const cloneUrl = await resolveCloneUrl(app, normalizeOpenCloneInput(payload));
+            await shell.openExternal(cloneUrl);
+            return { ok: true };
+        } catch (error) {
+            return toIpcError(error);
+        }
+    });
+
+    ipcMain.handle('videoV3:showProjectFolder', async (_event, payload) => {
+        try {
+            if (!shell?.openPath) {
+                throw new Error('Electron shell недоступен.');
+            }
+            const projectId = normalizeProjectIdInput(payload);
+            const folderPath = await requireApp(getVideoToolV3App).getProjectFolder(projectId);
+            const errorMessage = await shell.openPath(folderPath);
+            if (errorMessage) {
+                throw new Error(errorMessage);
+            }
+            return { ok: true };
         } catch (error) {
             return toIpcError(error);
         }

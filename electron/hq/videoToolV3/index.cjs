@@ -185,41 +185,57 @@ class VideoToolV3App extends EventEmitter {
         }
     }
 
+    async withRuntimeState(snapshot) {
+        return {
+            ...snapshot,
+            network: this.networkService.getState(),
+            disk: await this.fileStore.getDiskSnapshot()
+        };
+    }
+
     async getSnapshot(batchId) {
         this.ensureInitialized();
         const snapshot = await this.projectService.loadOrCreateProject(batchId);
-        return {
-            ...snapshot,
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(snapshot);
     }
 
     async selectSources(batchId, filePaths) {
         this.ensureInitialized();
         const snapshot = await this.projectService.importSources(batchId, filePaths);
         this.queueEngine.schedule(0);
-        return {
-            ...snapshot,
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(snapshot);
     }
 
     async retryPrepareSource(batchId, sourceId) {
         this.ensureInitialized();
         const snapshot = await this.projectService.retryPrepareSource(batchId, sourceId);
-        return {
-            ...snapshot,
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(snapshot);
+    }
+
+    async replaceSource(batchId, sourceId, filePath) {
+        this.ensureInitialized();
+        const snapshot = await this.projectService.replaceSource(batchId, sourceId, filePath);
+        this.queueEngine.schedule(0);
+        return this.withRuntimeState(snapshot);
+    }
+
+    async deleteSource(batchId, sourceId) {
+        this.ensureInitialized();
+        const snapshot = await this.projectService.deleteSource(batchId, sourceId);
+        return this.withRuntimeState(snapshot);
+    }
+
+    async updateQuality(projectId, preset) {
+        this.ensureInitialized();
+        const snapshot = await this.projectService.updateQuality(projectId, preset);
+        this.queueEngine.schedule(0);
+        return this.withRuntimeState(snapshot);
     }
 
     async saveSegments(batchId, segments) {
         this.ensureInitialized();
         const snapshot = await this.projectService.saveSegments(batchId, segments);
-        return {
-            ...snapshot,
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(snapshot);
     }
 
     async getSourcePreviewUrl(sourceId) {
@@ -243,10 +259,7 @@ class VideoToolV3App extends EventEmitter {
             throw new Error('Проект не найден.');
         }
         this.queueEngine.schedule(0);
-        return {
-            ...this.db.getSnapshot(project.batch_id),
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(this.db.getSnapshot(project.batch_id));
     }
 
     async retryItemRender(exportItemId) {
@@ -263,10 +276,7 @@ class VideoToolV3App extends EventEmitter {
             throw new Error('Export item не найден.');
         }
         this.queueEngine.schedule(0);
-        return {
-            ...this.db.getSnapshot(row.batch_id),
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(this.db.getSnapshot(row.batch_id));
     }
 
     async retryItemUpload(exportItemId) {
@@ -283,10 +293,7 @@ class VideoToolV3App extends EventEmitter {
             throw new Error('Export item не найден.');
         }
         this.queueEngine.schedule(0);
-        return {
-            ...this.db.getSnapshot(row.batch_id),
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(this.db.getSnapshot(row.batch_id));
     }
 
     async cancelItem(exportItemId) {
@@ -311,13 +318,10 @@ class VideoToolV3App extends EventEmitter {
         if (!project?.batch_id) {
             throw new Error('Export run не найден.');
         }
-        return {
-            ...this.db.getSnapshot(project.batch_id),
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(this.db.getSnapshot(project.batch_id));
     }
 
-    getSnapshotForExportItem(exportItemId) {
+    async getSnapshotForExportItem(exportItemId) {
         const row = this.db.get(`
             SELECT projects.batch_id
             FROM export_items
@@ -328,10 +332,18 @@ class VideoToolV3App extends EventEmitter {
         if (!row?.batch_id) {
             throw new Error('Export item не найден.');
         }
-        return {
-            ...this.db.getSnapshot(row.batch_id),
-            network: this.networkService.getState()
-        };
+        return this.withRuntimeState(this.db.getSnapshot(row.batch_id));
+    }
+
+    async getProjectFolder(projectId) {
+        this.ensureInitialized();
+        const safeProjectId = typeof projectId === 'string' ? projectId.trim() : '';
+        const project = safeProjectId ? this.db.get('SELECT id, batch_id FROM projects WHERE id = ?', [safeProjectId]) : null;
+        if (!project) {
+            throw new Error('Проект не найден.');
+        }
+        await this.fileStore.ensureProjectDirs({ batchId: project.batch_id, projectId: project.id });
+        return this.fileStore.assertInsideRoot(this.fileStore.getProjectRoot(project.id, project.batch_id));
     }
 
     setAccessToken(accessToken) {
@@ -345,7 +357,7 @@ class VideoToolV3App extends EventEmitter {
         }
     }
 
-    emitSnapshotForProjectId(projectId) {
+    async emitSnapshotForProjectId(projectId) {
         if (!this.db || !projectId) {
             return;
         }
@@ -357,10 +369,7 @@ class VideoToolV3App extends EventEmitter {
         this.emit('event', {
             type: 'snapshot',
             batchId: project.batch_id,
-            snapshot: {
-                ...snapshot,
-                network: this.networkService?.getState?.()
-            }
+            snapshot: await this.withRuntimeState(snapshot)
         });
     }
 

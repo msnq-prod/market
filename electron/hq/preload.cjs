@@ -4,6 +4,9 @@ const videoToolV3Api = {
     getSnapshot: (batchId) => ipcRenderer.invoke('videoV3:getSnapshot', { batchId }),
     selectSources: (batchId) => ipcRenderer.invoke('videoV3:selectSources', { batchId }),
     retryPrepareSource: (batchId, sourceId) => ipcRenderer.invoke('videoV3:retryPrepareSource', { batchId, sourceId }),
+    replaceSource: (batchId, sourceId) => ipcRenderer.invoke('videoV3:replaceSource', { batchId, sourceId }),
+    deleteSource: (batchId, sourceId) => ipcRenderer.invoke('videoV3:deleteSource', { batchId, sourceId }),
+    updateQuality: (projectId, preset) => ipcRenderer.invoke('videoV3:updateQuality', { projectId, preset }),
     saveSegments: (batchId, segments) => ipcRenderer.invoke('videoV3:saveSegments', { batchId, segments }),
     getSourcePreviewUrl: (sourceId) => ipcRenderer.invoke('videoV3:getSourcePreviewUrl', { sourceId }),
     startExport: (projectId, replaceExisting = false) => ipcRenderer.invoke('videoV3:startExport', { projectId, replaceExisting }),
@@ -11,6 +14,8 @@ const videoToolV3Api = {
     retryItemUpload: (exportItemId) => ipcRenderer.invoke('videoV3:retryItemUpload', { exportItemId }),
     cancelItem: (exportItemId) => ipcRenderer.invoke('videoV3:cancelItem', { exportItemId }),
     cancelRun: (runId) => ipcRenderer.invoke('videoV3:cancelRun', { runId }),
+    openClone: (cloneUrl) => ipcRenderer.invoke('videoV3:openClone', { cloneUrl }),
+    showProjectFolder: (projectId) => ipcRenderer.invoke('videoV3:showProjectFolder', { projectId }),
     onEvent: (callback) => {
         const listener = (_event, payload) => callback(payload);
         ipcRenderer.on('videoV3:event', listener);
