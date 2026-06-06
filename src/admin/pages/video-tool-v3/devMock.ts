@@ -54,6 +54,12 @@ let snapshot: VideoToolV3Snapshot = {
         online: true,
         apiReachable: true,
         authenticated: true
+    },
+    disk: {
+        freeBytes: 128 * 1024 * 1024 * 1024,
+        totalBytes: 512 * 1024 * 1024 * 1024,
+        checkedAt: '2026-01-01',
+        error: null
     }
 };
 
@@ -61,6 +67,26 @@ export const createVideoToolV3DevMock = (): VideoToolV3Api => ({
     getSnapshot: async () => snapshot,
     selectSources: async () => snapshot,
     retryPrepareSource: async () => snapshot,
+    replaceSource: async () => snapshot,
+    deleteSource: async (_batchId, sourceId) => {
+        snapshot = {
+            ...snapshot,
+            sources: snapshot.sources.map((source) => source.id === sourceId ? { ...source, status: 'DELETED', error_message: null } : source),
+            segments: snapshot.segments.map((segment) => segment.source_id === sourceId ? { ...segment, deleted: true } : segment),
+            counts: {
+                ...snapshot.counts,
+                activeSegments: snapshot.segments.filter((segment) => segment.source_id !== sourceId && !segment.deleted).length
+            }
+        };
+        return snapshot;
+    },
+    updateQuality: async (_projectId, preset) => {
+        snapshot = {
+            ...snapshot,
+            project: snapshot.project ? { ...snapshot.project, quality_preset: preset } : snapshot.project
+        };
+        return snapshot;
+    },
     saveSegments: async (_batchId, segments) => {
         snapshot = {
             ...snapshot,
@@ -81,5 +107,7 @@ export const createVideoToolV3DevMock = (): VideoToolV3Api => ({
     retryItemUpload: async () => snapshot,
     cancelItem: async () => snapshot,
     cancelRun: async () => snapshot,
+    openClone: async () => ({ ok: true }),
+    showProjectFolder: async () => ({ ok: true }),
     onEvent: () => () => undefined
 });

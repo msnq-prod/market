@@ -139,7 +139,13 @@ class VideoToolV3Database {
             ? normalizeRow(this.get('SELECT * FROM export_runs WHERE id = ?', [project.active_run_id]))
             : null;
         const exportItems = activeRun
-            ? this.all('SELECT * FROM export_items WHERE run_id = ? ORDER BY serial_number ASC', [activeRun.id]).map(normalizeRow)
+            ? this.all(`
+                SELECT export_items.*
+                FROM export_items
+                JOIN project_items ON project_items.id = export_items.project_item_id
+                WHERE export_items.run_id = ?
+                ORDER BY project_items.position ASC, export_items.serial_number ASC
+            `, [activeRun.id]).map(normalizeRow)
             : [];
         const jobs = this.all(`
             SELECT *

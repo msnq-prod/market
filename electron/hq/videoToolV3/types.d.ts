@@ -71,6 +71,12 @@ export type VideoToolV3Snapshot = {
     checkedAt: string | null;
     error: string | null;
   };
+  disk?: {
+    freeBytes: number | null;
+    totalBytes: number | null;
+    checkedAt: string | null;
+    error: string | null;
+  };
 };
 
 export type VideoToolV3Event =
@@ -85,11 +91,17 @@ export type VideoToolV3Api = {
   getSnapshot(batchId: string): Promise<VideoToolV3Snapshot>;
   selectSources(batchId: string): Promise<VideoToolV3Snapshot>;
   retryPrepareSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
+  replaceSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
+  deleteSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
+  updateQuality(projectId: string, preset: VideoQualityPreset): Promise<VideoToolV3Snapshot>;
   saveSegments(batchId: string, segments: Array<Record<string, unknown>>): Promise<VideoToolV3Snapshot>;
+  getSourcePreviewUrl(sourceId: string): Promise<{ previewUrl: string }>;
   startExport(projectId: string, replaceExisting?: boolean): Promise<VideoToolV3Snapshot>;
   retryItemRender(exportItemId: string): Promise<VideoToolV3Snapshot>;
   retryItemUpload(exportItemId: string): Promise<VideoToolV3Snapshot>;
   cancelItem(exportItemId: string): Promise<VideoToolV3Snapshot>;
   cancelRun(runId: string): Promise<VideoToolV3Snapshot>;
+  openClone(cloneUrl: string): Promise<{ ok: true }>;
+  showProjectFolder(projectId: string): Promise<{ ok: true }>;
   onEvent(handler: (event: VideoToolV3Event) => void): () => void;
 };

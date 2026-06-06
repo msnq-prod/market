@@ -11,6 +11,8 @@ export type VideoToolV3Api = {
   getSnapshot(batchId: string): Promise<VideoToolV3Snapshot>;
   selectSources(batchId: string): Promise<VideoToolV3Snapshot>;
   retryPrepareSource(sourceId: string): Promise<void>;
+  replaceSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
+  deleteSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
   updateQuality(projectId: string, preset: VideoQualityPreset): Promise<void>;
   saveSegments(projectId: string, segments: TimelineSegmentPatch[]): Promise<VideoToolV3Snapshot>;
   startExport(projectId: string, options?: StartExportOptions): Promise<ExportRunSnapshot>;
@@ -30,6 +32,8 @@ export type VideoToolV3Api = {
 videoV3:getSnapshot
 videoV3:selectSources
 videoV3:retryPrepareSource
+videoV3:replaceSource
+videoV3:deleteSource
 videoV3:updateQuality
 videoV3:saveSegments
 videoV3:startExport
@@ -76,6 +80,46 @@ Behavior:
 - accepts `.mp4`, `.mov`, `.m4v`, `.webm`;
 - creates `source_assets`;
 - creates `PREPARE_SOURCE` jobs.
+
+Output: `VideoToolV3Snapshot`.
+
+### `replaceSource`
+
+Input:
+
+```ts
+type ReplaceSourceInput = {
+  batchId: string;
+  sourceId: string;
+};
+```
+
+Behavior:
+
+- opens native file dialog for one video;
+- replaces original file metadata for selected source;
+- resets prepared artifact and queues `PREPARE_SOURCE`;
+- marks active non-completed run as `STALE`.
+
+Output: `VideoToolV3Snapshot`.
+
+### `deleteSource`
+
+Input:
+
+```ts
+type DeleteSourceInput = {
+  batchId: string;
+  sourceId: string;
+};
+```
+
+Behavior:
+
+- marks source as `DELETED`;
+- soft-deletes its timeline segments;
+- cancels pending/running prepare jobs for that source;
+- marks active non-completed run as `STALE`.
 
 Output: `VideoToolV3Snapshot`.
 
@@ -180,4 +224,3 @@ UI must show `error` and may branch on `code`.
 - Renderer never receives access token.
 - Renderer never sends arbitrary filesystem paths.
 - Main validates all IDs and payloads.
-

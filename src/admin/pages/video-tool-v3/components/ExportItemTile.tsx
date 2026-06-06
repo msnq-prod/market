@@ -1,21 +1,21 @@
-import { ExternalLink, RotateCcw, Square } from 'lucide-react';
+import { ExternalLink, FolderOpen, RotateCcw, Square } from 'lucide-react';
 import type { VideoToolV3ExportItem, VideoToolV3Item } from '../types';
 
 const renderLabels: Record<string, string> = {
     PENDING: 'Ожидает',
     QUEUED: 'В очереди',
-    RENDERING: 'Render',
+    RENDERING: 'Рендер',
     RENDERED: 'Готово',
-    RENDER_FAILED: 'Ошибка render',
+    RENDER_FAILED: 'Ошибка рендера',
     CANCELLED: 'Отменено'
 };
 
 const uploadLabels: Record<string, string> = {
-    PENDING: 'Ожидает render',
+    PENDING: 'Ждет рендер',
     QUEUED: 'В очереди',
-    UPLOADING: 'Upload',
+    UPLOADING: 'Загрузка',
     UPLOADED: 'Загружено',
-    UPLOAD_FAILED: 'Ошибка upload',
+    UPLOAD_FAILED: 'Ошибка загрузки',
     PAUSED_OFFLINE: 'Нет сети',
     AUTH_REQUIRED: 'Нужен вход',
     CANCELLED: 'Отменено'
@@ -36,6 +36,12 @@ const statusClassNames: Record<string, string> = {
 };
 
 const clampProgress = (value: number) => Math.max(0, Math.min(100, Number(value) || 0));
+
+const formatSize = (value: number | null | undefined) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    if (value >= 1024 ** 2) return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+    return `${Math.max(0, value / 1024).toFixed(0)} КБ`;
+};
 
 function StatusBadge({ status, labels }: { status: string; labels: Record<string, string> }) {
     return (
@@ -89,6 +95,8 @@ type ExportItemTileProps = {
     onRetryRender(exportItemId: string): void;
     onRetryUpload(exportItemId: string): void;
     onCancel(exportItemId: string): void;
+    onOpenClone(cloneUrl: string): void;
+    onShowProjectFolder(): void;
 };
 
 export function ExportItemTile({
@@ -98,7 +106,9 @@ export function ExportItemTile({
     uploadRetryDisabled,
     onRetryRender,
     onRetryUpload,
-    onCancel
+    onCancel,
+    onOpenClone,
+    onShowProjectFolder
 }: ExportItemTileProps) {
     const canRetryRender = item.render_status === 'RENDER_FAILED' && item.upload_status !== 'UPLOADED';
     const canRetryUpload = ['UPLOAD_FAILED', 'PAUSED_OFFLINE', 'AUTH_REQUIRED'].includes(item.upload_status)
@@ -107,6 +117,8 @@ export function ExportItemTile({
     const canCancel = ['PENDING', 'QUEUED', 'RENDERING'].includes(item.render_status)
         || ['QUEUED', 'UPLOADING', 'PAUSED_OFFLINE', 'AUTH_REQUIRED'].includes(item.upload_status);
     const cloneUrl = item.clone_url || projectItem?.clone_url || `/clone/${encodeURIComponent(item.serial_number)}`;
+    const renderRetryCount = Number(item.retry_count_render || 0);
+    const uploadRetryCount = Number(item.retry_count_upload || 0);
 
     return (
         <article className="rounded-lg border border-white/10 bg-[#15171b] p-4">
@@ -117,7 +129,7 @@ export function ExportItemTile({
                 </div>
                 <button
                     type="button"
-                    onClick={() => window.open(cloneUrl, '_blank', 'noopener,noreferrer')}
+                    onClick={() => onOpenClone(cloneUrl)}
                     className="inline-flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm text-gray-100 hover:bg-white/10"
                 >
                     <ExternalLink size={16} />
@@ -127,18 +139,24 @@ export function ExportItemTile({
 
             <div className="mt-4 space-y-4">
                 <ProgressRow
-                    label="Render"
+                    label="Рендер"
                     status={item.render_status}
                     progress={item.render_progress}
                     labels={renderLabels}
                 />
                 <ProgressRow
-                    label="Upload"
+                    label="Загрузка"
                     status={item.upload_status}
                     progress={item.upload_progress}
                     labels={uploadLabels}
                 />
             </div>
+
+            {(renderRetryCount > 0 || uploadRetryCount > 0) ? (
+                <p className="mt-3 text-xs text-gray-500">
+                    Попытки: рендер {renderRetryCount}, загрузка {uploadRetryCount}
+                </p>
+            ) : null}
 
             {item.error_message ? (
                 <p className="mt-4 rounded-md border border-red-500/30 bg-red-950/30 px-3 py-2 text-sm text-red-100">
@@ -147,7 +165,17 @@ export function ExportItemTile({
             ) : null}
 
             {item.output_path ? (
-                <p className="mt-4 break-all text-xs text-gray-500">{item.output_path}</p>
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                    <span>Локальный файл готов{formatSize(item.output_size_bytes) ? `: ${formatSize(item.output_size_bytes)}` : ''}</span>
+                    <button
+                        type="button"
+                        onClick={onShowProjectFolder}
+                        className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-xs text-gray-200 hover:bg-white/10"
+                    >
+                        <FolderOpen size={13} />
+                        Папка
+                    </button>
+                </div>
             ) : null}
             {item.server_file_url ? (
                 <a
@@ -156,7 +184,7 @@ export function ExportItemTile({
                     rel="noreferrer"
                     className="mt-3 block break-all text-sm text-emerald-300 hover:text-emerald-200"
                 >
-                    {item.server_file_url}
+                    Серверный файл
                 </a>
             ) : null}
 
@@ -170,7 +198,7 @@ export function ExportItemTile({
                             className="inline-flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm text-gray-100 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500"
                         >
                             <RotateCcw size={16} />
-                            Retry render
+                            Повторить рендер
                         </button>
                     ) : null}
                     {canRetryUpload ? (
@@ -181,7 +209,7 @@ export function ExportItemTile({
                             className="inline-flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm text-gray-100 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500"
                         >
                             <RotateCcw size={16} />
-                            Retry upload
+                            Повторить загрузку
                         </button>
                     ) : null}
                     {canCancel ? (

@@ -84,6 +84,8 @@ export type VideoToolV3ExportItem = {
     output_size_bytes?: number | null;
     server_file_url: string | null;
     clone_url: string;
+    retry_count_render?: number | null;
+    retry_count_upload?: number | null;
     error_message: string | null;
 };
 

@@ -164,8 +164,8 @@ test('Video Tool v3: offline pause is visible and retry is disabled', async ({ p
     await installVideoToolV3Mock(page);
     await openExportTab(page);
 
-    await expect(page.getByText('Нет сети. Рендер продолжается, загрузка будет возобновлена позже.')).toBeVisible();
-    await expect(page.locator('article').filter({ hasText: 'SERIAL-1' }).getByRole('button', { name: 'Retry upload' })).toBeDisabled();
+    await expect(page.getByText('Нет сети. Рендер продолжается, upload возобновится автоматически.')).toBeVisible();
+    await expect(page.locator('article').filter({ hasText: 'SERIAL-1' }).getByRole('button', { name: 'Повторить загрузку' })).toBeDisabled();
     await expect(page.locator('article').filter({ hasText: 'SERIAL-1' }).getByRole('button', { name: 'Проверить клон' })).toBeVisible();
 });
 
@@ -176,10 +176,10 @@ test('Video Tool v3: auth pause and retry affect only selected item', async ({ p
     await expect(page.getByText('Нужно войти заново. Готовые видео сохранены локально.')).toBeVisible();
     const first = page.locator('article').filter({ hasText: 'SERIAL-1' });
     const second = page.locator('article').filter({ hasText: 'SERIAL-2' });
-    await first.getByRole('button', { name: 'Retry upload' }).click();
+    await first.getByRole('button', { name: 'Повторить загрузку' }).click();
 
     await expect(first.getByText('В очереди')).toBeVisible();
-    await expect(second.getByText('Ошибка upload')).toBeVisible();
+    await expect(second.getByText('Ошибка загрузки')).toBeVisible();
     await expect.poll(() => page.evaluate(() => (window as Window & { __videoV3RetryCalls: string[] }).__videoV3RetryCalls))
         .toEqual(['export-item-1']);
 });
@@ -187,9 +187,10 @@ test('Video Tool v3: auth pause and retry affect only selected item', async ({ p
 test('Video Tool v3: existing video requires replace confirmation', async ({ page }) => {
     await installVideoToolV3Mock(page, { existingVideo: true });
     await openExportTab(page);
-    page.once('dialog', (dialog) => dialog.accept());
 
     await page.getByRole('button', { name: 'Начать экспорт' }).click();
+    await expect(page.getByRole('heading', { name: 'Заменить существующие видео?' })).toBeVisible();
+    await page.getByRole('button', { name: 'Заменить и начать' }).click();
 
     await expect.poll(() => page.evaluate(() => (window as Window & { __videoV3StartCalls: boolean[] }).__videoV3StartCalls))
         .toEqual([true]);
