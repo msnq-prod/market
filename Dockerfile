@@ -72,7 +72,7 @@ COPY public ./public
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/build ./build
 
-RUN mkdir -p /app/public/uploads \
+RUN mkdir -p /app/public/uploads /app/storage \
     && chmod +x /app/docker/entrypoint.sh \
     && chown -R node:node /app/public /app/storage /app/dist /app/build
 
