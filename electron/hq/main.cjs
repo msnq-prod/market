@@ -212,17 +212,18 @@ const ensureMediaRuntimes = async (apiOrigin) => {
 
 const ensureVideoToolV3Runtime = async () => {
     if (!videoToolV3App) {
-        videoToolV3App = createVideoToolV3App({
+        const nextVideoToolV3App = createVideoToolV3App({
             app,
             getApiOrigin: config.resolveApiOrigin,
             getNetworkStatus,
             getAccessToken: () => accessToken,
             refreshAccessToken: async () => (await ensureDesktopAuthSession({ force: true })).accessToken
         });
-        videoToolV3App.on('event', (event) => {
+        nextVideoToolV3App.on('event', (event) => {
             sendVideoToolV3Event(BrowserWindow.getAllWindows(), event);
         });
-        await videoToolV3App.init();
+        await nextVideoToolV3App.init();
+        videoToolV3App = nextVideoToolV3App;
     }
     return videoToolV3App;
 };
