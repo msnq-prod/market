@@ -52,5 +52,16 @@
 
 ## Status
 
-- Fixes 1-4: implemented.
-- Fixes 5-7: deferred as P2+ follow-up scope.
+- Stage 1 hardening: implemented.
+  - Duplicate desktop save guard and duplicate staged-file cleanup.
+  - Strict `photo_pre_normalized` checksum validation.
+  - Phase-based Status Center workflow progress.
+  - Idempotent stale retry success when manifest outcome is already applied.
+  - `queue_job_id` included in apply error logs.
+- Stage 2 Photo Upload Run v2: implemented.
+  - Prisma run/item models and statuses.
+  - `/api/photo-tool-v2` run, upload-intent, chunk, complete, commit, cancel API.
+  - Deterministic upload intents, checksum/chunk validation, all-or-nothing commit stale guard.
+  - SQLite-backed desktop v2 workflow manager with normalization, resume, offline/auth/stale states.
+  - Desktop Photo Tool save path now creates v2 run for upload and existing-only saves.
+  - Legacy `photo-tool/apply` remains available for compatibility/manual rollback.

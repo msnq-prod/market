@@ -273,6 +273,7 @@ type StonesMediaWorkflowPhase =
     | 'paused_offline'
     | 'auth_required'
     | 'failed'
+    | 'stale'
     | 'completed'
     | 'cancelled';
 

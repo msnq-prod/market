@@ -320,10 +320,7 @@ export const applyPhotoTool = async (
         }]));
         if (basePhotoStateToken !== currentPhotoStateToken) {
             const currentPhotoUrlByItemId = new Map(batch.items.map((item) => [item.id, item.item_photo_url || null]));
-            const hasQueuedUpload = manifest.some((entry) =>
-                entry.source === 'upload' && Boolean(entry.queue_job_id) && Boolean(entry.queue_file_id)
-            );
-            const isQueuedDuplicate = hasQueuedUpload && manifest.every((entry) => {
+            const isAlreadyApplied = manifest.every((entry) => {
                 if (entry.source === 'existing') {
                     return currentPhotoUrlByItemId.get(entry.item_id) === entry.existing_url;
                 }
@@ -348,7 +345,7 @@ export const applyPhotoTool = async (
                 return currentPhotoUrlByItemId.get(entry.item_id) === `${PHOTO_TOOL_PUBLIC_URL_ROOT}/${targetFilename}`;
             });
 
-            if (isQueuedDuplicate) {
+            if (isAlreadyApplied) {
                 await removeStagedFiles(uploadedFiles);
                 return serializePhotoToolPayload(batch);
             }

@@ -51,7 +51,7 @@ None found.
 - Evidence: `src/admin/pages/PhotoTool.tsx:1466`, `electron/hq/mediaWorkflowManager.cjs:295`, `electron/hq/mediaQueue.cjs:223`.
 - Effect: wasted disk and staging work after rapid double-click or repeated IPC calls.
 - Fix: add in-handler save guard in UI and/or cleanup staged files when workflow start returns an existing workflow.
-- Status: confirmed, deferred.
+- Status: fixed.
 
 ### PT-006: Workflow row progress stays at zero until completion
 
@@ -60,7 +60,7 @@ None found.
 - Evidence: `electron/hq/mediaWorkflowManager.cjs:148`, `src/admin/components/DesktopStatusCenter.tsx:431`.
 - Effect: long converting/uploading workflow can appear stuck even while phase changes.
 - Fix: expose phase-based or item/file progress in workflow snapshot and use it consistently.
-- Status: confirmed, deferred.
+- Status: fixed.
 
 ### PT-007: `photo_pre_normalized` checksum gate accepts invalid checksum strings
 
@@ -69,7 +69,7 @@ None found.
 - Evidence: `server/routes/batches/photoToolRoutes.ts:95`, `server/routes/batches/photoToolService.ts:281`, `server/routes/batches/photoToolService.ts:377`.
 - Effect: authenticated HQ client can bypass full image re-normalization for JPEG-like uploads without a valid checksum.
 - Fix: require `parseChecksumSha256` to succeed when `photo_pre_normalized` is set.
-- Status: confirmed, deferred.
+- Status: fixed.
 
 ### PT-008: Source-of-truth split between new workflow and legacy media queue
 
@@ -78,7 +78,7 @@ None found.
 - Evidence: `src/admin/pages/PhotoTool.tsx:1490`, `electron/hq/mediaQueue.cjs:315`, `src/admin/components/DesktopStatusCenter.tsx:1071`, `docs/SYSTEM_USAGE_GUIDE_RU.md:295`.
 - Effect: support/debugging can look at the wrong queue surface for current jobs.
 - Fix: docs/status labels should distinguish workflow from legacy upload queue; deprecate or hide legacy enqueue if no longer used.
-- Status: confirmed, deferred.
+- Status: partially fixed. Active desktop save path now uses Photo Upload Run v2; legacy queue/apply path remains for compatibility/manual rollback.
 
 ### PT-009: Important Photo Tool UI regression tests are skipped
 
@@ -87,7 +87,7 @@ None found.
 - Evidence: `tests/e2e/admin-photo-tool.spec.ts:437`, `tests/e2e/admin-photo-tool.spec.ts:634`.
 - Effect: several P1 paths above can regress without CI signal.
 - Fix: unskip or replace with stable focused tests after fixing workflow/draft behavior.
-- Status: confirmed, deferred.
+- Status: partially fixed. Focused API/v2/UI tests were added and pass; two older UI scenarios remain skipped.
 
 ### PT-010: Workflow manifest hash is computed but not used for duplicate policy
 
@@ -96,7 +96,7 @@ None found.
 - Evidence: `electron/hq/mediaWorkflowManager.cjs:289`, `electron/hq/mediaWorkflowManager.cjs:295`.
 - Effect: code suggests a more precise policy than the one implemented; future changes can misread dedupe semantics.
 - Fix: remove unused hash or use `findDuplicate` plus explicit same-batch active lock naming.
-- Status: confirmed, deferred.
+- Status: fixed for active desktop save path. Legacy manager remains only for compatibility.
 
 ## P3
 

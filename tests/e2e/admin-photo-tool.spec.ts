@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { createProductFixture, disconnectTestDb, testDb } from './support/db-fixtures';
 
@@ -41,6 +42,8 @@ const authHeaders = (token: string) => ({
     'Content-Type': 'application/json'
 });
 
+const sha256 = (buffer: Buffer) => createHash('sha256').update(buffer).digest('hex');
+
 async function login(request: APIRequestContext, email: string, password: string): Promise<LoginPayload> {
     const response = await request.post('/auth/login', {
         data: { email, password }
@@ -73,6 +76,18 @@ async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?:
                     helper: { embedded: true, ok: true },
                     queue: { counts: {}, activeJobs: 0, failedJobs: 0 },
                     workflows: { counts: {}, active: 0, failed: 0, offline: 0, authRequired: 0 }
+                }),
+                ensureAdminSession: async () => ({
+                    accessToken: window.localStorage.getItem('accessToken') || '',
+                    role: window.localStorage.getItem('userRole') || 'ADMIN',
+                    name: window.localStorage.getItem('userName') || 'Администратор HQ',
+                    userId: window.localStorage.getItem('userId') || 'usr-admin',
+                    user: {
+                        id: window.localStorage.getItem('userId') || 'usr-admin',
+                        role: window.localStorage.getItem('userRole') || 'ADMIN',
+                        name: window.localStorage.getItem('userName') || 'Администратор HQ',
+                        email: 'admin@stones.com'
+                    }
                 }),
                 syncAuthToken: async () => ({ ok: true }),
                 getMediaQueueSnapshot: async () => ({ jobs: [], counts: {} }),
@@ -403,9 +418,13 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
             ])
         }
     });
-    expect(staleApplyResponse.status()).toBe(409);
+    expect(staleApplyResponse.ok()).toBeTruthy();
     await expect(staleApplyResponse.json()).resolves.toMatchObject({
-        code: 'PHOTO_TOOL_STATE_STALE'
+        batch: { id: toolPayload.batch.id },
+        items: expect.arrayContaining([
+            expect.objectContaining({ item_photo_url: firstUploadPayload.url }),
+            expect.objectContaining({ item_photo_url: secondUploadPayload.url })
+        ])
     });
 
     const replacementResponse = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
@@ -516,6 +535,135 @@ test('API: concurrent photo apply rejects stale writer', async ({ request }) => 
     expect(staleResponse).toBeTruthy();
     await expect(staleResponse!.json()).resolves.toMatchObject({
         code: 'PHOTO_TOOL_STATE_STALE'
+    });
+});
+
+test('API: photo tool v2 uploads items, commits atomically and marks stale commit', async ({ request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const runId = randomUUID();
+    const manifest = {
+        manifestVersion: 2,
+        batchId: toolPayload.batch.id,
+        runId,
+        basePhotoStateToken: toolPayload.batch.photo_state_token,
+        photoExportSettings: {
+            format: 'jpeg',
+            quality: 88,
+            maxWidth: 1600,
+            maxHeight: 1600
+        },
+        items: toolPayload.items.map((item, index) => ({
+            itemId: item.id,
+            itemSeq: item.item_seq,
+            source: 'upload',
+            fileName: `photo-v2-${index + 1}.jpg`
+        }))
+    };
+
+    const createRunResponse = await request.post(`/api/photo-tool-v2/batches/${toolPayload.batch.id}/runs`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            client_run_id: runId,
+            expected_count: toolPayload.items.length,
+            manifest
+        }
+    });
+    expect(createRunResponse.status()).toBe(201);
+    await expect(createRunResponse.json()).resolves.toMatchObject({
+        id: runId,
+        status: 'OPEN',
+        expected_count: 2
+    });
+
+    for (const item of toolPayload.items) {
+        const checksum = sha256(TINY_PNG);
+        const intentResponse = await request.post(`/api/photo-tool-v2/runs/${runId}/items/${item.id}/upload-intent`, {
+            headers: authHeaders(admin.accessToken),
+            data: {
+                file_name: `photo-v2-${item.item_seq}.jpg`,
+                file_size_bytes: TINY_PNG.length,
+                checksum_sha256: checksum,
+                chunk_size_bytes: TINY_PNG.length
+            }
+        });
+        expect(intentResponse.ok()).toBeTruthy();
+        const intent = await intentResponse.json() as { upload_id: string };
+
+        const chunkResponse = await request.put(`/api/photo-tool-v2/runs/${runId}/items/${item.id}/upload-intent/${intent.upload_id}/chunks/0`, {
+            headers: {
+                Authorization: `Bearer ${admin.accessToken}`,
+                'Content-Type': 'application/octet-stream',
+                'X-Chunk-Sha256': checksum
+            },
+            data: TINY_PNG
+        });
+        expect(chunkResponse.ok()).toBeTruthy();
+
+        const completeResponse = await request.post(`/api/photo-tool-v2/runs/${runId}/items/${item.id}/upload-intent/${intent.upload_id}/complete`, {
+            headers: { Authorization: `Bearer ${admin.accessToken}` }
+        });
+        expect(completeResponse.ok()).toBeTruthy();
+    }
+
+    const commitResponse = await request.post(`/api/photo-tool-v2/runs/${runId}/commit`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(commitResponse.ok()).toBeTruthy();
+    await expect(commitResponse.json()).resolves.toMatchObject({
+        id: runId,
+        status: 'COMPLETED',
+        uploaded_count: 2
+    });
+
+    const committedPayloadResponse = await request.get(`/api/batches/${toolPayload.batch.id}/photo-tool`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(committedPayloadResponse.ok()).toBeTruthy();
+    const committedPayload = await committedPayloadResponse.json() as PhotoToolPayload;
+    expect(committedPayload.items.every((item) => item.item_photo_url?.includes(`/uploads/photos/v2-runs/${runId}/`))).toBeTruthy();
+
+    const staleToolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+    const staleRunId = randomUUID();
+    const staleManifest = {
+        manifestVersion: 2,
+        batchId: staleToolPayload.batch.id,
+        runId: staleRunId,
+        basePhotoStateToken: staleToolPayload.batch.photo_state_token,
+        photoExportSettings: {
+            format: 'jpeg',
+            quality: 80,
+            maxWidth: 1200,
+            maxHeight: 1200
+        },
+        items: staleToolPayload.items.map((item) => ({
+            itemId: item.id,
+            itemSeq: item.item_seq,
+            source: 'existing',
+            existingUrl: '/uploads/photos/stale-existing.jpg'
+        }))
+    };
+    const staleCreateResponse = await request.post(`/api/photo-tool-v2/batches/${staleToolPayload.batch.id}/runs`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            client_run_id: staleRunId,
+            expected_count: staleToolPayload.items.length,
+            manifest: staleManifest
+        }
+    });
+    expect(staleCreateResponse.ok()).toBeTruthy();
+    await testDb.item.update({
+        where: { id: staleToolPayload.items[0].id },
+        data: { item_photo_url: '/locations/crystal-caves.jpg' }
+    });
+    const staleCommitResponse = await request.post(`/api/photo-tool-v2/runs/${staleRunId}/commit`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(staleCommitResponse.status()).toBe(409);
+    await expect(staleCommitResponse.json()).resolves.toMatchObject({
+        code: 'PHOTO_TOOL_RUN_STALE'
     });
 });
 

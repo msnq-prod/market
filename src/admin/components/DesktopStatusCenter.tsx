@@ -99,6 +99,7 @@ const workflowPhaseLabel: Record<string, string> = {
     verifying: 'Проверка',
     paused_offline: 'Пауза: нет связи',
     auth_required: 'Нужен вход',
+    stale: 'Конфликт данных',
     failed: 'Ошибка',
     completed: 'Готово',
     cancelled: 'Отменено'
@@ -365,9 +366,11 @@ function WorkflowRow({
     onOpen: (workflow: StonesMediaWorkflow) => void;
 }) {
     const canRetry = workflow.phase === 'failed' || workflow.phase === 'auth_required' || workflow.phase === 'paused_offline';
-    const canCancel = !['completed', 'cancelled'].includes(workflow.phase);
+    const canCancel = !['completed', 'cancelled', 'stale'].includes(workflow.phase);
     const tone = workflow.phase === 'failed'
         ? 'border-red-400/25 bg-red-500/10'
+        : workflow.phase === 'stale'
+            ? 'border-amber-300/25 bg-amber-300/10'
         : workflow.phase === 'auth_required' || workflow.phase === 'paused_offline'
             ? 'border-amber-300/25 bg-amber-300/10'
             : workflow.phase === 'completed'
@@ -470,12 +473,15 @@ export function DesktopStatusCenter() {
 
     const queueCounts = useMemo(() => getQueueCounts(queue), [queue]);
     const workflows = workflowSnapshot.workflows;
-    const activeWorkflowCount = workflows.filter((workflow) => !['completed', 'cancelled', 'failed'].includes(workflow.phase)).length;
+    const activeWorkflowCount = workflows.filter((workflow) => !['completed', 'cancelled', 'failed', 'stale'].includes(workflow.phase)).length;
     const failedWorkflowCount = workflows.filter((workflow) => workflow.phase === 'failed').length;
+    const staleWorkflowCount = workflows.filter((workflow) => workflow.phase === 'stale').length;
     const standaloneQueueJobs = queue.jobs;
     const networkTone: StatusTone = diagnostics?.network.apiReachable ? 'ok' : diagnostics?.network.online ? 'warning' : 'offline';
     const queueTone: StatusTone = queueCounts.failed > 0 || queueCounts.stuck > 0 ? 'error' : queueCounts.blockedAuth > 0 ? 'warning' : queueCounts.active > 0 ? 'checking' : 'ok';
-    const workflowTone: StatusTone = failedWorkflowCount > 0 || (diagnostics?.workflows?.stuck || 0) > 0 ? 'error' : (diagnostics?.workflows?.blockedAuth || diagnostics?.workflows?.blockedOffline || 0) > 0 ? 'warning' : activeWorkflowCount > 0 ? 'checking' : 'ok';
+    const diagnosticStaleWorkflowCount = diagnostics?.workflows?.stale || 0;
+    const totalStaleWorkflowCount = Math.max(staleWorkflowCount, diagnosticStaleWorkflowCount);
+    const workflowTone: StatusTone = failedWorkflowCount > 0 || (diagnostics?.workflows?.stuck || 0) > 0 ? 'error' : totalStaleWorkflowCount > 0 || (diagnostics?.workflows?.blockedAuth || diagnostics?.workflows?.blockedOffline || 0) > 0 ? 'warning' : activeWorkflowCount > 0 ? 'checking' : 'ok';
     const cachedUpdate = diagnostics?.update || null;
     const updateChecked = Boolean(update || cachedUpdate?.checked);
     const updateAvailable = update?.updateAvailable ?? cachedUpdate?.updateAvailable ?? false;
@@ -525,11 +531,11 @@ export function DesktopStatusCenter() {
         const photoTotal = photoQueueTotal + photoWorkflowTotal;
         const photoDone = photoQueueDone + photoWorkflowDone;
         const photoActive = photoQueueJobs.filter((job) => activeQueueStatuses.has(job.status)).length
-            + photoWorkflows.filter((workflow) => !['completed', 'cancelled', 'failed'].includes(workflow.phase)).length;
+            + photoWorkflows.filter((workflow) => !['completed', 'cancelled', 'failed', 'stale'].includes(workflow.phase)).length;
         const photoFailed = photoQueueJobs.filter((job) => job.status === 'failed').length
             + photoWorkflows.filter((workflow) => workflow.phase === 'failed').length;
         const photoBlocked = photoQueueJobs.filter((job) => job.status === 'auth_required').length
-            + photoWorkflows.filter((workflow) => workflow.phase === 'auth_required' || workflow.phase === 'paused_offline').length;
+            + photoWorkflows.filter((workflow) => workflow.phase === 'auth_required' || workflow.phase === 'paused_offline' || workflow.phase === 'stale').length;
 
         return [
             {
@@ -569,6 +575,9 @@ export function DesktopStatusCenter() {
         if (failedWorkflowCount > 0) {
             return `Workflow ошибки: ${failedWorkflowCount}`;
         }
+        if (totalStaleWorkflowCount > 0) {
+            return `Конфликт фото: ${totalStaleWorkflowCount}`;
+        }
         if (queueCounts.stuck > 0 || (diagnostics.workflows?.stuck || 0) > 0) {
             return `Stuck: ${queueCounts.stuck + (diagnostics.workflows?.stuck || 0)}`;
         }
@@ -582,7 +591,7 @@ export function DesktopStatusCenter() {
             return `Доступна ${updateVersion}`;
         }
         return 'Все системы в норме';
-    }, [activeWorkflowCount, currentRoleLabel, diagnostics, failedWorkflowCount, isDesktopRuntime, queueCounts.active, queueCounts.blockedAuth, queueCounts.failed, queueCounts.stuck, updateAvailable, updateVersion, webStatus.apiReachable, webStatus.online]);
+    }, [activeWorkflowCount, currentRoleLabel, diagnostics, failedWorkflowCount, isDesktopRuntime, queueCounts.active, queueCounts.blockedAuth, queueCounts.failed, queueCounts.stuck, totalStaleWorkflowCount, updateAvailable, updateVersion, webStatus.apiReachable, webStatus.online]);
 
     const refresh = useCallback(async () => {
         if (!desktop || !isDesktopRuntime) {
@@ -995,7 +1004,7 @@ export function DesktopStatusCenter() {
                                         </StatusBadge>
                                         <StatusBadge tone={workflowTone}>
                                             <Activity size={13} />
-                                            {(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Нужен вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Offline: ${diagnostics?.workflows?.blockedOffline}` : failedWorkflowCount > 0 ? `Workflow ошибки: ${failedWorkflowCount}` : (diagnostics?.workflows?.stuck || 0) > 0 ? `Stuck: ${diagnostics?.workflows?.stuck}` : activeWorkflowCount > 0 ? `Workflow: ${activeWorkflowCount}` : 'Workflow чисты'}
+                                            {(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Нужен вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Offline: ${diagnostics?.workflows?.blockedOffline}` : failedWorkflowCount > 0 ? `Workflow ошибки: ${failedWorkflowCount}` : totalStaleWorkflowCount > 0 ? `Конфликт фото: ${totalStaleWorkflowCount}` : (diagnostics?.workflows?.stuck || 0) > 0 ? `Stuck: ${diagnostics?.workflows?.stuck}` : activeWorkflowCount > 0 ? `Workflow: ${activeWorkflowCount}` : 'Workflow чисты'}
                                         </StatusBadge>
                                         <StatusBadge tone={updateTone}>
                                             <Download size={13} />
@@ -1062,7 +1071,7 @@ export function DesktopStatusCenter() {
                                             <StatusCard
                                                 icon={<Activity size={18} />}
                                                 title="Media workflows"
-                                                value={(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Ожидает вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Пауза offline: ${diagnostics?.workflows?.blockedOffline}` : activeWorkflowCount > 0 ? `В работе: ${activeWorkflowCount}` : failedWorkflowCount > 0 ? `Workflow с ошибкой: ${failedWorkflowCount}` : 'Фоновых workflow нет'}
+                                                value={(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Ожидает вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Пауза offline: ${diagnostics?.workflows?.blockedOffline}` : totalStaleWorkflowCount > 0 ? `Конфликт фото: ${totalStaleWorkflowCount}` : activeWorkflowCount > 0 ? `В работе: ${activeWorkflowCount}` : failedWorkflowCount > 0 ? `Workflow с ошибкой: ${failedWorkflowCount}` : 'Фоновых workflow нет'}
                                                 detail="Photo Tool продолжает работу после закрытия страницы и поднимается после перезапуска HQ."
                                                 tone={workflowTone}
                                             />

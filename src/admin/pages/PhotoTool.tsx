@@ -168,7 +168,7 @@ const PHOTO_EXPORT_PRESETS: Array<{ id: string; title: string; description: stri
     }
 ];
 const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = { workflows: [], counts: {} };
-const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed']);
+const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed', 'stale']);
 
 const workflowPhaseLabel: Record<string, string> = {
     queued: 'В очереди',
@@ -177,6 +177,7 @@ const workflowPhaseLabel: Record<string, string> = {
     verifying: 'Проверка',
     paused_offline: 'Пауза: нет связи с сервером',
     auth_required: 'Нужен повторный вход',
+    stale: 'Конфликт данных',
     failed: 'Ошибка',
     completed: 'Готово',
     cancelled: 'Отменено'
@@ -782,6 +783,7 @@ export function PhotoTool() {
     const draftFileSignatureRef = useRef('');
     const completedWorkflowHandledRef = useRef<string | null>(null);
     const workflowLockedRef = useRef(false);
+    const saveInFlightRef = useRef(false);
     const isDesktopApp = isStonesDesktop();
 
     const batchPhotoWorkflow = useMemo(() => (
@@ -1407,6 +1409,10 @@ export function PhotoTool() {
     };
 
     const handleSave = async () => {
+        if (saveInFlightRef.current) {
+            return;
+        }
+
         if (!data) {
             return;
         }
@@ -1424,6 +1430,7 @@ export function PhotoTool() {
             return;
         }
 
+        saveInFlightRef.current = true;
         setSaving(true);
         setError('');
         setPhotoConflictError(false);
@@ -1478,7 +1485,7 @@ export function PhotoTool() {
                 fileIndex += 1;
             }
 
-            if (isDesktopApp && localPhotosForQueue.length > 0) {
+            if (isDesktopApp) {
                 const desktop = getStonesDesktop();
                 if (!desktop) {
                     throw new Error('Desktop queue недоступна.');
@@ -1511,7 +1518,7 @@ export function PhotoTool() {
                 const workflow = await desktop.startPhotoApplyWorkflow({
                     batchId,
                     batchLabel: data.batch.id,
-                    subtitle: `${localPhotosForQueue.length} фото`,
+                    subtitle: localPhotosForQueue.length > 0 ? `${localPhotosForQueue.length} новых фото` : 'Переназначение сохраненных фото',
                     items: workflowItems,
                     manifest: queuedManifest,
                     basePhotoStateToken: data.batch.photo_state_token,
@@ -1595,6 +1602,7 @@ export function PhotoTool() {
             }
             setError(message);
         } finally {
+            saveInFlightRef.current = false;
             setSaving(false);
         }
     };

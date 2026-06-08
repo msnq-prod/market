@@ -221,9 +221,10 @@ const createDiagnosticsRuntime = ({
             const queueSnapshot = getMediaQueue() ? getMediaQueue().getSnapshot() : { jobs: [], counts: {} };
             const workflowSnapshot = getMediaWorkflowManager() ? getMediaWorkflowManager().getSnapshot() : { workflows: [], counts: {} };
             const activeJobs = (queueSnapshot.counts.queued || 0) + (queueSnapshot.counts.uploading || 0) + (queueSnapshot.counts.retrying || 0);
-            const activeWorkflows = workflowSnapshot.workflows.filter((workflow) => !['completed', 'cancelled', 'failed'].includes(workflow.phase));
+            const activeWorkflows = workflowSnapshot.workflows.filter((workflow) => !['completed', 'cancelled', 'failed', 'stale'].includes(workflow.phase));
             const workflowOffline = workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'paused_offline').length;
             const workflowAuth = workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'auth_required').length;
+            const workflowStale = workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'stale').length;
 
             return {
                 app: appInfo,
@@ -248,6 +249,7 @@ const createDiagnosticsRuntime = ({
                     running: activeWorkflows.filter((workflow) => !['auth_required', 'paused_offline'].includes(workflow.phase)).length,
                     blockedAuth: workflowAuth,
                     blockedOffline: workflowOffline,
+                    stale: workflowStale,
                     failed: workflowSnapshot.workflows.filter((workflow) => workflow.phase === 'failed').length,
                     completed: workflowSnapshot.counts.completed || 0,
                     cancelled: workflowSnapshot.counts.cancelled || 0,

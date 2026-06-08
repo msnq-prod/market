@@ -171,9 +171,30 @@ const isActiveWorkflow = (workflow) => {
 
 const getRoutePath = (workflow) => `/admin/photo-tool/${encodeURIComponent(workflow.batchId)}`;
 
+const getWorkflowPhaseCompletedUnits = (workflow, total) => {
+    if (total <= 0) {
+        return 0;
+    }
+
+    switch (workflow.phase) {
+        case 'completed':
+            return total;
+        case 'verifying':
+            return Math.max(1, Math.floor(total * 0.9));
+        case 'uploading':
+        case 'paused_offline':
+        case 'auth_required':
+            return Math.max(1, Math.floor(total * 0.6));
+        case 'converting':
+            return Math.max(1, Math.floor(total * 0.25));
+        default:
+            return 0;
+    }
+};
+
 const buildWorkflowSnapshot = (workflow) => {
     const total = workflow.items.length;
-    const completed = workflow.phase === 'completed' ? workflow.items.length : 0;
+    const completed = getWorkflowPhaseCompletedUnits(workflow, total);
 
     return {
         id: workflow.id,
@@ -313,6 +334,12 @@ class MediaWorkflowManager extends EventEmitter {
         ) || null;
     }
 
+    async cleanupPayloadFiles(payload) {
+        await Promise.all((payload.files || [])
+            .filter((file) => isNonEmptyString(file?.fileId))
+            .map((file) => safeRemove(fileCachePathFor(this.stagedFilesDir, file.fileId))));
+    }
+
     async startPhotoApplyWorkflow(payload) {
         const manifestHash = createWorkflowHash({
             batchId: payload.batchId,
@@ -321,6 +348,9 @@ class MediaWorkflowManager extends EventEmitter {
         });
         const duplicate = this.findActiveBatchWorkflow('PHOTO_APPLY_WORKFLOW', payload.batchId);
         if (duplicate) {
+            await this.cleanupPayloadFiles(payload);
+            appendEvent(duplicate, 'duplicate_ignored', { stagedFilesCleaned: Array.isArray(payload.files) ? payload.files.length : 0 });
+            await this.markChanged();
             return buildWorkflowSnapshot(duplicate);
         }
 

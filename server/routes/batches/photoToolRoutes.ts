@@ -65,6 +65,7 @@ const parsePhotoExportSettings = (value: unknown): Required<PhotoUploadNormaliza
 };
 
 const parsePhotoPreNormalized = (value: unknown) => value === '1' || value === 'true';
+const SHA256_RE = /^[a-f0-9]{64}$/;
 
 const isSafePreNormalizedManifest = (value: unknown) => {
     if (typeof value !== 'string') {
@@ -94,7 +95,8 @@ const isSafePreNormalizedManifest = (value: unknown) => {
 
         return typeof typedEntry.queue_job_id === 'string'
             && typeof typedEntry.queue_file_id === 'string'
-            && typeof typedEntry.checksum_sha256 === 'string';
+            && typeof typedEntry.checksum_sha256 === 'string'
+            && SHA256_RE.test(typedEntry.checksum_sha256.trim().toLowerCase());
     });
 };
 
@@ -114,6 +116,7 @@ router.get('/:id/photo-tool', authenticateToken, async (req: AuthRequest, res) =
 
 router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest, res) => {
     let uploadedFiles: Express.Multer.File[] = [];
+    let requestBody: Record<string, unknown> | undefined;
 
     try {
         if (!req.user) return res.sendStatus(401);
@@ -131,7 +134,7 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         });
 
         uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
-        const requestBody = req.body as Record<string, unknown> | undefined;
+        requestBody = req.body as Record<string, unknown> | undefined;
         const photoExportSettings = parsePhotoExportSettings((req.body as Record<string, unknown> | undefined)?.photo_export_settings);
         const photoPreNormalized = parsePhotoPreNormalized(requestBody?.photo_pre_normalized);
         if (photoPreNormalized && !isSafePreNormalizedManifest(requestBody?.manifest)) {
@@ -147,7 +150,10 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
 
         res.json(await applyPhotoTool(req.params.id, req.body as Record<string, unknown> | undefined, uploadedFiles));
     } catch (error) {
-        console.error(error);
+        console.error('photo-tool apply failed', {
+            batch_id: req.params.id,
+            queue_job_id: typeof requestBody?.queue_job_id === 'string' ? requestBody.queue_job_id : null
+        }, error);
         const statusCode = getErrorStatusCode(error);
         const message = getErrorMessage(error, 'Не удалось применить назначения photo-tool.');
         const code = getErrorCode(error);

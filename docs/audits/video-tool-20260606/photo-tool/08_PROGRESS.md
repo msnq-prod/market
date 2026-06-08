@@ -15,10 +15,10 @@
 
 ## Next
 
-Optional P2+ follow-up: duplicate staged file cleanup, Status Center progress, `photo_pre_normalized` checksum tightening.
+Manual packaged HQ smoke test before production rollout.
 
 ## Blockers
 
-None for P1 implementation.
+None for implementation.
 
-Verification limitation: focused e2e could not run locally because MySQL on `localhost:3307` / `127.0.0.1:3307` was unavailable.
+Verification limitation: packaged Electron HQ smoke test was not run in this session.

@@ -56,6 +56,7 @@ export type StonesDesktopDiagnostics = {
         running?: number;
         blockedAuth?: number;
         blockedOffline?: number;
+        stale?: number;
         failed: number;
         completed?: number;
         cancelled?: number;
@@ -146,6 +147,7 @@ export type StonesMediaWorkflowPhase =
     | 'paused_offline'
     | 'auth_required'
     | 'failed'
+    | 'stale'
     | 'completed'
     | 'cancelled';
 

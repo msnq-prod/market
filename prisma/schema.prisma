@@ -306,6 +306,31 @@ enum VideoToolV3ItemStatus {
   CANCELLED
 }
 
+enum PhotoToolRunStatus {
+  OPEN
+  UPLOADING
+  READY_TO_COMMIT
+  COMMITTING
+  COMPLETED
+  FAILED
+  STALE
+  CANCELLED
+}
+
+enum PhotoToolRunItemSourceType {
+  EXISTING
+  UPLOAD
+}
+
+enum PhotoToolRunItemStatus {
+  PENDING
+  REUSED
+  UPLOADING
+  UPLOADED
+  FAILED
+  CANCELLED
+}
+
 enum TelegramNotificationJobStatus {
   PENDING
   PROCESSING
@@ -345,6 +370,7 @@ model User {
   requested_video_exports      BatchVideoExportSession[] @relation("BatchVideoExportRequestedBy")
   requested_video_export_runs  BatchVideoExportRun[] @relation("BatchVideoExportRunsRequestedBy")
   video_tool_v3_runs           VideoToolV3Run[] @relation("VideoToolV3RunsCreatedBy")
+  photo_tool_runs              PhotoToolRun[] @relation("PhotoToolRunsCreatedBy")
   created_qr_print_presets     QrPrintPreset[] @relation("QrPrintPresetCreatedBy")
   updated_qr_print_presets     QrPrintPreset[] @relation("QrPrintPresetUpdatedBy")
 
@@ -446,6 +472,7 @@ model Batch {
   video_export_sessions BatchVideoExportSession[]
   video_export_runs     BatchVideoExportRun[]
   video_tool_v3_runs     VideoToolV3Run[]
+  photo_tool_runs        PhotoToolRun[]
 
   @@index([owner_id])
   @@index([product_id])
@@ -482,6 +509,7 @@ model Item {
   order_assignments OrderItemAssignment[]
   video_export_items BatchVideoExportItem[]
   video_tool_v3_items VideoToolV3Item[]
+  photo_tool_run_items PhotoToolRunItem[]
 
   @@unique([batch_id, temp_id])
   @@index([batch_id])
@@ -687,6 +715,57 @@ model VideoToolV3Item {
   @@index([item_id])
   @@index([status])
   @@map("video_tool_v3_items")
+}
+
+model PhotoToolRun {
+  id                     String             @id
+  batch_id               String
+  created_by_user_id     String
+  status                 PhotoToolRunStatus @default(OPEN)
+  expected_count         Int
+  uploaded_count         Int                @default(0)
+  base_photo_state_token String             @db.VarChar(64)
+  photo_export_settings  Json
+  manifest               Json
+  error_message          String?            @db.Text
+  committed_at           DateTime?
+  created_at             DateTime           @default(now())
+  updated_at             DateTime           @updatedAt
+
+  batch           Batch              @relation(fields: [batch_id], references: [id])
+  created_by_user User               @relation("PhotoToolRunsCreatedBy", fields: [created_by_user_id], references: [id])
+  items           PhotoToolRunItem[]
+
+  @@index([batch_id, created_at])
+  @@index([status])
+  @@map("photo_tool_runs")
+}
+
+model PhotoToolRunItem {
+  id              String                     @id @default(uuid())
+  run_id          String
+  item_id         String
+  item_seq        Int
+  source_type     PhotoToolRunItemSourceType
+  status          PhotoToolRunItemStatus     @default(PENDING)
+  file_url        String?                    @db.Text
+  existing_url    String?                    @db.Text
+  checksum_sha256 String?                    @db.VarChar(64)
+  file_size_bytes Int?
+  error_message   String?                    @db.Text
+  uploaded_at     DateTime?
+  committed_at    DateTime?
+  created_at      DateTime                   @default(now())
+  updated_at      DateTime                   @updatedAt
+
+  run  PhotoToolRun @relation(fields: [run_id], references: [id])
+  item Item         @relation(fields: [item_id], references: [id])
+
+  @@unique([run_id, item_id])
+  @@unique([run_id, item_seq])
+  @@index([item_id])
+  @@index([status])
+  @@map("photo_tool_run_items")
 }
 
 model Ledger {

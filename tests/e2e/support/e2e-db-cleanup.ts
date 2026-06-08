@@ -37,6 +37,8 @@ type CleanupSummary = {
     qrPrintPresets: number;
     videoToolV3Items: number;
     videoToolV3Runs: number;
+    photoToolRunItems: number;
+    photoToolRuns: number;
     items: number;
     batches: number;
     collectionRequests: number;
@@ -61,6 +63,8 @@ const emptySummary = (): CleanupSummary => ({
     qrPrintPresets: 0,
     videoToolV3Items: 0,
     videoToolV3Runs: 0,
+    photoToolRunItems: 0,
+    photoToolRuns: 0,
     items: 0,
     batches: 0,
     collectionRequests: 0,
@@ -328,6 +332,13 @@ export async function cleanupE2eArtifacts(options: CleanupOptions = {}): Promise
             where: { batch_id: { in: batchIds } },
         }));
 
+        summary.photoToolRunItems = await deleteManyIfTableExists(() => prisma.photoToolRunItem.deleteMany({
+            where: { run: { batch_id: { in: batchIds } } },
+        }));
+
+        summary.photoToolRuns = await deleteManyIfTableExists(() => prisma.photoToolRun.deleteMany({
+            where: { batch_id: { in: batchIds } },
+        }));
     }
 
     if (hasValues(itemIds)) {

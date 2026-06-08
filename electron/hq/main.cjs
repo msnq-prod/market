@@ -1,7 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, protocol, shell } = require('electron');
 
 const { MediaUploadQueue } = require('./mediaQueue.cjs');
-const { MediaWorkflowManager } = require('./mediaWorkflowManager.cjs');
+const { PhotoToolV2WorkflowManager } = require('./photoToolV2WorkflowManager.cjs');
 const { createAppConfig } = require('./appConfig.cjs');
 const { createLocalServerRuntime } = require('./localServer.cjs');
 const { createUpdatesRuntime } = require('./updates.cjs');
@@ -193,10 +193,9 @@ const ensureMediaRuntimes = async (apiOrigin) => {
     }
 
     if (!mediaWorkflowManager) {
-        mediaWorkflowManager = new MediaWorkflowManager({
+        mediaWorkflowManager = new PhotoToolV2WorkflowManager({
             rootDir: config.getMediaWorkflowRoot(),
             stagedFilesDir: `${config.getMediaQueueRoot()}/files`,
-            mediaQueue,
             getApiOrigin: () => apiOrigin,
             getAccessToken: () => accessToken,
             refreshAccessToken: async () => (await ensureDesktopAuthSession({ force: true })).accessToken
