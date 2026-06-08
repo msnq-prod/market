@@ -690,18 +690,7 @@ const restoreDraftState = async (batchId: string, payload: PhotoToolPayload): Pr
         return null;
     }
 
-    if (draft.base_photo_state_token !== payload.batch.photo_state_token) {
-        await clearDraftStorage(batchId);
-        return {
-            photos: payload.items.filter((item) => Boolean(item.item_photo_url)).map((item) => buildPersistedPhoto(item)),
-            activePhotoId: '',
-            sortMode: 'name',
-            sortDescending: false,
-            assignmentDescending: false,
-            photoExportSettings: { ...DEFAULT_PHOTO_EXPORT_SETTINGS },
-            warningMessage: 'Старый черновик удален: данные партии уже изменились.'
-        };
-    }
+    const hasTokenMismatch = draft.base_photo_state_token !== payload.batch.photo_state_token;
 
     let missingLocalFiles = 0;
     const database = await openDraftDb().catch(() => null);
@@ -745,7 +734,9 @@ const restoreDraftState = async (batchId: string, payload: PhotoToolPayload): Pr
             sortDescending: draft.sort_descending,
             assignmentDescending: draft.assignment_descending,
             photoExportSettings: normalizePhotoExportSettings(draft.photo_export_settings),
-            warningMessage: missingLocalFiles > 0
+            warningMessage: hasTokenMismatch
+                ? 'Восстановлен конфликтный черновик: данные партии уже изменились. Проверьте назначения перед повторным сохранением.'
+                : missingLocalFiles > 0
                 ? 'Черновик восстановлен частично: часть локальных файлов недоступна.'
                 : 'Восстановлен несохраненный черновик photo-tool.'
         };
@@ -790,6 +781,7 @@ export function PhotoTool() {
     const baselineSignatureRef = useRef('');
     const draftFileSignatureRef = useRef('');
     const completedWorkflowHandledRef = useRef<string | null>(null);
+    const workflowLockedRef = useRef(false);
     const isDesktopApp = isStonesDesktop();
 
     const batchPhotoWorkflow = useMemo(() => (
@@ -798,7 +790,12 @@ export function PhotoTool() {
         ) || null
     ), [batchId, workflowSnapshot.workflows]);
     const activePhotoWorkflow = isActiveWorkflow(batchPhotoWorkflow) ? batchPhotoWorkflow : null;
+    const workflowLocked = Boolean(activePhotoWorkflow);
     const photoWorkflowStatusText = buildWorkflowStatusText(batchPhotoWorkflow);
+
+    useEffect(() => {
+        workflowLockedRef.current = workflowLocked;
+    }, [workflowLocked]);
 
     const openDesktopStatusCenter = useCallback((focusWorkflowId?: string) => {
         window.dispatchEvent(new CustomEvent('stones:open-status-center', {
@@ -810,6 +807,10 @@ export function PhotoTool() {
     }, []);
 
     const applyPhotoExportSettings = useCallback((nextSettings: Partial<PhotoExportSettings>, options?: { silent?: boolean }) => {
+        if (workflowLockedRef.current && !options?.silent) {
+            return;
+        }
+
         setPhotoExportSettings((current) => normalizePhotoExportSettings({
             ...current,
             ...nextSettings
@@ -821,6 +822,10 @@ export function PhotoTool() {
     }, []);
 
     const openItemFilePicker = useCallback((itemSeq: number) => {
+        if (workflowLockedRef.current) {
+            return;
+        }
+
         replacementItemSeqRef.current = itemSeq;
         itemFileInputRef.current?.click();
     }, []);
@@ -1064,6 +1069,10 @@ export function PhotoTool() {
     };
 
     const commitAssignmentChange = (photoId: string, nextValue: string, preferredActiveId: string | null = photoId) => {
+        if (workflowLockedRef.current) {
+            return;
+        }
+
         const nextPhotos = applyAssignmentToPhotoList(photos, itemSeqs, photoId, nextValue);
         clearAssignmentDraft(photoId);
         applyNextPhotos(nextPhotos, preferredActiveId);
@@ -1075,7 +1084,7 @@ export function PhotoTool() {
         const currentActivePhotoId = activePhotoIdRef.current;
         const currentAssignmentDraft = assignmentDraftRef.current;
 
-        if (currentAssignmentDraft?.photoId === currentActivePhotoId && currentActivePhotoId && currentActivePhotoId !== nextPhotoId) {
+        if (!workflowLockedRef.current && currentAssignmentDraft?.photoId === currentActivePhotoId && currentActivePhotoId && currentActivePhotoId !== nextPhotoId) {
             const nextPhotos = applyAssignmentToPhotoList(
                 photosRef.current,
                 itemSeqsRef.current,
@@ -1120,6 +1129,10 @@ export function PhotoTool() {
         nextSortDescending: boolean,
         nextAssignmentDescending: boolean
     ) => {
+        if (workflowLockedRef.current) {
+            return;
+        }
+
         const reordered = orderPhotos(buildPhotosWithPendingDraft(photos), nextSortMode, nextSortDescending);
         const reassigned = assignAllPhotos(reordered, itemSeqs, nextAssignmentDescending);
         clearAssignmentDraft();
@@ -1135,7 +1148,7 @@ export function PhotoTool() {
             return;
         }
 
-        if (importProgress) {
+        if (importProgress || workflowLockedRef.current) {
             return;
         }
 
@@ -1257,7 +1270,7 @@ export function PhotoTool() {
 
     const handleReplaceItemPhoto = async (itemSeq: number, fileList: FileList | null) => {
         const sourceFile = fileList?.[0];
-        if (!sourceFile || importProgress) {
+        if (!sourceFile || importProgress || workflowLockedRef.current) {
             return;
         }
 
@@ -1317,6 +1330,10 @@ export function PhotoTool() {
     };
 
     const handleRemovePhoto = useCallback((photoId: string) => {
+        if (workflowLockedRef.current) {
+            return;
+        }
+
         const currentPhotos = photosRef.current;
         const currentIndex = currentPhotos.findIndex((photo) => photo.id === photoId);
         if (currentIndex === -1) {
@@ -1358,6 +1375,10 @@ export function PhotoTool() {
     }, [activatePhoto]);
 
     const handleAssignmentInputChange = (photoId: string, nextValue: string) => {
+        if (workflowLockedRef.current) {
+            return;
+        }
+
         const normalized = normalizeAssignmentInput(nextValue);
         const photo = photos.find((item) => item.id === photoId);
         const committedValue = padItemSeq(photo?.assigned_item_seq ?? null);
@@ -1568,7 +1589,7 @@ export function PhotoTool() {
             let message = saveError instanceof Error ? saveError.message : 'Не удалось сохранить назначения photo-tool.';
             if (code === 'PHOTO_TOOL_STATE_STALE') {
                 setPhotoConflictError(true);
-                message = 'Данные photo-tool изменились после открытия страницы. Обновите инструмент и повторите сохранение. Локальный черновик сохранен, проверьте назначения перед повторным сохранением.';
+                message = 'Данные photo-tool изменились после открытия страницы. Обновите инструмент: конфликтный черновик будет восстановлен, проверьте назначения перед повторным сохранением.';
             } else {
                 setPhotoConflictError(false);
             }
@@ -1667,6 +1688,10 @@ export function PhotoTool() {
         if (event.key === 'ArrowRight' && nextPhoto) {
             event.preventDefault();
             activatePhoto(nextPhoto.id, 1);
+            return;
+        }
+
+        if (activePhotoWorkflow) {
             return;
         }
 
@@ -1777,7 +1802,7 @@ export function PhotoTool() {
                             data-testid="photo-workflow-banner"
                             className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-400/20 bg-sky-500/10 px-5 py-3 text-sm text-sky-50 xl:px-8"
                         >
-                            <span>{photoWorkflowStatusText || 'Фоновое сохранение фото выполняется.'}</span>
+                            <span>{photoWorkflowStatusText || 'Фоновое сохранение фото выполняется.'} Редактирование заблокировано до завершения workflow.</span>
                             <button
                                 type="button"
                                 onClick={() => openDesktopStatusCenter(activePhotoWorkflow.id)}
@@ -1846,6 +1871,7 @@ export function PhotoTool() {
                                                 active={sortMode === 'name'}
                                                 title="Имя"
                                                 description="Числовая сортировка"
+                                                disabled={workflowLocked}
                                                 onClick={() => applyFullReassignment('name', sortDescending, assignmentDescending)}
                                             />
                                             <WorkspaceToggle
@@ -1853,6 +1879,7 @@ export function PhotoTool() {
                                                 active={sortMode === 'date'}
                                                 title="Дата"
                                                 description="Файловое время"
+                                                disabled={workflowLocked}
                                                 onClick={() => applyFullReassignment('date', sortDescending, assignmentDescending)}
                                             />
                                             <WorkspaceToggle
@@ -1860,6 +1887,7 @@ export function PhotoTool() {
                                                 active={sortDescending}
                                                 title="Список"
                                                 description={sortDescending ? 'Обратный' : 'Прямой'}
+                                                disabled={workflowLocked}
                                                 onClick={() => applyFullReassignment(sortMode, !sortDescending, assignmentDescending)}
                                             />
                                             <WorkspaceToggle
@@ -1867,6 +1895,7 @@ export function PhotoTool() {
                                                 active={assignmentDescending}
                                                 title="Назначение"
                                                 description={assignmentDescending ? 'От конца' : 'От начала'}
+                                                disabled={workflowLocked}
                                                 onClick={() => applyFullReassignment(sortMode, sortDescending, !assignmentDescending)}
                                             />
                                         </div>
@@ -1912,6 +1941,7 @@ export function PhotoTool() {
                                                 photo={photo}
                                                 index={index}
                                                 isActive={photo.id === activePhotoId}
+                                                readOnly={workflowLocked}
                                                 onActivate={handleListItemActivate}
                                                 onRemove={handleListItemRemove}
                                             />
@@ -1944,12 +1974,14 @@ export function PhotoTool() {
                                     <PhotoQualityPanel
                                         settings={photoExportSettings}
                                         estimate={sizeEstimate}
+                                        readOnly={workflowLocked}
                                         onApplySettings={applyPhotoExportSettings}
                                     />
                                 ) : activeStep === 'export' && data ? (
                                     <PhotoExportGrid
                                         items={data.items}
                                         photos={photos}
+                                        readOnly={workflowLocked}
                                         onActivatePhoto={(photoId) => {
                                             activatePhoto(photoId, 0);
                                             setActiveStep('assign');
@@ -1984,6 +2016,7 @@ export function PhotoTool() {
                                                     direction={-1}
                                                     navigationDirection={carouselDirection}
                                                     assignmentValue={prevPhoto ? getDisplayedAssignmentValue(prevPhoto) : ''}
+                                                    readOnly={workflowLocked}
                                                     onActivate={(photo) => activatePhoto(photo.id, -1)}
                                                     onAssignmentChange={handleAssignmentInputChange}
                                                 />
@@ -1995,6 +2028,7 @@ export function PhotoTool() {
                                                     direction={0}
                                                     navigationDirection={carouselDirection}
                                                     assignmentValue={activePhoto ? getDisplayedAssignmentValue(activePhoto) : ''}
+                                                    readOnly={workflowLocked}
                                                     onActivate={(photo) => activatePhoto(photo.id, 0)}
                                                     onAssignmentChange={handleAssignmentInputChange}
                                                 />
@@ -2006,6 +2040,7 @@ export function PhotoTool() {
                                                     direction={1}
                                                     navigationDirection={carouselDirection}
                                                     assignmentValue={nextPhoto ? getDisplayedAssignmentValue(nextPhoto) : ''}
+                                                    readOnly={workflowLocked}
                                                     onActivate={(photo) => activatePhoto(photo.id, 1)}
                                                     onAssignmentChange={handleAssignmentInputChange}
                                                 />
@@ -2079,10 +2114,12 @@ function PhotoToolStepNav({ activeStep, onChange }: { activeStep: PhotoToolStep;
 function PhotoQualityPanel({
     settings,
     estimate,
+    readOnly,
     onApplySettings
 }: {
     settings: PhotoExportSettings;
     estimate: PhotoSizeEstimate;
+    readOnly: boolean;
     onApplySettings: (settings: Partial<PhotoExportSettings>) => void;
 }) {
     const activePreset = PHOTO_EXPORT_PRESETS.find((preset) =>
@@ -2106,11 +2143,12 @@ function PhotoQualityPanel({
                             key={preset.id}
                             type="button"
                             data-testid={`photo-preset-${preset.id}`}
+                            disabled={readOnly}
                             onClick={() => onApplySettings(preset.settings)}
                             className={`rounded-3xl border px-4 py-4 text-left transition ${activePreset === preset.id
                                 ? 'border-sky-300/70 bg-sky-400/16 text-sky-50'
                                 : 'border-white/8 bg-white/[0.035] text-white/70 hover:bg-white/[0.07]'
-                            }`}
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
                         >
                             <p className="text-sm font-semibold">{preset.title}</p>
                             <p className="mt-2 text-xs text-white/45">{preset.description}</p>
@@ -2126,6 +2164,7 @@ function PhotoQualityPanel({
                         min={40}
                         max={95}
                         suffix="%"
+                        disabled={readOnly}
                         onChange={(quality) => onApplySettings({ quality })}
                     />
                     <PhotoNumberField
@@ -2135,6 +2174,7 @@ function PhotoQualityPanel({
                         min={800}
                         max={4096}
                         suffix="px"
+                        disabled={readOnly}
                         onChange={(maxWidth) => onApplySettings({ maxWidth })}
                     />
                     <PhotoNumberField
@@ -2144,6 +2184,7 @@ function PhotoQualityPanel({
                         min={800}
                         max={4096}
                         suffix="px"
+                        disabled={readOnly}
                         onChange={(maxHeight) => onApplySettings({ maxHeight })}
                     />
                 </div>
@@ -2168,6 +2209,7 @@ function PhotoNumberField({
     min,
     max,
     suffix,
+    disabled = false,
     onChange
 }: {
     testId: string;
@@ -2176,6 +2218,7 @@ function PhotoNumberField({
     min: number;
     max: number;
     suffix: string;
+    disabled?: boolean;
     onChange: (value: number) => void;
 }) {
     return (
@@ -2188,8 +2231,9 @@ function PhotoNumberField({
                     min={min}
                     max={max}
                     value={value}
+                    disabled={disabled}
                     onChange={(event) => onChange(clampInteger(event.currentTarget.value, value, min, max))}
-                    className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-white outline-none focus:border-sky-300/70"
+                    className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-white outline-none focus:border-sky-300/70 disabled:cursor-not-allowed disabled:opacity-45"
                 />
                 <span className="text-xs text-white/38">{suffix}</span>
             </span>
@@ -2200,6 +2244,7 @@ function PhotoNumberField({
 function PhotoExportGrid({
     items,
     photos,
+    readOnly,
     onActivatePhoto,
     onReplace,
     onReupload,
@@ -2207,6 +2252,7 @@ function PhotoExportGrid({
 }: {
     items: PhotoToolItem[];
     photos: WorkingPhoto[];
+    readOnly: boolean;
     onActivatePhoto: (photoId: string) => void;
     onReplace: (itemSeq: number) => void;
     onReupload: (itemSeq: number) => void;
@@ -2251,13 +2297,13 @@ function PhotoExportGrid({
                                 {photo ? `${photo.source === 'local' ? 'Новое фото' : 'Сохраненное фото'}: ${photo.name}` : 'Нет назначения'}
                             </p>
                             <div className="mt-4 grid grid-cols-3 gap-2">
-                                <button type="button" data-testid={`photo-export-replace-${item.item_seq}`} onClick={() => onReplace(item.item_seq)} className="rounded-xl bg-sky-400 px-3 py-2 text-xs font-semibold text-[#061018] transition hover:bg-sky-300">
+                                <button type="button" data-testid={`photo-export-replace-${item.item_seq}`} onClick={() => onReplace(item.item_seq)} disabled={readOnly} className="rounded-xl bg-sky-400 px-3 py-2 text-xs font-semibold text-[#061018] transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-45">
                                     Заменить
                                 </button>
-                                <button type="button" data-testid={`photo-export-reupload-${item.item_seq}`} onClick={() => onReupload(item.item_seq)} className="rounded-xl bg-white/[0.07] px-3 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.12]">
+                                <button type="button" data-testid={`photo-export-reupload-${item.item_seq}`} onClick={() => onReupload(item.item_seq)} disabled={readOnly} className="rounded-xl bg-white/[0.07] px-3 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-45">
                                     Заново
                                 </button>
-                                <button type="button" data-testid={`photo-export-clear-${item.item_seq}`} onClick={() => onClear(item.item_seq)} disabled={!photo} className="rounded-xl bg-red-500/12 px-3 py-2 text-xs font-semibold text-red-100 transition hover:bg-red-500/18 disabled:opacity-40">
+                                <button type="button" data-testid={`photo-export-clear-${item.item_seq}`} onClick={() => onClear(item.item_seq)} disabled={!photo || readOnly} className="rounded-xl bg-red-500/12 px-3 py-2 text-xs font-semibold text-red-100 transition hover:bg-red-500/18 disabled:cursor-not-allowed disabled:opacity-40">
                                     Снять
                                 </button>
                             </div>
@@ -2334,7 +2380,7 @@ function WorkspaceToggle({
             className={`rounded-2xl px-3 py-3 text-left transition ${active
                 ? 'bg-[#1d2530] text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.22)]'
                 : 'bg-[#101216] text-white/58 hover:bg-[#171a1f] hover:text-white/82'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#101216]`}
             {...props}
         >
             <div className="text-xs font-medium uppercase tracking-[0.22em]">{title}</div>
@@ -2379,12 +2425,14 @@ const PhotoListItem = memo(function PhotoListItem({
     photo,
     index,
     isActive,
+    readOnly,
     onActivate,
     onRemove
 }: {
     photo: WorkingPhoto;
     index: number;
     isActive: boolean;
+    readOnly: boolean;
     onActivate: (photoId: string, index: number) => void;
     onRemove: (photoId: string) => void;
 }) {
@@ -2431,7 +2479,8 @@ const PhotoListItem = memo(function PhotoListItem({
                         event.stopPropagation();
                         onRemove(photo.id);
                     }}
-                    className="rounded-xl p-2 text-white/25 transition-colors hover:bg-red-500/10 hover:text-red-200"
+                    disabled={readOnly}
+                    className="rounded-xl p-2 text-white/25 transition-colors hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-white/25"
                     aria-label={`Удалить ${photo.name}`}
                 >
                     <Trash2 size={15} />
@@ -2449,6 +2498,7 @@ const CarouselStageCard = memo(function CarouselStageCard({
     direction,
     navigationDirection,
     assignmentValue,
+    readOnly,
     onActivate,
     onAssignmentChange
 }: {
@@ -2459,6 +2509,7 @@ const CarouselStageCard = memo(function CarouselStageCard({
     direction: -1 | 0 | 1;
     navigationDirection: number;
     assignmentValue: string;
+    readOnly: boolean;
     onActivate: (photo: WorkingPhoto) => void;
     onAssignmentChange: (photoId: string, nextValue: string) => void;
 }) {
@@ -2531,12 +2582,13 @@ const CarouselStageCard = memo(function CarouselStageCard({
                                 value={assignmentValue}
                                 inputMode="numeric"
                                 maxLength={3}
+                                disabled={readOnly}
                                 onFocus={() => onActivate(photo)}
                                 onChange={(event) => onAssignmentChange(photo.id, event.target.value)}
                                 className={`mt-2 w-full rounded-2xl px-4 py-3 text-base font-semibold text-white outline-none transition ${photo.assigned_item_seq == null
                                     ? 'bg-red-500/10 placeholder:text-red-100/30 focus:bg-red-500/12'
                                     : 'bg-black/32 focus:bg-black/42'
-                                    }`}
+                                    } disabled:cursor-not-allowed disabled:opacity-55`}
                                 placeholder="Без номера"
                             />
                         </label>

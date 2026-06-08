@@ -21,6 +21,12 @@ const VERIFY_DELAY_MS = 1_200;
 const STATE_VERSION = 2;
 const EVENT_BUFFER_SIZE = 10;
 const WORKFLOW_STUCK_MS = 10 * 60_000;
+const DEFAULT_PHOTO_EXPORT_SETTINGS = {
+    format: 'jpeg',
+    quality: 80,
+    maxWidth: 1200,
+    maxHeight: 1200
+};
 
 const nowIso = () => new Date().toISOString();
 const createId = () => crypto.randomUUID();
@@ -109,6 +115,26 @@ const parseJsonResponse = async (response, fallbackMessage) => {
 const createWorkflowHash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fileCachePathFor = (rootDir, fileId) => path.join(rootDir, `${fileId}.bin`);
 const isLikelyOfflineError = (message) => /Failed to fetch|fetch failed|network|ECONNREFUSED|ECONNRESET|ENOTFOUND|timed out|timeout|socket hang up|offline/i.test(String(message || ''));
+const clampInteger = (value, fallback, min, max) => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(max, Math.max(min, parsed));
+};
+const normalizePhotoExportSettings = (value) => {
+    if (!isRecord(value)) {
+        return { ...DEFAULT_PHOTO_EXPORT_SETTINGS };
+    }
+
+    return {
+        format: 'jpeg',
+        quality: clampInteger(value.quality, DEFAULT_PHOTO_EXPORT_SETTINGS.quality, 40, 95),
+        maxWidth: clampInteger(value.maxWidth, DEFAULT_PHOTO_EXPORT_SETTINGS.maxWidth, 800, 4096),
+        maxHeight: clampInteger(value.maxHeight, DEFAULT_PHOTO_EXPORT_SETTINGS.maxHeight, 800, 4096)
+    };
+};
 
 const toOfflineError = (message) => {
     const error = new Error(message || 'Сеть недоступна.');
@@ -223,6 +249,7 @@ class MediaWorkflowManager extends EventEmitter {
         nextWorkflow.blockingReason = typeof workflow.blockingReason === 'string' ? workflow.blockingReason : null;
         nextWorkflow.recentEvents = Array.isArray(workflow.recentEvents) ? workflow.recentEvents.slice(-EVENT_BUFFER_SIZE) : [];
         nextWorkflow.summary = isRecord(workflow.summary) ? workflow.summary : {};
+        nextWorkflow.photoExportSettings = normalizePhotoExportSettings(workflow.photoExportSettings);
 
         nextWorkflow.items = Array.isArray(workflow.items) ? workflow.items : [];
         nextWorkflow.files = Array.isArray(workflow.files) ? workflow.files : [];
@@ -323,6 +350,7 @@ class MediaWorkflowManager extends EventEmitter {
             },
             manifestHash,
             basePhotoStateToken: payload.basePhotoStateToken,
+            photoExportSettings: normalizePhotoExportSettings(payload.photoExportSettings),
             items: Array.isArray(payload.items) ? payload.items : [],
             files
         };
@@ -533,8 +561,7 @@ class MediaWorkflowManager extends EventEmitter {
                 source: 'upload',
                 file_index: fileIndex,
                 queue_job_id: workflow.id,
-                queue_file_id: item.fileId,
-                checksum_sha256: file?.checksumSha256
+                queue_file_id: item.fileId
             };
         });
     }
@@ -575,6 +602,7 @@ class MediaWorkflowManager extends EventEmitter {
             }
             form.append('manifest', JSON.stringify(this.buildPhotoManifest(workflow)));
             form.append('base_photo_state_token', workflow.basePhotoStateToken);
+            form.append('photo_export_settings', JSON.stringify(normalizePhotoExportSettings(workflow.photoExportSettings)));
             form.append('queue_job_id', workflow.id);
 
             const payload = await this.apiRequest(`/api/batches/${encodeURIComponent(workflow.batchId)}/photo-tool/apply`, {

@@ -32,6 +32,12 @@ const moveFileSafely = async (sourcePath: string, targetPath: string) => {
     }
 };
 
+const createPhotoToolStateStaleError = () => createCodedHttpError(
+    'Фото партии уже обновились в другом окне или фоновой загрузкой. Обновите Photo Tool, чтобы не перезаписать чужие изменения.',
+    409,
+    'PHOTO_TOOL_STATE_STALE'
+);
+
 type PhotoToolApplyManifestEntry = {
     item_id: string;
     item_seq: number;
@@ -308,6 +314,10 @@ export const applyPhotoTool = async (
         const currentPhotoStateToken = buildPhotoToolStateToken(batch);
         const basePhotoStateToken = parsePhotoToolBaseStateToken(body?.base_photo_state_token);
         const manifest = parsePhotoToolApplyManifest(body?.manifest, batch);
+        const expectedItemStateById = new Map(batch.items.map((item) => [item.id, {
+            item_photo_url: item.item_photo_url,
+            updated_at: item.updated_at
+        }]));
         if (basePhotoStateToken !== currentPhotoStateToken) {
             const currentPhotoUrlByItemId = new Map(batch.items.map((item) => [item.id, item.item_photo_url || null]));
             const hasQueuedUpload = manifest.some((entry) =>
@@ -343,7 +353,7 @@ export const applyPhotoTool = async (
                 return serializePhotoToolPayload(batch);
             }
 
-            throw createCodedHttpError('Фото партии уже обновились в другом окне или фоновой загрузкой. Обновите Photo Tool, чтобы не перезаписать чужие изменения.', 409, 'PHOTO_TOOL_STATE_STALE');
+            throw createPhotoToolStateStaleError();
         }
 
         const usedFileIndexes = manifest
@@ -409,14 +419,32 @@ export const applyPhotoTool = async (
         const nextPhotoUrls = new Set(nextPhotoUrlByItemId.values());
         cleanupCandidateUrls = cleanupCandidateUrls.filter((url) => !nextPhotoUrls.has(url));
 
-        await prisma.$transaction(manifest.map((entry) =>
-            prisma.item.update({
-                where: { id: entry.item_id },
-                data: {
-                    item_photo_url: nextPhotoUrlByItemId.get(entry.item_id) || null
+        await prisma.$transaction(async (tx) => {
+            for (const entry of manifest) {
+                const expectedItemState = expectedItemStateById.get(entry.item_id);
+                if (!expectedItemState) {
+                    throw createPhotoToolStateStaleError();
                 }
-            })
-        ));
+
+                const result = await tx.item.updateMany({
+                    where: {
+                        id: entry.item_id,
+                        batch_id: batch.id,
+                        deleted_at: null,
+                        item_seq: entry.item_seq,
+                        item_photo_url: expectedItemState.item_photo_url,
+                        updated_at: expectedItemState.updated_at
+                    },
+                    data: {
+                        item_photo_url: nextPhotoUrlByItemId.get(entry.item_id) || null
+                    }
+                });
+
+                if (result.count !== 1) {
+                    throw createPhotoToolStateStaleError();
+                }
+            }
+        });
 
         const updatedBatch = ensurePhotoToolBatchReady(await getPhotoToolBatch(batchId));
         const afterMediaSnapshot = await loadBatchMediaSnapshot(prisma, batchId);

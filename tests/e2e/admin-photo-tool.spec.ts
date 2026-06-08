@@ -20,6 +20,11 @@ type PhotoToolPayload = {
     }>;
 };
 
+type DesktopPhotoWorkflowSnapshot = {
+    workflows: Array<Record<string, unknown>>;
+    counts: Record<string, number>;
+};
+
 const ADMIN_EMAIL = 'admin@stones.com';
 const ADMIN_PASSWORD = 'admin123';
 const PARTNER_EMAIL = 'yakutia.partner@stones.com';
@@ -52,9 +57,10 @@ async function setAdminSession(page: Page, loginPayload: LoginPayload) {
     }, loginPayload);
 }
 
-async function installDesktopPhotoMock(page: Page) {
-    await page.addInitScript(() => {
+async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?: DesktopPhotoWorkflowSnapshot } = {}) {
+    await page.addInitScript((mockOptions: { workflowSnapshot?: DesktopPhotoWorkflowSnapshot }) => {
         const stagedFiles: Record<string, { chunks: number; size: number }> = {};
+        const workflowSnapshot = mockOptions.workflowSnapshot || { workflows: [], counts: {} };
         Object.defineProperty(window, 'stonesDesktop', {
             configurable: true,
             value: {
@@ -71,8 +77,11 @@ async function installDesktopPhotoMock(page: Page) {
                 syncAuthToken: async () => ({ ok: true }),
                 getMediaQueueSnapshot: async () => ({ jobs: [], counts: {} }),
                 subscribeMediaQueue: () => () => undefined,
-                getMediaWorkflowSnapshot: async () => ({ workflows: [], counts: {} }),
-                subscribeMediaWorkflows: () => () => undefined,
+                getMediaWorkflowSnapshot: async () => workflowSnapshot,
+                subscribeMediaWorkflows: (callback: (snapshot: DesktopPhotoWorkflowSnapshot) => void) => {
+                    queueMicrotask(() => callback(workflowSnapshot));
+                    return () => undefined;
+                },
                 stageMediaQueueFileStart: async () => {
                     const fileId = crypto.randomUUID();
                     stagedFiles[fileId] = { chunks: 0, size: 0 };
@@ -105,7 +114,7 @@ async function installDesktopPhotoMock(page: Page) {
                 }
             }
         });
-    });
+    }, options);
 }
 
 async function createReceivedBatchWithSerials(
@@ -155,6 +164,44 @@ async function createReceivedBatchWithSerials(
     });
     expect(toolResponse.ok()).toBeTruthy();
     return await toolResponse.json() as PhotoToolPayload;
+}
+
+async function uploadTinyPhoto(request: APIRequestContext, accessToken: string, name: string): Promise<string> {
+    const response = await request.post('/api/upload/photo', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        multipart: {
+            file: {
+                name,
+                mimeType: 'image/png',
+                buffer: TINY_PNG
+            }
+        }
+    });
+    expect(response.ok()).toBeTruthy();
+    const payload = await response.json() as { url: string };
+    return payload.url;
+}
+
+async function applyExistingPhotoUrls(
+    request: APIRequestContext,
+    accessToken: string,
+    toolPayload: PhotoToolPayload,
+    urls: string[]
+): Promise<PhotoToolPayload> {
+    const response = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        multipart: {
+            base_photo_state_token: toolPayload.batch.photo_state_token,
+            manifest: JSON.stringify(toolPayload.items.map((item, index) => ({
+                item_id: item.id,
+                item_seq: item.item_seq,
+                source: 'existing',
+                existing_url: urls[index]
+            })))
+        }
+    });
+    expect(response.ok()).toBeTruthy();
+    return await response.json() as PhotoToolPayload;
 }
 
 test.afterAll(async () => {
@@ -434,6 +481,44 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
     expect(legacyApplyResponse.ok()).toBeTruthy();
 });
 
+test('API: concurrent photo apply rejects stale writer', async ({ request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+
+    const firstUrls = await Promise.all([
+        uploadTinyPhoto(request, admin.accessToken, 'race-a-1.png'),
+        uploadTinyPhoto(request, admin.accessToken, 'race-a-2.png')
+    ]);
+    const secondUrls = await Promise.all([
+        uploadTinyPhoto(request, admin.accessToken, 'race-b-1.png'),
+        uploadTinyPhoto(request, admin.accessToken, 'race-b-2.png')
+    ]);
+
+    const applyUrls = (urls: string[]) => request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            base_photo_state_token: toolPayload.batch.photo_state_token,
+            manifest: JSON.stringify(toolPayload.items.map((item, index) => ({
+                item_id: item.id,
+                item_seq: item.item_seq,
+                source: 'existing',
+                existing_url: urls[index]
+            })))
+        }
+    });
+
+    const responses = await Promise.all([applyUrls(firstUrls), applyUrls(secondUrls)]);
+    expect(responses.map((response) => response.status()).sort()).toEqual([200, 409]);
+
+    const staleResponse = responses.find((response) => response.status() === 409);
+    expect(staleResponse).toBeTruthy();
+    await expect(staleResponse!.json()).resolves.toMatchObject({
+        code: 'PHOTO_TOOL_STATE_STALE'
+    });
+});
+
 test.skip('UI: admin resolves duplicate item numbers and saves photo assignments', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
@@ -567,6 +652,55 @@ test('UI: desktop photo workflow receives export settings', async ({ page, reque
     expect(payload.files).toHaveLength(2);
 });
 
+test('UI: active desktop photo workflow locks editing controls', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+    const urls = await Promise.all([
+        uploadTinyPhoto(request, admin.accessToken, 'locked-1.png'),
+        uploadTinyPhoto(request, admin.accessToken, 'locked-2.png')
+    ]);
+    await applyExistingPhotoUrls(request, admin.accessToken, toolPayload, urls);
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page, {
+        workflowSnapshot: {
+            workflows: [
+                {
+                    id: 'photo-workflow-active-e2e',
+                    kind: 'PHOTO_APPLY_WORKFLOW',
+                    batchId,
+                    phase: 'uploading',
+                    progress: { completed: 0, total: 2 },
+                    routePath: `/admin/photo-tool/${batchId}`,
+                    lastError: null,
+                    createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
+                    updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
+                    uploadState: null
+                }
+            ],
+            counts: { uploading: 1 }
+        }
+    });
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await expect(page.getByTestId('photo-workflow-banner')).toContainText('Редактирование заблокировано до завершения workflow.');
+    await expect(page.getByTestId('photo-sort-name')).toBeDisabled();
+    await expect(page.getByTestId('photo-preset-standard')).toBeDisabled();
+
+    await page.getByTestId('photo-step-assign').click();
+    const assignmentInput = page.getByTestId('photo-assignment-input-center');
+    await expect(assignmentInput).toHaveValue('001');
+    await expect(assignmentInput).toBeDisabled();
+    await page.keyboard.press('Delete');
+    await expect(assignmentInput).toHaveValue('001');
+
+    await page.getByTestId('photo-step-export').click();
+    await expect(page.getByTestId('photo-export-clear-1')).toBeDisabled();
+});
+
 test('UI: desktop hotkeys navigate carousel, stage assignment numbers and remove binding with Delete', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
@@ -629,6 +763,62 @@ test('UI: desktop hotkeys navigate carousel, stage assignment numbers and remove
     await expect(page.getByTestId('photo-assignment-input-center').last()).toHaveValue('002');
     await expect(page.getByTestId('photo-list-status-0')).toHaveText('Позиция 001');
     await expect(page.getByTestId('photo-coverage')).toContainText('2/3');
+});
+
+test('UI: stale local photo draft is restored as conflict instead of being deleted', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+    const urls = await Promise.all([
+        uploadTinyPhoto(request, admin.accessToken, 'draft-old-1.png'),
+        uploadTinyPhoto(request, admin.accessToken, 'draft-old-2.png')
+    ]);
+    const appliedPayload = await applyExistingPhotoUrls(request, admin.accessToken, toolPayload, urls);
+
+    await testDb.item.update({
+        where: { id: appliedPayload.items[0].id },
+        data: { item_photo_url: '/locations/crystal-caves.jpg' }
+    });
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page);
+    await page.addInitScript(({ currentBatchId, staleToken, photoItems, photoUrls }) => {
+        localStorage.setItem(`photo-tool-draft:${currentBatchId}`, JSON.stringify({
+            version: 2,
+            batch_id: currentBatchId,
+            base_photo_state_token: staleToken,
+            photo_export_settings: {
+                format: 'jpeg',
+                quality: 92,
+                maxWidth: 2048,
+                maxHeight: 2048
+            },
+            sort_mode: 'name',
+            sort_descending: false,
+            assignment_descending: true,
+            active_photo_id: `persisted:${photoItems[0].id}`,
+            photos: photoItems.map((item, index) => ({
+                id: `persisted:${item.id}`,
+                source: 'persisted',
+                name: `draft-old-${index + 1}.jpg`,
+                assigned_item_seq: index === 0 ? 2 : 1,
+                existing_url: photoUrls[index],
+                last_modified: null
+            }))
+        }));
+    }, {
+        currentBatchId: batchId,
+        staleToken: appliedPayload.batch.photo_state_token,
+        photoItems: appliedPayload.items,
+        photoUrls: urls
+    });
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await expect(page.getByText('Восстановлен конфликтный черновик: данные партии уже изменились.')).toBeVisible();
+    await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
+    await page.getByTestId('photo-step-assign').click();
+    await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('002');
 });
 
 test.skip('UI: restores photo draft after reload and rejects stale save after external changes', async ({ page, request }) => {
