@@ -17,16 +17,16 @@ const pageMeta: Record<string, { title: string; description: string }> = {
         description: 'Клиентская база и история взаимодействия.'
     },
     '/admin/inventory': {
-        title: 'Наличие',
-        description: 'Текущий онлайн-остаток и доступность товаров.'
+        title: 'Наличие в продаже',
+        description: 'Онлайн-остаток, резервы и доступность товаров для продаж.'
     },
     '/admin/sales-history': {
         title: 'История продаж',
         description: 'Архив завершенных продаж.'
     },
     '/admin/products': {
-        title: 'Товары',
-        description: 'Карточки товаров, остатки и публикация.'
+        title: 'Товары и локации',
+        description: 'Локации, карточки товаров, остатки и публикация.'
     },
     '/admin/brandbook': {
         title: 'Брендбук',
@@ -41,7 +41,7 @@ const pageMeta: Record<string, { title: string; description: string }> = {
         description: 'Распределение партий и движение товаров.'
     },
     '/admin/warehouse': {
-        title: 'Склад',
+        title: 'Склад HQ',
         description: 'Складские остатки HQ и статусы items.'
     },
     '/admin/users': {

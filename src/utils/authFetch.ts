@@ -1,5 +1,6 @@
-import { syncDesktopAuthToken } from './desktop';
+import { ensureDesktopAdminSession, isStonesDesktop, syncDesktopAuthToken } from './desktop';
 import { fetchWithLogging } from './apiFetch';
+import { persistDesktopAuthSession } from './session';
 
 type AuthFetchInput = Parameters<typeof fetch>[0];
 type AuthFetchInit = Parameters<typeof fetch>[1];
@@ -37,6 +38,24 @@ const tryRefreshToken = async (): Promise<string | null> => {
     }
 };
 
+const tryDesktopAdminSession = async (): Promise<string | null> => {
+    if (!isStonesDesktop()) {
+        return null;
+    }
+
+    try {
+        const session = await ensureDesktopAdminSession();
+        if (!session?.accessToken) {
+            return null;
+        }
+
+        persistDesktopAuthSession(session);
+        return session.accessToken;
+    } catch {
+        return null;
+    }
+};
+
 export const authFetch = async (input: AuthFetchInput, init?: AuthFetchInit): Promise<Response> => {
     const initialToken = localStorage.getItem('accessToken');
     let response = await fetchWithLogging(input, withAuthHeader(init, initialToken));
@@ -45,7 +64,7 @@ export const authFetch = async (input: AuthFetchInput, init?: AuthFetchInit): Pr
         return response;
     }
 
-    const nextToken = await tryRefreshToken();
+    const nextToken = await tryRefreshToken() || await tryDesktopAdminSession();
     if (!nextToken) {
         return response;
     }

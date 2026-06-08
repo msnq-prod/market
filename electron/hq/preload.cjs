@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('stonesDesktop', {
     downloadHqUpdate: () => ipcRenderer.invoke('stones:download-hq-update'),
     exportStatusCenterLogs: (payload) => ipcRenderer.invoke('stones:export-status-center-logs', payload),
     getAdminAutoLoginCredentials: () => ipcRenderer.invoke('stones:get-admin-auto-login-credentials'),
+    ensureAdminSession: () => ipcRenderer.invoke('stones:ensure-admin-session'),
     syncAuthToken: (accessToken) => ipcRenderer.invoke('stones:sync-auth-token', accessToken),
     selectBatchDiagnosticsMediaFolder: () => ipcRenderer.invoke('stones:select-batch-diagnostics-media-folder'),
     exportDiagnosticsMarkdown: (payload) => ipcRenderer.invoke('stones:export-diagnostics-markdown', payload),

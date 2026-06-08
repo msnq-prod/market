@@ -99,8 +99,7 @@ export const createVideoToolV3DevMock = (): VideoToolV3Api => ({
         return snapshot;
     },
     getSourcePreviewUrl: async () => ({
-        error: 'Mock preview недоступен.',
-        code: 'MOCK'
+        previewUrl: 'data:video/mp4;base64,AAAA'
     }),
     startExport: async () => snapshot,
     retryItemRender: async () => snapshot,

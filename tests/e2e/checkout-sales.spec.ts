@@ -115,7 +115,7 @@ test('Sales manager can search, edit and process checkout заявки without l
     await page.goto('/admin/clients');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Клиенты' })).toBeVisible();
     await page.goto('/admin/inventory');
-    await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Наличие в продаже' })).toBeVisible();
     await page.goto('/admin/sales-history');
     await expect(page.getByRole('main').getByRole('heading', { name: 'История продаж' })).toBeVisible();
     await page.goto('/admin/orders');
@@ -252,7 +252,7 @@ test('Sales cabinet ACL: sales manager sees all 4 sales screens, manager is redi
     await page.goto('/admin/clients');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Клиенты' })).toBeVisible();
     await page.goto('/admin/inventory');
-    await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Наличие в продаже' })).toBeVisible();
     await page.goto('/admin/sales-history');
     await expect(page.getByRole('main').getByRole('heading', { name: 'История продаж' })).toBeVisible();
 
@@ -351,7 +351,7 @@ test('Sales inventory supports filters, serial search and item detail', async ({
     await page.waitForURL(/\/admin\/orders$/);
 
     await page.goto('/admin/inventory');
-    await expect(page.getByRole('heading', { name: 'Наличие' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Наличие в продаже' })).toBeVisible();
     await expect(page.getByTestId('inventory-page-size')).toHaveValue('300');
 
     await page.getByLabel('Поиск по наличию').fill(serialNumber);

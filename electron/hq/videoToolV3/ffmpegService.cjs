@@ -9,6 +9,10 @@ const ffprobeStatic = require('ffprobe-static');
 const OUTPUT_WIDTH = 720;
 const OUTPUT_HEIGHT = 1280;
 const OUTPUT_FPS = 24;
+const OUTPUT_AUDIO_SAMPLE_RATE = 48_000;
+const OUTPUT_AUDIO_CHANNELS = 2;
+const OUTPUT_AUDIO_CHANNEL_LAYOUT = 'stereo';
+const OUTPUT_AUDIO_BITRATE = '128k';
 const MAX_SOURCE_DURATION_MS = 60 * 60 * 1000;
 
 const QUALITY_PRESETS = {
@@ -82,6 +86,14 @@ const toSec = (valueMs) => {
     return (numeric / 1000).toFixed(3);
 };
 
+const silentAudioFilter = (durationMs, label) => (
+    `anullsrc=channel_layout=${OUTPUT_AUDIO_CHANNEL_LAYOUT}:sample_rate=${OUTPUT_AUDIO_SAMPLE_RATE},atrim=duration=${toSec(durationMs)},asetpts=PTS-STARTPTS[${label}]`
+);
+
+const trimAudioFilter = (inputIndex, startMs, endMs, label) => (
+    `[${inputIndex}:a:0]atrim=start=${toSec(startMs)}:end=${toSec(endMs)},asetpts=PTS-STARTPTS,aresample=${OUTPUT_AUDIO_SAMPLE_RATE},aformat=sample_rates=${OUTPUT_AUDIO_SAMPLE_RATE}:channel_layouts=${OUTPUT_AUDIO_CHANNEL_LAYOUT}[${label}]`
+);
+
 class FfmpegService {
     constructor({ fileStore }) {
         if (!fileStore) {
@@ -114,6 +126,7 @@ class FfmpegService {
         const parsed = parseJson(stdout, 'ffprobe');
         const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
         const videoStream = streams.find((stream) => stream?.codec_type === 'video');
+        const audioStream = streams.find((stream) => stream?.codec_type === 'audio');
         if (!videoStream) {
             throw new Error('Исходный файл не удалось прочитать. Выберите другой файл.');
         }
@@ -134,7 +147,9 @@ class FfmpegService {
             durationMs,
             sizeBytes: stat.size,
             formatName: parsed.format?.format_name || null,
-            videoCodec: videoStream.codec_name || null
+            videoCodec: videoStream.codec_name || null,
+            audioCodec: audioStream?.codec_name || null,
+            hasAudio: Boolean(audioStream)
         };
     }
 
@@ -146,22 +161,35 @@ class FfmpegService {
         return probe;
     }
 
-    async prepareSource({ inputPath, preparedPath, qualityPreset = 'standard', expectedDurationMs = 0, onProgress, signal }) {
+    async prepareSource({ inputPath, preparedPath, qualityPreset = 'standard', expectedDurationMs = 0, hasAudio = null, onProgress, signal }) {
         const preset = QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.standard;
         const tmpOutput = this.fileStore.createTempPath(preparedPath);
+        const sourceHasAudio = hasAudio === null ? (await this.probe(inputPath)).hasAudio : Boolean(hasAudio);
+        const expectedDurationSec = toSec(expectedDurationMs);
+        const inputArgs = sourceHasAudio
+            ? ['-i', inputPath]
+            : ['-i', inputPath, '-f', 'lavfi', '-t', expectedDurationSec, '-i', `anullsrc=channel_layout=${OUTPUT_AUDIO_CHANNEL_LAYOUT}:sample_rate=${OUTPUT_AUDIO_SAMPLE_RATE}`];
+        const audioMap = sourceHasAudio ? '0:a:0' : '1:a:0';
         await fsp.mkdir(path.dirname(tmpOutput), { recursive: true });
         await fsp.rm(tmpOutput, { force: true }).catch(() => undefined);
 
         try {
             await this.runProcess(ffmpegPath(), [
                 '-y',
-                '-i', inputPath,
+                ...inputArgs,
+                '-map', '0:v:0',
+                '-map', audioMap,
                 '-vf', `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},fps=${OUTPUT_FPS},setsar=1`,
-                '-an',
+                '-af', 'aresample=async=1:first_pts=0,apad',
                 '-c:v', 'libx264',
                 '-preset', preset.preset,
                 '-crf', String(preset.crf),
                 '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', OUTPUT_AUDIO_BITRATE,
+                '-ar', String(OUTPUT_AUDIO_SAMPLE_RATE),
+                '-ac', String(OUTPUT_AUDIO_CHANNELS),
+                '-shortest',
                 '-movflags', '+faststart',
                 '-progress', 'pipe:1',
                 '-nostats',
@@ -174,9 +202,15 @@ class FfmpegService {
                 }
             });
 
-            await this.probePrepared(tmpOutput);
+            const tmpProbe = await this.probePrepared(tmpOutput);
+            if (!tmpProbe.hasAudio) {
+                throw new Error('Prepared-файл не содержит audio stream.');
+            }
             await this.fileStore.atomicMove(tmpOutput, preparedPath);
             const preparedProbe = await this.probePrepared(preparedPath);
+            if (!preparedProbe.hasAudio) {
+                throw new Error('Prepared-файл не содержит audio stream.');
+            }
             const sizeBytes = await this.fileStore.getFileSize(preparedPath);
             if (sizeBytes <= 0) {
                 throw new Error('Prepared-файл пустой.');
@@ -212,6 +246,22 @@ class FfmpegService {
             throw new Error('Render segment duration должен быть больше 0.');
         }
 
+        const [introProbe, tailProbe] = await Promise.all([
+            this.probePrepared(intro.preparedPath),
+            this.probePrepared(tail.preparedPath)
+        ]);
+        const filterComplex = [
+            `[0:v]trim=start=${toSec(intro.startMs)}:end=${toSec(intro.endMs)},setpts=PTS-STARTPTS[v0]`,
+            introProbe.hasAudio
+                ? trimAudioFilter(0, intro.startMs, intro.endMs, 'a0')
+                : silentAudioFilter(introDurationMs, 'a0'),
+            `[1:v]trim=start=${toSec(tail.startMs)}:end=${toSec(tail.endMs)},setpts=PTS-STARTPTS[v1]`,
+            tailProbe.hasAudio
+                ? trimAudioFilter(1, tail.startMs, tail.endMs, 'a1')
+                : silentAudioFilter(tailDurationMs, 'a1'),
+            '[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]'
+        ].join(';');
+
         await fsp.mkdir(path.dirname(tmpOutput), { recursive: true });
         await fsp.rm(tmpOutput, { force: true }).catch(() => undefined);
 
@@ -221,17 +271,17 @@ class FfmpegService {
                 '-i', intro.preparedPath,
                 '-i', tail.preparedPath,
                 '-filter_complex',
-                [
-                    `[0:v]trim=start=${toSec(intro.startMs)}:end=${toSec(intro.endMs)},setpts=PTS-STARTPTS[v0]`,
-                    `[1:v]trim=start=${toSec(tail.startMs)}:end=${toSec(tail.endMs)},setpts=PTS-STARTPTS[v1]`,
-                    '[v0][v1]concat=n=2:v=1:a=0[v]'
-                ].join(';'),
+                filterComplex,
                 '-map', '[v]',
-                '-an',
+                '-map', '[a]',
                 '-c:v', 'libx264',
                 '-preset', preset.preset,
                 '-crf', String(preset.crf),
                 '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', OUTPUT_AUDIO_BITRATE,
+                '-ar', String(OUTPUT_AUDIO_SAMPLE_RATE),
+                '-ac', String(OUTPUT_AUDIO_CHANNELS),
                 '-movflags', '+faststart',
                 '-progress', 'pipe:1',
                 '-nostats',
@@ -245,6 +295,9 @@ class FfmpegService {
             });
 
             const tmpProbe = await this.probePrepared(tmpOutput);
+            if (!tmpProbe.hasAudio) {
+                throw new Error('Rendered-файл не содержит audio stream.');
+            }
             const toleranceMs = Math.max(750, Math.round(expectedDurationMs * 0.05));
             if (Math.abs(tmpProbe.durationMs - expectedDurationMs) > toleranceMs) {
                 throw new Error('Rendered-файл имеет неверную duration.');
@@ -256,6 +309,9 @@ class FfmpegService {
 
             await this.fileStore.atomicMove(tmpOutput, outputPath);
             const finalProbe = await this.probePrepared(outputPath);
+            if (!finalProbe.hasAudio) {
+                throw new Error('Rendered output не содержит audio stream.');
+            }
             const sizeBytes = await this.fileStore.getFileSize(outputPath);
             if (sizeBytes <= 0) {
                 throw new Error('Rendered output пустой.');

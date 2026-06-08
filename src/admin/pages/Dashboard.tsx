@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, Boxes, MapPin, Truck, Users } from 'lucide-react';
+import { Archive, Boxes, Truck, Users } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 
 type DashboardStats = {
@@ -29,7 +29,7 @@ const initialStats: DashboardStats = {
     stockOnlineItems: 0,
 };
 
-const PROJECT_VERSION = '1.5.15';
+const PROJECT_VERSION = import.meta.env.VITE_PROJECT_VERSION || 'dev';
 
 export function Dashboard() {
     const [stats, setStats] = useState<DashboardStats>(initialStats);
@@ -85,20 +85,12 @@ export function Dashboard() {
 
     const cards = [
         {
-            title: 'Локации',
-            to: '/admin/products',
-            icon: <MapPin size={18} />,
-            accentClass: 'bg-amber-400/10 text-amber-200',
-            value: stats.locationsTotal,
-            subtitle: `С опубликованными товарами: ${stats.locationsPublished}`
-        },
-        {
-            title: 'Товары',
+            title: 'Товары и локации',
             to: '/admin/products',
             icon: <Boxes size={18} />,
             accentClass: 'bg-blue-400/10 text-blue-200',
             value: stats.productsTotal,
-            subtitle: `Опубликовано: ${stats.productsPublished}`
+            subtitle: `Опубликовано: ${stats.productsPublished} · локаций: ${stats.locationsTotal} · с товарами: ${stats.locationsPublished}`
         },
         {
             title: 'Пользователи',
@@ -106,15 +98,7 @@ export function Dashboard() {
             icon: <Users size={18} />,
             accentClass: 'bg-violet-400/10 text-violet-200',
             value: stats.usersTotal,
-            subtitle: 'Все зарегистрированные роли'
-        },
-        {
-            title: 'Франчайзи',
-            to: '/admin/users',
-            icon: <Users size={18} />,
-            accentClass: 'bg-cyan-400/10 text-cyan-200',
-            value: stats.franchiseesTotal,
-            subtitle: 'Активные партнерские аккаунты'
+            subtitle: `Все роли · франчайзи: ${stats.franchiseesTotal}`
         },
         {
             title: 'Партии в пути',

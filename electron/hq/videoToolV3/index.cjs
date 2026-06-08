@@ -23,7 +23,8 @@ class VideoToolV3App extends EventEmitter {
         rootDir = null,
         getApiOrigin = null,
         getNetworkStatus = null,
-        getAccessToken = null
+        getAccessToken = null,
+        refreshAccessToken = null
     }) {
         super();
         if (!app) {
@@ -35,6 +36,7 @@ class VideoToolV3App extends EventEmitter {
         this.getApiOrigin = getApiOrigin || (() => 'http://127.0.0.1:3001');
         this.getNetworkStatus = getNetworkStatus;
         this.getAccessToken = getAccessToken;
+        this.refreshAccessToken = refreshAccessToken;
         this.fileStore = new VideoToolV3FileStore({ rootDir: this.rootDir });
         this.db = null;
         this.serverClient = null;
@@ -63,7 +65,8 @@ class VideoToolV3App extends EventEmitter {
         }).init();
         this.serverClient = new ServerClient({
             getApiOrigin: this.getApiOrigin,
-            getAccessToken: this.getAccessToken
+            getAccessToken: this.getAccessToken,
+            refreshAccessToken: this.refreshAccessToken
         });
         this.projectService = new ProjectService({
             db: this.db,

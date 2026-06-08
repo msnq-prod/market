@@ -1,13 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { readFileSync } from 'node:fs'
 
 // https://vitejs.dev/config/
+const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version?: string }
+const projectVersion = packageJson.version?.trim() || '0.0.0'
 const devServerPort = Number(process.env.VITE_PORT || '5173')
 const apiProxyTarget = process.env.VITE_API_TARGET || 'http://127.0.0.1:3001'
 const usePolling = process.env.VITE_USE_POLLING === '1'
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    'import.meta.env.VITE_PROJECT_VERSION': JSON.stringify(projectVersion),
+  },
   build: {
     rollupOptions: {
       output: {

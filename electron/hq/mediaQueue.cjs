@@ -111,13 +111,14 @@ const parseJsonResponse = async (response, fallbackMessage) => {
 };
 
 class MediaUploadQueue extends EventEmitter {
-    constructor({ rootDir, getApiOrigin, getAccessToken }) {
+    constructor({ rootDir, getApiOrigin, getAccessToken, refreshAccessToken = null }) {
         super();
         this.rootDir = rootDir;
         this.filesDir = path.join(rootDir, 'files');
         this.statePath = path.join(rootDir, 'queue.json');
         this.getApiOrigin = getApiOrigin;
         this.getAccessToken = getAccessToken;
+        this.refreshAccessToken = refreshAccessToken;
         this.jobs = [];
         this.stagedFiles = new Map();
         this.abortControllers = new Map();
@@ -424,7 +425,10 @@ class MediaUploadQueue extends EventEmitter {
     }
 
     async runJob(job) {
-        const token = this.getAccessToken();
+        let token = this.getAccessToken();
+        if (!token && this.refreshAccessToken) {
+            token = await this.refreshAccessToken().catch(() => null);
+        }
         if (!token) {
             job.status = 'auth_required';
             job.lastError = 'Нужно войти в HQ заново.';
@@ -492,9 +496,19 @@ class MediaUploadQueue extends EventEmitter {
             job.updatedAt = nowIso();
 
             if (statusCode === 401 || statusCode === 403) {
-                job.status = 'auth_required';
-                job.blockingReason = 'auth_required';
-                appendEvent(job, 'blocked_auth');
+                const refreshedToken = this.refreshAccessToken
+                    ? await this.refreshAccessToken().catch(() => null)
+                    : null;
+                if (refreshedToken) {
+                    job.status = 'retrying';
+                    job.nextAttemptAt = Date.now() + 250;
+                    job.blockingReason = 'retry_scheduled';
+                    appendEvent(job, 'auth_refreshed');
+                } else {
+                    job.status = 'auth_required';
+                    job.blockingReason = 'auth_required';
+                    appendEvent(job, 'blocked_auth');
+                }
             } else if (errorCode === 'PHOTO_TOOL_STATE_STALE') {
                 job.status = 'failed';
                 job.blockingReason = 'photo_tool_state_stale';

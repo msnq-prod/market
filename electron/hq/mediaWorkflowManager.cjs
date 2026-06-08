@@ -176,7 +176,7 @@ const buildWorkflowSnapshot = (workflow) => {
 };
 
 class MediaWorkflowManager extends EventEmitter {
-    constructor({ rootDir, stagedFilesDir, mediaQueue, getApiOrigin, getAccessToken }) {
+    constructor({ rootDir, stagedFilesDir, mediaQueue, getApiOrigin, getAccessToken, refreshAccessToken = null }) {
         super();
         this.rootDir = rootDir;
         this.stagedFilesDir = stagedFilesDir;
@@ -184,6 +184,7 @@ class MediaWorkflowManager extends EventEmitter {
         this.mediaQueue = mediaQueue;
         this.getApiOrigin = getApiOrigin;
         this.getAccessToken = getAccessToken;
+        this.refreshAccessToken = refreshAccessToken;
         this.workflows = [];
         this.processing = false;
         this.persistPromise = Promise.resolve();
@@ -408,7 +409,10 @@ class MediaWorkflowManager extends EventEmitter {
     }
 
     async apiRequest(pathname, init = {}, fallbackMessage = 'Запрос не выполнен.') {
-        const token = this.getAccessToken();
+        let token = this.getAccessToken();
+        if (!token && this.refreshAccessToken) {
+            token = await this.refreshAccessToken().catch(() => null);
+        }
         if (!token) {
             throw toAuthError('Нужно войти в HQ заново.');
         }
@@ -449,10 +453,20 @@ class MediaWorkflowManager extends EventEmitter {
         workflow.updatedAt = nowIso();
 
         if (normalized.code === 'AUTH_REQUIRED') {
-            workflow.phase = 'auth_required';
-            workflow.nextAttemptAt = Date.now() + RETRY_DELAY_MS;
-            workflow.blockingReason = 'auth_required';
-            appendEvent(workflow, 'blocked_auth');
+            const refreshedToken = this.refreshAccessToken
+                ? await this.refreshAccessToken().catch(() => null)
+                : null;
+            if (refreshedToken) {
+                workflow.phase = 'uploading';
+                workflow.nextAttemptAt = Date.now() + RETRY_DELAY_MS;
+                workflow.blockingReason = 'retry_scheduled';
+                appendEvent(workflow, 'auth_refreshed');
+            } else {
+                workflow.phase = 'auth_required';
+                workflow.nextAttemptAt = Date.now() + RETRY_DELAY_MS;
+                workflow.blockingReason = 'auth_required';
+                appendEvent(workflow, 'blocked_auth');
+            }
         } else if (normalized.code === 'OFFLINE') {
             workflow.phase = 'paused_offline';
             workflow.nextAttemptAt = Date.now() + RETRY_DELAY_MS;

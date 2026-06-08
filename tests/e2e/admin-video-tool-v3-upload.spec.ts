@@ -135,6 +135,7 @@ const installVideoToolV3Mock = async (
                 return snapshot;
             },
             retryItemRender: async () => snapshot,
+            getSourcePreviewUrl: async () => ({ previewUrl: 'data:video/mp4;base64,AAAA' }),
             retryItemUpload: async (exportItemId: string) => {
                 target.__videoV3RetryCalls.push(exportItemId);
                 snapshot = {
@@ -235,6 +236,18 @@ test('Video Tool v3: editor keeps timeline visible with many segments', async ({
     expect(metrics.documentScrollHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1);
     expect(metrics.segmentCanScroll).toBe(true);
     expect(metrics.segmentScrollbarWidth).toBe('none');
+});
+
+test('Video Tool v3: editor preview video is not muted', async ({ page }) => {
+    await installVideoToolV3Mock(page, { segmentCount: 3 });
+    await openEditorTab(page);
+
+    const video = page.getByTestId('video-v3-preview').locator('video');
+    await expect(video).toBeVisible();
+    await expect.poll(() => video.evaluate((node) => (node as HTMLVideoElement).muted)).toBe(false);
+
+    await page.getByRole('button', { name: 'play pause' }).click();
+    await expect.poll(() => video.evaluate((node) => (node as HTMLVideoElement).muted)).toBe(false);
 });
 
 test('Video Tool v3 API: resumable chunks complete and publish clone video', async ({ page, request }) => {

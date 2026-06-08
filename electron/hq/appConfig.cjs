@@ -7,6 +7,7 @@ const DESKTOP_ADMIN_AUTO_LOGIN = Object.freeze({
     email: 'admin@stones.com',
     password: 'admin123'
 });
+const DESKTOP_ADMIN_TOKEN = process.env.DESKTOP_ADMIN_TOKEN?.trim() || 'stones-hq-desktop-admin-token-v1';
 const DEFAULT_API_ORIGIN = 'http://127.0.0.1:3001';
 const DEFAULT_DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const UPDATE_MANIFEST_FILE = 'ZAGARAMI-HQ-update.json';
@@ -71,6 +72,7 @@ const createAppConfig = ({ app }) => {
         projectRoot,
         APP_DISPLAY_NAME,
         DESKTOP_ADMIN_AUTO_LOGIN,
+        DESKTOP_ADMIN_TOKEN,
         DEFAULT_API_ORIGIN,
         DEFAULT_DEV_SERVER_URL,
         UPDATE_MANIFEST_FILE,

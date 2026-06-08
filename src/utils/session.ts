@@ -1,4 +1,5 @@
 import { syncDesktopAuthToken } from './desktop';
+import type { StonesDesktopAdminSession } from './desktop';
 import { apiFetch } from './apiFetch';
 
 type SessionPayload = {
@@ -16,6 +17,15 @@ export const persistAuthSession = (payload: SessionPayload) => {
         localStorage.setItem('userId', payload.userId);
     }
     void syncDesktopAuthToken(payload.accessToken);
+};
+
+export const persistDesktopAuthSession = (session: StonesDesktopAdminSession) => {
+    persistAuthSession({
+        accessToken: session.accessToken,
+        role: session.role,
+        name: session.name,
+        userId: session.userId || session.user.id
+    });
 };
 
 export const clearAuthSession = () => {

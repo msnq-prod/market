@@ -48,11 +48,24 @@ export function PreviewPanel({
         video.currentTime = targetSeconds;
     }, []);
 
+    const handlePlayPause = useCallback(() => {
+        const video = videoRef.current;
+        if (!video || isPlaying || !sourcePreviewUrl) {
+            onPlayPause();
+            return;
+        }
+
+        video.muted = false;
+        void video.play().catch(() => undefined);
+        onPlayPause();
+    }, [isPlaying, onPlayPause, sourcePreviewUrl]);
+
     useEffect(() => {
         const video = videoRef.current;
         if (!video || !sourcePreviewUrl) return;
         if (video.src !== sourcePreviewUrl) {
             pendingSeekMsRef.current = sourceLocalMs;
+            video.muted = false;
             video.src = sourcePreviewUrl;
             video.load();
         }
@@ -111,7 +124,6 @@ export function PreviewPanel({
                         <video
                             ref={videoRef}
                             className="h-full w-full object-contain"
-                            muted
                             playsInline
                             preload="metadata"
                             onLoadedMetadata={(event) => applyPendingSeek(event.currentTarget)}
@@ -145,7 +157,7 @@ export function PreviewPanel({
                     <button type="button" onClick={() => onFrameStep(-1)} className="rounded p-2 hover:bg-white/8" aria-label="frame back">
                         <StepBack size={21} />
                     </button>
-                    <button type="button" onClick={onPlayPause} className="rounded p-3 hover:bg-white/8" aria-label="play pause">
+                    <button type="button" onClick={handlePlayPause} className="rounded p-3 hover:bg-white/8" aria-label="play pause">
                         {isPlaying ? <Pause size={28} /> : <Play size={28} />}
                     </button>
                     <button type="button" onClick={() => onFrameStep(1)} className="rounded p-2 hover:bg-white/8" aria-label="frame forward">

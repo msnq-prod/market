@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, HardDriveDownload, Settings2, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, HardDriveDownload, Settings2, Menu, X, ExternalLink } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { logoutSession } from '../../utils/session';
@@ -55,7 +55,7 @@ export function Sidebar() {
     const salesItems: NavConfig[] = [
         { id: 'orders', to: '/admin/orders', icon: <ShoppingCart size={18} />, label: 'Заказы' },
         { id: 'clients', to: '/admin/clients', icon: <Users size={18} />, label: 'Клиенты' },
-        { id: 'inventory', to: '/admin/inventory', icon: <Database size={18} />, label: 'Наличие' },
+        { id: 'inventory', to: '/admin/inventory', icon: <Database size={18} />, label: 'Наличие в продаже' },
         { id: 'sales-history', to: '/admin/sales-history', icon: <History size={18} />, label: 'История продаж' }
     ];
 
@@ -75,13 +75,13 @@ export function Sidebar() {
             items: [
                 { id: 'acceptance', to: '/admin/acceptance', icon: <Truck size={18} />, label: 'Приемка' },
                 { id: 'allocation', to: '/admin/allocation', icon: <Box size={18} />, label: 'Распределение' },
-                { id: 'warehouse', to: '/admin/warehouse', icon: <Archive size={18} />, label: 'Склад' }
+                { id: 'warehouse', to: '/admin/warehouse', icon: <Archive size={18} />, label: 'Склад HQ' }
             ]
         },
         {
             title: 'Контент',
             items: [
-                { id: 'products', to: '/admin/products', icon: <Box size={18} />, label: 'Товары' },
+                { id: 'products', to: '/admin/products', icon: <Box size={18} />, label: 'Товары и локации' },
                 { id: 'qr-print', to: '/admin/qr/print', icon: <QrCode size={18} />, label: 'QR-печать', newTab: true },
                 { id: 'hq-admin', to: '/admin/video-tool', icon: <HardDriveDownload size={18} />, label: 'HQ Admin' },
                 { id: 'clone-content', to: '/admin/clone-content', icon: <FileText size={18} />, label: 'Страница клона' }
@@ -358,12 +358,15 @@ function NavItem({
                 {icon}
             </div>
             <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+            {newTab ? (
+                <ExternalLink aria-hidden="true" size={13} className="shrink-0 text-gray-500 transition group-hover:text-gray-300" />
+            ) : null}
         </>
     );
 
     if (newTab) {
         return (
-            <a href={to} target="_blank" rel="noreferrer noopener" className={className} onClick={onNavigate}>
+            <a href={to} target="_blank" rel="noreferrer noopener" className={className} onClick={onNavigate} title="Откроется в новом окне">
                 {content}
             </a>
         );

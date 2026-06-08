@@ -26,9 +26,75 @@ protocol.registerSchemesAsPrivileged([{
 }]);
 
 let accessToken = null;
+let desktopAuthSession = null;
 let mediaQueue = null;
 let mediaWorkflowManager = null;
 let videoToolV3App = null;
+
+const resumeAuthBlockedWork = () => {
+    mediaQueue?.schedule(0);
+    mediaWorkflowManager?.schedule(0);
+};
+
+const setAccessToken = (nextToken) => {
+    accessToken = nextToken;
+    videoToolV3App?.setAccessToken(nextToken);
+    if (nextToken) {
+        resumeAuthBlockedWork();
+    }
+};
+
+const normalizeDesktopAuthSession = (payload) => {
+    if (!payload?.accessToken || !payload?.user?.id || !payload?.role || !payload?.name) {
+        throw new Error('Некорректный ответ desktop-авторизации.');
+    }
+
+    return {
+        accessToken: payload.accessToken,
+        accessTokenTtlSeconds: Number(payload.accessTokenTtlSeconds || 0) || null,
+        role: payload.role,
+        name: payload.name,
+        userId: payload.user.id,
+        user: payload.user
+    };
+};
+
+const requestDesktopAuthSession = async () => {
+    const networkStatus = await getNetworkStatus();
+    if (!networkStatus.apiReachable) {
+        const error = new Error('Сервер не отвечает.');
+        error.code = 'SERVER_OFFLINE';
+        error.details = networkStatus;
+        throw error;
+    }
+
+    const apiOrigin = await config.resolveApiOrigin();
+    const response = await fetch(`${apiOrigin.replace(/\/+$/, '')}/auth/desktop-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: config.DESKTOP_ADMIN_TOKEN })
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+        const error = new Error(payload?.error || 'Desktop-вход не выполнен.');
+        error.code = response.status === 401 || response.status === 403 ? 'AUTH_FAILED' : 'DESKTOP_LOGIN_FAILED';
+        error.status = response.status;
+        throw error;
+    }
+
+    desktopAuthSession = normalizeDesktopAuthSession(payload);
+    setAccessToken(desktopAuthSession.accessToken);
+    return desktopAuthSession;
+};
+
+const ensureDesktopAuthSession = async ({ force = false } = {}) => {
+    if (!force && desktopAuthSession?.accessToken) {
+        return desktopAuthSession;
+    }
+
+    return requestDesktopAuthSession();
+};
 
 const localServerRuntime = createLocalServerRuntime({
     getDistRoot: config.getDistRoot,
@@ -114,7 +180,8 @@ const ensureMediaRuntimes = async (apiOrigin) => {
         mediaQueue = new MediaUploadQueue({
             rootDir: config.getMediaQueueRoot(),
             getApiOrigin: () => apiOrigin,
-            getAccessToken: () => accessToken
+            getAccessToken: () => accessToken,
+            refreshAccessToken: async () => (await ensureDesktopAuthSession({ force: true })).accessToken
         });
         mediaQueue.on('change', (snapshot) => {
             BrowserWindow.getAllWindows().forEach((window) => {
@@ -131,7 +198,8 @@ const ensureMediaRuntimes = async (apiOrigin) => {
             stagedFilesDir: `${config.getMediaQueueRoot()}/files`,
             mediaQueue,
             getApiOrigin: () => apiOrigin,
-            getAccessToken: () => accessToken
+            getAccessToken: () => accessToken,
+            refreshAccessToken: async () => (await ensureDesktopAuthSession({ force: true })).accessToken
         });
         mediaWorkflowManager.on('change', (snapshot) => {
             BrowserWindow.getAllWindows().forEach((window) => {
@@ -148,7 +216,8 @@ const ensureVideoToolV3Runtime = async () => {
             app,
             getApiOrigin: config.resolveApiOrigin,
             getNetworkStatus,
-            getAccessToken: () => accessToken
+            getAccessToken: () => accessToken,
+            refreshAccessToken: async () => (await ensureDesktopAuthSession({ force: true })).accessToken
         });
         videoToolV3App.on('event', (event) => {
             sendVideoToolV3Event(BrowserWindow.getAllWindows(), event);
@@ -160,8 +229,8 @@ const ensureVideoToolV3Runtime = async () => {
 
 const resolveAppUrl = async (apiOrigin) => (
     config.shouldUseLocalDist()
-        ? `${await localServerRuntime.start(apiOrigin)}/admin/login`
-        : `${config.normalizeOrigin(process.env.STONES_HQ_DEV_SERVER_URL, config.DEFAULT_DEV_SERVER_URL)}/admin/login`
+        ? `${await localServerRuntime.start(apiOrigin)}/admin`
+        : `${config.normalizeOrigin(process.env.STONES_HQ_DEV_SERVER_URL, config.DEFAULT_DEV_SERVER_URL)}/admin`
 );
 
 const createWindow = async () => {
@@ -189,11 +258,9 @@ registerIpcHandlers({
     updatesRuntime,
     getAppInfo,
     getNetworkStatus,
+    ensureDesktopAuthSession,
     getAccessToken: () => accessToken,
-    setAccessToken: (nextToken) => {
-        accessToken = nextToken;
-        videoToolV3App?.setAccessToken(nextToken);
-    },
+    setAccessToken,
     getMediaQueue: () => mediaQueue,
     getMediaWorkflowManager: () => mediaWorkflowManager
 });

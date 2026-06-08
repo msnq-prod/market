@@ -85,6 +85,7 @@ const registerIpcHandlers = ({
     updatesRuntime,
     getAppInfo,
     getNetworkStatus,
+    ensureDesktopAuthSession,
     getAccessToken,
     setAccessToken,
     getMediaQueue,
@@ -108,6 +109,7 @@ const registerIpcHandlers = ({
 
     ipcMain.handle('stones:get-app-info', async () => getAppInfo());
     ipcMain.handle('stones:get-network-status', async () => getNetworkStatus());
+    ipcMain.handle('stones:ensure-admin-session', async () => ensureDesktopAuthSession({ force: true }));
     ipcMain.handle('stones:get-desktop-diagnostics', async () => diagnosticsRuntime.getDesktopDiagnostics());
     ipcMain.handle('stones:check-hq-update', async () => updatesRuntime.checkAndTrack());
     ipcMain.handle('stones:download-hq-update', async () => updatesRuntime.downloadAndTrack());

@@ -15,6 +15,7 @@ import { LoadingScreen } from './components/LoadingScreen'
 import { ScrollToProductsHint } from './components/ScrollToProductsHint'
 import { AdminLayout } from './admin/components/AdminLayout'
 import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
+import { DesktopAuthGate } from './admin/components/DesktopAuthGate'
 import { HqDesktopDownloadPlaceholder } from './admin/components/HqDesktopDownloadPlaceholder'
 import { Dashboard } from './admin/pages/Dashboard'
 import { Products } from './admin/pages/Products'
@@ -626,6 +627,7 @@ function DesktopOnlyToolRoute({ toolName, children }: { toolName: string; childr
 function App() {
   return (
     <BrowserRouter>
+      <DesktopAuthGate>
         <RouteChangeTracker />
         <Routes>
         <Route path="/" element={<MainApp />} />
@@ -691,6 +693,7 @@ function App() {
         <Route path="*" element={<NotFound />} />
 
       </Routes>
+      </DesktopAuthGate>
     </BrowserRouter>
   )
 }

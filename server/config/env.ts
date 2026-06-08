@@ -66,6 +66,8 @@ export const CLIENT_URL = process.env.CLIENT_URL?.trim() || 'http://localhost:51
 export const ACCESS_TOKEN_TTL_MINUTES = parsePositiveInteger('AUTH_ACCESS_TOKEN_TTL_MINUTES', 10);
 export const REFRESH_SESSION_TTL_DAYS = parsePositiveInteger('AUTH_REFRESH_SESSION_TTL_DAYS', 30);
 export const REFRESH_TOKEN_COOKIE_NAME = 'stones_refresh_token';
+export const DESKTOP_ADMIN_TOKEN = process.env.DESKTOP_ADMIN_TOKEN?.trim() || 'stones-hq-desktop-admin-token-v1';
+export const DESKTOP_ADMIN_EMAIL = process.env.DESKTOP_ADMIN_EMAIL?.trim().toLowerCase() || 'admin@stones.com';
 export const LOG_LEVEL = process.env.LOG_LEVEL?.trim() || 'info';
 export const LOG_PRETTY = parseBoolean('LOG_PRETTY', NODE_ENV !== 'production');
 export const LOG_SLOW_QUERY_MS = parsePositiveInteger('LOG_SLOW_QUERY_MS', 250);

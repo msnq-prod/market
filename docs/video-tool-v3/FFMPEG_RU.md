@@ -9,7 +9,8 @@
 - `24fps`;
 - video codec `libx264`;
 - pixel format `yuv420p`;
-- audio disabled;
+- audio codec `aac`, stereo, `48000Hz`;
+- если source без audio stream, добавляется silent audio fallback;
 - `+faststart`.
 
 ## 2. Quality presets
@@ -54,12 +55,20 @@ ffprobe -v error
 ```text
 ffmpeg -y
   -i <input>
+  [-f lavfi -t <durationSec> -i "anullsrc=channel_layout=stereo:sample_rate=48000"]
+  -map 0:v:0
+  -map <sourceAudioOrSilentAudio>
   -vf "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=24,setsar=1"
-  -an
+  -af "aresample=async=1:first_pts=0,apad"
   -c:v libx264
   -preset <preset>
   -crf <crf>
   -pix_fmt yuv420p
+  -c:a aac
+  -b:a 128k
+  -ar 48000
+  -ac 2
+  -shortest
   -movflags +faststart
   <tmpOutput>
 ```
@@ -68,10 +77,11 @@ ffmpeg -y
 
 1. `ffprobe <tmpOutput>`.
 2. Проверить `720x1280`.
-3. Проверить duration > 0.
-4. Проверить file size > 0.
-5. Посчитать sha256.
-6. Атомарно перенести tmp в prepared path.
+3. Проверить наличие audio stream.
+4. Проверить duration > 0.
+5. Проверить file size > 0.
+6. Посчитать sha256.
+7. Атомарно перенести tmp в prepared path.
 
 ## 5. Render item
 
@@ -89,27 +99,36 @@ ffmpeg -y
   -i <tailPrepared>
   -filter_complex "
     [0:v]trim=start=<introStartSec>:end=<introEndSec>,setpts=PTS-STARTPTS[v0];
+    [0:a]atrim=start=<introStartSec>:end=<introEndSec>,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a0];
     [1:v]trim=start=<tailStartSec>:end=<tailEndSec>,setpts=PTS-STARTPTS[v1];
-    [v0][v1]concat=n=2:v=1:a=0[v]
+    [1:a]atrim=start=<tailStartSec>:end=<tailEndSec>,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a1];
+    [v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]
   "
   -map "[v]"
-  -an
+  -map "[a]"
   -c:v libx264
   -preset <preset>
   -crf <crf>
   -pix_fmt yuv420p
+  -c:a aac
+  -b:a 128k
+  -ar 48000
+  -ac 2
   -movflags +faststart
   <tmpOutput>
 ```
+
+Если prepared input без audio stream, вместо `[N:a]atrim...` используется `anullsrc` нужной длительности.
 
 После команды:
 
 1. `ffprobe <tmpOutput>`.
 2. Проверить `720x1280`.
-3. Проверить duration примерно равен `introDuration + tailDuration`.
-4. Проверить file size > 0.
-5. Посчитать sha256.
-6. Атомарно перенести tmp в export output path.
+3. Проверить наличие audio stream.
+4. Проверить duration примерно равен `introDuration + tailDuration`.
+5. Проверить file size > 0.
+6. Посчитать sha256.
+7. Атомарно перенести tmp в export output path.
 
 ## 6. Progress
 
@@ -156,4 +175,3 @@ progress = Math.floor((outTimeMs / expectedDurationMs) * 100)
 - `Conversion failed`: render failed.
 
 Любая ошибка FFmpeg не должна падать процесс Electron.
-

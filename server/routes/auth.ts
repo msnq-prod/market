@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { authenticateToken } from '../middleware/auth.ts';
@@ -6,6 +7,8 @@ import type { AuthRequest } from '../middleware/auth.ts';
 import {
     ACCESS_TOKEN_SECRET,
     ACCESS_TOKEN_TTL_MINUTES,
+    DESKTOP_ADMIN_EMAIL,
+    DESKTOP_ADMIN_TOKEN,
     IS_LOCAL_AUTH_ENVIRONMENT
 } from '../config/env.ts';
 import {
@@ -42,6 +45,15 @@ const normalizeEmail = (value: unknown): string => {
 const normalizeUsername = (value: unknown): string => {
     if (typeof value !== 'string') return '';
     return value.trim().toLowerCase();
+};
+
+const isValidDesktopAdminToken = (value: unknown): boolean => {
+    const token = typeof value === 'string' ? value.trim() : '';
+    if (!token || Buffer.byteLength(token) !== Buffer.byteLength(DESKTOP_ADMIN_TOKEN)) {
+        return false;
+    }
+
+    return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(DESKTOP_ADMIN_TOKEN));
 };
 
 const serializeUser = (user: {
@@ -272,6 +284,40 @@ router.post('/login', loginRateLimit, async (req: AuthRequest, res) => {
         res.json(buildAuthResponse(user));
     } catch (_error) {
         res.status(500).json({ error: 'Не удалось выполнить вход.' });
+    }
+});
+
+router.post('/desktop-login', async (req: AuthRequest, res) => {
+    if (!isValidDesktopAdminToken(req.body?.token)) {
+        return res.status(403).json({ error: 'Некорректный desktop token.' });
+    }
+
+    try {
+        const user = await prisma.user.findUnique({
+            where: { email: DESKTOP_ADMIN_EMAIL },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                username: true,
+                role: true
+            }
+        });
+
+        if (!user || user.role !== 'ADMIN') {
+            return res.status(500).json({ error: 'Desktop admin account не найден.' });
+        }
+
+        const refreshSession = await createRefreshSession(prisma, req, user.id);
+        setRefreshSessionCookie(req, res, refreshSession);
+        logDomainEvent('api', 'auth-desktop-login-success', {
+            user_id: user.id,
+            role: user.role
+        });
+
+        res.json(buildAuthResponse(user));
+    } catch (_error) {
+        res.status(500).json({ error: 'Не удалось выполнить desktop-вход.' });
     }
 });
 

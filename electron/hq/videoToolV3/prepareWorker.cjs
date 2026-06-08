@@ -69,6 +69,7 @@ class PrepareWorker {
                 preparedPath,
                 qualityPreset: source.quality_preset,
                 expectedDurationMs: inputProbe.durationMs,
+                hasAudio: inputProbe.hasAudio,
                 onProgress: (progress) => context.emitProgress?.(progress)
             });
 

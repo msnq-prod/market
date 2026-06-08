@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import * as THREE from 'three';
 import { apiFetch } from '../../utils/apiFetch';
 import { getStonesDesktop, isStonesDesktop } from '../../utils/desktop';
-import { persistAuthSession } from '../../utils/session';
+import { persistAuthSession, persistDesktopAuthSession } from '../../utils/session';
 import { hasWebGLSupport } from '../../utils/webgl';
 import { partnerControlClassName } from '../components/ui';
 import { isAdminWorkspaceRole, isPartnerRole } from '../../../shared/domain/policy';
@@ -175,31 +175,38 @@ export function Login({ portal = 'partner' }: LoginProps) {
 
         desktopAutoLoginAttemptedRef.current = true;
         const desktop = getStonesDesktop();
-        if (!desktop?.getAdminAutoLoginCredentials) {
+        if (!desktop?.ensureAdminSession) {
             return;
         }
 
         let cancelled = false;
-        void desktop.getAdminAutoLoginCredentials()
-            .then((credentials) => {
+        setLoading(true);
+        void desktop.ensureAdminSession()
+            .then((session) => {
                 if (cancelled) {
                     return;
                 }
 
-                setEmail(credentials.email);
-                setPassword(credentials.password);
-                return loginWithCredentials(credentials.email, credentials.password);
+                persistDesktopAuthSession(session);
+                const fromPath = (location.state as LoginLocationState | null)?.from?.pathname;
+                const staffTarget = fromPath?.startsWith('/admin') ? fromPath : '/admin';
+                navigate(staffTarget, { replace: true });
             })
             .catch((error) => {
                 if (!cancelled) {
                     setError(error instanceof Error ? error.message : 'Автовход в desktop-приложении не удался.');
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setLoading(false);
                 }
             });
 
         return () => {
             cancelled = true;
         };
-    }, [isAdminPortal, loginWithCredentials]);
+    }, [isAdminPortal, location.state, navigate]);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();

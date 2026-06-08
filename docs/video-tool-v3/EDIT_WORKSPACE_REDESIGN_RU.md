@@ -182,7 +182,7 @@ Timeline:
   - play/pause;
   - frame forward;
   - next cut;
-- muted audio icon можно не делать, так как v3 audio disabled.
+- preview воспроизводит audio stream prepared source; отдельный audio editing не добавляется.
 
 ## 5. Данные и вычисления
 

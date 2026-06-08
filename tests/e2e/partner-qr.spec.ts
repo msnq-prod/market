@@ -390,7 +390,7 @@ test('UI e2e: HQ открывает QR-сервис из товаров по к�
 
     await setSession(page, admin);
     await page.goto('/admin/products');
-    await expect(page.getByRole('heading', { name: 'Товары' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Товары и локации' })).toBeVisible();
 
     await page.getByRole('button', { name: /Карьер «Мирный», Якутия/ }).click();
     await page.getByTestId('product-expand-prod-yak-001').click();

@@ -3,6 +3,7 @@
 interface ImportMetaEnv {
     readonly VITE_SENTRY_DSN_FRONTEND?: string;
     readonly VITE_SENTRY_ENVIRONMENT?: string;
+    readonly VITE_PROJECT_VERSION?: string;
 }
 
 interface ImportMeta {
@@ -10,6 +11,15 @@ interface ImportMeta {
 }
 
 type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
+type StonesDesktopAdminSession = {
+    accessToken: string;
+    accessTokenTtlSeconds?: number | null;
+    role: import('./data/db').UserRole;
+    name: string;
+    userId: string;
+    user: import('./data/db').User;
+};
+
 type StonesHqUpdateInfo = {
     status?: 'ok' | 'not_configured' | 'manifest_missing' | 'manifest_invalid' | 'check_failed' | 'download_failed';
     manifestUrl: string;
@@ -165,6 +175,7 @@ interface StonesDesktopApi {
     downloadHqUpdate(): Promise<StonesHqUpdateDownloadResult>;
     exportStatusCenterLogs(payload: unknown): Promise<{ success: true; path: string }>;
     getAdminAutoLoginCredentials(): Promise<{ email: string; password: string }>;
+    ensureAdminSession(): Promise<StonesDesktopAdminSession>;
     syncAuthToken(accessToken: string | null): Promise<{ ok: true }>;
     exportDiagnosticsMarkdown(payload: unknown): Promise<{ success: true; path: string; jsonPath?: string }>;
     selectBatchDiagnosticsMediaFolder(): Promise<{

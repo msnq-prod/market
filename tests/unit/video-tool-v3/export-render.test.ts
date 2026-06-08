@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require('ffmpeg-static');
+const ffprobePath = require('ffprobe-static').path;
 const { VideoToolV3Database, nowIso } = require('../../../electron/hq/videoToolV3/db.cjs');
 const { VideoToolV3FileStore } = require('../../../electron/hq/videoToolV3/fileStore.cjs');
 const { FfmpegService } = require('../../../electron/hq/videoToolV3/ffmpegService.cjs');
@@ -33,6 +34,77 @@ const createPreparedVideo = (filePath: string, color: string) => {
     assert.equal(result.status, 0, result.stderr);
 };
 
+const createVideoWithAudio = (
+    filePath: string,
+    {
+        color,
+        size,
+        durationSec = 1.2,
+        frequency = 440
+    }: { color: string; size: string; durationSec?: number; frequency?: number }
+) => {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    const result = spawnSync(ffmpegPath, [
+        '-y',
+        '-f', 'lavfi',
+        '-i', `color=c=${color}:s=${size}:r=24:d=${durationSec}`,
+        '-f', 'lavfi',
+        '-i', `sine=frequency=${frequency}:sample_rate=48000:duration=${durationSec}`,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '28',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-ac', '2',
+        '-shortest',
+        '-movflags', '+faststart',
+        filePath
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+};
+
+const createPreparedVideoWithAudio = (filePath: string, color: string, frequency: number) => {
+    createVideoWithAudio(filePath, {
+        color,
+        frequency,
+        size: '720x1280'
+    });
+};
+
+const probeStreams = (filePath: string): Array<{ codec_type?: string }> => {
+    const result = spawnSync(ffprobePath, [
+        '-v', 'error',
+        '-print_format', 'json',
+        '-show_streams',
+        filePath
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout).streams || [];
+};
+
+const getMaxAudioVolume = (filePath: string) => {
+    const result = spawnSync(ffmpegPath, [
+        '-hide_banner',
+        '-nostats',
+        '-i', filePath,
+        '-map', '0:a:0',
+        '-af', 'volumedetect',
+        '-f', 'null',
+        '-'
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const match = result.stderr.match(/max_volume:\s*(-?(?:\d+(?:\.\d+)?|inf)) dB/i);
+    assert.ok(match, result.stderr);
+    return match[1] === '-inf' ? Number.NEGATIVE_INFINITY : Number(match[1]);
+};
+
+const assertAudibleAudio = (filePath: string) => {
+    const streams = probeStreams(filePath);
+    assert.equal(streams.some((stream) => stream.codec_type === 'audio'), true);
+    assert.ok(getMaxAudioVolume(filePath) > -50);
+};
+
 const waitFor = async (predicate: () => boolean) => {
     for (let attempt = 0; attempt < 100; attempt += 1) {
         if (predicate()) return;
@@ -41,7 +113,7 @@ const waitFor = async (predicate: () => boolean) => {
     throw new Error('Timed out waiting for condition.');
 };
 
-const createHarness = async (itemCount: number) => {
+const createHarness = async (itemCount: number, options: { withAudio?: boolean } = {}) => {
     const root = await mkdtemp(path.join(tmpdir(), 'stones-video-v3-export-'));
     const fileStore = await new VideoToolV3FileStore({ rootDir: root }).init();
     const db = await new VideoToolV3Database({ dbPath: fileStore.getDatabasePath() }).init();
@@ -95,7 +167,12 @@ const createHarness = async (itemCount: number) => {
     for (const [index, sourceName] of sourceIds.entries()) {
         const sourceId = `source-${sourceName}`;
         const preparedPath = fileStore.getPreparedSourcePath({ batchId, projectId, sourceId });
-        createPreparedVideo(preparedPath, index === 0 ? 'black' : (index % 2 === 0 ? 'blue' : 'red'));
+        const color = index === 0 ? 'black' : (index % 2 === 0 ? 'blue' : 'red');
+        if (options.withAudio) {
+            createPreparedVideoWithAudio(preparedPath, color, 440 + (index * 110));
+        } else {
+            createPreparedVideo(preparedPath, color);
+        }
         const checksum = await fileStore.sha256(preparedPath);
         db.run(`
             INSERT INTO source_assets (
@@ -168,6 +245,38 @@ const createHarness = async (itemCount: number) => {
     };
 };
 
+test('prepareSource preserves audible source audio', async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stones-video-v3-prepare-audio-'));
+    const fileStore = await new VideoToolV3FileStore({ rootDir: root }).init();
+    const ffmpegService = new FfmpegService({ fileStore });
+    t.after(() => {
+        rmSync(root, { recursive: true, force: true });
+    });
+
+    const inputPath = path.join(root, 'input-with-audio.mp4');
+    const preparedPath = fileStore.getPreparedSourcePath({
+        batchId: 'batch-audio',
+        projectId: 'project-audio',
+        sourceId: 'source-audio'
+    });
+    createVideoWithAudio(inputPath, {
+        color: 'green',
+        frequency: 880,
+        size: '160x240'
+    });
+
+    const inputProbe = await ffmpegService.probe(inputPath);
+    const prepared = await ffmpegService.prepareSource({
+        inputPath,
+        preparedPath,
+        qualityPreset: 'fast',
+        expectedDurationMs: inputProbe.durationMs,
+        hasAudio: inputProbe.hasAudio
+    });
+
+    assertAudibleAudio(prepared.preparedPath);
+});
+
 test('startRun creates manifest/items/jobs and renders items independently', async (t) => {
     const harness = await createHarness(2);
     t.after(() => harness.close());
@@ -201,6 +310,19 @@ test('startRun creates manifest/items/jobs and renders items independently', asy
     items = harness.db.all('SELECT * FROM export_items WHERE run_id = ? ORDER BY serial_number ASC', [run.id]);
     assert.equal(items.every((item: { render_status: string }) => item.render_status === 'RENDERED'), true);
     assert.equal(items.every((item: { upload_status: string }) => item.upload_status === 'QUEUED'), true);
+});
+
+test('render preserves audible prepared audio in final output', async (t) => {
+    const harness = await createHarness(1, { withAudio: true });
+    t.after(() => harness.close());
+
+    const run = await harness.exportService.startRun(harness.projectId);
+    const renderJob = harness.db.get(`SELECT * FROM jobs WHERE run_id = ? AND type = 'RENDER_ITEM'`, [run.id]);
+    await harness.completeRenderJob(renderJob);
+
+    const item = harness.db.get('SELECT * FROM export_items WHERE run_id = ?', [run.id]);
+    assert.equal(item.render_status, 'RENDERED');
+    assertAudibleAudio(item.output_path);
 });
 
 test('startRun persists replace_existing for upload recovery', async (t) => {

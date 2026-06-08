@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import type { Location, User, Product } from './data/db';
 import { apiFetch } from './utils/apiFetch';
 import { authFetch } from './utils/authFetch';
-import { clearAuthSession, logoutSession } from './utils/session';
+import { clearAuthSession, logoutSession, persistDesktopAuthSession } from './utils/session';
+import { ensureDesktopAdminSession, isStonesDesktop } from './utils/desktop';
 
 interface AppState {
     viewMode: 'WORLD' | 'LOCATION';
@@ -99,9 +100,31 @@ export const useStore = create<AppState>((set) => ({
     },
 
     hydrateSession: async () => {
+        const hydrateDesktopSession = async () => {
+            const session = await ensureDesktopAdminSession();
+            if (!session?.accessToken) {
+                return false;
+            }
+
+            persistDesktopAuthSession(session);
+            set({ user: session.user, authLoading: false });
+            return true;
+        };
+
         const accessToken = localStorage.getItem('accessToken');
         const storedRole = localStorage.getItem('userRole');
         if (!accessToken && !storedRole) {
+            if (isStonesDesktop()) {
+                set({ authLoading: true });
+                try {
+                    if (await hydrateDesktopSession()) {
+                        return;
+                    }
+                } catch (error) {
+                    console.error('Failed to hydrate desktop session:', error);
+                }
+            }
+
             set({ user: null, authLoading: false });
             return;
         }
@@ -111,6 +134,16 @@ export const useStore = create<AppState>((set) => ({
         try {
             const response = await authFetch('/auth/me');
             if (!response.ok) {
+                if (isStonesDesktop()) {
+                    try {
+                        if (await hydrateDesktopSession()) {
+                            return;
+                        }
+                    } catch (error) {
+                        console.error('Failed to renew desktop session:', error);
+                    }
+                }
+
                 clearAuthSession();
                 set({ user: null, authLoading: false });
                 return;
@@ -121,6 +154,18 @@ export const useStore = create<AppState>((set) => ({
             set({ user, authLoading: false });
         } catch (error) {
             console.error('Failed to hydrate session:', error);
+            if (isStonesDesktop()) {
+                try {
+                    if (await hydrateDesktopSession()) {
+                        return;
+                    }
+                } catch (desktopError) {
+                    console.error('Failed to renew desktop session:', desktopError);
+                    set({ user: null, authLoading: false });
+                    return;
+                }
+            }
+
             clearAuthSession();
             set({ user: null, authLoading: false });
         }

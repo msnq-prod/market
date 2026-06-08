@@ -20,7 +20,7 @@ const classifyResponseError = (status) => {
 };
 
 class ServerClient {
-    constructor({ getApiOrigin, getAccessToken }) {
+    constructor({ getApiOrigin, getAccessToken, refreshAccessToken = null }) {
         if (typeof getApiOrigin !== 'function') {
             throw new Error('ServerClient requires getApiOrigin.');
         }
@@ -30,10 +30,14 @@ class ServerClient {
 
         this.getApiOrigin = getApiOrigin;
         this.getAccessToken = getAccessToken;
+        this.refreshAccessToken = refreshAccessToken;
     }
 
-    async request(path, options = {}) {
-        const token = this.getAccessToken();
+    async request(path, options = {}, retryAuth = true) {
+        let token = this.getAccessToken();
+        if (!token && this.refreshAccessToken) {
+            token = await this.refreshAccessToken().catch(() => null);
+        }
         if (!token) {
             throw new VideoToolV3ServerError('Нужно войти заново.', {
                 status: 401,
@@ -63,6 +67,13 @@ class ServerClient {
 
         const payload = await response.json().catch(() => null);
         if (!response.ok) {
+            if (retryAuth && (response.status === 401 || response.status === 403) && this.refreshAccessToken) {
+                const refreshedToken = await this.refreshAccessToken().catch(() => null);
+                if (refreshedToken) {
+                    return this.request(path, options, false);
+                }
+            }
+
             throw new VideoToolV3ServerError(
                 payload?.error || `Ошибка API Video Tool v3: ${response.status}.`,
                 {

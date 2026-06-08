@@ -1,3 +1,5 @@
+import type { User } from '../data/db';
+
 export type StonesDesktopPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd';
 
 export type StonesDesktopAppInfo = {
@@ -5,6 +7,15 @@ export type StonesDesktopAppInfo = {
     platform: StonesDesktopPlatform;
     mode: 'development' | 'production';
     apiOrigin: string;
+};
+
+export type StonesDesktopAdminSession = {
+    accessToken: string;
+    accessTokenTtlSeconds?: number | null;
+    role: User['role'];
+    name: string;
+    userId: string;
+    user: User;
 };
 
 export type StonesDesktopNetworkStatus = {
@@ -215,6 +226,7 @@ export type StonesDesktopApi = {
     downloadHqUpdate: () => Promise<StonesHqUpdateDownloadResult>;
     exportStatusCenterLogs: (payload: unknown) => Promise<{ success: true; path: string }>;
     getAdminAutoLoginCredentials: () => Promise<{ email: string; password: string }>;
+    ensureAdminSession: () => Promise<StonesDesktopAdminSession>;
     syncAuthToken: (accessToken: string | null) => Promise<{ ok: true }>;
     selectBatchDiagnosticsMediaFolder: () => Promise<StonesBatchDiagnosticsMediaFolder>;
     exportDiagnosticsMarkdown: (payload: unknown) => Promise<{ success: true; path: string; jsonPath?: string }>;
@@ -241,6 +253,8 @@ export const isStonesDesktop = () => Boolean(window.stonesDesktop?.isDesktop);
 
 export const syncDesktopAuthToken = (accessToken: string | null) =>
     window.stonesDesktop?.syncAuthToken(accessToken).catch(() => undefined);
+
+export const ensureDesktopAdminSession = () => window.stonesDesktop?.ensureAdminSession();
 
 export const stageDesktopFile = async (file: File) => {
     const desktop = window.stonesDesktop;
