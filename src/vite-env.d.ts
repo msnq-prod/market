@@ -199,16 +199,18 @@ interface StonesDesktopApi {
     }): Promise<{ fileId: string }>;
     stageMediaQueueFileChunk(fileId: string, chunk: ArrayBuffer): Promise<{ ok: true }>;
     stageMediaQueueFileFinish(fileId: string): Promise<{
-        fileId: string;
-        size: number;
-        checksumSha256: string;
+      fileId: string;
+      size: number;
+      checksumSha256: string;
     }>;
+    stageMediaQueueFileDiscard(fileId: string): Promise<{ ok: true }>;
     getMediaQueueSnapshot(): Promise<StonesMediaQueueSnapshot>;
     getMediaWorkflowSnapshot(): Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue(callback: (snapshot: StonesMediaQueueSnapshot) => void): () => void;
     subscribeMediaWorkflows(callback: (snapshot: StonesMediaWorkflowSnapshot) => void): () => void;
     enqueuePhotoToolApply(payload: unknown): Promise<StonesMediaQueueJob>;
     startPhotoApplyWorkflow(payload: unknown): Promise<StonesMediaWorkflow>;
+    completePhotoApplyWorkflowStaging(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     retryMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     cancelMediaWorkflow(workflowId: string): Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob(jobId: string): Promise<StonesMediaQueueSnapshot>;

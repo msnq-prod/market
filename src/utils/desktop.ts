@@ -235,12 +235,14 @@ export type StonesDesktopApi = {
     stageMediaQueueFileStart: (fileMeta: { fileId?: string; name: string; mimeType: string; size: number }) => Promise<{ fileId: string }>;
     stageMediaQueueFileChunk: (fileId: string, chunk: ArrayBuffer) => Promise<{ ok: true }>;
     stageMediaQueueFileFinish: (fileId: string) => Promise<{ fileId: string; size: number; checksumSha256: string }>;
+    stageMediaQueueFileDiscard: (fileId: string) => Promise<{ ok: true }>;
     getMediaQueueSnapshot: () => Promise<StonesMediaQueueSnapshot>;
     getMediaWorkflowSnapshot: () => Promise<StonesMediaWorkflowSnapshot>;
     subscribeMediaQueue: (callback: (snapshot: StonesMediaQueueSnapshot) => void) => () => void;
     subscribeMediaWorkflows: (callback: (snapshot: StonesMediaWorkflowSnapshot) => void) => () => void;
     enqueuePhotoToolApply: (payload: unknown) => Promise<StonesMediaQueueJob>;
     startPhotoApplyWorkflow: (payload: unknown) => Promise<StonesMediaWorkflow>;
+    completePhotoApplyWorkflowStaging: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     retryMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     cancelMediaWorkflow: (workflowId: string) => Promise<StonesMediaWorkflowSnapshot>;
     retryMediaQueueJob: (jobId: string) => Promise<StonesMediaQueueSnapshot>;
@@ -258,13 +260,14 @@ export const syncDesktopAuthToken = (accessToken: string | null) =>
 
 export const ensureDesktopAdminSession = () => window.stonesDesktop?.ensureAdminSession();
 
-export const stageDesktopFile = async (file: File) => {
+export const stageDesktopFile = async (file: File, preferredFileId?: string) => {
     const desktop = window.stonesDesktop;
     if (!desktop) {
         throw new Error('Desktop queue недоступна.');
     }
 
     const { fileId } = await desktop.stageMediaQueueFileStart({
+        ...(preferredFileId ? { fileId: preferredFileId } : {}),
         name: file.name,
         mimeType: file.type || 'application/octet-stream',
         size: file.size
@@ -281,21 +284,36 @@ export const stageDesktopFile = async (file: File) => {
             const chunk = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
             await desktop.stageMediaQueueFileChunk(fileId, chunk);
         }
+
+        const staged = await desktop.stageMediaQueueFileFinish(fileId);
+        return {
+            fileId,
+            originalName: file.name,
+            mimeType: file.type || 'application/octet-stream',
+            size: staged.size,
+            checksumSha256: staged.checksumSha256
+        };
+    } catch (error) {
+        await desktop.stageMediaQueueFileDiscard?.(fileId).catch(() => undefined);
+        throw error;
     } finally {
         reader.releaseLock();
     }
-
-    const staged = await desktop.stageMediaQueueFileFinish(fileId);
-    return {
-        fileId,
-        originalName: file.name,
-        mimeType: file.type || 'application/octet-stream',
-        size: staged.size,
-        checksumSha256: staged.checksumSha256
-    };
 };
 
 export const stageFileForMediaQueue = stageDesktopFile;
+
+export const discardDesktopStagedFiles = async (fileIds: Array<string | null | undefined>) => {
+    const desktop = window.stonesDesktop;
+    if (!desktop?.stageMediaQueueFileDiscard) {
+        return;
+    }
+
+    await Promise.all(
+        [...new Set(fileIds.filter((fileId): fileId is string => Boolean(fileId)))]
+            .map((fileId) => desktop.stageMediaQueueFileDiscard?.(fileId).catch(() => undefined))
+    );
+};
 
 export const waitForMediaQueueJob = (jobId: string) => new Promise<StonesMediaQueueJob>((resolve, reject) => {
     const desktop = window.stonesDesktop;

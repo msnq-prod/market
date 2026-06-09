@@ -17,6 +17,7 @@ import { Button } from '../components/ui';
 import { DesktopStatusCenter } from '../components/DesktopStatusCenter';
 import { authFetch } from '../../utils/authFetch';
 import {
+    discardDesktopStagedFiles,
     getStonesDesktop,
     isStonesDesktop,
     stageDesktopFile,
@@ -101,6 +102,12 @@ type PhotoToolDraft = {
     assignment_descending: boolean;
     active_photo_id: string | null;
     photos: DraftPhotoMeta[];
+};
+
+type PhotoToolWorkflowDraftMarker = {
+    workflowId: string;
+    signature: string;
+    savedAt: string;
 };
 
 type RestoredDraftState = {
@@ -208,6 +215,7 @@ const buildWorkflowStatusText = (workflow: StonesMediaWorkflow | null | undefine
 
 const padItemSeq = (value: number | null) => value == null ? '' : String(value).padStart(3, '0');
 const draftKeyFor = (batchId: string) => `photo-tool-draft:${batchId}`;
+const workflowDraftKeyFor = (batchId: string) => `photo-tool-workflow-draft:${batchId}`;
 const normalizeAssignmentInput = (value: string) => value.replace(/\D/g, '').slice(0, 3);
 const getFileExtension = (value: string) => {
     const normalized = value.split('?')[0]?.split('#')[0] || value;
@@ -547,6 +555,14 @@ const buildCurrentSignature = (
     photos: photos.map((photo) => buildDraftPhotoMeta(photo))
 });
 
+const buildDraftSignature = (draft: PhotoToolDraft) => JSON.stringify({
+    photo_export_settings: draft.photo_export_settings,
+    sort_mode: draft.sort_mode,
+    sort_descending: draft.sort_descending,
+    assignment_descending: draft.assignment_descending,
+    photos: draft.photos
+});
+
 const draftFileKey = (batchId: string, photoId: string) => `${batchId}:${photoId}`;
 
 const requestToPromise = <T,>(request: IDBRequest<T>) =>
@@ -612,6 +628,30 @@ const deleteDraftFilesForBatch = async (batchId: string, keepKeys?: Set<string>)
 
 const persistDraftMetadata = (batchId: string, draft: PhotoToolDraft) => {
     localStorage.setItem(draftKeyFor(batchId), JSON.stringify(draft));
+};
+
+const persistWorkflowDraftMarker = (batchId: string, marker: PhotoToolWorkflowDraftMarker) => {
+    localStorage.setItem(workflowDraftKeyFor(batchId), JSON.stringify(marker));
+};
+
+const readWorkflowDraftMarker = (batchId: string): PhotoToolWorkflowDraftMarker | null => {
+    const raw = localStorage.getItem(workflowDraftKeyFor(batchId));
+    if (!raw) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as PhotoToolWorkflowDraftMarker;
+        if (!parsed?.workflowId || !parsed.signature) {
+            localStorage.removeItem(workflowDraftKeyFor(batchId));
+            return null;
+        }
+
+        return parsed;
+    } catch {
+        localStorage.removeItem(workflowDraftKeyFor(batchId));
+        return null;
+    }
 };
 
 const syncDraftFilesForPhotos = async (batchId: string, photos: WorkingPhoto[]) => {
@@ -950,8 +990,53 @@ export function PhotoTool() {
         };
     }, [isDesktopApp]);
 
+    const itemSeqs = useMemo(() => data?.items.map((item) => item.item_seq) ?? [], [data]);
+    useEffect(() => {
+        itemSeqsRef.current = itemSeqs;
+    }, [itemSeqs]);
+    const photosWithPendingDraft = useMemo(() => (
+        assignmentDraft
+            ? applyAssignmentToPhotoList(photos, itemSeqs, assignmentDraft.photoId, assignmentDraft.value)
+            : photos
+    ), [assignmentDraft, itemSeqs, photos]);
+    const photoMetrics = useMemo(() => {
+        const coveredItemSeqs = new Set(photosWithPendingDraft.flatMap((photo) => photo.assigned_item_seq == null ? [] : [photo.assigned_item_seq]));
+        const missingItemSeqs = itemSeqs.filter((itemSeq) => !coveredItemSeqs.has(itemSeq));
+        const assignedCount = photosWithPendingDraft.filter((photo) => photo.assigned_item_seq != null).length;
+
+        return {
+            missingItemSeqs,
+            assignedCount,
+            unassignedCount: photosWithPendingDraft.length - assignedCount,
+            extraPhotoCount: Math.max(0, photosWithPendingDraft.length - itemSeqs.length)
+        };
+    }, [itemSeqs, photosWithPendingDraft]);
+    const { missingItemSeqs, assignedCount, unassignedCount, extraPhotoCount } = photoMetrics;
+    const canSave = Boolean(data) && missingItemSeqs.length === 0 && itemSeqs.length > 0;
+    const currentSignature = useMemo(
+        () => buildCurrentSignature(photosWithPendingDraft, sortMode, sortDescending, assignmentDescending, photoExportSettings),
+        [assignmentDescending, photoExportSettings, photosWithPendingDraft, sortDescending, sortMode]
+    );
+    const hasUnsavedChanges = Boolean(data) && currentSignature !== baselineSignatureRef.current;
+
     useEffect(() => {
         if (!batchPhotoWorkflow || batchPhotoWorkflow.phase !== 'completed' || completedWorkflowHandledRef.current === batchPhotoWorkflow.id) {
+            return;
+        }
+
+        const workflowDraftMarker = readWorkflowDraftMarker(batchId);
+        if (workflowDraftMarker?.workflowId !== batchPhotoWorkflow.id) {
+            return;
+        }
+
+        if (hasUnsavedChanges && currentSignature !== workflowDraftMarker.signature) {
+            localStorage.removeItem(workflowDraftKeyFor(batchId));
+            return;
+        }
+
+        const draft = readDraftMetadata(batchId);
+        if (draft && buildDraftSignature(draft) !== workflowDraftMarker.signature) {
+            localStorage.removeItem(workflowDraftKeyFor(batchId));
             return;
         }
 
@@ -959,37 +1044,15 @@ export function PhotoTool() {
         void clearDraftStorage(batchId)
             .catch(() => undefined)
             .finally(() => {
+                localStorage.removeItem(workflowDraftKeyFor(batchId));
                 void loadPhotoTool({
                     restoreDraft: false,
                     showLoading: false,
                     successMessage: 'Фоновое сохранение фото завершено, данные обновлены.'
                 });
             });
-    }, [batchId, batchPhotoWorkflow]);
+    }, [batchId, batchPhotoWorkflow, currentSignature, hasUnsavedChanges]);
 
-    const itemSeqs = useMemo(() => data?.items.map((item) => item.item_seq) ?? [], [data]);
-    useEffect(() => {
-        itemSeqsRef.current = itemSeqs;
-    }, [itemSeqs]);
-    const photoMetrics = useMemo(() => {
-        const coveredItemSeqs = new Set(photos.flatMap((photo) => photo.assigned_item_seq == null ? [] : [photo.assigned_item_seq]));
-        const missingItemSeqs = itemSeqs.filter((itemSeq) => !coveredItemSeqs.has(itemSeq));
-        const assignedCount = photos.filter((photo) => photo.assigned_item_seq != null).length;
-
-        return {
-            missingItemSeqs,
-            assignedCount,
-            unassignedCount: photos.length - assignedCount,
-            extraPhotoCount: Math.max(0, photos.length - itemSeqs.length)
-        };
-    }, [itemSeqs, photos]);
-    const { missingItemSeqs, assignedCount, unassignedCount, extraPhotoCount } = photoMetrics;
-    const canSave = Boolean(data) && missingItemSeqs.length === 0 && itemSeqs.length > 0;
-    const currentSignature = useMemo(
-        () => buildCurrentSignature(photos, sortMode, sortDescending, assignmentDescending, photoExportSettings),
-        [assignmentDescending, photoExportSettings, photos, sortDescending, sortMode]
-    );
-    const hasUnsavedChanges = Boolean(data) && currentSignature !== baselineSignatureRef.current;
     const activePhotoState = useMemo(() => {
         const activeIndex = photos.findIndex((photo) => photo.id === activePhotoId);
         const resolvedActiveIndex = activeIndex >= 0 ? activeIndex : 0;
@@ -1437,8 +1500,16 @@ export function PhotoTool() {
         setSuccessMessage('');
 
         try {
+            const effectivePhotos = photosWithPendingDraft;
+            const effectiveSignature = buildCurrentSignature(
+                effectivePhotos,
+                sortMode,
+                sortDescending,
+                assignmentDescending,
+                photoExportSettings
+            );
             const assignedPhotosByItemSeq = new Map(
-                photos.flatMap((photo) => photo.assigned_item_seq == null ? [] : [[photo.assigned_item_seq, photo] as const])
+                effectivePhotos.flatMap((photo) => photo.assigned_item_seq == null ? [] : [[photo.assigned_item_seq, photo] as const])
             );
             const manifest: Array<Record<string, string | number>> = [];
             const workflowItems: Array<Record<string, string | number>> = [];
@@ -1491,40 +1562,101 @@ export function PhotoTool() {
                     throw new Error('Desktop queue недоступна.');
                 }
 
-                const stagedFiles = [];
-                const queuedManifest = [...manifest];
-                for (const entry of localPhotosForQueue) {
-                    const staged = await stageDesktopFile(entry.photo.file);
-                    stagedFiles.push({
-                        ...staged,
-                        fileIndex: entry.fileIndex
+                const stagedFiles: Array<{
+                    fileId: string;
+                    originalName: string;
+                    mimeType: string;
+                    size: number;
+                    checksumSha256: string;
+                    fileIndex: number;
+                }> = [];
+                const plannedRunId = crypto.randomUUID();
+                const plannedFiles = localPhotosForQueue.map((entry) => ({
+                    fileId: crypto.randomUUID(),
+                    originalName: entry.photo.file.name,
+                    name: entry.photo.file.name,
+                    mimeType: entry.photo.file.type || 'application/octet-stream',
+                    size: entry.photo.file.size,
+                    checksumSha256: '',
+                    fileIndex: entry.fileIndex,
+                    photoId: entry.photo.id
+                }));
+                const plannedFileIdByPhotoId = new Map(plannedFiles.map((file) => [file.photoId, file.fileId]));
+                let workflow: StonesMediaWorkflow | null = null;
+                try {
+                    const queuedManifest = [...manifest];
+                    for (const plannedFile of plannedFiles) {
+                        const manifestIndex = queuedManifest.findIndex((item) => item.source === 'upload' && item.file_index === plannedFile.fileIndex);
+                        if (manifestIndex >= 0) {
+                            queuedManifest[manifestIndex] = {
+                                ...queuedManifest[manifestIndex],
+                                queue_file_id: plannedFile.fileId
+                            };
+                        }
+                    }
+                    const queuedWorkflowItems = workflowItems.map((item) => {
+                        if (item.source !== 'upload' || typeof item.fileId !== 'string') {
+                            return item;
+                        }
+                        return {
+                            ...item,
+                            fileId: plannedFileIdByPhotoId.get(item.fileId) || item.fileId
+                        };
                     });
-                    const manifestIndex = queuedManifest.findIndex((item) => item.source === 'upload' && item.file_index === entry.fileIndex);
-                    if (manifestIndex >= 0) {
-                        queuedManifest[manifestIndex] = {
-                            ...queuedManifest[manifestIndex],
-                            queue_file_id: staged.fileId
-                        };
-                    }
-                    const workflowItemIndex = workflowItems.findIndex((item) => item.source === 'upload' && item.fileId === entry.photo.id);
-                    if (workflowItemIndex >= 0) {
-                        workflowItems[workflowItemIndex] = {
-                            ...workflowItems[workflowItemIndex],
-                            fileId: staged.fileId
-                        };
-                    }
-                }
 
-                const workflow = await desktop.startPhotoApplyWorkflow({
-                    batchId,
-                    batchLabel: data.batch.id,
-                    subtitle: localPhotosForQueue.length > 0 ? `${localPhotosForQueue.length} новых фото` : 'Переназначение сохраненных фото',
-                    items: workflowItems,
-                    manifest: queuedManifest,
-                    basePhotoStateToken: data.batch.photo_state_token,
-                    photoExportSettings,
-                    files: stagedFiles
+                    workflow = await desktop.startPhotoApplyWorkflow({
+                        clientWorkflowId: plannedRunId,
+                        batchId,
+                        batchLabel: data.batch.id,
+                        subtitle: localPhotosForQueue.length > 0 ? `${localPhotosForQueue.length} новых фото` : 'Переназначение сохраненных фото',
+                        items: queuedWorkflowItems,
+                        manifest: queuedManifest,
+                        basePhotoStateToken: data.batch.photo_state_token,
+                        photoExportSettings,
+                        files: plannedFiles,
+                        deferProcessingUntilFilesReady: localPhotosForQueue.length > 0
+                    });
+
+                    if (workflow.id === plannedRunId) {
+                        for (const entry of localPhotosForQueue) {
+                            const plannedFileId = plannedFileIdByPhotoId.get(entry.photo.id);
+                            if (!plannedFileId) {
+                                throw new Error('Не удалось подготовить staged file id.');
+                            }
+                            const staged = await stageDesktopFile(entry.photo.file, plannedFileId);
+                            stagedFiles.push({
+                                ...staged,
+                                fileIndex: entry.fileIndex
+                            });
+                        }
+
+                        if (localPhotosForQueue.length > 0) {
+                            await desktop.completePhotoApplyWorkflowStaging(workflow.id);
+                        }
+                    } else {
+                        await discardDesktopStagedFiles(plannedFiles.map((file) => file.fileId));
+                    }
+                } catch (desktopError) {
+                    await discardDesktopStagedFiles([
+                        ...plannedFiles.map((file) => file.fileId),
+                        ...stagedFiles.map((file) => file.fileId)
+                    ]);
+                    if (workflow?.id === plannedRunId) {
+                        await desktop.cancelMediaWorkflow(workflow.id).catch(() => undefined);
+                    }
+                    throw desktopError;
+                }
+                if (!workflow) {
+                    throw new Error('Desktop workflow не был создан.');
+                }
+                persistWorkflowDraftMarker(batchId, {
+                    workflowId: workflow.id,
+                    signature: effectiveSignature,
+                    savedAt: new Date().toISOString()
                 });
+                assignmentDraftRef.current = null;
+                setAssignmentDraft(null);
+                applyNextPhotos(effectivePhotos, activePhotoId);
                 window.dispatchEvent(new CustomEvent('stones:open-status-center', {
                     detail: { tab: 'queue', focus: { type: 'workflow', id: workflow.id } }
                 }));
@@ -1553,7 +1685,7 @@ export function PhotoTool() {
                     .filter((item) => Boolean(item.item_photo_url))
                     .map((item) => [item.item_seq, item.item_photo_url as string])
             );
-            const nextPhotos = photos.map((photo) => {
+            const nextPhotos = effectivePhotos.map((photo) => {
                 if (photo.assigned_item_seq == null) {
                     return photo;
                 }
@@ -1578,13 +1710,16 @@ export function PhotoTool() {
                     last_modified: null
                 };
             });
-            const preferredActiveId = activePhoto?.assigned_item_seq != null && photoUrlByItemSeq.has(activePhoto.assigned_item_seq)
-                ? `persisted:${activePhoto.assigned_item_seq}`
+            const effectiveActivePhoto = effectivePhotos.find((photo) => photo.id === activePhotoId) || activePhoto;
+            const preferredActiveId = effectiveActivePhoto?.assigned_item_seq != null && photoUrlByItemSeq.has(effectiveActivePhoto.assigned_item_seq)
+                ? `persisted:${effectiveActivePhoto.assigned_item_seq}`
                 : activePhotoId;
 
             baselineSignatureRef.current = buildCurrentSignature(nextPhotos, sortMode, sortDescending, assignmentDescending, photoExportSettings);
             draftFileSignatureRef.current = '';
             setData(typedPayload);
+            assignmentDraftRef.current = null;
+            setAssignmentDraft(null);
             applyNextPhotos(nextPhotos, preferredActiveId);
             await clearDraftStorage(batchId);
             setSuccessMessage('Назначения фото сохранены.');
@@ -1626,7 +1761,7 @@ export function PhotoTool() {
             sort_descending: sortDescending,
             assignment_descending: assignmentDescending,
             active_photo_id: activePhotoId || null,
-            photos: photos.map((photo) => buildDraftPhotoMeta(photo))
+            photos: photosWithPendingDraft.map((photo) => buildDraftPhotoMeta(photo))
         };
 
         const timeoutId = window.setTimeout(() => {
@@ -1636,21 +1771,21 @@ export function PhotoTool() {
         return () => {
             window.clearTimeout(timeoutId);
         };
-    }, [activePhotoId, assignmentDescending, batchId, data, hasUnsavedChanges, photoExportSettings, photos, sortDescending, sortMode]);
+    }, [activePhotoId, assignmentDescending, batchId, data, hasUnsavedChanges, photoExportSettings, photosWithPendingDraft, sortDescending, sortMode]);
 
     useEffect(() => {
         if (!data || !hasUnsavedChanges) {
             return;
         }
 
-        const nextFileSignature = buildDraftFileSignature(photos);
+        const nextFileSignature = buildDraftFileSignature(photosWithPendingDraft);
         if (nextFileSignature === draftFileSignatureRef.current) {
             return;
         }
 
         draftFileSignatureRef.current = nextFileSignature;
-        void syncDraftFilesForPhotos(batchId, photos).catch(() => undefined);
-    }, [batchId, data, hasUnsavedChanges, photos]);
+        void syncDraftFilesForPhotos(batchId, photosWithPendingDraft).catch(() => undefined);
+    }, [batchId, data, hasUnsavedChanges, photosWithPendingDraft]);
 
     useEffect(() => {
         if (!hasUnsavedChanges) {

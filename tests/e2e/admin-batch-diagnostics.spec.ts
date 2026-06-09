@@ -207,6 +207,7 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
             startPhotoApplyWorkflow: async () => {
                 throw new Error('not used');
             },
+            completePhotoApplyWorkflowStaging: async () => emptyWorkflows,
             retryMediaWorkflow: async () => emptyWorkflows,
             cancelMediaWorkflow: async () => emptyWorkflows,
             retryMediaQueueJob: async () => emptyQueue,

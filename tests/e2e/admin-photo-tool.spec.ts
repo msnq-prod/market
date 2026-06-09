@@ -34,6 +34,11 @@ const TINY_PNG = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
     'base64'
 );
+const TINY_JPEG = Buffer.from(
+    '/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z',
+    'base64'
+);
+const PHOTO_V2_TEST_CHUNK_SIZE = 256 * 1024;
 const SVG_MARKUP = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
 const E2E_REQUEST_NOTE = '[e2e] admin-photo-tool';
 
@@ -60,10 +65,15 @@ async function setAdminSession(page: Page, loginPayload: LoginPayload) {
     }, loginPayload);
 }
 
-async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?: DesktopPhotoWorkflowSnapshot } = {}) {
-    await page.addInitScript((mockOptions: { workflowSnapshot?: DesktopPhotoWorkflowSnapshot }) => {
+async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?: DesktopPhotoWorkflowSnapshot; failStartPhotoWorkflow?: boolean } = {}) {
+    await page.addInitScript((mockOptions: { workflowSnapshot?: DesktopPhotoWorkflowSnapshot; failStartPhotoWorkflow?: boolean }) => {
         const stagedFiles: Record<string, { chunks: number; size: number }> = {};
         const workflowSnapshot = mockOptions.workflowSnapshot || { workflows: [], counts: {} };
+        const appendFileId = (key: string, fileId: string) => {
+            const current = JSON.parse(window.localStorage.getItem(key) || '[]') as string[];
+            current.push(fileId);
+            window.localStorage.setItem(key, JSON.stringify(current));
+        };
         Object.defineProperty(window, 'stonesDesktop', {
             configurable: true,
             value: {
@@ -97,9 +107,10 @@ async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?:
                     queueMicrotask(() => callback(workflowSnapshot));
                     return () => undefined;
                 },
-                stageMediaQueueFileStart: async () => {
-                    const fileId = crypto.randomUUID();
+                stageMediaQueueFileStart: async (fileMeta?: { fileId?: string }) => {
+                    const fileId = fileMeta?.fileId || crypto.randomUUID();
                     stagedFiles[fileId] = { chunks: 0, size: 0 };
+                    appendFileId('__stagedPhotoFileIds', fileId);
                     return { fileId };
                 },
                 stageMediaQueueFileChunk: async (fileId: string, chunk: ArrayBuffer) => {
@@ -112,7 +123,15 @@ async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?:
                     size: stagedFiles[fileId].size,
                     checksumSha256: `sha-${fileId}`
                 }),
+                stageMediaQueueFileDiscard: async (fileId: string) => {
+                    delete stagedFiles[fileId];
+                    appendFileId('__discardedPhotoFileIds', fileId);
+                    return { ok: true };
+                },
                 startPhotoApplyWorkflow: async (payload: Record<string, unknown>) => {
+                    if (mockOptions.failStartPhotoWorkflow) {
+                        throw new Error('workflow start failed');
+                    }
                     window.localStorage.setItem('__photoWorkflowPayload', JSON.stringify(payload));
                     return {
                         id: 'photo-workflow-e2e',
@@ -126,7 +145,8 @@ async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?:
                         updatedAt: new Date().toISOString(),
                         uploadState: null
                     };
-                }
+                },
+                completePhotoApplyWorkflowStaging: async () => workflowSnapshot
             }
         });
     }, options);
@@ -578,15 +598,15 @@ test('API: photo tool v2 uploads items, commits atomically and marks stale commi
         expected_count: 2
     });
 
-    for (const item of toolPayload.items) {
-        const checksum = sha256(TINY_PNG);
+    for (const [index, item] of toolPayload.items.entries()) {
+        const checksum = sha256(TINY_JPEG);
         const intentResponse = await request.post(`/api/photo-tool-v2/runs/${runId}/items/${item.id}/upload-intent`, {
             headers: authHeaders(admin.accessToken),
             data: {
                 file_name: `photo-v2-${item.item_seq}.jpg`,
-                file_size_bytes: TINY_PNG.length,
+                file_size_bytes: TINY_JPEG.length,
                 checksum_sha256: checksum,
-                chunk_size_bytes: TINY_PNG.length
+                chunk_size_bytes: PHOTO_V2_TEST_CHUNK_SIZE
             }
         });
         expect(intentResponse.ok()).toBeTruthy();
@@ -598,7 +618,7 @@ test('API: photo tool v2 uploads items, commits atomically and marks stale commi
                 'Content-Type': 'application/octet-stream',
                 'X-Chunk-Sha256': checksum
             },
-            data: TINY_PNG
+            data: TINY_JPEG
         });
         expect(chunkResponse.ok()).toBeTruthy();
 
@@ -606,13 +626,35 @@ test('API: photo tool v2 uploads items, commits atomically and marks stale commi
             headers: { Authorization: `Bearer ${admin.accessToken}` }
         });
         expect(completeResponse.ok()).toBeTruthy();
+        const completePayload = await completeResponse.json() as Record<string, unknown>;
+        expect(completePayload).toMatchObject({
+            item_id: item.id,
+            status: 'UPLOADED'
+        });
+        expect(index === toolPayload.items.length - 1 ? ['COMPLETED'] : ['UPLOADING', 'READY_TO_COMMIT']).toContain(completePayload.run_status);
+        expect(completePayload.items).toBeUndefined();
+
+        const completedIntentResponse = await request.post(`/api/photo-tool-v2/runs/${runId}/items/${item.id}/upload-intent`, {
+            headers: authHeaders(admin.accessToken),
+            data: {
+                file_name: `photo-v2-${item.item_seq}.jpg`,
+                file_size_bytes: TINY_JPEG.length,
+                checksum_sha256: checksum,
+                chunk_size_bytes: PHOTO_V2_TEST_CHUNK_SIZE
+            }
+        });
+        expect(completedIntentResponse.ok()).toBeTruthy();
+        await expect(completedIntentResponse.json()).resolves.toMatchObject({
+            completed: true,
+            file_url: expect.stringContaining(`/uploads/photos/v2-runs/${runId}/`)
+        });
     }
 
-    const commitResponse = await request.post(`/api/photo-tool-v2/runs/${runId}/commit`, {
+    const runResponse = await request.get(`/api/photo-tool-v2/runs/${runId}`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }
     });
-    expect(commitResponse.ok()).toBeTruthy();
-    await expect(commitResponse.json()).resolves.toMatchObject({
+    expect(runResponse.ok()).toBeTruthy();
+    await expect(runResponse.json()).resolves.toMatchObject({
         id: runId,
         status: 'COMPLETED',
         uploaded_count: 2
@@ -641,8 +683,8 @@ test('API: photo tool v2 uploads items, commits atomically and marks stale commi
         items: staleToolPayload.items.map((item) => ({
             itemId: item.id,
             itemSeq: item.item_seq,
-            source: 'existing',
-            existingUrl: '/uploads/photos/stale-existing.jpg'
+            source: 'upload',
+            fileName: `photo-v2-stale-${item.item_seq}.jpg`
         }))
     };
     const staleCreateResponse = await request.post(`/api/photo-tool-v2/batches/${staleToolPayload.batch.id}/runs`, {
@@ -658,12 +700,40 @@ test('API: photo tool v2 uploads items, commits atomically and marks stale commi
         where: { id: staleToolPayload.items[0].id },
         data: { item_photo_url: '/locations/crystal-caves.jpg' }
     });
-    const staleCommitResponse = await request.post(`/api/photo-tool-v2/runs/${staleRunId}/commit`, {
+    const staleChecksum = sha256(TINY_JPEG);
+    const staleIntentResponse = await request.post(`/api/photo-tool-v2/runs/${staleRunId}/items/${staleToolPayload.items[0].id}/upload-intent`, {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            file_name: `photo-v2-stale-${staleToolPayload.items[0].item_seq}.jpg`,
+            file_size_bytes: TINY_JPEG.length,
+            checksum_sha256: staleChecksum,
+            chunk_size_bytes: PHOTO_V2_TEST_CHUNK_SIZE
+        }
+    });
+    expect(staleIntentResponse.ok()).toBeTruthy();
+    const staleIntent = await staleIntentResponse.json() as { upload_id: string };
+    const staleChunkResponse = await request.put(`/api/photo-tool-v2/runs/${staleRunId}/items/${staleToolPayload.items[0].id}/upload-intent/${staleIntent.upload_id}/chunks/0`, {
+        headers: {
+            Authorization: `Bearer ${admin.accessToken}`,
+            'Content-Type': 'application/octet-stream',
+            'X-Chunk-Sha256': staleChecksum
+        },
+        data: TINY_JPEG
+    });
+    expect(staleChunkResponse.ok()).toBeTruthy();
+    const staleCompleteResponse = await request.post(`/api/photo-tool-v2/runs/${staleRunId}/items/${staleToolPayload.items[0].id}/upload-intent/${staleIntent.upload_id}/complete`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` }
     });
-    expect(staleCommitResponse.status()).toBe(409);
-    await expect(staleCommitResponse.json()).resolves.toMatchObject({
-        code: 'PHOTO_TOOL_RUN_STALE'
+    expect(staleCompleteResponse.ok()).toBeTruthy();
+    await expect(staleCompleteResponse.json()).resolves.toMatchObject({
+        run_status: 'STALE'
+    });
+    const staleRunResponse = await request.get(`/api/photo-tool-v2/runs/${staleRunId}`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(staleRunResponse.ok()).toBeTruthy();
+    await expect(staleRunResponse.json()).resolves.toMatchObject({
+        status: 'STALE'
     });
 });
 
@@ -787,6 +857,11 @@ test('UI: desktop photo workflow receives export settings', async ({ page, reque
     ]);
 
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
+    await page.getByTestId('photo-assignment-input-center').fill('002');
+    await expect(page.getByTestId('photo-coverage')).toContainText('1/2');
+    await expect(page.getByTestId('photo-save')).toBeDisabled();
+    await page.getByTestId('photo-assignment-input-center').fill('001');
+    await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
     await page.getByTestId('photo-save').click();
     await expect(page.getByText(/Сохранение передано в фон/)).toBeVisible();
 
@@ -798,6 +873,43 @@ test('UI: desktop photo workflow receives export settings', async ({ page, reque
         maxHeight: 2048
     });
     expect(payload.files).toHaveLength(2);
+});
+
+test('UI: desktop photo workflow start failure cleans staged files', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page, { failStartPhotoWorkflow: true });
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+
+    await page.getByTestId('photo-upload-input').setInputFiles([
+        {
+            name: 'cleanup-1.png',
+            mimeType: 'image/png',
+            buffer: TINY_PNG,
+            lastModified: new Date('2026-04-04T11:00:00.000Z').getTime()
+        },
+        {
+            name: 'cleanup-2.png',
+            mimeType: 'image/png',
+            buffer: TINY_PNG,
+            lastModified: new Date('2026-04-04T11:01:00.000Z').getTime()
+        }
+    ]);
+
+    await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
+    await page.getByTestId('photo-save').click();
+    await expect(page.getByText('workflow start failed')).toBeVisible();
+
+    const staged = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__stagedPhotoFileIds') || '[]') as string[]);
+    const discarded = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__discardedPhotoFileIds') || '[]') as string[]);
+    expect(staged).toHaveLength(0);
+    expect(discarded).toHaveLength(2);
 });
 
 test('UI: active desktop photo workflow locks editing controls', async ({ page, request }) => {

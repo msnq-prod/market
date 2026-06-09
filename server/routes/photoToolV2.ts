@@ -53,7 +53,7 @@ router.post('/batches/:batchId/runs', async (req: AuthRequest, res) => {
 
 router.get('/runs/:runId', async (req: AuthRequest, res) => {
     try {
-        res.json(await getPhotoToolV2Run(req.params.runId));
+        res.json(await getPhotoToolV2Run(req.params.runId, req.user?.id));
     } catch (error) {
         sendError(res, error, 'Не удалось загрузить run Photo Tool v2.');
     }
@@ -77,7 +77,7 @@ router.get('/runs/:runId/items/:itemId/upload-intent/:uploadId', async (req: Aut
 
 router.put(
     '/runs/:runId/items/:itemId/upload-intent/:uploadId/chunks/:chunkIndex',
-    express.raw({ type: 'application/octet-stream', limit: '64mb' }),
+    express.raw({ type: 'application/octet-stream', limit: '8mb' }),
     async (req: AuthRequest, res) => {
         try {
             if (!Buffer.isBuffer(req.body)) {
@@ -100,10 +100,12 @@ router.put(
 
 router.post('/runs/:runId/items/:itemId/upload-intent/:uploadId/complete', async (req: AuthRequest, res) => {
     try {
+        if (!req.user) return res.sendStatus(401);
         res.json(await completePhotoToolV2UploadIntent(
             req.params.runId,
             req.params.itemId,
-            req.params.uploadId
+            req.params.uploadId,
+            req.user.id
         ));
     } catch (error) {
         sendError(res, error, 'Не удалось завершить upload intent.');

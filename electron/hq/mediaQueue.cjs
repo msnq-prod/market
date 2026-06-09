@@ -270,6 +270,14 @@ class MediaUploadQueue extends EventEmitter {
         };
     }
 
+    async discardStagedFile(fileId) {
+        const staged = this.stagedFiles.get(fileId);
+        this.stagedFiles.delete(fileId);
+        const cachePath = staged?.cachePath || path.join(this.filesDir, `${fileId}.bin`);
+        await fsp.rm(cachePath, { force: true }).catch(() => undefined);
+        return { ok: true };
+    }
+
     getStagedFile(fileId) {
         const staged = this.stagedFiles.get(fileId);
         if (staged) {

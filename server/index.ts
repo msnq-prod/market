@@ -49,6 +49,7 @@ import {
 import { setNewOrderNotificationAdapter, setOrderStatusNotificationAdapter } from './services/orderNotifications.ts';
 import { createErrorLoggingMiddleware, createRequestLoggingMiddleware, initServerObservability, logDomainEvent } from './services/logger.ts';
 import { prisma } from './services/prisma.ts';
+import { startPhotoToolV2Finalizer } from './services/photoToolV2Service.ts';
 
 initServerObservability('api');
 setNewOrderNotificationAdapter(async (payload) => {
@@ -206,7 +207,14 @@ app.use(cors({
     origin: clientUrl,
     credentials: true
 }));
-app.use(express.json());
+const defaultJsonParser = express.json({ limit: '1mb' });
+const largePhotoToolJsonParser = express.json({ limit: '10mb' });
+app.use((req, res, next) => {
+    const parser = req.path.startsWith('/api/photo-tool-v2/')
+        ? largePhotoToolJsonParser
+        : defaultJsonParser;
+    return parser(req, res, next);
+});
 app.use(createRequestLoggingMiddleware('api'));
 
 // Static media (uploaded files and pre-bundled location images)
@@ -1073,6 +1081,10 @@ if (fs.existsSync(distIndexPath)) {
 }
 
 app.use(createErrorLoggingMiddleware('api'));
+
+if (process.env.PHOTO_TOOL_V2_FINALIZER_DISABLED !== '1') {
+    startPhotoToolV2Finalizer();
+}
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);

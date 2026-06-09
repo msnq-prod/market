@@ -27,6 +27,11 @@ import { isStonesDesktop } from './utils/desktop'
 
 const VideoToolV3Page = React.lazy(() => import('./admin/pages/video-tool-v3/VideoToolV3Page').then((module) => ({ default: module.VideoToolV3Page })))
 const PhotoTool = React.lazy(() => import('./admin/pages/PhotoTool').then((module) => ({ default: module.PhotoTool })))
+const SidebarV2Prototype = React.lazy(() => import('./admin/prototypes/sidebar-v2/SidebarV2Prototype').then((module) => ({ default: module.SidebarV2Prototype })))
+const WorkspacesPrototype = React.lazy(() => import('./admin/prototypes/workspaces/WorkspacesPrototype').then((module) => ({ default: module.WorkspacesPrototype })))
+const MegaMenuPrototype = React.lazy(() => import('./admin/prototypes/mega-menu/MegaMenuPrototype').then((module) => ({ default: module.MegaMenuPrototype })))
+const CommandMatrixPrototype = React.lazy(() => import('./admin/prototypes/command-matrix/CommandMatrixPrototype').then((module) => ({ default: module.CommandMatrixPrototype })))
+const FocusDeckPrototype = React.lazy(() => import('./admin/prototypes/focus-deck/FocusDeckPrototype').then((module) => ({ default: module.FocusDeckPrototype })))
 
 type StonesDebugWindow = Window & {
   __STONES_DEBUG__?: {
@@ -635,6 +640,62 @@ function App() {
 
         {/* Admin Routes */}
         <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
+        <Route
+          path="/admin/prototypes/sidebar-v2"
+          element={(
+            <AdminFullscreenRoute>
+              <SidebarV2Prototype />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/prototypes/workspaces"
+          element={(
+            <AdminFullscreenRoute>
+              <WorkspacesPrototype />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/prototypes/workspaces/:workspaceId"
+          element={(
+            <AdminFullscreenRoute>
+              <WorkspacesPrototype />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/prototypes/mega-menu"
+          element={(
+            <AdminFullscreenRoute>
+              <MegaMenuPrototype />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/prototypes/command-matrix"
+          element={(
+            <AdminFullscreenRoute>
+              <CommandMatrixPrototype />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/prototypes/command-matrix/:featureId"
+          element={(
+            <AdminFullscreenRoute>
+              <CommandMatrixPrototype />
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
+          path="/admin/prototypes/focus-deck"
+          element={(
+            <AdminFullscreenRoute>
+              <FocusDeckPrototype />
+            </AdminFullscreenRoute>
+          )}
+        />
         <Route
           path="/admin/photo-tool/:batchId"
           element={(

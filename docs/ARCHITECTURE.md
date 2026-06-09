@@ -196,9 +196,10 @@ ZAGARAMI состоит из четырех основных частей:
 
 - маршрут: `/admin/photo-tool/:batchId`
 - в браузерном HQ маршрут показывает заглушку скачивания `ZAGARAMI HQ`; рабочий интерфейс доступен в Electron HQ
-- backend: `GET /api/batches/:id/photo-tool`, `POST /api/batches/:id/photo-tool/apply`
+- активный desktop backend: `/api/photo-tool-v2/*`; legacy backend: `POST /api/batches/:id/photo-tool/apply`
 - инструмент работает только для batch в `RECEIVED`
-- сохранение идет по полному manifest и контролируется через `photo_state_token`
+- сохранение идет через полный run manifest и контролируется через `photo_state_token`
+- desktop worker загружает финальные JPEG по item в server buffer; сервер сам применяет run, когда все item готовы
 - итог сохраняется в `Item.item_photo_url`
 
 Активный сценарий работы с видео: Video Tool v3 через HQ Desktop.

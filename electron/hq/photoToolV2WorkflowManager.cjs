@@ -9,11 +9,15 @@ const heicConvert = require('heic-convert');
 const sharp = require('sharp');
 
 const TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'failed', 'stale']);
-const ACTIVE_STATUSES = new Set(['queued', 'normalizing', 'uploading', 'committing', 'paused_offline', 'auth_required']);
+const ACTIVE_STATUSES = new Set(['staging', 'queued', 'normalizing', 'uploading', 'committing', 'paused_offline', 'auth_required']);
 const IMAGE_CONVERT_EXTENSIONS = new Set(['.heic', '.heif']);
 const RETRY_DELAY_MS = 3_000;
 const CHUNK_SIZE_BYTES = 4 * 1024 * 1024;
+const API_REQUEST_TIMEOUT_MS = 60_000;
+const CHUNK_UPLOAD_TIMEOUT_MS = 5 * 60_000;
 const WORKFLOW_STUCK_MS = 10 * 60_000;
+const MAX_LOCAL_SOURCE_FILE_SIZE_BYTES = 250 * 1024 * 1024;
+const MAX_LOCAL_SOURCE_PIXELS = 80_000_000;
 const DEFAULT_PHOTO_EXPORT_SETTINGS = {
     format: 'jpeg',
     quality: 80,
@@ -76,6 +80,24 @@ const toAuthError = (message) => {
     return error;
 };
 
+const fetchWithTimeout = async (url, init = {}, timeoutMs = API_REQUEST_TIMEOUT_MS) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, {
+            ...init,
+            signal: controller.signal
+        });
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw toOfflineError('Запрос Photo Tool v2 превысил timeout.');
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+
 const normalizeFailure = (error, fallbackMessage) => {
     if (error?.code === 'OFFLINE' || error?.code === 'AUTH_REQUIRED') return error;
     const status = Number(error?.status || error?.statusCode || 0);
@@ -106,6 +128,45 @@ const workflowPhaseForStatus = (status) => {
             return 'stale';
         default:
             return 'queued';
+    }
+};
+
+const localStatusFromServerRunStatus = (status) => {
+    switch (String(status || '').toUpperCase()) {
+        case 'OPEN':
+            return 'queued';
+        case 'UPLOADING':
+            return 'uploading';
+        case 'READY_TO_COMMIT':
+        case 'COMMITTING':
+            return 'committing';
+        case 'COMPLETED':
+            return 'completed';
+        case 'STALE':
+            return 'stale';
+        case 'FAILED':
+            return 'failed';
+        case 'CANCELLED':
+            return 'cancelled';
+        default:
+            return null;
+    }
+};
+
+const localStatusFromServerItemStatus = (status) => {
+    switch (String(status || '').toUpperCase()) {
+        case 'REUSED':
+            return 'reused';
+        case 'UPLOADED':
+            return 'uploaded';
+        case 'UPLOADING':
+            return 'uploading';
+        case 'FAILED':
+            return 'failed';
+        case 'CANCELLED':
+            return 'cancelled';
+        default:
+            return 'pending';
     }
 };
 
@@ -189,7 +250,7 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         return `${this.getApiOrigin().replace(/\/+$/, '')}${pathname}`;
     }
 
-    async apiRequest(pathname, init = {}, fallbackMessage = 'Запрос не выполнен.') {
+    async apiRequest(pathname, init = {}, fallbackMessage = 'Запрос не выполнен.', timeoutMs = API_REQUEST_TIMEOUT_MS) {
         let token = this.getAccessToken();
         if (!token && this.refreshAccessToken) {
             token = await this.refreshAccessToken().catch(() => null);
@@ -197,13 +258,13 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         if (!token) throw toAuthError('Нужно войти в HQ заново.');
 
         try {
-            const response = await fetch(this.buildApiUrl(pathname), {
+            const response = await fetchWithTimeout(this.buildApiUrl(pathname), {
                 ...init,
                 headers: {
                     ...(init.headers || {}),
                     Authorization: `Bearer ${token}`
                 }
-            });
+            }, timeoutMs);
             const payload = await response.json().catch(() => null);
             if (!response.ok) {
                 const error = new Error(isRecord(payload) && typeof payload.error === 'string' ? payload.error : fallbackMessage);
@@ -218,20 +279,20 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         }
     }
 
-    async apiRaw(pathname, init = {}, fallbackMessage = 'Запрос не выполнен.') {
+    async apiRaw(pathname, init = {}, fallbackMessage = 'Запрос не выполнен.', timeoutMs = CHUNK_UPLOAD_TIMEOUT_MS) {
         let token = this.getAccessToken();
         if (!token && this.refreshAccessToken) {
             token = await this.refreshAccessToken().catch(() => null);
         }
         if (!token) throw toAuthError('Нужно войти в HQ заново.');
         try {
-            const response = await fetch(this.buildApiUrl(pathname), {
+            const response = await fetchWithTimeout(this.buildApiUrl(pathname), {
                 ...init,
                 headers: {
                     ...(init.headers || {}),
                     Authorization: `Bearer ${token}`
                 }
-            });
+            }, timeoutMs);
             const payload = await response.json().catch(() => null);
             if (!response.ok) {
                 const error = new Error(isRecord(payload) && typeof payload.error === 'string' ? payload.error : fallbackMessage);
@@ -287,7 +348,7 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             return this.buildWorkflowSnapshot(duplicate);
         }
 
-        const runId = crypto.randomUUID();
+        const runId = isNonEmptyString(payload.clientWorkflowId) ? String(payload.clientWorkflowId) : crypto.randomUUID();
         const settings = normalizePhotoExportSettings(payload.photoExportSettings);
         const filesById = new Map((payload.files || []).map((file) => [file.fileId, file]));
         const items = Array.isArray(payload.items) ? payload.items : [];
@@ -328,7 +389,7 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
                 id, batch_id, status, server_created, base_photo_state_token,
                 photo_export_settings_json, manifest_json, summary_json,
                 last_error, next_attempt_at, created_at, updated_at
-            ) VALUES (?, ?, 'queued', 0, ?, ?, ?, ?, NULL, 0, ?, ?)
+            ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, NULL, 0, ?, ?)
         `);
         const insertItem = db.prepare(`
             INSERT INTO photo_run_items (
@@ -340,6 +401,7 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             insertRun.run(
                 runId,
                 batchId,
+                payload.deferProcessingUntilFilesReady ? 'staging' : 'queued',
                 String(payload.basePhotoStateToken || ''),
                 JSON.stringify(settings),
                 JSON.stringify(manifest),
@@ -384,7 +446,9 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         });
         tx();
         this.emitChange();
-        this.schedule(0);
+        if (!payload.deferProcessingUntilFilesReady) {
+            this.schedule(0);
+        }
         return this.buildWorkflowSnapshot(this.getRun(runId));
     }
 
@@ -459,6 +523,27 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         return this.getSnapshot();
     }
 
+    async completeWorkflowStaging(workflowId) {
+        const timestamp = nowIso();
+        this.ensureDb().prepare(`
+            UPDATE photo_runs
+            SET status = 'queued', last_error = NULL, next_attempt_at = 0, updated_at = ?
+            WHERE id = ? AND status = 'staging'
+        `).run(timestamp, workflowId);
+        this.emitChange();
+        this.schedule(0);
+        return this.getSnapshot();
+    }
+
+    async cleanupRunLocalFiles(workflowId) {
+        const items = this.getRunItems(workflowId);
+        await Promise.all(items.flatMap((item) => [
+            safeRemove(item.cache_path),
+            safeRemove(item.normalized_path)
+        ]));
+        await safeRemove(path.join(this.filesRoot, workflowId));
+    }
+
     async cancelWorkflow(workflowId) {
         const run = this.getRun(workflowId);
         if (run?.server_created) {
@@ -470,6 +555,7 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             SET status = 'cancelled', next_attempt_at = 0, updated_at = ?
             WHERE id = ?
         `).run(timestamp, workflowId);
+        await this.cleanupRunLocalFiles(workflowId);
         this.emitChange();
         return this.getSnapshot();
     }
@@ -509,8 +595,10 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             values.push(value);
         }
         fields.push('updated_at = ?');
-        values.push(nowIso(), runId);
-        this.ensureDb().prepare(`UPDATE photo_runs SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        values.push(nowIso());
+        const protectsCancelled = Object.prototype.hasOwnProperty.call(patch, 'status') && patch.status !== 'cancelled';
+        const where = protectsCancelled ? `id = ? AND status != 'cancelled'` : 'id = ?';
+        this.ensureDb().prepare(`UPDATE photo_runs SET ${fields.join(', ')} WHERE ${where}`).run(...values, runId);
         this.emitChange();
     }
 
@@ -526,6 +614,64 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         this.ensureDb().prepare(`UPDATE photo_run_items SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     }
 
+    isRunCancelled(runId) {
+        return this.getRun(runId)?.status === 'cancelled';
+    }
+
+    applyServerRunSnapshot(runId, serverRun) {
+        if (!isRecord(serverRun)) return null;
+
+        const timestamp = nowIso();
+        const db = this.ensureDb();
+        const updateItem = db.prepare(`
+            UPDATE photo_run_items
+            SET status = ?, server_file_url = COALESCE(?, server_file_url), last_error = ?, updated_at = ?
+            WHERE run_id = ? AND item_id = ?
+        `);
+        if (Array.isArray(serverRun.items)) {
+            for (const item of serverRun.items) {
+                if (!isRecord(item) || !isNonEmptyString(item.item_id)) continue;
+                updateItem.run(
+                    localStatusFromServerItemStatus(item.status),
+                    typeof item.file_url === 'string' ? item.file_url : null,
+                    typeof item.error_message === 'string' ? item.error_message : null,
+                    timestamp,
+                    runId,
+                    item.item_id
+                );
+            }
+        }
+
+        const localStatus = localStatusFromServerRunStatus(serverRun.status);
+        if (!localStatus) return null;
+
+        if (localStatus === 'completed') {
+            db.prepare(`
+                UPDATE photo_run_items
+                SET status = 'committed', updated_at = ?
+                WHERE run_id = ? AND status IN ('reused', 'uploaded')
+            `).run(timestamp, runId);
+        }
+
+        const patch = {
+            status: localStatus,
+            last_error: typeof serverRun.error_message === 'string' ? serverRun.error_message : null,
+            next_attempt_at: localStatus === 'committing' ? Date.now() + RETRY_DELAY_MS : 0
+        };
+        if (localStatus === 'completed') {
+            patch.completed_at = nowIso();
+        }
+        this.updateRun(runId, patch);
+        return localStatus;
+    }
+
+    async refreshServerRunStatus(runId) {
+        const serverRun = await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}`, {
+            method: 'GET'
+        }, 'Не удалось получить статус Photo Tool v2 run.');
+        return this.applyServerRunSnapshot(runId, serverRun);
+    }
+
     async processRun(run) {
         try {
             if (['paused_offline', 'auth_required'].includes(run.status)) {
@@ -534,7 +680,7 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             }
             if (!run.server_created) {
                 const manifest = JSON.parse(run.manifest_json);
-                await this.apiRequest(`/api/photo-tool-v2/batches/${encodeURIComponent(run.batch_id)}/runs`, {
+                const serverRun = await this.apiRequest(`/api/photo-tool-v2/batches/${encodeURIComponent(run.batch_id)}/runs`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -543,22 +689,43 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
                         manifest
                     })
                 }, 'Не удалось создать Photo Tool v2 run.');
+                if (this.isRunCancelled(run.id)) {
+                    await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' }, 'Не удалось отменить Photo Tool v2 run.').catch(() => undefined);
+                    return;
+                }
                 this.updateRun(run.id, { server_created: 1, status: 'uploading', last_error: null });
+                const localStatus = this.applyServerRunSnapshot(run.id, serverRun);
+                if (TERMINAL_STATUSES.has(localStatus)) {
+                    return;
+                }
+                run = this.getRun(run.id);
+            } else if (run.status === 'committing') {
+                const localStatus = await this.refreshServerRunStatus(run.id);
+                if (localStatus === 'committing' || TERMINAL_STATUSES.has(localStatus)) {
+                    return;
+                }
+                run = this.getRun(run.id);
             }
 
             const items = this.getRunItems(run.id);
             for (const item of items) {
+                if (this.isRunCancelled(run.id)) {
+                    return;
+                }
                 if (item.source === 'existing' || item.status === 'reused' || item.status === 'uploaded') {
                     continue;
                 }
                 await this.processUploadItem(run.id, item);
+                if (this.isRunCancelled(run.id)) {
+                    return;
+                }
             }
 
+            if (this.isRunCancelled(run.id)) {
+                return;
+            }
             this.updateRun(run.id, { status: 'committing', last_error: null });
-            await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(run.id)}/commit`, {
-                method: 'POST'
-            }, 'Не удалось commit Photo Tool v2 run.');
-            this.updateRun(run.id, { status: 'completed', next_attempt_at: 0, last_error: null, completed_at: nowIso() });
+            await this.refreshServerRunStatus(run.id);
         } catch (error) {
             await this.handleRunError(run.id, error);
         }
@@ -568,9 +735,20 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         const settings = normalizePhotoExportSettings(JSON.parse(this.getRun(runId).photo_export_settings_json || '{}'));
         const sourcePath = item.cache_path;
         if (!sourcePath) throw new Error('Нет staged photo file.');
-        let sourceBuffer = await fsp.readFile(sourcePath);
+        const sourceStat = await fsp.stat(sourcePath);
+        if (sourceStat.size > MAX_LOCAL_SOURCE_FILE_SIZE_BYTES) {
+            throw new Error('Исходное фото слишком большое для локальной обработки Photo Tool v2.');
+        }
+        const normalizedPath = path.join(this.filesRoot, runId, `${item.item_id}.jpg`);
+        await fsp.mkdir(path.dirname(normalizedPath), { recursive: true });
         const extension = path.extname(item.original_name || '').toLowerCase();
         if (IMAGE_CONVERT_EXTENSIONS.has(extension)) {
+            const sourceMetadata = await sharp(sourcePath, { animated: false }).metadata().catch(() => null);
+            if (sourceMetadata?.width && sourceMetadata.height
+                && sourceMetadata.width * sourceMetadata.height > MAX_LOCAL_SOURCE_PIXELS) {
+                throw new Error('Исходное фото превышает лимит пикселей Photo Tool v2.');
+            }
+            let sourceBuffer = await fsp.readFile(sourcePath);
             const converted = await heicConvert({
                 buffer: sourceBuffer,
                 format: 'JPEG',
@@ -579,78 +757,170 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             sourceBuffer = converted instanceof ArrayBuffer
                 ? Buffer.from(new Uint8Array(converted))
                 : Buffer.from(converted);
+            const convertedMetadata = await sharp(sourceBuffer, { animated: false }).metadata();
+            if (convertedMetadata.width && convertedMetadata.height
+                && convertedMetadata.width * convertedMetadata.height > MAX_LOCAL_SOURCE_PIXELS) {
+                throw new Error('Исходное фото превышает лимит пикселей Photo Tool v2.');
+            }
+            await sharp(sourceBuffer)
+                .rotate()
+                .resize({
+                    width: settings.maxWidth,
+                    height: settings.maxHeight,
+                    fit: 'inside',
+                    withoutEnlargement: true
+                })
+                .jpeg({ quality: settings.quality, mozjpeg: true })
+                .toFile(normalizedPath);
+        } else {
+            const sourceMetadata = await sharp(sourcePath, { animated: false }).metadata();
+            if (sourceMetadata.width && sourceMetadata.height
+                && sourceMetadata.width * sourceMetadata.height > MAX_LOCAL_SOURCE_PIXELS) {
+                throw new Error('Исходное фото превышает лимит пикселей Photo Tool v2.');
+            }
+            await sharp(sourcePath)
+                .rotate()
+                .resize({
+                    width: settings.maxWidth,
+                    height: settings.maxHeight,
+                    fit: 'inside',
+                    withoutEnlargement: true
+                })
+                .jpeg({ quality: settings.quality, mozjpeg: true })
+                .toFile(normalizedPath);
         }
-        const normalizedBuffer = await sharp(sourceBuffer)
-            .rotate()
-            .resize({
-                width: settings.maxWidth,
-                height: settings.maxHeight,
-                fit: 'inside',
-                withoutEnlargement: true
-            })
-            .jpeg({ quality: settings.quality, mozjpeg: true })
-            .toBuffer();
-        const normalizedPath = path.join(this.filesRoot, runId, `${item.item_id}.jpg`);
-        await fsp.mkdir(path.dirname(normalizedPath), { recursive: true });
-        await fsp.writeFile(normalizedPath, normalizedBuffer);
+        const stat = await fsp.stat(normalizedPath);
         return {
             normalizedPath,
-            checksumSha256: sha256Buffer(normalizedBuffer),
-            fileSizeBytes: normalizedBuffer.length
+            checksumSha256: await sha256File(normalizedPath),
+            fileSizeBytes: stat.size
         };
     }
 
-    async processUploadItem(runId, item) {
-        this.updateRun(runId, { status: 'normalizing', last_error: null });
-        this.updateItem(item.id, { status: 'normalizing', last_error: null });
-        const normalized = item.normalized_path && item.checksum_sha256 && item.file_size_bytes
-            ? {
-                normalizedPath: item.normalized_path,
-                checksumSha256: item.checksum_sha256,
-                fileSizeBytes: item.file_size_bytes
-            }
-            : await this.normalizeItemPhoto(runId, item);
-        this.updateItem(item.id, {
-            normalized_path: normalized.normalizedPath,
-            checksum_sha256: normalized.checksumSha256,
-            file_size_bytes: normalized.fileSizeBytes,
-            status: 'uploading'
-        });
-        this.updateRun(runId, { status: 'uploading', last_error: null });
-
-        const intent = await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}/items/${encodeURIComponent(item.item_id)}/upload-intent`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                file_name: `${safeFileName(item.original_name || 'photo')}.jpg`,
-                file_size_bytes: normalized.fileSizeBytes,
-                checksum_sha256: normalized.checksumSha256,
-                chunk_size_bytes: CHUNK_SIZE_BYTES
-            })
-        }, 'Не удалось создать photo upload intent.');
-
-        const fileBuffer = await fsp.readFile(normalized.normalizedPath);
-        const uploadedChunks = new Set(Array.isArray(intent.uploaded_chunks) ? intent.uploaded_chunks.map(Number) : []);
-        const chunkCount = Math.ceil(fileBuffer.length / CHUNK_SIZE_BYTES);
-        for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-            if (uploadedChunks.has(chunkIndex)) continue;
-            const start = chunkIndex * CHUNK_SIZE_BYTES;
-            const chunk = fileBuffer.subarray(start, Math.min(fileBuffer.length, start + CHUNK_SIZE_BYTES));
-            await this.apiRaw(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}/items/${encodeURIComponent(item.item_id)}/upload-intent/${encodeURIComponent(intent.upload_id)}/chunks/${chunkIndex}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/octet-stream',
-                    'X-Chunk-Sha256': sha256Buffer(chunk)
-                },
-                body: chunk
-            }, 'Не удалось загрузить photo chunk.');
+    async getReusableNormalizedPhoto(item) {
+        if (!item.normalized_path || !item.checksum_sha256 || !item.file_size_bytes) {
+            return null;
         }
+        try {
+            const stat = await fsp.stat(item.normalized_path);
+            if (stat.size !== Number(item.file_size_bytes)) {
+                await safeRemove(item.normalized_path);
+                return null;
+            }
+            const checksumSha256 = await sha256File(item.normalized_path);
+            if (checksumSha256 !== item.checksum_sha256) {
+                await safeRemove(item.normalized_path);
+                return null;
+            }
+            return {
+                normalizedPath: item.normalized_path,
+                checksumSha256,
+                fileSizeBytes: Number(item.file_size_bytes)
+            };
+        } catch {
+            return null;
+        }
+    }
 
-        await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}/items/${encodeURIComponent(item.item_id)}/upload-intent/${encodeURIComponent(intent.upload_id)}/complete`, {
-            method: 'POST'
-        }, 'Не удалось завершить photo upload intent.');
-        this.updateItem(item.id, { status: 'uploaded', last_error: null });
-        await safeRemove(item.cache_path);
+    async processUploadItem(runId, item) {
+        try {
+            if (this.isRunCancelled(runId)) {
+                return;
+            }
+            this.updateRun(runId, { status: 'normalizing', last_error: null });
+            this.updateItem(item.id, { status: 'normalizing', last_error: null });
+            const normalized = await this.getReusableNormalizedPhoto(item)
+                || await this.normalizeItemPhoto(runId, item);
+            if (this.isRunCancelled(runId)) {
+                return;
+            }
+            this.updateItem(item.id, {
+                normalized_path: normalized.normalizedPath,
+                checksum_sha256: normalized.checksumSha256,
+                file_size_bytes: normalized.fileSizeBytes,
+                status: 'uploading'
+            });
+            this.updateRun(runId, { status: 'uploading', last_error: null });
+
+            const intent = await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}/items/${encodeURIComponent(item.item_id)}/upload-intent`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    file_name: `${safeFileName(item.original_name || 'photo')}.jpg`,
+                    file_size_bytes: normalized.fileSizeBytes,
+                    checksum_sha256: normalized.checksumSha256,
+                    chunk_size_bytes: CHUNK_SIZE_BYTES
+                })
+            }, 'Не удалось создать photo upload intent.');
+            if (this.isRunCancelled(runId)) {
+                return;
+            }
+
+            if (intent?.completed === true) {
+                this.updateItem(item.id, {
+                    status: 'uploaded',
+                    server_file_url: typeof intent.file_url === 'string' ? intent.file_url : null,
+                    last_error: null
+                });
+                await safeRemove(item.cache_path);
+                return;
+            }
+
+            const uploadedChunks = new Set(Array.isArray(intent.uploaded_chunks) ? intent.uploaded_chunks.map(Number) : []);
+            const chunkCount = Math.ceil(normalized.fileSizeBytes / CHUNK_SIZE_BYTES);
+            const fileHandle = await fsp.open(normalized.normalizedPath, 'r');
+            try {
+                for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+                    if (this.isRunCancelled(runId)) {
+                        return;
+                    }
+                    if (uploadedChunks.has(chunkIndex)) continue;
+                    const start = chunkIndex * CHUNK_SIZE_BYTES;
+                    const expectedLength = Math.min(CHUNK_SIZE_BYTES, normalized.fileSizeBytes - start);
+                    const chunk = Buffer.allocUnsafe(expectedLength);
+                    const { bytesRead } = await fileHandle.read(chunk, 0, expectedLength, start);
+                    if (bytesRead !== expectedLength) {
+                        throw new Error('Normalized photo file was truncated during upload.');
+                    }
+                    const body = chunk;
+                    await this.apiRaw(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}/items/${encodeURIComponent(item.item_id)}/upload-intent/${encodeURIComponent(intent.upload_id)}/chunks/${chunkIndex}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/octet-stream',
+                            'X-Chunk-Sha256': sha256Buffer(body)
+                        },
+                        body
+                    }, 'Не удалось загрузить photo chunk.', CHUNK_UPLOAD_TIMEOUT_MS);
+                }
+            } finally {
+                await fileHandle.close();
+            }
+
+            if (this.isRunCancelled(runId)) {
+                return;
+            }
+            const completedItem = await this.apiRequest(`/api/photo-tool-v2/runs/${encodeURIComponent(runId)}/items/${encodeURIComponent(item.item_id)}/upload-intent/${encodeURIComponent(intent.upload_id)}/complete`, {
+                method: 'POST'
+            }, 'Не удалось завершить photo upload intent.', CHUNK_UPLOAD_TIMEOUT_MS);
+            if (this.isRunCancelled(runId)) {
+                return;
+            }
+            this.updateItem(item.id, {
+                status: 'uploaded',
+                server_file_url: typeof completedItem?.file_url === 'string' ? completedItem.file_url : null,
+                last_error: null
+            });
+            await safeRemove(item.cache_path);
+        } catch (error) {
+            const normalized = normalizeFailure(error, 'Photo Tool v2 item upload failed.');
+            if (!['OFFLINE', 'AUTH_REQUIRED', 'PHOTO_TOOL_RUN_STALE', 'UPLOAD_INTENT_EXPIRED'].includes(normalized.code)) {
+                this.updateItem(item.id, {
+                    status: 'failed',
+                    last_error: normalized.message || 'Photo Tool v2 item upload failed.'
+                });
+            }
+            throw error;
+        }
     }
 
     async handleRunError(runId, error) {
@@ -671,6 +941,14 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         if (normalized.code === 'OFFLINE') {
             this.updateRun(runId, {
                 status: 'paused_offline',
+                last_error: normalized.message,
+                next_attempt_at: nextAttemptAt
+            });
+            return;
+        }
+        if (normalized.code === 'UPLOAD_INTENT_EXPIRED') {
+            this.updateRun(runId, {
+                status: 'queued',
                 last_error: normalized.message,
                 next_attempt_at: nextAttemptAt
             });
