@@ -83,7 +83,6 @@ services:
 
   telegram-worker:
     image: stones-runtime:prod
-    build: *runtime-build
     restart: unless-stopped
     depends_on:
       db:

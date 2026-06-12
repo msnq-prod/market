@@ -25,11 +25,13 @@ npm run ops:deploy
 
 1. запускает preflight
 2. делает backup БД, если production db уже поднята
-3. запускает `docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build`
-4. ждет healthy для `db`
-5. ждет healthy для `app`
-6. делает внутренний healthcheck `app`
-7. делает внешний healthcheck через `caddy`
+3. собирает runtime image через `docker compose build app`
+4. поднимает supporting-сервисы без пересборки
+5. пересоздает `app` и `telegram-worker` на уже собранном image
+6. ждет healthy для `db`, `app` и `telegram-worker`
+7. поднимает/проверяет `caddy`
+8. делает внутренний healthcheck `app`
+9. делает внешний healthcheck через `caddy`
 
 ## 1.1 Автоматический релиз через GitHub Actions
 
