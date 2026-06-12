@@ -36,21 +36,31 @@ class PrepareWorker {
         if (!source) {
             return { status: 'FAILED', errorMessage: 'Source не найден.' };
         }
+        const expectedRevision = Number(source.source_revision || 1);
 
         try {
             await this.ensureOriginalExists(source.original_external_path);
-            this.updateSource(sourceId, {
+            if (!this.updateSource(sourceId, {
                 status: 'PROBING',
-                errorMessage: null
-            });
+                errorMessage: null,
+                expectedRevision
+            })) {
+                return { status: 'CANCELLED', errorMessage: 'Source уже заменен.' };
+            }
             context.emitProjectUpdate?.(source.project_id);
 
             const inputProbe = await this.ffmpegService.probe(source.original_external_path);
-            this.updateSource(sourceId, {
+            const originalChecksumSha256 = await this.fileStore.sha256(source.original_external_path);
+            if (!this.updateSource(sourceId, {
                 durationMs: inputProbe.durationMs,
+                originalChecksumSha256,
+                originalHasAudio: inputProbe.hasAudio,
                 status: 'PREPARING',
-                errorMessage: null
-            });
+                errorMessage: null,
+                expectedRevision
+            })) {
+                return { status: 'CANCELLED', errorMessage: 'Source уже заменен.' };
+            }
             context.emitProjectUpdate?.(source.project_id);
             context.emitProgress?.(1);
 
@@ -70,21 +80,33 @@ class PrepareWorker {
                 qualityPreset: source.quality_preset,
                 expectedDurationMs: inputProbe.durationMs,
                 hasAudio: inputProbe.hasAudio,
+                signal: context.signal,
                 onProgress: (progress) => context.emitProgress?.(progress)
             });
+            if (context.signal?.aborted) {
+                return { status: 'CANCELLED' };
+            }
 
+            let stored = false;
             this.db.transaction(() => {
                 const now = nowIso();
-                this.db.run(`
+                const result = this.db.run(`
                     UPDATE source_assets
                     SET prepared_path = ?,
                         prepared_checksum_sha256 = ?,
+                        prepared_has_audio = ?,
                         duration_ms = ?,
                         status = 'READY',
                         error_message = NULL,
                         updated_at = ?
                     WHERE id = ?
-                `, [prepared.preparedPath, prepared.checksumSha256, prepared.durationMs, now, sourceId]);
+                      AND source_revision = ?
+                      AND status = 'PREPARING'
+                `, [prepared.preparedPath, prepared.checksumSha256, prepared.preparedHasAudio ? 1 : 0, prepared.durationMs, now, sourceId, expectedRevision]);
+                stored = result.changes > 0;
+                if (!stored) {
+                    return;
+                }
 
                 const existingSegment = this.db.get('SELECT id FROM timeline_segments WHERE source_id = ? LIMIT 1', [sourceId]);
                 if (!existingSegment && prepared.durationMs > 0) {
@@ -109,14 +131,22 @@ class PrepareWorker {
                     ]);
                 }
             });
+            if (!stored) {
+                await fsp.rm(prepared.preparedPath, { force: true }).catch(() => undefined);
+                return { status: 'CANCELLED', errorMessage: 'Source уже заменен.' };
+            }
 
             context.emitProjectUpdate?.(source.project_id);
             return { status: 'DONE' };
         } catch (error) {
+            if (context.signal?.aborted) {
+                return { status: 'CANCELLED' };
+            }
             const status = error?.code === 'SOURCE_MISSING' ? 'MISSING' : 'PREPARE_FAILED';
             this.updateSource(sourceId, {
                 status,
-                errorMessage: failMessage(error)
+                errorMessage: failMessage(error),
+                expectedRevision
             });
             context.emitProjectUpdate?.(source.project_id);
             return { status: 'FAILED', errorMessage: failMessage(error) };
@@ -136,15 +166,40 @@ class PrepareWorker {
         }
     }
 
-    updateSource(sourceId, { status, durationMs = null, errorMessage }) {
+    updateSource(sourceId, {
+        status,
+        durationMs = null,
+        originalChecksumSha256 = undefined,
+        originalHasAudio = undefined,
+        preparedHasAudio = undefined,
+        expectedRevision = null,
+        errorMessage
+    }) {
         const fields = ['status = ?', 'error_message = ?', 'updated_at = ?'];
         const values = [status, errorMessage ?? null, nowIso()];
         if (durationMs !== null) {
             fields.unshift('duration_ms = ?');
             values.unshift(durationMs);
         }
+        if (originalChecksumSha256 !== undefined) {
+            fields.unshift('original_checksum_sha256 = ?');
+            values.unshift(originalChecksumSha256);
+        }
+        if (originalHasAudio !== undefined) {
+            fields.unshift('original_has_audio = ?');
+            values.unshift(originalHasAudio === null ? null : (originalHasAudio ? 1 : 0));
+        }
+        if (preparedHasAudio !== undefined) {
+            fields.unshift('prepared_has_audio = ?');
+            values.unshift(preparedHasAudio === null ? null : (preparedHasAudio ? 1 : 0));
+        }
         values.push(sourceId);
-        this.db.run(`UPDATE source_assets SET ${fields.join(', ')} WHERE id = ?`, values);
+        let where = 'WHERE id = ?';
+        if (expectedRevision !== null) {
+            where += ' AND source_revision = ?';
+            values.push(expectedRevision);
+        }
+        return this.db.run(`UPDATE source_assets SET ${fields.join(', ')} ${where}`, values).changes > 0;
     }
 }
 

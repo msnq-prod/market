@@ -85,7 +85,7 @@ type RenderManifestV3 = {
         height: 1280;
         fps: 24;
         qualityPreset: string;
-        audio: 'disabled';
+        audio: 'source' | 'disabled';
     };
     sources: Array<{
         sourceId: string;
@@ -93,6 +93,10 @@ type RenderManifestV3 = {
         preparedPath: string;
         checksumSha256: string;
         durationMs: number;
+        sourceRevision?: number;
+        originalChecksumSha256?: string | null;
+        originalHasAudio?: boolean;
+        preparedHasAudio?: boolean;
     }>;
     introSegment: {
         segmentId: string;
@@ -155,7 +159,7 @@ export const parseRenderManifestV3 = (value: unknown, batchId: string, runId: st
         value.settings.width !== 720
         || value.settings.height !== 1280
         || value.settings.fps !== 24
-        || value.settings.audio !== 'disabled'
+        || !['source', 'disabled'].includes(String(value.settings.audio))
         || !isNonEmptyString(value.settings.qualityPreset)
     ) {
         throw new VideoToolV3HttpError('Некорректные настройки manifest.', 400);
@@ -166,13 +170,28 @@ export const parseRenderManifestV3 = (value: unknown, batchId: string, runId: st
     }
 
     const sources = value.sources.map((source) => {
-        if (!isPlainObject(source) || !exactKeys(source, [
+        if (!isPlainObject(source)) {
+            throw new VideoToolV3HttpError('Некорректный source в manifest.', 400);
+        }
+        const allowedKeys = [
+            'sourceId',
+            'position',
+            'preparedPath',
+            'checksumSha256',
+            'durationMs',
+            'sourceRevision',
+            'originalChecksumSha256',
+            'originalHasAudio',
+            'preparedHasAudio'
+        ];
+        const actualKeys = Object.keys(source);
+        if (actualKeys.some((key) => !allowedKeys.includes(key)) || ![
             'sourceId',
             'position',
             'preparedPath',
             'checksumSha256',
             'durationMs'
-        ])) {
+        ].every((key) => Object.prototype.hasOwnProperty.call(source, key))) {
             throw new VideoToolV3HttpError('Некорректный source в manifest.', 400);
         }
         if (
@@ -191,7 +210,13 @@ export const parseRenderManifestV3 = (value: unknown, batchId: string, runId: st
             position: source.position,
             preparedPath: source.preparedPath,
             checksumSha256: source.checksumSha256.toLowerCase(),
-            durationMs: Number(source.durationMs)
+            durationMs: Number(source.durationMs),
+            sourceRevision: Number.isInteger(source.sourceRevision) && Number(source.sourceRevision) > 0
+                ? Number(source.sourceRevision)
+                : undefined,
+            originalChecksumSha256: isSha256(source.originalChecksumSha256) ? source.originalChecksumSha256.toLowerCase() : null,
+            originalHasAudio: typeof source.originalHasAudio === 'boolean' ? source.originalHasAudio : undefined,
+            preparedHasAudio: typeof source.preparedHasAudio === 'boolean' ? source.preparedHasAudio : undefined
         };
     });
 
@@ -497,6 +522,107 @@ const moveFileSafely = async (sourcePath: string, targetPath: string) => {
     }
 };
 
+const buildVideoToolV3FilePathFromUrl = (value: string | null | undefined) => {
+    if (!value || !value.startsWith(`${VIDEO_TOOL_V3_PUBLIC_URL_ROOT}/`)) {
+        return null;
+    }
+
+    const encodedPath = value.slice(VIDEO_TOOL_V3_PUBLIC_URL_ROOT.length + 1);
+    const segments = encodedPath.split('/').map((segment) => {
+        try {
+            return decodeURIComponent(segment);
+        } catch {
+            return '';
+        }
+    });
+    if (segments.length !== 3 || segments.some((segment) => !segment || segment !== path.basename(segment))) {
+        return null;
+    }
+
+    return path.join(VIDEO_TOOL_V3_PUBLIC_ROOT, ...segments);
+};
+
+const buildVideoToolV3Url = (batchId: string, runId: string, fileName: string) =>
+    `${VIDEO_TOOL_V3_PUBLIC_URL_ROOT}/${encodeURIComponent(batchId)}/${encodeURIComponent(runId)}/${encodeURIComponent(fileName)}`;
+
+const listVideoToolV3RunFileUrls = async (batchId: string, currentRunId: string) => {
+    const batchDir = path.join(VIDEO_TOOL_V3_PUBLIC_ROOT, batchId);
+    const runDirs = await fs.readdir(batchDir, { withFileTypes: true }).catch(() => []);
+    const urls: string[] = [];
+
+    for (const runDir of runDirs) {
+        if (!runDir.isDirectory() || runDir.name === currentRunId) {
+            continue;
+        }
+
+        const runPath = path.join(batchDir, runDir.name);
+        const files = await fs.readdir(runPath, { withFileTypes: true }).catch(() => []);
+        for (const file of files) {
+            if (!file.isFile() || !file.name.toLowerCase().endsWith('.mp4')) {
+                continue;
+            }
+            urls.push(buildVideoToolV3Url(batchId, runDir.name, file.name));
+        }
+    }
+
+    return urls;
+};
+
+const cleanupSupersededVideoToolV3Files = async (batchId: string, currentRunId: string) => {
+    const [diskUrls, oldRunItems] = await Promise.all([
+        listVideoToolV3RunFileUrls(batchId, currentRunId),
+        prisma.videoToolV3Item.findMany({
+            where: {
+                file_url: { not: null },
+                run: {
+                    batch_id: batchId,
+                    id: { not: currentRunId }
+                }
+            },
+            select: {
+                id: true,
+                file_url: true
+            }
+        })
+    ]);
+
+    const candidateUrls = [...new Set([
+        ...diskUrls,
+        ...oldRunItems.flatMap((item) => item.file_url ? [item.file_url] : [])
+    ].filter((url) => url.startsWith(`${VIDEO_TOOL_V3_PUBLIC_URL_ROOT}/`)))];
+    if (candidateUrls.length === 0) {
+        return;
+    }
+
+    const itemReferences = await prisma.item.findMany({
+        where: { item_video_url: { in: candidateUrls } },
+        select: { item_video_url: true }
+    });
+    const protectedUrls = new Set(itemReferences.flatMap((item) => item.item_video_url ? [item.item_video_url] : []));
+    const urlsToRemove = candidateUrls.filter((url) => !protectedUrls.has(url));
+    if (urlsToRemove.length === 0) {
+        return;
+    }
+
+    const runItemIdsToClear = oldRunItems
+        .filter((item) => item.file_url && urlsToRemove.includes(item.file_url))
+        .map((item) => item.id);
+    if (runItemIdsToClear.length > 0) {
+        await prisma.videoToolV3Item.updateMany({
+            where: { id: { in: runItemIdsToClear } },
+            data: { file_url: null }
+        });
+    }
+
+    await Promise.all(urlsToRemove.map(async (url) => {
+        const filePath = buildVideoToolV3FilePathFromUrl(url);
+        if (!filePath) return;
+        await fs.rm(filePath, { force: true }).catch(() => undefined);
+        await fs.rmdir(path.dirname(filePath)).catch(() => undefined);
+    }));
+    await fs.rmdir(path.join(VIDEO_TOOL_V3_PUBLIC_ROOT, batchId)).catch(() => undefined);
+};
+
 export const commitVideoToolV3ItemVideo = async (input: {
     runId: string;
     itemId: string;
@@ -597,6 +723,7 @@ export const commitVideoToolV3ItemVideo = async (input: {
         };
     });
 
+    await cleanupSupersededVideoToolV3Files(run.batch_id, run.id);
     return result;
 };
 

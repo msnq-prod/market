@@ -23,7 +23,7 @@ const normalizeQualityPreset = (value) => {
 };
 
 class ProjectService {
-    constructor({ db, serverClient, fileStore, getQueueEngine = null }) {
+    constructor({ db, serverClient, fileStore, ffmpegService = null, getQueueEngine = null }) {
         if (!db) {
             throw new Error('ProjectService requires db.');
         }
@@ -37,6 +37,7 @@ class ProjectService {
         this.db = db;
         this.serverClient = serverClient;
         this.fileStore = fileStore;
+        this.ffmpegService = ffmpegService;
         this.getQueueEngine = getQueueEngine;
         this.timelineService = new TimelineService();
     }
@@ -135,50 +136,10 @@ class ProjectService {
         `, [project.id]);
         const inserted = [];
 
-        const entries = await Promise.all(selectedPaths.map(async (filePath, index) => {
-            const absolutePath = path.resolve(filePath);
-            const extension = path.extname(absolutePath).toLowerCase();
-            const sourceId = crypto.randomUUID();
-            const base = {
-                id: sourceId,
-                position: Number(maxPosition?.position ?? -1) + 1 + index,
-                originalName: path.basename(absolutePath),
-                originalExternalPath: absolutePath,
-                originalSizeBytes: 0,
-                originalLastModified: 0,
-                status: 'NEW',
-                errorMessage: null,
-                shouldEnqueue: true
-            };
-
-            if (!SUPPORTED_SOURCE_EXTENSIONS.has(extension)) {
-                return {
-                    ...base,
-                    status: 'PREPARE_FAILED',
-                    errorMessage: 'Неподдерживаемый формат. Выберите mp4, mov, m4v или webm.',
-                    shouldEnqueue: false
-                };
-            }
-
-            try {
-                const stat = await fsp.stat(absolutePath);
-                return {
-                    ...base,
-                    originalSizeBytes: stat.size,
-                    originalLastModified: Math.round(stat.mtimeMs),
-                    status: stat.isFile() && stat.size > 0 ? 'NEW' : 'MISSING',
-                    errorMessage: stat.isFile() && stat.size > 0 ? null : 'Исходный файл не найден.',
-                    shouldEnqueue: stat.isFile() && stat.size > 0
-                };
-            } catch {
-                return {
-                    ...base,
-                    status: 'MISSING',
-                    errorMessage: 'Исходный файл не найден.',
-                    shouldEnqueue: false
-                };
-            }
-        }));
+        const entries = await Promise.all(selectedPaths.map(async (filePath, index) => ({
+            id: crypto.randomUUID(),
+            ...(await this.inspectSourceFile(filePath, Number(maxPosition?.position ?? -1) + 1 + index))
+        })));
 
         this.db.transaction(() => {
             for (const entry of entries) {
@@ -191,15 +152,19 @@ class ProjectService {
                         original_external_path,
                         original_size_bytes,
                         original_last_modified,
+                        original_checksum_sha256,
+                        original_has_audio,
                         prepared_path,
                         prepared_checksum_sha256,
+                        prepared_has_audio,
+                        source_revision,
                         duration_ms,
                         status,
                         error_message,
                         created_at,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, ?, ?, ?, ?, ?)
                 `, [
                     entry.id,
                     project.id,
@@ -208,6 +173,9 @@ class ProjectService {
                     entry.originalExternalPath,
                     entry.originalSizeBytes,
                     entry.originalLastModified,
+                    entry.originalChecksumSha256,
+                    entry.originalHasAudio === null ? null : (entry.originalHasAudio ? 1 : 0),
+                    entry.durationMs,
                     entry.status,
                     entry.errorMessage,
                     timestamp,
@@ -265,6 +233,18 @@ class ProjectService {
         if (needsReprepare && !queueEngine) {
             throw new Error('Очередь подготовки не запущена.');
         }
+        const activePrepareJobs = needsReprepare
+            ? this.db.all(`
+                SELECT id
+                FROM jobs
+                WHERE project_id = ?
+                  AND type = 'PREPARE_SOURCE'
+                  AND status IN ('QUEUED', 'RUNNING')
+            `, [project.id])
+            : [];
+        for (const job of activePrepareJobs) {
+            queueEngine?.cancelJob?.(job.id);
+        }
 
         const timestamp = nowIso();
         this.db.transaction(() => {
@@ -276,6 +256,9 @@ class ProjectService {
             `, [qualityPreset, timestamp, project.id]);
 
             if (needsReprepare) {
+                for (const source of sources) {
+                    this.cleanupPreparedPath(source.prepared_path);
+                }
                 this.db.run(`
                     UPDATE jobs
                     SET status = 'CANCELLED',
@@ -291,6 +274,8 @@ class ProjectService {
                     SET status = 'NEW',
                         prepared_path = NULL,
                         prepared_checksum_sha256 = NULL,
+                        prepared_has_audio = NULL,
+                        source_revision = source_revision + 1,
                         duration_ms = 0,
                         error_message = NULL,
                         updated_at = ?
@@ -356,9 +341,11 @@ class ProjectService {
                 UPDATE source_assets
                 SET status = 'DELETED',
                     error_message = NULL,
+                    source_revision = source_revision + 1,
                     updated_at = ?
                 WHERE id = ?
             `, [timestamp, source.id]);
+            this.cleanupPreparedPath(source.prepared_path);
             this.markActiveRunStale(project, timestamp);
             this.db.run('UPDATE projects SET updated_at = ? WHERE id = ?', [timestamp, project.id]);
         });
@@ -403,9 +390,13 @@ class ProjectService {
                     original_external_path = ?,
                     original_size_bytes = ?,
                     original_last_modified = ?,
+                    original_checksum_sha256 = ?,
+                    original_has_audio = ?,
                     prepared_path = NULL,
                     prepared_checksum_sha256 = NULL,
-                    duration_ms = 0,
+                    prepared_has_audio = NULL,
+                    source_revision = source_revision + 1,
+                    duration_ms = ?,
                     status = ?,
                     error_message = ?,
                     updated_at = ?
@@ -415,11 +406,15 @@ class ProjectService {
                 entry.originalExternalPath,
                 entry.originalSizeBytes,
                 entry.originalLastModified,
+                entry.originalChecksumSha256,
+                entry.originalHasAudio === null ? null : (entry.originalHasAudio ? 1 : 0),
+                entry.durationMs,
                 entry.status,
                 entry.errorMessage,
                 timestamp,
                 source.id
             ]);
+            this.cleanupPreparedPath(source.prepared_path);
             this.markActiveRunStale(project, timestamp);
             this.db.run('UPDATE projects SET updated_at = ? WHERE id = ?', [timestamp, project.id]);
         });
@@ -480,9 +475,13 @@ class ProjectService {
                     error_message = NULL,
                     prepared_path = NULL,
                     prepared_checksum_sha256 = NULL,
+                    prepared_has_audio = NULL,
+                    source_revision = source_revision + 1,
                     updated_at = ?
                 WHERE id = ?
             `, [now, safeSourceId]);
+            this.cleanupPreparedPath(source.prepared_path);
+            this.markActiveRunStale(project, now);
         });
 
         queueEngine.enqueue({
@@ -532,6 +531,9 @@ class ProjectService {
             originalExternalPath: absolutePath,
             originalSizeBytes: 0,
             originalLastModified: 0,
+            originalChecksumSha256: null,
+            originalHasAudio: null,
+            durationMs: 0,
             status: 'NEW',
             errorMessage: null,
             shouldEnqueue: true
@@ -548,13 +550,47 @@ class ProjectService {
 
         try {
             const stat = await fsp.stat(absolutePath);
+            if (!stat.isFile() || stat.size <= 0) {
+                return {
+                    ...base,
+                    originalSizeBytes: stat.size,
+                    originalLastModified: Math.round(stat.mtimeMs),
+                    status: 'MISSING',
+                    errorMessage: 'Исходный файл не найден.',
+                    shouldEnqueue: false
+                };
+            }
+
+            const [checksum, probe] = await Promise.all([
+                typeof this.fileStore.sha256 === 'function' ? this.fileStore.sha256(absolutePath) : Promise.resolve(null),
+                this.ffmpegService ? this.ffmpegService.probe(absolutePath) : Promise.resolve(null)
+            ]).catch((error) => {
+                const message = error instanceof Error ? error.message : 'Исходный файл не удалось прочитать.';
+                return [null, { errorMessage: message }];
+            });
+
+            if (probe?.errorMessage) {
+                return {
+                    ...base,
+                    originalSizeBytes: stat.size,
+                    originalLastModified: Math.round(stat.mtimeMs),
+                    originalChecksumSha256: checksum,
+                    status: 'PREPARE_FAILED',
+                    errorMessage: probe.errorMessage,
+                    shouldEnqueue: false
+                };
+            }
+
             return {
                 ...base,
                 originalSizeBytes: stat.size,
                 originalLastModified: Math.round(stat.mtimeMs),
-                status: stat.isFile() && stat.size > 0 ? 'NEW' : 'MISSING',
-                errorMessage: stat.isFile() && stat.size > 0 ? null : 'Исходный файл не найден.',
-                shouldEnqueue: stat.isFile() && stat.size > 0
+                originalChecksumSha256: checksum,
+                originalHasAudio: probe ? Boolean(probe.hasAudio) : null,
+                durationMs: probe?.durationMs || 0,
+                status: 'NEW',
+                errorMessage: null,
+                shouldEnqueue: true
             };
         } catch {
             return {
@@ -566,16 +602,91 @@ class ProjectService {
         }
     }
 
+    cleanupPreparedPath(preparedPath) {
+        if (!preparedPath || typeof this.fileStore.removeFileSync !== 'function') {
+            return;
+        }
+        try {
+            this.fileStore.removeFileSync(preparedPath);
+        } catch {
+            // Best-effort cleanup; DB state still prevents reuse.
+        }
+    }
+
+    cleanupLocalRunArtifacts(runId) {
+        const safeRunId = typeof runId === 'string' ? runId.trim() : '';
+        if (!safeRunId) return;
+
+        const run = this.db.get('SELECT id, project_id, batch_id FROM export_runs WHERE id = ?', [safeRunId]);
+        const items = this.db.all('SELECT id, output_path FROM export_items WHERE run_id = ?', [safeRunId]);
+
+        for (const item of items) {
+            if (!item.output_path || typeof this.fileStore.removeFileSync !== 'function') {
+                continue;
+            }
+            try {
+                this.fileStore.removeFileSync(item.output_path);
+            } catch {
+                // Best-effort cleanup; stale status disables retries.
+            }
+        }
+
+        if (run && typeof this.fileStore.getExportsDir === 'function' && typeof this.fileStore.removeDirectorySync === 'function') {
+            try {
+                this.fileStore.removeDirectorySync(this.fileStore.getExportsDir(run.project_id, run.batch_id, safeRunId));
+            } catch {
+                // Best-effort cleanup.
+            }
+        }
+
+        if (items.length > 0) {
+            const placeholders = items.map(() => '?').join(', ');
+            this.db.run(`
+                DELETE FROM upload_attempts
+                WHERE export_item_id IN (${placeholders})
+            `, items.map((item) => item.id));
+        }
+
+        this.db.run(`
+            UPDATE export_items
+            SET output_path = NULL,
+                output_checksum_sha256 = NULL,
+                output_size_bytes = NULL,
+                updated_at = ?
+            WHERE run_id = ?
+        `, [nowIso(), safeRunId]);
+    }
+
     markActiveRunStale(project, timestamp = nowIso()) {
         if (!project?.active_run_id) {
             return;
         }
+        const queueEngine = this.getQueueEngine?.();
+        const activeJobs = this.db.all(`
+            SELECT id
+            FROM jobs
+            WHERE run_id = ?
+              AND status IN ('QUEUED', 'RUNNING', 'WAITING_NETWORK', 'WAITING_AUTH')
+        `, [project.active_run_id]);
+        for (const job of activeJobs) {
+            queueEngine?.cancelJob?.(job.id);
+        }
+        this.db.run(`
+            UPDATE jobs
+            SET status = 'CANCELLED',
+                locked_at = NULL,
+                locked_by = NULL,
+                updated_at = ?
+            WHERE run_id = ?
+              AND status IN ('QUEUED', 'RUNNING', 'FAILED', 'CANCELLED', 'WAITING_NETWORK', 'WAITING_AUTH')
+        `, [timestamp, project.active_run_id]);
+        this.cleanupLocalRunArtifacts(project.active_run_id);
         this.db.run(`
             UPDATE export_runs
             SET status = 'STALE',
                 updated_at = ?
             WHERE id = ?
-              AND status NOT IN ('COMPLETED', 'CANCELLED', 'STALE')
+              AND status NOT IN ('CANCELLED', 'STALE')
         `, [timestamp, project.active_run_id]);
     }
 
@@ -668,17 +779,7 @@ class ProjectService {
                 ]);
             }
 
-            const activeRun = project.active_run_id
-                ? this.db.get('SELECT id, status FROM export_runs WHERE id = ?', [project.active_run_id])
-                : null;
-            if (activeRun && activeRun.status !== 'COMPLETED') {
-                this.db.run(`
-                    UPDATE export_runs
-                    SET status = 'STALE',
-                        updated_at = ?
-                    WHERE id = ?
-                `, [now, activeRun.id]);
-            }
+            this.markActiveRunStale(project, now);
 
             this.db.run('UPDATE projects SET updated_at = ? WHERE id = ?', [now, project.id]);
         });

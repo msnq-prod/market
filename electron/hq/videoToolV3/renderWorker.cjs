@@ -84,6 +84,11 @@ class RenderWorker {
             if (!fs.existsSync(introSource.preparedPath) || !fs.existsSync(tailSource.preparedPath)) {
                 throw new Error('Prepared-файл не найден на диске.');
             }
+            const introRequiresAudio = Boolean(introSource.originalHasAudio);
+            const tailRequiresAudio = Boolean(tailSource.originalHasAudio);
+            if ((introRequiresAudio && introSource.preparedHasAudio === false) || (tailRequiresAudio && tailSource.preparedHasAudio === false)) {
+                throw new Error('Prepared-файл потерял audio stream.');
+            }
 
             const outputPath = this.fileStore.getExportItemPath({
                 batchId: record.batch_id,
@@ -112,6 +117,7 @@ class RenderWorker {
                 },
                 outputPath,
                 qualityPreset: manifest.settings?.qualityPreset || record.quality_preset,
+                requireAudibleAudio: introRequiresAudio || tailRequiresAudio,
                 signal: context.signal,
                 onProgress: (progress) => {
                     this.updateItem(exportItemId, {
@@ -128,7 +134,19 @@ class RenderWorker {
             }
 
             const timestamp = nowIso();
+            let stale = false;
             this.db.transaction(() => {
+                const current = this.db.get(`
+                    SELECT export_runs.status AS run_status, jobs.status AS job_status
+                    FROM export_runs
+                    LEFT JOIN jobs ON jobs.id = ?
+                    WHERE export_runs.id = ?
+                `, [job.id, record.run_id]);
+                if (!current || ['STALE', 'CANCELLED'].includes(current.run_status) || current.job_status === 'CANCELLED') {
+                    stale = true;
+                    return;
+                }
+
                 this.db.run(`
                     UPDATE export_items
                     SET render_status = 'RENDERED',
@@ -171,6 +189,21 @@ class RenderWorker {
                     ]);
                 }
             });
+            if (stale) {
+                if (typeof this.fileStore.removeFileSync === 'function') {
+                    try {
+                        this.fileStore.removeFileSync(rendered.outputPath);
+                    } catch {
+                        // Best-effort cleanup; stale state prevents reuse.
+                    }
+                }
+                this.updateItem(exportItemId, {
+                    renderStatus: 'CANCELLED',
+                    errorMessage: 'Export run уже не активен.'
+                });
+                context.emitProjectUpdate?.(record.project_id);
+                return { status: 'CANCELLED', errorMessage: 'Export run уже не активен.' };
+            }
 
             this.exportService?.reconcileRun(record.run_id);
             context.emitProjectUpdate?.(record.project_id);

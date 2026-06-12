@@ -41,7 +41,20 @@ type StorageEntry = {
     relative_path: string;
     size_bytes: number;
     modified_at: string;
+    batch: BatchFolderMetadata | null;
 };
+
+type BatchFolderMetadata = {
+    id: string;
+    location_id: string | null;
+    location_name: string;
+    template_name: string;
+    collected_date: string | null;
+    created_at: string;
+    display_name: string;
+};
+
+const BATCH_FOLDER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const createStorageError = (message: string, statusCode = 400) =>
     Object.assign(new Error(message), { statusCode });
@@ -129,6 +142,82 @@ const getDirectorySize = async (absolutePath: string): Promise<number> => {
     return total;
 };
 
+const getLocalizedName = (translations: Array<{ language_id: number; name: string }>, fallback: string) => {
+    const translation = translations.find((item) => item.language_id === 2)
+        || translations.find((item) => item.language_id === 1)
+        || translations[0];
+    return translation?.name || fallback;
+};
+
+const formatBatchFolderDate = (value: Date) => new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+}).format(value);
+
+const hydrateBatchFolderMetadata = async (entries: StorageEntry[]): Promise<StorageEntry[]> => {
+    const batchIds = entries
+        .filter((entry) => entry.type === 'directory' && BATCH_FOLDER_ID_PATTERN.test(entry.name))
+        .map((entry) => entry.name);
+
+    if (batchIds.length === 0) return entries;
+
+    const batches = await prisma.batch.findMany({
+        where: { id: { in: batchIds } },
+        select: {
+            id: true,
+            collected_date: true,
+            created_at: true,
+            product: {
+                select: {
+                    translations: {
+                        select: {
+                            language_id: true,
+                            name: true
+                        }
+                    },
+                    location: {
+                        select: {
+                            id: true,
+                            translations: {
+                                select: {
+                                    language_id: true,
+                                    name: true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    const batchById = new Map<string, BatchFolderMetadata>();
+    for (const batch of batches) {
+        const locationName = batch.product?.location
+            ? getLocalizedName(batch.product.location.translations, 'Без локации')
+            : 'Без локации';
+        const templateName = batch.product
+            ? getLocalizedName(batch.product.translations, 'Без шаблона')
+            : 'Без шаблона';
+        const dateValue = batch.collected_date || batch.created_at;
+        batchById.set(batch.id, {
+            id: batch.id,
+            location_id: batch.product?.location?.id || null,
+            location_name: locationName,
+            template_name: templateName,
+            collected_date: batch.collected_date?.toISOString() || null,
+            created_at: batch.created_at.toISOString(),
+            display_name: `${locationName} | ${templateName} | ${formatBatchFolderDate(dateValue)}`
+        });
+    }
+
+    return entries.map((entry) => ({
+        ...entry,
+        batch: batchById.get(entry.name) || null
+    }));
+};
+
 const serializeEntry = async (directoryRelativePath: string, directoryAbsolutePath: string, name: string): Promise<StorageEntry | null> => {
     const absolutePath = path.join(directoryAbsolutePath, name);
     const stat = await fs.lstat(absolutePath);
@@ -142,7 +231,8 @@ const serializeEntry = async (directoryRelativePath: string, directoryAbsolutePa
         type: isDirectory ? 'directory' : 'file',
         relative_path: relativePath,
         size_bytes: isDirectory ? await getDirectorySize(absolutePath) : stat.size,
-        modified_at: stat.mtime.toISOString()
+        modified_at: stat.mtime.toISOString(),
+        batch: null
     };
 };
 
@@ -169,12 +259,13 @@ const listStorage = async (pathValue: unknown) => {
     }
 
     const names = await fs.readdir(absolutePath);
-    const entries = (await Promise.all(names.map((name) => serializeEntry(relativePath, absolutePath, name))))
+    const entriesWithoutMetadata = (await Promise.all(names.map((name) => serializeEntry(relativePath, absolutePath, name))))
         .filter((entry): entry is StorageEntry => entry !== null)
         .sort((left, right) => {
             if (left.type !== right.type) return left.type === 'directory' ? -1 : 1;
             return left.name.localeCompare(right.name, 'ru');
         });
+    const entries = await hydrateBatchFolderMetadata(entriesWithoutMetadata);
 
     const disk = await getDiskSnapshot();
     const usedBytes = await getDirectorySize(STORAGE_ROOT);

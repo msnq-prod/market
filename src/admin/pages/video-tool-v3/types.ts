@@ -39,8 +39,12 @@ export type VideoToolV3Source = {
     original_external_path?: string | null;
     original_size_bytes: number;
     original_last_modified?: number;
+    original_checksum_sha256?: string | null;
+    original_has_audio?: boolean | null;
     prepared_path?: string | null;
     prepared_checksum_sha256?: string | null;
+    prepared_has_audio?: boolean | null;
+    source_revision?: number;
     duration_ms: number;
     status: 'NEW' | 'COPYING' | 'PROBING' | 'PREPARING' | 'READY' | 'PREPARE_FAILED' | 'MISSING' | 'DELETED' | string;
     error_message: string | null;

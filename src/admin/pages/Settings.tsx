@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpDown, ChevronRight, ExternalLink, File, Folder, FolderPlus, HardDrive, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
+import { ArrowUpDown, ChevronRight, ExternalLink, File, Folder, FolderPlus, HardDrive, RefreshCw, SlidersHorizontal, Trash2, UploadCloud } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+
+type BatchFolderMetadata = {
+    id: string;
+    location_id: string | null;
+    location_name: string;
+    template_name: string;
+    collected_date: string | null;
+    created_at: string;
+    display_name: string;
+};
 
 type ServerStorageEntry = {
     name: string;
@@ -8,6 +18,7 @@ type ServerStorageEntry = {
     relative_path: string;
     size_bytes: number;
     modified_at: string;
+    batch?: BatchFolderMetadata | null;
 };
 
 type ServerStorageSnapshot = {
@@ -20,7 +31,7 @@ type ServerStorageSnapshot = {
     entries: ServerStorageEntry[];
 };
 
-type SortKey = 'name' | 'size' | 'modified';
+type SortKey = 'name' | 'size' | 'modified' | 'batch_date';
 type SortState = {
     key: SortKey;
     direction: 'asc' | 'desc';
@@ -50,7 +61,46 @@ const formatDateTime = (value: string) => {
     }).format(date);
 };
 
-const getFileUrl = (relativePath: string) => `/uploads/${relativePath.split('/').map(encodeURIComponent).join('/')}`;
+const formatDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+
+    return new Intl.DateTimeFormat('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    }).format(date);
+};
+
+const DEFAULT_SERVER_ORIGIN = 'https://zagarami.com';
+
+const normalizeOrigin = (value: string | null | undefined): string => {
+    if (!value) return DEFAULT_SERVER_ORIGIN;
+
+    try {
+        return new URL(value).origin;
+    } catch {
+        return DEFAULT_SERVER_ORIGIN;
+    }
+};
+
+const getConfiguredServerOrigin = async (): Promise<string> => {
+    if (window.stonesDesktop?.getAppInfo) {
+        try {
+            const appInfo = await window.stonesDesktop.getAppInfo();
+            return normalizeOrigin(appInfo.apiOrigin);
+        } catch {
+            return DEFAULT_SERVER_ORIGIN;
+        }
+    }
+
+    return DEFAULT_SERVER_ORIGIN;
+};
+
+const getFileUrl = (serverOrigin: string, relativePath: string) => {
+    const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
+    return new URL(`/uploads/${encodedPath}`, serverOrigin).toString();
+};
 
 const sortEntries = (entries: ServerStorageEntry[], sort: SortState) => [...entries].sort((left, right) => {
     if (left.type !== right.type) return left.type === 'directory' ? -1 : 1;
@@ -58,14 +108,28 @@ const sortEntries = (entries: ServerStorageEntry[], sort: SortState) => [...entr
     let result = 0;
     if (sort.key === 'size') {
         result = left.size_bytes - right.size_bytes;
+    } else if (sort.key === 'batch_date') {
+        const leftDate = new Date(left.batch?.collected_date || left.batch?.created_at || left.modified_at).getTime();
+        const rightDate = new Date(right.batch?.collected_date || right.batch?.created_at || right.modified_at).getTime();
+        result = leftDate - rightDate;
     } else if (sort.key === 'modified') {
         result = new Date(left.modified_at).getTime() - new Date(right.modified_at).getTime();
     } else {
-        result = left.name.localeCompare(right.name, 'ru');
+        const leftName = left.batch?.display_name || left.name;
+        const rightName = right.batch?.display_name || right.name;
+        result = leftName.localeCompare(rightName, 'ru');
     }
 
     return sort.direction === 'asc' ? result : -result;
 });
+
+const getEntryDisplayName = (entry: ServerStorageEntry, batchFolderMode: boolean) =>
+    batchFolderMode && entry.batch ? entry.batch.display_name : entry.name;
+
+const getEntryDateLabel = (entry: ServerStorageEntry, batchFolderMode: boolean) => {
+    if (!batchFolderMode || !entry.batch) return formatDateTime(entry.modified_at);
+    return formatDate(entry.batch.collected_date || entry.batch.created_at);
+};
 
 const buttonClassName = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50';
 
@@ -79,6 +143,9 @@ export function Settings() {
     const [dragActive, setDragActive] = useState(false);
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
+    const [serverOrigin, setServerOrigin] = useState(DEFAULT_SERVER_ORIGIN);
+    const [batchFolderMode, setBatchFolderMode] = useState(false);
+    const [locationFilter, setLocationFilter] = useState('');
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     const loadStorage = useCallback(async (pathValue: string) => {
@@ -106,7 +173,36 @@ export function Settings() {
         void loadStorage(currentPath);
     }, [currentPath, loadStorage]);
 
-    const sortedEntries = useMemo(() => sortEntries(snapshot?.entries || [], sort), [snapshot?.entries, sort]);
+    useEffect(() => {
+        void getConfiguredServerOrigin().then(setServerOrigin);
+    }, []);
+
+    const batchLocationOptions = useMemo(() => {
+        const options = new Map<string, string>();
+        for (const entry of snapshot?.entries || []) {
+            if (!entry.batch) continue;
+            const key = entry.batch.location_id || '__none__';
+            if (!options.has(key)) {
+                options.set(key, entry.batch.location_name);
+            }
+        }
+
+        return [...options.entries()]
+            .map(([id, name]) => ({ id, name }))
+            .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+    }, [snapshot?.entries]);
+
+    const sortedEntries = useMemo(() => {
+        let nextEntries = snapshot?.entries || [];
+        if (batchFolderMode) {
+            nextEntries = nextEntries.filter((entry) => {
+                if (!entry.batch) return false;
+                if (!locationFilter) return true;
+                return (entry.batch.location_id || '__none__') === locationFilter;
+            });
+        }
+        return sortEntries(nextEntries, sort);
+    }, [batchFolderMode, locationFilter, snapshot?.entries, sort]);
     const usedPercent = snapshot?.total_bytes
         ? Math.max(0, Math.min(100, Math.round((snapshot.used_bytes / snapshot.total_bytes) * 100)))
         : null;
@@ -126,6 +222,13 @@ export function Settings() {
             key,
             direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
         }));
+    };
+
+    const toggleBatchFolderMode = () => {
+        const next = !batchFolderMode;
+        setBatchFolderMode(next);
+        setLocationFilter('');
+        setSort(next ? { key: 'batch_date', direction: 'desc' } : { key: 'name', direction: 'asc' });
     };
 
     const uploadFiles = async (files: FileList | File[]) => {
@@ -273,6 +376,26 @@ export function Settings() {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={toggleBatchFolderMode}
+                            className={`${buttonClassName} ${batchFolderMode ? 'border-emerald-300/40 bg-emerald-300/10 text-emerald-100' : ''}`}
+                        >
+                            <SlidersHorizontal size={16} />
+                            Папки партий
+                        </button>
+                        {batchFolderMode ? (
+                            <select
+                                value={locationFilter}
+                                onChange={(event) => setLocationFilter(event.target.value)}
+                                className="h-10 min-w-44 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none transition focus:border-emerald-300/50"
+                            >
+                                <option value="">Все локации</option>
+                                {batchLocationOptions.map((location) => (
+                                    <option key={location.id} value={location.id}>{location.name}</option>
+                                ))}
+                            </select>
+                        ) : null}
                         <input
                             value={newFolderName}
                             onChange={(event) => setNewFolderName(event.target.value)}
@@ -323,9 +446,14 @@ export function Settings() {
                         <table className="min-w-[760px] w-full table-fixed text-left text-sm">
                             <thead className="border-b border-white/8 text-xs uppercase text-gray-600">
                                 <tr>
-                                    <TableHeader label="Имя" active={sort.key === 'name'} onClick={() => updateSort('name')} className="w-[48%]" />
+                                    <TableHeader label={batchFolderMode ? 'Партия' : 'Имя'} active={sort.key === 'name'} onClick={() => updateSort('name')} className="w-[48%]" />
                                     <TableHeader label="Размер" active={sort.key === 'size'} onClick={() => updateSort('size')} className="w-[18%]" />
-                                    <TableHeader label="Изменен" active={sort.key === 'modified'} onClick={() => updateSort('modified')} className="w-[22%]" />
+                                    <TableHeader
+                                        label={batchFolderMode ? 'Дата партии' : 'Изменен'}
+                                        active={sort.key === (batchFolderMode ? 'batch_date' : 'modified')}
+                                        onClick={() => updateSort(batchFolderMode ? 'batch_date' : 'modified')}
+                                        className="w-[22%]"
+                                    />
                                     <th className="w-[12%] px-4 py-3 text-right font-medium">Действия</th>
                                 </tr>
                             </thead>
@@ -348,11 +476,16 @@ export function Settings() {
                                                     className="flex min-w-0 items-center gap-3 text-left text-gray-100 hover:text-emerald-200"
                                                 >
                                                     <Folder size={18} className="shrink-0 text-emerald-200" />
-                                                    <span className="truncate">{entry.name}</span>
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate">{getEntryDisplayName(entry, batchFolderMode)}</span>
+                                                        {batchFolderMode && entry.batch ? (
+                                                            <span className="block truncate text-xs text-gray-600">{entry.name}</span>
+                                                        ) : null}
+                                                    </span>
                                                 </button>
                                             ) : (
                                                 <a
-                                                    href={getFileUrl(entry.relative_path)}
+                                                    href={getFileUrl(serverOrigin, entry.relative_path)}
                                                     target="_blank"
                                                     rel="noreferrer"
                                                     className="flex min-w-0 items-center gap-3 text-gray-100 hover:text-emerald-200"
@@ -364,7 +497,7 @@ export function Settings() {
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-gray-400">{formatBytes(entry.size_bytes)}</td>
-                                        <td className="px-4 py-3 text-gray-400">{formatDateTime(entry.modified_at)}</td>
+                                        <td className="px-4 py-3 text-gray-400">{getEntryDateLabel(entry, batchFolderMode)}</td>
                                         <td className="px-4 py-3 text-right">
                                             <button
                                                 type="button"

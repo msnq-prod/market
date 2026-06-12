@@ -4,8 +4,8 @@ const path = require('path');
 
 const Database = require('better-sqlite3');
 
-const SCHEMA_VERSION = 2;
-const SCHEMA_NAME = 'persist_replace_existing';
+const SCHEMA_VERSION = 3;
+const SCHEMA_NAME = 'source_revision_audio_metadata';
 
 const nowIso = () => new Date().toISOString();
 
@@ -15,8 +15,8 @@ const normalizeRow = (row) => {
     }
 
     return Object.fromEntries(Object.entries(row).map(([key, value]) => {
-        if (key === 'deleted') {
-            return [key, Boolean(value)];
+        if (['deleted', 'original_has_audio', 'prepared_has_audio'].includes(key)) {
+            return [key, value === null ? null : Boolean(value)];
         }
         return [key, value];
     }));
@@ -78,6 +78,20 @@ class VideoToolV3Database {
             const columns = db.prepare('PRAGMA table_info(export_runs)').all();
             if (!columns.some((column) => column.name === 'replace_existing')) {
                 db.exec('ALTER TABLE export_runs ADD COLUMN replace_existing INTEGER NOT NULL DEFAULT 0');
+            }
+
+            const sourceColumns = db.prepare('PRAGMA table_info(source_assets)').all();
+            if (!sourceColumns.some((column) => column.name === 'original_checksum_sha256')) {
+                db.exec('ALTER TABLE source_assets ADD COLUMN original_checksum_sha256 TEXT');
+            }
+            if (!sourceColumns.some((column) => column.name === 'original_has_audio')) {
+                db.exec('ALTER TABLE source_assets ADD COLUMN original_has_audio INTEGER');
+            }
+            if (!sourceColumns.some((column) => column.name === 'prepared_has_audio')) {
+                db.exec('ALTER TABLE source_assets ADD COLUMN prepared_has_audio INTEGER');
+            }
+            if (!sourceColumns.some((column) => column.name === 'source_revision')) {
+                db.exec('ALTER TABLE source_assets ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 1');
             }
             db.prepare(`
                 INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)

@@ -125,6 +125,7 @@ const createHarness = async () => {
     let remoteUploaded = false;
     let expireIntentOnce = false;
     let conflictChunkOnce = false;
+    let staleDuringComplete = false;
     const serverClient = {
         createRun: async ({ replaceExisting }: { replaceExisting: boolean }) => {
             if (failAuthOnce) {
@@ -195,6 +196,10 @@ const createHarness = async () => {
             if (failComplete) {
                 throw new VideoToolV3ServerError('complete failed', { status: 500, kind: 'SERVER_ERROR' });
             }
+            if (staleDuringComplete) {
+                db.run(`UPDATE export_runs SET status = 'STALE' WHERE id = ?`, [ids.run]);
+                db.run(`UPDATE jobs SET status = 'CANCELLED' WHERE id = ?`, [ids.job]);
+            }
             return {
                 run: { id: ids.run, status: 'COMPLETED', expected_count: 1, uploaded_count: 1 },
                 uploaded: {
@@ -249,6 +254,9 @@ const createHarness = async () => {
         },
         setConflictChunkOnce() {
             conflictChunkOnce = true;
+        },
+        setStaleDuringComplete() {
+            staleDuringComplete = true;
         },
         clearUploadedChunks() {
             uploadedChunks.clear();
@@ -351,6 +359,20 @@ test('upload recovery accepts matching server-completed item without uploading c
     assert.equal(result.status, 'DONE');
     assert.deepEqual(harness.chunkCalls, []);
     assert.equal(harness.db.get('SELECT upload_status FROM export_items WHERE id = ?', [ids.exportItem]).upload_status, 'UPLOADED');
+});
+
+test('upload worker does not mark stale run item as uploaded after complete returns', async (t) => {
+    const harness = await createHarness();
+    t.after(() => harness.close());
+    harness.setStaleDuringComplete();
+
+    const job = harness.db.get('SELECT * FROM jobs WHERE id = ?', [ids.job]);
+    const result = await harness.worker.handle(job, {});
+    const item = harness.db.get('SELECT * FROM export_items WHERE id = ?', [ids.exportItem]);
+
+    assert.equal(result.status, 'CANCELLED');
+    assert.equal(item.upload_status, 'CANCELLED');
+    assert.equal(item.server_file_url, null);
 });
 
 test('upload forwards persisted replace_existing to server run', async (t) => {

@@ -1,7 +1,7 @@
 {
   "name": "stones",
   "private": true,
-  "version": "1.6.9-1",
+  "version": "1.6.12-4",
   "type": "module",
   "packageManager": "npm@10.9.3",
   "engines": {

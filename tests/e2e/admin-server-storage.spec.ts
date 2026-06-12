@@ -9,6 +9,15 @@ type StorageEntry = {
     relative_path: string;
     size_bytes: number;
     modified_at: string;
+    batch?: {
+        id: string;
+        location_id: string | null;
+        location_name: string;
+        template_name: string;
+        collected_date: string | null;
+        created_at: string;
+        display_name: string;
+    } | null;
 };
 
 type StorageSnapshot = {
@@ -128,6 +137,38 @@ test('UI smoke: admin uses server storage finder controls', async ({ page }) => 
             modified_at: nowIso
         },
         {
+            name: '193b95e2-63c5-4247-8f34-0abfe45d24c4',
+            type: 'directory',
+            relative_path: '193b95e2-63c5-4247-8f34-0abfe45d24c4',
+            size_bytes: 8192,
+            modified_at: nowIso,
+            batch: {
+                id: '193b95e2-63c5-4247-8f34-0abfe45d24c4',
+                location_id: 'location-yakutia',
+                location_name: 'Якутия',
+                template_name: 'Алмаз',
+                collected_date: '2026-06-01T00:00:00.000Z',
+                created_at: '2026-06-01T00:00:00.000Z',
+                display_name: 'Якутия | Алмаз | 01.06.2026'
+            }
+        },
+        {
+            name: '2c801b33-ee2a-4f87-ba8e-1aa0db55bc8e',
+            type: 'directory',
+            relative_path: '2c801b33-ee2a-4f87-ba8e-1aa0db55bc8e',
+            size_bytes: 4096,
+            modified_at: nowIso,
+            batch: {
+                id: '2c801b33-ee2a-4f87-ba8e-1aa0db55bc8e',
+                location_id: 'location-altai',
+                location_name: 'Алтай',
+                template_name: 'Нефрит',
+                collected_date: '2026-06-10T00:00:00.000Z',
+                created_at: '2026-06-10T00:00:00.000Z',
+                display_name: 'Алтай | Нефрит | 10.06.2026'
+            }
+        },
+        {
             name: 'old-video.mp4',
             type: 'file',
             relative_path: 'old-video.mp4',
@@ -194,6 +235,18 @@ test('UI smoke: admin uses server storage finder controls', async ({ page }) => 
     await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Дисковое пространство' })).toBeVisible();
     await expect(page.getByText('old-video.mp4')).toBeVisible();
+    await expect(page.getByRole('link', { name: /old-video\.mp4/ })).toHaveAttribute(
+        'href',
+        'https://zagarami.com/uploads/old-video.mp4'
+    );
+
+    await page.getByRole('button', { name: 'Папки партий' }).click();
+    await expect(page.getByText('Якутия | Алмаз | 01.06.2026')).toBeVisible();
+    await expect(page.getByText('old-video.mp4')).toHaveCount(0);
+    await page.locator('select').selectOption({ label: 'Якутия' });
+    await expect(page.getByText('Якутия | Алмаз | 01.06.2026')).toBeVisible();
+    await expect(page.getByText('Алтай | Нефрит | 10.06.2026')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Папки партий' }).click();
 
     await page.getByPlaceholder('Новая папка').fill('manual');
     await page.getByRole('button', { name: 'Создать' }).click();

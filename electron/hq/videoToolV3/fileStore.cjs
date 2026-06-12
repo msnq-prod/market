@@ -166,6 +166,18 @@ class VideoToolV3FileStore {
         return stat.size;
     }
 
+    removeFileSync(filePath) {
+        if (!filePath) return;
+        const safeTarget = this.assertInsideRoot(filePath);
+        fs.rmSync(safeTarget, { force: true });
+    }
+
+    removeDirectorySync(directoryPath) {
+        if (!directoryPath) return;
+        const safeTarget = this.assertInsideRoot(directoryPath);
+        fs.rmSync(safeTarget, { recursive: true, force: true });
+    }
+
     async getDiskSnapshot() {
         try {
             await fsp.mkdir(this.rootDir, { recursive: true });

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import crypto from 'node:crypto';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { createProductFixture, disconnectTestDb } from './support/db-fixtures';
 import {
     ADMIN_EMAIL,
@@ -11,6 +13,8 @@ import {
 } from './admin-video-tool.helpers';
 
 type UploadStatus = 'PAUSED_OFFLINE' | 'AUTH_REQUIRED' | 'UPLOAD_FAILED' | 'QUEUED';
+
+const publicUploadPath = (url: string) => path.join(process.cwd(), 'public', url.replace(/^\/+/, ''));
 
 test.afterAll(async () => {
     await disconnectTestDb();
@@ -250,7 +254,7 @@ test('Video Tool v3: editor preview video is not muted', async ({ page }) => {
     await expect.poll(() => video.evaluate((node) => (node as HTMLVideoElement).muted)).toBe(false);
 });
 
-test('Video Tool v3 API: resumable chunks complete and publish clone video', async ({ page, request }) => {
+test('Video Tool v3 API: resumable chunks complete, publish clone video, and cleanup superseded files', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: true });
@@ -259,23 +263,27 @@ test('Video Tool v3 API: resumable chunks complete and publish clone video', asy
     expect(item?.id).toBeTruthy();
     expect(item?.serial_number).toBeTruthy();
 
-    const runId = crypto.randomUUID();
-    const sourceId = crypto.randomUUID();
-    const output = Buffer.from('resumable-video-tool-v3-e2e');
-    const checksum = crypto.createHash('sha256').update(output).digest('hex');
     const auth = { Authorization: `Bearer ${admin.accessToken}` };
-    const manifest = {
+    const uploadRun = async (replaceExisting: boolean, output: Buffer) => {
+        const runId = crypto.randomUUID();
+        const sourceId = crypto.randomUUID();
+        const checksum = crypto.createHash('sha256').update(output).digest('hex');
+        const manifest = {
         manifestVersion: 3,
         batchId: fixture.batch.id,
         projectId: crypto.randomUUID(),
         runId,
-        settings: { width: 720, height: 1280, fps: 24, qualityPreset: 'standard', audio: 'disabled' },
+        settings: { width: 720, height: 1280, fps: 24, qualityPreset: 'standard', audio: 'source' },
         sources: [{
             sourceId,
             position: 0,
             preparedPath: '/tmp/source.mp4',
             checksumSha256: 'a'.repeat(64),
-            durationMs: 2000
+            durationMs: 2000,
+            sourceRevision: 1,
+            originalChecksumSha256: 'b'.repeat(64),
+            originalHasAudio: true,
+            preparedHasAudio: true
         }],
         introSegment: {
             segmentId: crypto.randomUUID(),
@@ -292,69 +300,79 @@ test('Video Tool v3 API: resumable chunks complete and publish clone video', asy
             startMs: 1000,
             endMs: 2000
         }]
-    };
+        };
 
-    const runResponse = await request.post(`/api/video-tool-v3/batches/${fixture.batch.id}/runs`, {
-        headers: auth,
-        data: {
-            client_run_id: runId,
-            manifest,
-            expected_count: 1,
-            replace_existing: false
-        }
-    });
-    expect(runResponse.ok()).toBeTruthy();
-
-    const intentResponse = await request.post(`/api/video-tool-v3/runs/${runId}/items/${item!.id}/upload-intent`, {
-        headers: auth,
-        data: {
-            serial_number: item!.serial_number,
-            file_name: `${item!.serial_number}.mp4`,
-            file_size_bytes: output.length,
-            checksum_sha256: checksum,
-            chunk_size_bytes: 8
-        }
-    });
-    expect(intentResponse.ok()).toBeTruthy();
-    const intent = await intentResponse.json() as { upload_id: string; chunk_size_bytes: number };
-
-    for (let offset = 0, chunkIndex = 0; offset < output.length; offset += intent.chunk_size_bytes, chunkIndex += 1) {
-        const chunk = output.subarray(offset, offset + intent.chunk_size_bytes);
-        const chunkResponse = await request.put(
-            `/api/video-tool-v3/runs/${runId}/items/${item!.id}/upload-intent/${intent.upload_id}/chunks/${chunkIndex}`,
-            {
-                headers: {
-                    ...auth,
-                    'Content-Type': 'application/octet-stream',
-                    'X-Chunk-Sha256': crypto.createHash('sha256').update(chunk).digest('hex')
-                },
-                data: chunk
+        const runResponse = await request.post(`/api/video-tool-v3/batches/${fixture.batch.id}/runs`, {
+            headers: auth,
+            data: {
+                client_run_id: runId,
+                manifest,
+                expected_count: 1,
+                replace_existing: replaceExisting
             }
-        );
-        expect(chunkResponse.ok()).toBeTruthy();
-    }
+        });
+        expect(runResponse.ok()).toBeTruthy();
 
-    const completeResponse = await request.post(
-        `/api/video-tool-v3/runs/${runId}/items/${item!.id}/upload-intent/${intent.upload_id}/complete`,
-        { headers: auth }
-    );
-    expect(completeResponse.ok()).toBeTruthy();
-    const completed = await completeResponse.json() as {
-        uploaded: { item_id: string; file_url: string; clone_url: string; checksum_sha256: string };
+        const intentResponse = await request.post(`/api/video-tool-v3/runs/${runId}/items/${item!.id}/upload-intent`, {
+            headers: auth,
+            data: {
+                serial_number: item!.serial_number,
+                file_name: `${item!.serial_number}.mp4`,
+                file_size_bytes: output.length,
+                checksum_sha256: checksum,
+                chunk_size_bytes: 8
+            }
+        });
+        expect(intentResponse.ok()).toBeTruthy();
+        const intent = await intentResponse.json() as { upload_id: string; chunk_size_bytes: number };
+
+        for (let offset = 0, chunkIndex = 0; offset < output.length; offset += intent.chunk_size_bytes, chunkIndex += 1) {
+            const chunk = output.subarray(offset, offset + intent.chunk_size_bytes);
+            const chunkResponse = await request.put(
+                `/api/video-tool-v3/runs/${runId}/items/${item!.id}/upload-intent/${intent.upload_id}/chunks/${chunkIndex}`,
+                {
+                    headers: {
+                        ...auth,
+                        'Content-Type': 'application/octet-stream',
+                        'X-Chunk-Sha256': crypto.createHash('sha256').update(chunk).digest('hex')
+                    },
+                    data: chunk
+                }
+            );
+            expect(chunkResponse.ok()).toBeTruthy();
+        }
+
+        const completeResponse = await request.post(
+            `/api/video-tool-v3/runs/${runId}/items/${item!.id}/upload-intent/${intent.upload_id}/complete`,
+            { headers: auth }
+        );
+        expect(completeResponse.ok()).toBeTruthy();
+        const completed = await completeResponse.json() as {
+            uploaded: { item_id: string; file_url: string; clone_url: string; checksum_sha256: string };
+        };
+        expect(completed.uploaded).toMatchObject({
+            item_id: item!.id,
+            checksum_sha256: checksum,
+            clone_url: `/clone/${item!.serial_number}`
+        });
+        return completed.uploaded;
     };
-    expect(completed.uploaded).toMatchObject({
-        item_id: item!.id,
-        checksum_sha256: checksum,
-        clone_url: `/clone/${item!.serial_number}`
-    });
+
+    const firstUploaded = await uploadRun(false, Buffer.from('resumable-video-tool-v3-e2e-first'));
+    const firstFilePath = publicUploadPath(firstUploaded.file_url);
+    expect(existsSync(firstFilePath)).toBeTruthy();
+
+    const secondUploaded = await uploadRun(true, Buffer.from('resumable-video-tool-v3-e2e-second'));
+    expect(secondUploaded.file_url).not.toBe(firstUploaded.file_url);
+    expect(existsSync(firstFilePath)).toBeFalsy();
 
     const cloneResponse = await request.get(`/api/public/items/${item!.serial_number}`);
     expect(cloneResponse.ok()).toBeTruthy();
     const clone = await cloneResponse.json() as { video_url?: string; has_video?: boolean };
-    expect(clone.video_url).toBe(completed.uploaded.file_url);
+    expect(clone.video_url).toBe(secondUploaded.file_url);
     expect(clone.has_video).toBe(true);
 
     await page.goto(`/clone/${item!.serial_number}`);
     await page.getByRole('button', { name: 'Открыть видео' }).click();
-    await expect(page.locator('video')).toHaveAttribute('src', completed.uploaded.file_url);
+    await expect(page.locator('video')).toHaveAttribute('src', secondUploaded.file_url);
 });

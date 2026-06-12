@@ -65,6 +65,12 @@ const getDurationMs = (format, stream) => {
     return Math.round(durationSec * 1000);
 };
 
+const parseMaxVolumeDb = (stderr) => {
+    const match = String(stderr || '').match(/max_volume:\s*(-?(?:\d+(?:\.\d+)?|inf)) dB/i);
+    if (!match) return null;
+    return match[1] === '-inf' ? Number.NEGATIVE_INFINITY : Number(match[1]);
+};
+
 const classifyFfmpegError = (message) => {
     if (/spawn .*?(ENOENT|ENOTDIR|EACCES)|ENOENT|ENOTDIR|EACCES/i.test(message)) {
         return 'FFmpeg не найден или недоступен. Переустановите HQ Desktop или проверьте сборку приложения.';
@@ -161,6 +167,27 @@ class FfmpegService {
         return probe;
     }
 
+    async assertAudibleAudio(inputPath, label) {
+        const probe = await this.probe(inputPath);
+        if (!probe.hasAudio) {
+            throw new Error(`${label} не содержит audio stream.`);
+        }
+
+        const { stderr } = await this.runProcess(ffmpegPath(), [
+            '-hide_banner',
+            '-nostats',
+            '-i', inputPath,
+            '-map', '0:a:0',
+            '-af', 'volumedetect',
+            '-f', 'null',
+            '-'
+        ]);
+        const maxVolumeDb = parseMaxVolumeDb(stderr);
+        if (maxVolumeDb === Number.NEGATIVE_INFINITY) {
+            throw new Error(`${label} содержит нулевую audio дорожку.`);
+        }
+    }
+
     async prepareSource({ inputPath, preparedPath, qualityPreset = 'standard', expectedDurationMs = 0, hasAudio = null, onProgress, signal }) {
         const preset = QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.standard;
         const tmpOutput = this.fileStore.createTempPath(preparedPath);
@@ -206,10 +233,16 @@ class FfmpegService {
             if (!tmpProbe.hasAudio) {
                 throw new Error('Prepared-файл не содержит audio stream.');
             }
+            if (sourceHasAudio) {
+                await this.assertAudibleAudio(tmpOutput, 'Prepared-файл');
+            }
             await this.fileStore.atomicMove(tmpOutput, preparedPath);
             const preparedProbe = await this.probePrepared(preparedPath);
             if (!preparedProbe.hasAudio) {
                 throw new Error('Prepared-файл не содержит audio stream.');
+            }
+            if (sourceHasAudio) {
+                await this.assertAudibleAudio(preparedPath, 'Prepared-файл');
             }
             const sizeBytes = await this.fileStore.getFileSize(preparedPath);
             if (sizeBytes <= 0) {
@@ -221,6 +254,7 @@ class FfmpegService {
             return {
                 preparedPath,
                 checksumSha256,
+                preparedHasAudio: preparedProbe.hasAudio,
                 durationMs: preparedProbe.durationMs,
                 sizeBytes
             };
@@ -232,7 +266,7 @@ class FfmpegService {
         }
     }
 
-    async renderItem({ intro, tail, outputPath, qualityPreset = 'standard', onProgress, signal }) {
+    async renderItem({ intro, tail, outputPath, qualityPreset = 'standard', requireAudibleAudio = false, onProgress, signal }) {
         const preset = QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.standard;
         const tmpOutput = this.fileStore.createTempPath(outputPath);
         const introDurationMs = Math.max(0, Number(intro?.endMs || 0) - Number(intro?.startMs || 0));
@@ -298,6 +332,9 @@ class FfmpegService {
             if (!tmpProbe.hasAudio) {
                 throw new Error('Rendered-файл не содержит audio stream.');
             }
+            if (requireAudibleAudio) {
+                await this.assertAudibleAudio(tmpOutput, 'Rendered-файл');
+            }
             const toleranceMs = Math.max(750, Math.round(expectedDurationMs * 0.05));
             if (Math.abs(tmpProbe.durationMs - expectedDurationMs) > toleranceMs) {
                 throw new Error('Rendered-файл имеет неверную duration.');
@@ -311,6 +348,9 @@ class FfmpegService {
             const finalProbe = await this.probePrepared(outputPath);
             if (!finalProbe.hasAudio) {
                 throw new Error('Rendered output не содержит audio stream.');
+            }
+            if (requireAudibleAudio) {
+                await this.assertAudibleAudio(outputPath, 'Rendered output');
             }
             const sizeBytes = await this.fileStore.getFileSize(outputPath);
             if (sizeBytes <= 0) {

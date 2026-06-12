@@ -6,7 +6,7 @@ const { VideoToolV3ServerError } = require('./serverClient.cjs');
 const failMessage = (error) => (error instanceof Error ? error.message : 'Загрузка прервалась.');
 
 class UploadWorker {
-    constructor({ db, uploadService, networkService = null, exportService = null }) {
+    constructor({ db, uploadService, networkService = null, exportService = null, ffmpegService = null }) {
         if (!db) {
             throw new Error('UploadWorker requires db.');
         }
@@ -18,6 +18,7 @@ class UploadWorker {
         this.uploadService = uploadService;
         this.networkService = networkService;
         this.exportService = exportService;
+        this.ffmpegService = ffmpegService;
     }
 
     async handle(job, context = {}) {
@@ -49,6 +50,13 @@ class UploadWorker {
         if (!fs.existsSync(record.output_path)) {
             return this.fail(record, 'Rendered output не найден на диске.', context);
         }
+        if (this.ffmpegService && this.outputRequiresAudibleAudio(record)) {
+            try {
+                await this.ffmpegService.assertAudibleAudio(record.output_path, 'Rendered output');
+            } catch (error) {
+                return this.fail(record, error instanceof Error ? error.message : 'Rendered output потерял audio.', context);
+            }
+        }
 
         const network = this.networkService?.getState?.();
         if (network && (!network.online || !network.apiReachable)) {
@@ -79,6 +87,19 @@ class UploadWorker {
             });
             if (context.signal?.aborted) {
                 return { status: 'CANCELLED' };
+            }
+            const current = this.db.get(`
+                SELECT export_runs.status AS run_status, jobs.status AS job_status
+                FROM export_runs
+                LEFT JOIN jobs ON jobs.id = ?
+                WHERE export_runs.id = ?
+            `, [job.id, record.run_id]);
+            if (!current || ['STALE', 'CANCELLED'].includes(current.run_status) || current.job_status === 'CANCELLED') {
+                const message = 'Export run уже не активен.';
+                this.updateItem(record.id, { uploadStatus: 'CANCELLED', errorMessage: message });
+                this.uploadService.setLatestAttemptStatus(record.id, 'CANCELLED', message);
+                context.emitProjectUpdate?.(record.project_id);
+                return { status: 'CANCELLED', errorMessage: 'Export run уже не активен.' };
             }
 
             this.db.run(`
@@ -136,6 +157,17 @@ class UploadWorker {
         this.exportService?.reconcileRun(record.run_id);
         context.emitProjectUpdate?.(record.project_id);
         return { status: 'FAILED', errorMessage: message };
+    }
+
+    outputRequiresAudibleAudio(record) {
+        const manifest = parseManifest(record.manifest_json);
+        if (manifest.settings?.audio !== 'source') {
+            return false;
+        }
+        const output = manifest.outputs?.find((entry) => entry.exportItemId === record.id);
+        const introSource = manifest.sources?.find((source) => source.sourceId === manifest.introSegment?.sourceId);
+        const tailSource = manifest.sources?.find((source) => source.sourceId === output?.sourceId);
+        return Boolean(introSource?.originalHasAudio || tailSource?.originalHasAudio);
     }
 
     updateItem(exportItemId, { uploadStatus, uploadProgress = null, errorMessage }) {

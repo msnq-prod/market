@@ -15,14 +15,18 @@ const buildManifest = () => ({
         height: 1280,
         fps: 24,
         qualityPreset: 'medium',
-        audio: 'disabled'
+        audio: 'source'
     },
     sources: [{
         sourceId: '44444444-4444-4444-8444-444444444444',
         position: 0,
         preparedPath: '/tmp/source.mp4',
         checksumSha256: 'a'.repeat(64),
-        durationMs: 10_000
+        durationMs: 10_000,
+        sourceRevision: 2,
+        originalChecksumSha256: 'b'.repeat(64),
+        originalHasAudio: true,
+        preparedHasAudio: true
     }],
     introSegment: {
         segmentId: '55555555-5555-4555-8555-555555555555',
@@ -46,6 +50,22 @@ test('parseRenderManifestV3 accepts strict v3 manifest', () => {
 
     assert.equal(manifest.manifestVersion, 3);
     assert.equal(manifest.outputs[0]?.serialNumber, 'RUSLOC01000001');
+    assert.equal(manifest.settings.audio, 'source');
+    assert.equal(manifest.sources[0]?.sourceRevision, 2);
+    assert.equal(manifest.sources[0]?.originalHasAudio, true);
+});
+
+test('parseRenderManifestV3 accepts legacy disabled audio manifest', () => {
+    const legacy = buildManifest();
+    legacy.settings.audio = 'disabled';
+    delete legacy.sources[0].sourceRevision;
+    delete legacy.sources[0].originalChecksumSha256;
+    delete legacy.sources[0].originalHasAudio;
+    delete legacy.sources[0].preparedHasAudio;
+
+    const manifest = parseRenderManifestV3(legacy, batchId, runId);
+
+    assert.equal(manifest.settings.audio, 'disabled');
 });
 
 test('parseRenderManifestV3 rejects extra keys', () => {

@@ -177,19 +177,23 @@ const createHarness = async (itemCount: number, options: { withAudio?: boolean }
         db.run(`
             INSERT INTO source_assets (
                 id, project_id, position, original_name, original_external_path,
-                original_size_bytes, original_last_modified, prepared_path,
-                prepared_checksum_sha256, duration_ms, status, error_message,
+                original_size_bytes, original_last_modified, original_checksum_sha256,
+                original_has_audio, prepared_path, prepared_checksum_sha256,
+                prepared_has_audio, source_revision, duration_ms, status, error_message,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, 1200, 'READY', NULL, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, 1, 1200, 'READY', NULL, ?, ?)
         `, [
             sourceId,
             projectId,
             index,
             `${sourceName}.mp4`,
             preparedPath,
+            checksum,
+            options.withAudio ? 1 : 0,
             preparedPath,
             checksum,
+            options.withAudio ? 1 : 0,
             timestamp,
             timestamp
         ]);
@@ -445,6 +449,56 @@ test('cancelling a running render aborts worker and does not create upload job',
     assert.equal(harness.db.get('SELECT render_status FROM export_items WHERE id = ?', [renderJob.export_item_id]).render_status, 'CANCELLED');
     assert.equal(harness.db.get('SELECT status FROM jobs WHERE id = ?', [renderJob.id]).status, 'CANCELLED');
     assert.equal(harness.db.all(`SELECT id FROM jobs WHERE export_item_id = ? AND type = 'UPLOAD_ITEM'`, [renderJob.export_item_id]).length, 0);
+});
+
+test('render worker does not store output after run becomes stale', async (t) => {
+    const harness = await createHarness(1);
+    t.after(() => harness.close());
+
+    const run = await harness.exportService.startRun(harness.projectId);
+    const renderJob = harness.db.get(`SELECT * FROM jobs WHERE run_id = ? AND type = 'RENDER_ITEM'`, [run.id]);
+    const renderWorker = new RenderWorker({
+        db: harness.db,
+        fileStore: harness.fileStore,
+        exportService: harness.exportService,
+        ffmpegService: {
+            renderItem: async ({ outputPath }: { outputPath: string }) => {
+                harness.db.run(`UPDATE export_runs SET status = 'STALE' WHERE id = ?`, [run.id]);
+                harness.db.run(`UPDATE jobs SET status = 'CANCELLED' WHERE id = ?`, [renderJob.id]);
+                mkdirSync(path.dirname(outputPath), { recursive: true });
+                writeFileSync(outputPath, 'stale-render');
+                return {
+                    outputPath,
+                    checksumSha256: 'b'.repeat(64),
+                    durationMs: 1000,
+                    sizeBytes: 12
+                };
+            }
+        }
+    });
+
+    harness.db.run(`
+        UPDATE jobs
+        SET status = 'RUNNING',
+            attempts = 1,
+            locked_at = ?,
+            locked_by = 'test'
+        WHERE id = ?
+    `, [nowIso(), renderJob.id]);
+    const result = await renderWorker.handle(harness.db.get('SELECT * FROM jobs WHERE id = ?', [renderJob.id]), {});
+    const item = harness.db.get('SELECT * FROM export_items WHERE id = ?', [renderJob.export_item_id]);
+    const staleOutputPath = harness.fileStore.getExportItemPath({
+        batchId: harness.batchId,
+        projectId: harness.projectId,
+        runId: run.id,
+        serialNumber: item.serial_number
+    });
+
+    assert.equal(result.status, 'CANCELLED');
+    assert.equal(item.render_status, 'CANCELLED');
+    assert.equal(item.output_path, null);
+    assert.equal(harness.db.all(`SELECT id FROM jobs WHERE export_item_id = ? AND type = 'UPLOAD_ITEM'`, [renderJob.export_item_id]).length, 0);
+    assert.equal(existsSync(staleOutputPath), false);
 });
 
 test('atomicMove replaces an existing output without leaving backup files', async (t) => {

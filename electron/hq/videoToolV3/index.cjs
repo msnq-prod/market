@@ -68,10 +68,14 @@ class VideoToolV3App extends EventEmitter {
             getAccessToken: this.getAccessToken,
             refreshAccessToken: this.refreshAccessToken
         });
+        this.ffmpegService = new FfmpegService({
+            fileStore: this.fileStore
+        });
         this.projectService = new ProjectService({
             db: this.db,
             serverClient: this.serverClient,
             fileStore: this.fileStore,
+            ffmpegService: this.ffmpegService,
             getQueueEngine: () => this.queueEngine
         });
         this.networkService = new VideoToolV3NetworkService({
@@ -81,9 +85,6 @@ class VideoToolV3App extends EventEmitter {
         this.queueEngine = new VideoToolV3QueueEngine({
             db: this.db,
             networkService: this.networkService
-        });
-        this.ffmpegService = new FfmpegService({
-            fileStore: this.fileStore
         });
         this.prepareWorker = new PrepareWorker({
             db: this.db,
@@ -110,7 +111,8 @@ class VideoToolV3App extends EventEmitter {
             db: this.db,
             uploadService: this.uploadService,
             networkService: this.networkService,
-            exportService: this.exportService
+            exportService: this.exportService,
+            ffmpegService: this.ffmpegService
         });
         this.queueEngine.registerHandler('PREPARE_SOURCE', (job, context) => this.prepareWorker.handle(job, context));
         this.queueEngine.registerHandler('RENDER_ITEM', (job, context) => this.renderWorker.handle(job, context));

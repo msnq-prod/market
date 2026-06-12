@@ -99,14 +99,37 @@ class ExportService {
             projectId: project.id
         });
 
+        const activeRunJobs = project.active_run_id
+            ? this.db.all(`
+                SELECT id
+                FROM jobs
+                WHERE run_id = ?
+                  AND status IN ('QUEUED', 'RUNNING', 'WAITING_NETWORK', 'WAITING_AUTH')
+            `, [project.active_run_id])
+            : [];
+        const queueEngine = this.getQueueEngine?.();
+        for (const job of activeRunJobs) {
+            queueEngine?.cancelJob?.(job.id);
+        }
+
         this.db.transaction(() => {
             if (project.active_run_id) {
+                this.db.run(`
+                    UPDATE jobs
+                    SET status = 'CANCELLED',
+                        locked_at = NULL,
+                        locked_by = NULL,
+                        updated_at = ?
+                    WHERE run_id = ?
+                      AND status IN ('QUEUED', 'RUNNING', 'FAILED', 'CANCELLED', 'WAITING_NETWORK', 'WAITING_AUTH')
+                `, [timestamp, project.active_run_id]);
+                this.cleanupLocalRunArtifacts(project.active_run_id);
                 this.db.run(`
                     UPDATE export_runs
                     SET status = 'STALE',
                         updated_at = ?
                     WHERE id = ?
-                      AND status NOT IN ('COMPLETED', 'CANCELLED')
+                      AND status NOT IN ('CANCELLED', 'STALE')
                 `, [timestamp, project.active_run_id]);
             }
 
@@ -353,6 +376,50 @@ class ExportService {
         return jobId;
     }
 
+    cleanupLocalRunArtifacts(runId) {
+        const safeRunId = typeof runId === 'string' ? runId.trim() : '';
+        if (!safeRunId) return;
+
+        const run = this.db.get('SELECT id, project_id, batch_id FROM export_runs WHERE id = ?', [safeRunId]);
+        const items = this.db.all('SELECT id, output_path FROM export_items WHERE run_id = ?', [safeRunId]);
+
+        for (const item of items) {
+            if (!item.output_path || typeof this.fileStore.removeFileSync !== 'function') {
+                continue;
+            }
+            try {
+                this.fileStore.removeFileSync(item.output_path);
+            } catch {
+                // Best-effort cleanup; stale status disables reuse.
+            }
+        }
+
+        if (run && typeof this.fileStore.getExportsDir === 'function' && typeof this.fileStore.removeDirectorySync === 'function') {
+            try {
+                this.fileStore.removeDirectorySync(this.fileStore.getExportsDir(run.project_id, run.batch_id, safeRunId));
+            } catch {
+                // Best-effort cleanup.
+            }
+        }
+
+        if (items.length > 0) {
+            const placeholders = items.map(() => '?').join(', ');
+            this.db.run(`
+                DELETE FROM upload_attempts
+                WHERE export_item_id IN (${placeholders})
+            `, items.map((item) => item.id));
+        }
+
+        this.db.run(`
+            UPDATE export_items
+            SET output_path = NULL,
+                output_checksum_sha256 = NULL,
+                output_size_bytes = NULL,
+                updated_at = ?
+            WHERE run_id = ?
+        `, [nowIso(), safeRunId]);
+    }
+
     cancelItem(exportItemId) {
         const item = this.getExportItem(exportItemId);
         const jobs = this.db.all(`
@@ -416,6 +483,7 @@ class ExportService {
 
         const timestamp = nowIso();
         this.db.transaction(() => {
+            this.cleanupLocalRunArtifacts(safeRunId);
             this.db.run(`
                 UPDATE jobs
                 SET status = 'CANCELLED',

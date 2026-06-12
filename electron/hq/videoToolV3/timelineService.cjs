@@ -207,7 +207,7 @@ class TimelineService {
                 height: 1280,
                 fps: 24,
                 qualityPreset: qualityPreset || project?.quality_preset || 'standard',
-                audio: 'disabled'
+                audio: 'source'
             },
             sources: sources
                 .filter((source) => source.status !== 'DELETED')
@@ -217,7 +217,11 @@ class TimelineService {
                     position: toInt(source.position),
                     preparedPath: source.prepared_path,
                     checksumSha256: source.prepared_checksum_sha256,
-                    durationMs: toInt(source.duration_ms)
+                    durationMs: toInt(source.duration_ms),
+                    sourceRevision: toInt(source.source_revision, 1),
+                    originalChecksumSha256: source.original_checksum_sha256 || null,
+                    originalHasAudio: Boolean(source.original_has_audio),
+                    preparedHasAudio: Boolean(source.prepared_has_audio)
                 })),
             introSegment: {
                 segmentId: intro.id,
