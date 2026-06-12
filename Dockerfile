@@ -52,6 +52,8 @@ COPY prisma/schema.prisma ./prisma/schema.prisma
 RUN --mount=type=cache,target=/tmp/.npm \
     npm ci --omit=dev --prefer-offline --no-audit --no-fund \
     && npx prisma generate \
+    && rm -rf node_modules/electron node_modules/electron-builder node_modules/app-builder-bin \
+        node_modules/ffmpeg-static/ffmpeg node_modules/ffprobe-static/bin \
     && find node_modules -type f -name '*.map' -delete
 
 FROM node:22-alpine AS runtime
@@ -61,7 +63,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     npm_config_cache=/tmp/.npm
 
-RUN apk add --no-cache openssl su-exec
+RUN apk add --no-cache openssl su-exec ffmpeg
 
 COPY package*.json ./
 COPY prisma ./prisma
@@ -80,5 +82,3 @@ EXPOSE 3001
 
 ENTRYPOINT ["/bin/sh", "./docker/entrypoint.sh"]
 CMD ["node", "build/server/index.js"]
-
-RUN apk add --no-cache ffmpeg
