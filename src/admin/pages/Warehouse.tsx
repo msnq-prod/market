@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode, Trash2, Search } from 'lucide-react';
+import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode, Trash2, Search, VideoOff } from 'lucide-react';
 import { Button, Modal } from '../components/ui';
 import { authFetch } from '../../utils/authFetch';
 
@@ -285,6 +285,7 @@ export function Warehouse() {
     const [itemLoading, setItemLoading] = useState(false);
     const [itemError, setItemError] = useState('');
     const [deletingBatchId, setDeletingBatchId] = useState('');
+    const [deletingBatchVideosId, setDeletingBatchVideosId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
 
     const loadData = async (showSpinner = true) => {
@@ -480,6 +481,37 @@ export function Warehouse() {
         }
     };
 
+    const handleDeleteBatchVideos = async (batchId: string, videoCount: number) => {
+        if (videoCount <= 0) {
+            return;
+        }
+
+        if (!window.confirm(`Удалить видео у всех товаров партии ${batchId}? Будет очищено ссылок: ${videoCount}.`)) {
+            return;
+        }
+
+        setDeletingBatchVideosId(batchId);
+        setError('');
+
+        try {
+            const response = await authFetch(`/api/batches/${batchId}/videos`, {
+                method: 'DELETE'
+            });
+
+            const payload = await response.json().catch(() => ({ error: 'Не удалось удалить видео партии.' }));
+            if (!response.ok) {
+                throw new Error(payload.error || 'Не удалось удалить видео партии.');
+            }
+
+            await loadData(false);
+        } catch (deleteError) {
+            console.error(deleteError);
+            setError(deleteError instanceof Error ? deleteError.message : 'Не удалось удалить видео партии.');
+        } finally {
+            setDeletingBatchVideosId('');
+        }
+    };
+
     const renderGroupedItems = (items: BatchItem[]) => {
         const groups = new Map<string, BatchItem[]>();
 
@@ -650,6 +682,7 @@ export function Warehouse() {
                                                                             const isBatchExpanded = Boolean(expandedBatchIds[batch.id]);
                                                                             const soldCount = batch.items.filter((item) => item.is_sold).length;
                                                                             const unsoldCount = batch.items.length - soldCount;
+                                                                            const videoCount = batch.items.filter((item) => Boolean(item.item_video_url)).length;
 
                                                                             return (
                                                                                 <div key={batch.id} className="rounded-2xl border border-white/6 bg-[#14161b]">
@@ -674,18 +707,30 @@ export function Warehouse() {
                                                                                                     <span className="rounded-full border border-white/10 px-3 py-1">Всего: {batch.items.length}</span>
                                                                                                     <span className="rounded-full border border-white/10 px-3 py-1">Непроданных: {unsoldCount}</span>
                                                                                                     <span className="rounded-full border border-white/10 px-3 py-1">Проданных: {soldCount}</span>
+                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Видео: {videoCount}</span>
                                                                                                 </div>
                                                                                             </div>
                                                                                         </button>
-                                                                                        <button
-                                                                                            type="button"
-                                                                                            onClick={() => void handleDeleteBatch(batch.id)}
-                                                                                            disabled={deletingBatchId === batch.id}
-                                                                                            className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-50"
-                                                                                        >
-                                                                                            <Trash2 size={14} />
-                                                                                            {deletingBatchId === batch.id ? 'Скрываем...' : 'Скрыть'}
-                                                                                        </button>
+                                                                                        <div className="flex flex-wrap gap-2 lg:justify-end">
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                onClick={() => void handleDeleteBatchVideos(batch.id, videoCount)}
+                                                                                                disabled={deletingBatchVideosId === batch.id || videoCount === 0}
+                                                                                                className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 px-3 py-2 text-xs text-amber-100 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                                            >
+                                                                                                <VideoOff size={14} />
+                                                                                                {deletingBatchVideosId === batch.id ? 'Удаляем...' : 'Удалить видео'}
+                                                                                            </button>
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                onClick={() => void handleDeleteBatch(batch.id)}
+                                                                                                disabled={deletingBatchId === batch.id}
+                                                                                                className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-50"
+                                                                                            >
+                                                                                                <Trash2 size={14} />
+                                                                                                {deletingBatchId === batch.id ? 'Скрываем...' : 'Скрыть'}
+                                                                                            </button>
+                                                                                        </div>
                                                                                     </div>
 
                                                                                     {isBatchExpanded && (

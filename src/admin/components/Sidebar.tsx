@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, HardDriveDownload, Settings2, Menu, X, ExternalLink } from 'lucide-react';
+import { LayoutDashboard, Box, Truck, Users, FileText, Archive, ShoppingCart, QrCode, Database, History, Bot, LogOut, HardDriveDownload, Settings2, Menu, X, ExternalLink, HardDrive } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { logoutSession } from '../../utils/session';
@@ -92,7 +92,10 @@ export function Sidebar() {
             items: [
                 { id: 'users', to: '/admin/users', icon: <Users size={18} />, label: 'Пользователи' },
                 ...(isAdminRole(role)
-                    ? [{ id: 'telegram-bots', to: '/admin/telegram-bots', icon: <Bot size={18} />, label: 'Telegram' }]
+                    ? [
+                        { id: 'settings', to: '/admin/settings', icon: <HardDrive size={18} />, label: 'Настройки' },
+                        { id: 'telegram-bots', to: '/admin/telegram-bots', icon: <Bot size={18} />, label: 'Telegram' }
+                    ]
                     : [])
             ]
         }
@@ -179,7 +182,7 @@ export function Sidebar() {
                         <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] transition duration-200 ${settingsOpen ? 'text-blue-200' : 'text-gray-500 group-hover:text-gray-200'}`}>
                             <Settings2 size={18} />
                         </div>
-                        <span className="min-w-0 flex-1 truncate font-medium">Настройки</span>
+                        <span className="min-w-0 flex-1 truncate font-medium">Меню</span>
                     </button>
 
                     {settingsOpen ? (

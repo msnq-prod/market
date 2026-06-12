@@ -48,6 +48,10 @@ const pageMeta: Record<string, { title: string; description: string }> = {
         title: 'Пользователи',
         description: 'Роли и доступы операционной команды.'
     },
+    '/admin/settings': {
+        title: 'Настройки',
+        description: 'Серверные файлы и дисковое пространство.'
+    },
     '/admin/telegram-bots': {
         title: 'Telegram',
         description: 'Боты, уведомления и системные события.'
@@ -73,6 +77,7 @@ export function AdminLayout() {
         '/admin/sales-history'
     ]);
     const adminOnlyRoutes = new Set([
+        '/admin/settings',
         '/admin/telegram-bots'
     ]);
 

@@ -20,6 +20,7 @@ import { HqDesktopDownloadPlaceholder } from './admin/components/HqDesktopDownlo
 import { Dashboard } from './admin/pages/Dashboard'
 import { Products } from './admin/pages/Products'
 import { Brandbook } from './admin/pages/Brandbook'
+import { Settings } from './admin/pages/Settings'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
 import { logReactError, logRouteChange } from './utils/clientLogger'
@@ -738,6 +739,7 @@ function App() {
           <Route path="warehouse" element={<Warehouse />} />
           <Route path="video-tool" element={<VideoToolLauncher />} />
           <Route path="users" element={<Users />} />
+          <Route path="settings" element={<Settings />} />
           <Route path="telegram-bots" element={<TelegramBots />} />
           <Route path="clone-content" element={<CloneContent />} />
         </Route>

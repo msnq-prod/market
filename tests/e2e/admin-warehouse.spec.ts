@@ -89,6 +89,26 @@ test('API: finalize переводит item в STOCK_HQ, а публичный �
     expect(afterAllocationProduct?.available_stock).toBe(1);
 });
 
+test('API: admin can delete videos for a whole batch', async ({ request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const fixture = await createWarehouseFixture();
+
+    const deleteVideosResponse = await request.delete(`/api/batches/${fixture.firstBatchId}/videos`, {
+        headers: authHeaders(admin.accessToken)
+    });
+    expect(deleteVideosResponse.ok()).toBeTruthy();
+    const deleteVideosPayload = await deleteVideosResponse.json() as { cleared_count: number };
+    expect(deleteVideosPayload.cleared_count).toBe(2);
+
+    const itemsResponse = await request.get(`/api/items/batch/${fixture.firstBatchId}`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(itemsResponse.ok()).toBeTruthy();
+    const items = await itemsResponse.json() as Array<{ item_video_url: string | null }>;
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item.item_video_url === null)).toBeTruthy();
+});
+
 test('UI: admin navigates warehouse tree, sees grouped items and opens item modal in read-only mode', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const fixture = await createWarehouseFixture();

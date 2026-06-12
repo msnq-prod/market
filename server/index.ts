@@ -22,6 +22,7 @@ import telegramRoutes from './routes/telegram.ts';
 import qrPrintPresetRoutes from './routes/qrPrintPresets.ts';
 import videoToolV3Routes from './routes/videoToolV3.ts';
 import photoToolV2Routes from './routes/photoToolV2.ts';
+import serverStorageRoutes from './routes/serverStorage.ts';
 import { setUploadedMediaResponseHeaders } from './middleware/upload.ts';
 import { HQ_IMMEDIATE_BATCH_OWNER_EMAIL, isStaffRole, normalizeCode } from './utils/collectionWorkflow.ts';
 import { resolveProjectPath } from './utils/projectPaths.ts';
@@ -248,6 +249,7 @@ app.use('/api/telegram', telegramRoutes);
 app.use('/api/qr-print-presets', qrPrintPresetRoutes);
 app.use('/api/video-tool-v3', videoToolV3Routes);
 app.use('/api/photo-tool-v2', photoToolV2Routes);
+app.use('/api/server-storage', serverStorageRoutes);
 app.use('/api/client-logs', express.json({ limit: '256kb' }), (req, res) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const entries = Array.isArray((body as { entries?: unknown[] }).entries)

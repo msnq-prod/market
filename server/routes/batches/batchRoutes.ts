@@ -101,6 +101,77 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res) => {
     }
 });
 
+router.delete('/:id/videos', authenticateToken, async (req: AuthRequest, res) => {
+    try {
+        if (!req.user) return res.sendStatus(401);
+        if (!isStaffRole(req.user.role)) return res.sendStatus(403);
+
+        const updated = await prisma.$transaction(async (tx) => {
+            const batch = await tx.batch.findFirst({
+                where: {
+                    id: req.params.id,
+                    deleted_at: null
+                },
+                select: {
+                    id: true
+                }
+            });
+
+            if (!batch) {
+                throw createHttpError('Партия не найдена.', 404);
+            }
+
+            const result = await tx.item.updateMany({
+                where: {
+                    batch_id: batch.id,
+                    deleted_at: null,
+                    item_video_url: {
+                        not: null
+                    }
+                },
+                data: {
+                    item_video_url: null
+                }
+            });
+
+            const nextBatch = await tx.batch.findFirst({
+                where: {
+                    id: batch.id,
+                    deleted_at: null
+                },
+                include: BATCH_INCLUDE
+            });
+
+            return {
+                clearedCount: result.count,
+                batch: nextBatch
+            };
+        });
+
+        logDomainEvent('api', 'batch-videos-deleted', {
+            entity_type: 'batch',
+            entity_id: req.params.id,
+            user_id: req.user.id,
+            cleared_count: updated.clearedCount
+        });
+
+        res.json({
+            success: true,
+            cleared_count: updated.clearedCount,
+            batch: updated.batch ? serializeBatch(req, updated.batch) : null
+        });
+    } catch (error) {
+        console.error(error);
+        const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+        const message = error instanceof Error && error.message
+            ? error.message
+            : 'Не удалось удалить видео партии.';
+        res.status(statusCode).json({ error: message });
+    }
+});
+
 router.post('/:id/receive', authenticateToken, async (req: AuthRequest, res) => {
     try {
         if (!req.user) return res.sendStatus(401);
