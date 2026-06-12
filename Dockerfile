@@ -19,6 +19,8 @@ FROM base AS deps
 COPY package*.json ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
 
+RUN npm pkg delete dependencies.ffmpeg-static dependencies.ffprobe-static optionalDependencies.electron optionalDependencies.electron-builder
+
 RUN --mount=type=cache,target=/tmp/.npm \
     sh -lc 'attempt=1; \
     while [ "$attempt" -le 4 ]; do \
@@ -49,11 +51,12 @@ COPY --from=builder /app/build/server/index.js /tmp/build-server-index.js
 COPY package*.json ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
 
+RUN npm pkg delete dependencies.ffmpeg-static dependencies.ffprobe-static optionalDependencies.electron optionalDependencies.electron-builder
+
 RUN --mount=type=cache,target=/tmp/.npm \
     npm ci --omit=dev --prefer-offline --no-audit --no-fund \
     && npx prisma generate \
-    && rm -rf node_modules/electron node_modules/electron-builder node_modules/app-builder-bin \
-        node_modules/ffmpeg-static/ffmpeg node_modules/ffprobe-static/bin \
+    && rm -rf node_modules/app-builder-bin \
     && find node_modules -type f -name '*.map' -delete
 
 FROM node:22-alpine AS runtime
