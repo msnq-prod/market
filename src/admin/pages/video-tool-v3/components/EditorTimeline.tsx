@@ -15,7 +15,7 @@ type EditorTimelineProps = {
     onSeek(globalMs: number): void;
     onScrub(globalMs: number): void;
     onSelectSegment(segmentId: string): void;
-    onMoveBoundary(segmentId: string, edge: 'start' | 'end', globalMs: number): void;
+    onMoveBoundary(segmentId: string, edge: 'start' | 'end', globalMs: number, commit: boolean): void;
     onViewportChange(viewport: TimelineViewport): void;
 };
 
@@ -97,24 +97,37 @@ export function EditorTimeline({
         const target = event.currentTarget;
         target.setPointerCapture(event.pointerId);
 
-        const move = (moveEvent: PointerEvent) => {
+        const getBoundaryTime = (moveEvent: PointerEvent) => {
             const rawRect = surfaceRef.current?.getBoundingClientRect();
-            if (!rawRect) return;
+            if (!rawRect) return null;
             const rect = {
                 left: rawRect.left,
                 width: Math.max(1, rawRect.width)
             } as DOMRect;
-            onMoveBoundary(segmentId, edge, xToTime(moveEvent.clientX, rect, viewport));
+            return xToTime(moveEvent.clientX, rect, viewport);
         };
-        const up = () => {
-            target.removeEventListener('pointermove', move);
-            target.removeEventListener('pointerup', up);
-            target.removeEventListener('pointercancel', up);
+        const move = (moveEvent: PointerEvent) => {
+            const nextTime = getBoundaryTime(moveEvent);
+            if (nextTime === null) return;
+            onMoveBoundary(segmentId, edge, nextTime, false);
         };
+        const stop = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', cancel);
+        };
+        const up = (upEvent: PointerEvent) => {
+            const nextTime = getBoundaryTime(upEvent);
+            if (nextTime !== null) {
+                onMoveBoundary(segmentId, edge, nextTime, true);
+            }
+            stop();
+        };
+        const cancel = () => stop();
 
-        target.addEventListener('pointermove', move);
-        target.addEventListener('pointerup', up);
-        target.addEventListener('pointercancel', up);
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', cancel);
     };
 
     return (
@@ -159,7 +172,7 @@ export function EditorTimeline({
                     onSelectSegment={onSelectSegment}
                     onStartBoundaryDrag={handleBoundaryDrag}
                 />
-                <div className="absolute inset-0">
+                <div className="pointer-events-none absolute inset-0">
                     <Playhead leftPercent={playheadPercent} />
                 </div>
             </div>

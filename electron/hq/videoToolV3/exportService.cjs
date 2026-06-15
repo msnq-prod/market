@@ -60,6 +60,13 @@ class ExportService {
         const items = this.db.all('SELECT * FROM project_items WHERE project_id = ? ORDER BY position ASC', [project.id]);
         const sources = this.db.all('SELECT * FROM source_assets WHERE project_id = ? ORDER BY position ASC', [project.id]);
         const segments = this.db.all('SELECT * FROM timeline_segments WHERE project_id = ? ORDER BY position ASC', [project.id]);
+        const existingVideoItem = items.find((item) => item.existing_video_url);
+        if (existingVideoItem && !replaceExisting) {
+            const error = new Error('Видео товара уже существует. Подтвердите замену перед export.');
+            error.code = 'ITEM_VIDEO_EXISTS';
+            throw error;
+        }
+
         const validation = this.timelineService.validateForExport({
             project,
             items,

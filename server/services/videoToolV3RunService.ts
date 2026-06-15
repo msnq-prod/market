@@ -12,6 +12,8 @@ export type VideoToolV3ErrorCode =
     | 'BATCH_NOT_RECEIVED'
     | 'RUN_MANIFEST_CONFLICT'
     | 'ITEM_VIDEO_EXISTS'
+    | 'RUN_NOT_UPLOADABLE'
+    | 'RUN_ITEM_NOT_UPLOADABLE'
     | 'CHECKSUM_MISMATCH'
     | 'UPLOAD_INTENT_EXPIRED'
     | 'UPLOAD_CHUNK_CONFLICT'
@@ -493,11 +495,55 @@ export const loadVideoToolV3RunItemForUpload = async (runId: string, itemId: str
     if (!run || run.items.length === 0) {
         throw new VideoToolV3HttpError('Run item не найден.', 404);
     }
-    if (run.status === 'CANCELLED') {
-        throw new VideoToolV3HttpError('Run отменен.', 409);
-    }
 
     return { run, runItem: run.items[0] };
+};
+
+type UploadEligibilityRun = {
+    status: string;
+};
+
+type UploadEligibilityRunItem = {
+    status: string;
+    checksum_sha256?: string | null;
+    file_url?: string | null;
+};
+
+export const assertVideoToolV3RunItemUploadable = (
+    run: UploadEligibilityRun,
+    runItem: UploadEligibilityRunItem,
+    {
+        checksumSha256,
+        allowIdempotentReplay = false
+    }: { checksumSha256?: string | null; allowIdempotentReplay?: boolean } = {}
+) => {
+    const replayMatchesUploadedItem = allowIdempotentReplay
+        && runItem.status === 'UPLOADED'
+        && Boolean(runItem.file_url)
+        && Boolean(checksumSha256)
+        && runItem.checksum_sha256 === checksumSha256;
+
+    if (replayMatchesUploadedItem) {
+        return 'idempotent-replay';
+    }
+
+    if (run.status === 'CANCELLED') {
+        throw new VideoToolV3HttpError('Run отменен.', 409, 'RUN_NOT_UPLOADABLE');
+    }
+    if (run.status === 'COMPLETED') {
+        throw new VideoToolV3HttpError('Run уже завершен.', 409, 'RUN_NOT_UPLOADABLE');
+    }
+    if (run.status === 'FAILED') {
+        throw new VideoToolV3HttpError('Run завершен с ошибкой.', 409, 'RUN_NOT_UPLOADABLE');
+    }
+    if (runItem.status === 'UPLOADED') {
+        throw new VideoToolV3HttpError('Видео run item уже загружено.', 409, 'ITEM_VIDEO_EXISTS');
+    }
+    if (runItem.status === 'CANCELLED' || runItem.status === 'FAILED') {
+        throw new VideoToolV3HttpError('Run item не принимает upload.', 409, 'RUN_ITEM_NOT_UPLOADABLE');
+    }
+
+    return 'uploadable';
 };
 
 const sanitizeFilenamePart = (value: string) => {
@@ -640,6 +686,27 @@ export const commitVideoToolV3ItemVideo = async (input: {
     const { run, runItem } = await loadVideoToolV3RunItemForUpload(input.runId, input.itemId);
     if (runItem.serial_number !== input.serialNumber) {
         throw new VideoToolV3HttpError('Serial number не совпадает с run item.', 400);
+    }
+    const uploadEligibility = assertVideoToolV3RunItemUploadable(run, runItem, {
+        checksumSha256: input.checksumSha256,
+        allowIdempotentReplay: true
+    });
+    if (uploadEligibility === 'idempotent-replay') {
+        return {
+            run: {
+                id: run.id,
+                status: run.status,
+                expected_count: run.expected_count,
+                uploaded_count: run.uploaded_count
+            },
+            uploaded: {
+                item_id: input.itemId,
+                serial_number: input.serialNumber,
+                file_url: runItem.file_url || '',
+                checksum_sha256: runItem.checksum_sha256 || input.checksumSha256,
+                clone_url: `/clone/${encodeURIComponent(input.serialNumber)}`
+            }
+        };
     }
 
     const safeSerial = sanitizeFilenamePart(input.serialNumber);

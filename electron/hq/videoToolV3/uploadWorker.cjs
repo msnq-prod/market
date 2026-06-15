@@ -117,6 +117,18 @@ class UploadWorker {
                 nowIso(),
                 record.id
             ]);
+            this.db.run(`
+                UPDATE project_items
+                SET existing_video_url = ?,
+                    clone_url = ?,
+                    updated_at = ?
+                WHERE id = ?
+            `, [
+                completed.uploaded.file_url,
+                completed.uploaded.clone_url || record.clone_url,
+                nowIso(),
+                record.project_item_id
+            ]);
             this.exportService?.reconcileRun(record.run_id);
             context.emitProjectUpdate?.(record.project_id);
             return { status: 'DONE' };

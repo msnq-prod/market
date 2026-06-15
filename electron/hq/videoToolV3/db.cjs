@@ -64,6 +64,9 @@ class VideoToolV3Database {
     applyMigrations() {
         const db = this.ensureOpen();
         const migrate = db.transaction(() => {
+            const hasTable = (tableName) => Boolean(db
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .get(tableName));
             const initialApplied = db
                 .prepare('SELECT version FROM schema_migrations WHERE version = 1')
                 .get();
@@ -80,18 +83,20 @@ class VideoToolV3Database {
                 db.exec('ALTER TABLE export_runs ADD COLUMN replace_existing INTEGER NOT NULL DEFAULT 0');
             }
 
-            const sourceColumns = db.prepare('PRAGMA table_info(source_assets)').all();
-            if (!sourceColumns.some((column) => column.name === 'original_checksum_sha256')) {
-                db.exec('ALTER TABLE source_assets ADD COLUMN original_checksum_sha256 TEXT');
-            }
-            if (!sourceColumns.some((column) => column.name === 'original_has_audio')) {
-                db.exec('ALTER TABLE source_assets ADD COLUMN original_has_audio INTEGER');
-            }
-            if (!sourceColumns.some((column) => column.name === 'prepared_has_audio')) {
-                db.exec('ALTER TABLE source_assets ADD COLUMN prepared_has_audio INTEGER');
-            }
-            if (!sourceColumns.some((column) => column.name === 'source_revision')) {
-                db.exec('ALTER TABLE source_assets ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 1');
+            if (hasTable('source_assets')) {
+                const sourceColumns = db.prepare('PRAGMA table_info(source_assets)').all();
+                if (!sourceColumns.some((column) => column.name === 'original_checksum_sha256')) {
+                    db.exec('ALTER TABLE source_assets ADD COLUMN original_checksum_sha256 TEXT');
+                }
+                if (!sourceColumns.some((column) => column.name === 'original_has_audio')) {
+                    db.exec('ALTER TABLE source_assets ADD COLUMN original_has_audio INTEGER');
+                }
+                if (!sourceColumns.some((column) => column.name === 'prepared_has_audio')) {
+                    db.exec('ALTER TABLE source_assets ADD COLUMN prepared_has_audio INTEGER');
+                }
+                if (!sourceColumns.some((column) => column.name === 'source_revision')) {
+                    db.exec('ALTER TABLE source_assets ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 1');
+                }
             }
             db.prepare(`
                 INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)

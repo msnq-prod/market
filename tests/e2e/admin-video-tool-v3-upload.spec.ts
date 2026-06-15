@@ -44,10 +44,12 @@ const installVideoToolV3Mock = async (
         type TestWindow = Window & {
             __videoV3RetryCalls: string[];
             __videoV3StartCalls: boolean[];
+            __videoV3SaveCalls: Array<Array<Record<string, unknown>>>;
             stones: { videoToolV3: Record<string, unknown> };
             stonesDesktop: {
                 isDesktop: true;
                 videoToolV3: Record<string, unknown>;
+                ensureAdminSession(): Promise<Record<string, unknown>>;
                 syncAuthToken(accessToken: string | null): Promise<{ ok: true }>;
             };
         };
@@ -129,11 +131,19 @@ const installVideoToolV3Mock = async (
         let snapshot = buildSnapshot();
         target.__videoV3RetryCalls = [];
         target.__videoV3StartCalls = [];
+        target.__videoV3SaveCalls = [];
         const api = {
             getSnapshot: async () => snapshot,
             selectSources: async () => snapshot,
             retryPrepareSource: async () => snapshot,
-            saveSegments: async () => snapshot,
+            saveSegments: async (_batchId: string, segments: Array<Record<string, unknown>>) => {
+                target.__videoV3SaveCalls.push(segments);
+                snapshot = {
+                    ...snapshot,
+                    segments
+                };
+                return snapshot;
+            },
             startExport: async (_projectId: string, replaceExisting: boolean) => {
                 target.__videoV3StartCalls.push(replaceExisting);
                 return snapshot;
@@ -158,6 +168,18 @@ const installVideoToolV3Mock = async (
         target.stonesDesktop = {
             isDesktop: true,
             videoToolV3: api,
+            ensureAdminSession: async () => ({
+                accessToken: 'e2e-token',
+                role: 'ADMIN',
+                name: 'Admin',
+                userId: 'admin-e2e',
+                user: {
+                    id: 'admin-e2e',
+                    email: 'admin@stones.com',
+                    name: 'Admin',
+                    role: 'ADMIN'
+                }
+            }),
             syncAuthToken: async () => ({ ok: true })
         };
         localStorage.setItem('accessToken', 'e2e-token');
@@ -252,6 +274,26 @@ test('Video Tool v3: editor preview video is not muted', async ({ page }) => {
 
     await page.getByRole('button', { name: 'play pause' }).click();
     await expect.poll(() => video.evaluate((node) => (node as HTMLVideoElement).muted)).toBe(false);
+});
+
+test('Video Tool v3: trim drag saves timeline once on release', async ({ page }) => {
+    await installVideoToolV3Mock(page, { segmentCount: 3 });
+    await openEditorTab(page);
+
+    const trimEnd = page.locator('button[aria-label="trim end"]').first();
+    await expect(trimEnd).toBeVisible();
+    const box = await trimEnd.boundingBox();
+    expect(box).toBeTruthy();
+    if (!box) return;
+
+    await trimEnd.hover();
+    await page.mouse.down();
+    await page.mouse.move(box.x + 28, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    await expect.poll(() => page.evaluate(() => (
+        window as Window & { __videoV3SaveCalls: Array<Array<Record<string, unknown>>> }
+    ).__videoV3SaveCalls.length)).toBe(1);
 });
 
 test('Video Tool v3 API: resumable chunks complete, publish clone video, and cleanup superseded files', async ({ page, request }) => {

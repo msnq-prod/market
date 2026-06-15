@@ -12,6 +12,34 @@ const SUPPORTED_SOURCE_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 const normalizeSerial = (value) => (typeof value === 'string' ? value.trim() : '');
 
+const isSoftRefreshError = (error) => {
+    const kind = typeof error?.kind === 'string' ? error.kind : '';
+    return kind === 'OFFLINE' || kind === 'AUTH_REQUIRED';
+};
+
+const normalizeBatchPayload = (payload, fallbackBatchId) => {
+    const batch = payload?.batch || {};
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    return {
+        batch: {
+            id: typeof batch.id === 'string' && batch.id.trim() ? batch.id.trim() : fallbackBatchId,
+            status: typeof batch.status === 'string' && batch.status.trim() ? batch.status.trim() : 'DRAFT',
+            expectedOutputCount: Number(batch.expected_output_count || items.length || 0)
+        },
+        items: items.map((item, index) => {
+            const serialNumber = normalizeSerial(item?.serial_number);
+            return {
+                itemId: String(item?.id || '').trim(),
+                itemSeq: item?.item_seq ?? null,
+                serialNumber,
+                existingVideoUrl: item?.item_video_url || null,
+                cloneUrl: item?.clone_url || `/clone/${encodeURIComponent(serialNumber)}`,
+                position: index
+            };
+        }).filter((item) => item.itemId)
+    };
+};
+
 const normalizeQualityPreset = (value) => {
     const preset = typeof value === 'string' ? value.trim() : '';
     if (!QUALITY_PRESETS.has(preset)) {
@@ -42,7 +70,7 @@ class ProjectService {
         this.timelineService = new TimelineService();
     }
 
-    async loadOrCreateProject(batchId) {
+    async loadOrCreateProject(batchId, { requireFresh = false } = {}) {
         const safeBatchId = typeof batchId === 'string' ? batchId.trim() : '';
         if (!safeBatchId) {
             const error = new Error('batchId is required.');
@@ -52,13 +80,21 @@ class ProjectService {
 
         const existing = this.db.get('SELECT id FROM projects WHERE batch_id = ? ORDER BY created_at DESC LIMIT 1', [safeBatchId]);
         if (existing) {
+            try {
+                await this.refreshProjectFromServer(safeBatchId, { requireFresh });
+            } catch (error) {
+                if (requireFresh || !isSoftRefreshError(error)) {
+                    throw error;
+                }
+            }
             return this.db.getSnapshot(safeBatchId);
         }
 
         const payload = await this.serverClient.fetchBatch(safeBatchId);
+        const normalizedPayload = normalizeBatchPayload(payload, safeBatchId);
         const projectId = crypto.randomUUID();
         const timestamp = nowIso();
-        const items = Array.isArray(payload?.items) ? payload.items : [];
+        const items = normalizedPayload.items;
 
         this.db.transaction(() => {
             this.db.run(`
@@ -74,9 +110,9 @@ class ProjectService {
                 ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
             `, [
                 projectId,
-                payload.batch.id,
-                payload.batch.status,
-                Number(payload.batch.expected_output_count || items.length || 0),
+                normalizedPayload.batch.id,
+                normalizedPayload.batch.status,
+                normalizedPayload.batch.expectedOutputCount,
                 DEFAULT_QUALITY_PRESET,
                 timestamp,
                 timestamp
@@ -94,16 +130,16 @@ class ProjectService {
                         clone_url,
                         position,
                         created_at,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `, [
                     crypto.randomUUID(),
                     projectId,
-                    item.id,
-                    item.item_seq ?? null,
-                    normalizeSerial(item.serial_number),
-                    item.item_video_url || null,
-                    item.clone_url || `/clone/${encodeURIComponent(normalizeSerial(item.serial_number))}`,
+                    item.itemId,
+                    item.itemSeq,
+                    item.serialNumber,
+                    item.existingVideoUrl,
+                    item.cloneUrl,
                     index,
                     timestamp,
                     timestamp
@@ -112,6 +148,165 @@ class ProjectService {
         });
 
         return this.db.getSnapshot(safeBatchId);
+    }
+
+    async refreshProjectForExport(projectId) {
+        const safeProjectId = typeof projectId === 'string' ? projectId.trim() : '';
+        const project = safeProjectId ? this.db.get('SELECT batch_id FROM projects WHERE id = ?', [safeProjectId]) : null;
+        if (!project?.batch_id) {
+            throw new Error('Проект не найден.');
+        }
+        return this.loadOrCreateProject(project.batch_id, { requireFresh: true });
+    }
+
+    async refreshProjectFromServer(batchId, { requireFresh = false } = {}) {
+        const safeBatchId = typeof batchId === 'string' ? batchId.trim() : '';
+        if (!safeBatchId) {
+            const error = new Error('batchId is required.');
+            error.code = 'VALIDATION_FAILED';
+            throw error;
+        }
+
+        let payload;
+        try {
+            payload = await this.serverClient.fetchBatch(safeBatchId);
+        } catch (error) {
+            if (!requireFresh && isSoftRefreshError(error)) {
+                return this.db.getSnapshot(safeBatchId);
+            }
+            throw error;
+        }
+
+        const project = this.db.get('SELECT * FROM projects WHERE batch_id = ? ORDER BY created_at DESC LIMIT 1', [safeBatchId]);
+        if (!project) {
+            return this.loadOrCreateProject(safeBatchId, { requireFresh });
+        }
+
+        this.reconcileProjectWithBatchPayload(project, payload);
+        return this.db.getSnapshot(safeBatchId);
+    }
+
+    reconcileProjectWithBatchPayload(project, payload) {
+        const normalizedPayload = normalizeBatchPayload(payload, project.batch_id);
+        const timestamp = nowIso();
+        const currentItems = this.db.all('SELECT * FROM project_items WHERE project_id = ? ORDER BY position ASC', [project.id]);
+        const currentByItemId = new Map(currentItems.map((item) => [item.item_id, item]));
+        const nextItemIds = new Set(normalizedPayload.items.map((item) => item.itemId));
+        const itemSetChanged = currentItems.length !== normalizedPayload.items.length
+            || currentItems.some((item) => !nextItemIds.has(item.item_id));
+        const itemIdentityChanged = normalizedPayload.items.some((item) => {
+            const current = currentByItemId.get(item.itemId);
+            return !current || current.serial_number !== item.serialNumber;
+        });
+        const projectTruthChanged = project.batch_status !== normalizedPayload.batch.status
+            || Number(project.expected_output_count) !== normalizedPayload.batch.expectedOutputCount
+            || itemSetChanged
+            || itemIdentityChanged;
+
+        this.db.transaction(() => {
+            if (itemSetChanged) {
+                this.cleanupProjectExportState(project.id, timestamp);
+            } else if (projectTruthChanged) {
+                this.markActiveRunStale(project, timestamp);
+            }
+
+            this.db.run(`
+                UPDATE projects
+                SET batch_status = ?,
+                    expected_output_count = ?,
+                    updated_at = ?
+                WHERE id = ?
+            `, [
+                normalizedPayload.batch.status,
+                normalizedPayload.batch.expectedOutputCount,
+                timestamp,
+                project.id
+            ]);
+
+            this.db.run(`
+                UPDATE project_items
+                SET position = position + 100000,
+                    updated_at = ?
+                WHERE project_id = ?
+            `, [timestamp, project.id]);
+
+            for (const item of normalizedPayload.items) {
+                this.db.run(`
+                    INSERT INTO project_items (
+                        id,
+                        project_id,
+                        item_id,
+                        item_seq,
+                        serial_number,
+                        existing_video_url,
+                        clone_url,
+                        position,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id, item_id) DO UPDATE SET
+                        item_seq = excluded.item_seq,
+                        serial_number = excluded.serial_number,
+                        existing_video_url = excluded.existing_video_url,
+                        clone_url = excluded.clone_url,
+                        position = excluded.position,
+                        updated_at = excluded.updated_at
+                `, [
+                    crypto.randomUUID(),
+                    project.id,
+                    item.itemId,
+                    item.itemSeq,
+                    item.serialNumber,
+                    item.existingVideoUrl,
+                    item.cloneUrl,
+                    item.position,
+                    timestamp,
+                    timestamp
+                ]);
+            }
+
+            if (itemSetChanged) {
+                const placeholders = normalizedPayload.items.map(() => '?').join(', ');
+                if (placeholders) {
+                    this.db.run(`
+                        DELETE FROM project_items
+                        WHERE project_id = ?
+                          AND item_id NOT IN (${placeholders})
+                    `, [project.id, ...normalizedPayload.items.map((item) => item.itemId)]);
+                } else {
+                    this.db.run('DELETE FROM project_items WHERE project_id = ?', [project.id]);
+                }
+            }
+        });
+    }
+
+    cleanupProjectExportState(projectId, timestamp = nowIso()) {
+        const safeProjectId = typeof projectId === 'string' ? projectId.trim() : '';
+        if (!safeProjectId) return;
+
+        const queueEngine = this.getQueueEngine?.();
+        const activeJobs = this.db.all(`
+            SELECT id
+            FROM jobs
+            WHERE project_id = ?
+              AND status IN ('QUEUED', 'RUNNING', 'WAITING_NETWORK', 'WAITING_AUTH')
+        `, [safeProjectId]);
+        for (const job of activeJobs) {
+            queueEngine?.cancelJob?.(job.id);
+        }
+
+        const runs = this.db.all('SELECT id FROM export_runs WHERE project_id = ?', [safeProjectId]);
+        for (const run of runs) {
+            this.cleanupLocalRunArtifacts(run.id);
+        }
+
+        this.db.run(`
+            DELETE FROM jobs
+            WHERE project_id = ?
+              AND type IN ('RENDER_ITEM', 'UPLOAD_ITEM')
+        `, [safeProjectId]);
+        this.db.run('DELETE FROM export_runs WHERE project_id = ?', [safeProjectId]);
+        this.db.run('UPDATE projects SET active_run_id = NULL, updated_at = ? WHERE id = ?', [timestamp, safeProjectId]);
     }
 
     async importSources(batchId, filePaths) {

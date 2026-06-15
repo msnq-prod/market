@@ -156,12 +156,14 @@ class VideoToolV3App extends EventEmitter {
             if (job.run_id) {
                 this.exportService.reconcileRun(job.run_id);
             }
+            this.recoverUploadQueueAndSchedule();
             this.emitSnapshotForProjectId(job.project_id);
         });
         this.queueEngine.on('job-failed', (job) => {
             if (job.run_id) {
                 this.exportService.reconcileRun(job.run_id);
             }
+            this.recoverUploadQueueAndSchedule();
             this.emitSnapshotForProjectId(job.project_id);
         });
         this.queueEngine.on('project-updated', (event) => {
@@ -198,10 +200,19 @@ class VideoToolV3App extends EventEmitter {
         };
     }
 
+    recoverUploadQueueAndSchedule() {
+        const repaired = this.uploadService?.recoverUploadQueue?.() || 0;
+        if (repaired > 0) {
+            this.queueEngine?.schedule?.(0);
+        }
+        return repaired;
+    }
+
     async getSnapshot(batchId) {
         this.ensureInitialized();
         const snapshot = await this.projectService.loadOrCreateProject(batchId);
-        return this.withRuntimeState(snapshot);
+        const repaired = this.recoverUploadQueueAndSchedule();
+        return this.withRuntimeState(repaired > 0 ? this.db.getSnapshot(batchId) : snapshot);
     }
 
     async selectSources(batchId, filePaths) {
@@ -258,6 +269,7 @@ class VideoToolV3App extends EventEmitter {
 
     async startExport(projectId, options = {}) {
         this.ensureInitialized();
+        await this.projectService.refreshProjectForExport(projectId);
         await this.exportService.startRun(projectId, options);
         const project = this.db.get('SELECT batch_id FROM projects WHERE id = ?', [projectId]);
         if (!project?.batch_id) {

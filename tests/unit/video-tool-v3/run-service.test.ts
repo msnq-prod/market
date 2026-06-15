@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRenderManifestV3, VideoToolV3HttpError } from '../../../server/services/videoToolV3RunService.ts';
+import {
+    assertVideoToolV3RunItemUploadable,
+    parseRenderManifestV3,
+    VideoToolV3HttpError
+} from '../../../server/services/videoToolV3RunService.ts';
 
 const batchId = '11111111-1111-4111-8111-111111111111';
 const runId = '22222222-2222-4222-8222-222222222222';
@@ -79,5 +83,37 @@ test('parseRenderManifestV3 rejects mismatched batch/run', () => {
     assert.throws(
         () => parseRenderManifestV3(buildManifest(), '99999999-9999-4999-8999-999999999999', runId),
         VideoToolV3HttpError
+    );
+});
+
+test('upload guard blocks terminal run item overwrite but allows same-checksum replay', () => {
+    assert.equal(assertVideoToolV3RunItemUploadable(
+        { status: 'OPEN' },
+        { status: 'PENDING' },
+        { checksumSha256: 'a'.repeat(64) }
+    ), 'uploadable');
+
+    assert.equal(assertVideoToolV3RunItemUploadable(
+        { status: 'COMPLETED' },
+        { status: 'UPLOADED', checksum_sha256: 'a'.repeat(64), file_url: '/uploads/video.mp4' },
+        { checksumSha256: 'a'.repeat(64), allowIdempotentReplay: true }
+    ), 'idempotent-replay');
+
+    assert.throws(
+        () => assertVideoToolV3RunItemUploadable(
+            { status: 'PARTIAL' },
+            { status: 'UPLOADED', checksum_sha256: 'a'.repeat(64), file_url: '/uploads/video.mp4' },
+            { checksumSha256: 'b'.repeat(64), allowIdempotentReplay: true }
+        ),
+        (error: { statusCode?: number; code?: string }) => error.statusCode === 409 && error.code === 'ITEM_VIDEO_EXISTS'
+    );
+
+    assert.throws(
+        () => assertVideoToolV3RunItemUploadable(
+            { status: 'COMPLETED' },
+            { status: 'PENDING' },
+            { checksumSha256: 'a'.repeat(64) }
+        ),
+        (error: { statusCode?: number; code?: string }) => error.statusCode === 409 && error.code === 'RUN_NOT_UPLOADABLE'
     );
 });

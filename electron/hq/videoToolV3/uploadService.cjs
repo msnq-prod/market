@@ -375,15 +375,17 @@ class UploadService {
         return jobs.length;
     }
 
-    recoverOnStartup() {
+    recoverUploadQueue({ resetUploading = false } = {}) {
         const rows = this.db.all(`
             SELECT export_items.*, export_runs.project_id
             FROM export_items
             JOIN export_runs ON export_runs.id = export_items.run_id
             WHERE export_items.render_status = 'RENDERED'
               AND export_items.upload_status IN ('QUEUED', 'UPLOADING', 'PAUSED_OFFLINE', 'AUTH_REQUIRED')
+              AND export_runs.status NOT IN ('COMPLETED', 'CANCELLED', 'STALE')
         `);
         const timestamp = nowIso();
+        let repaired = 0;
         for (const row of rows) {
             if (!row.output_path || !fs.existsSync(row.output_path)) {
                 this.db.transaction(() => {
@@ -404,6 +406,7 @@ class UploadService {
                           AND status IN ('QUEUED', 'RUNNING', 'WAITING_NETWORK', 'WAITING_AUTH')
                     `, [timestamp, row.id]);
                 });
+                repaired += 1;
                 continue;
             }
 
@@ -415,6 +418,9 @@ class UploadService {
                   AND status IN (${ACTIVE_JOB_STATUSES.map(() => '?').join(', ')})
                 LIMIT 1
             `, [row.id, ...ACTIVE_JOB_STATUSES]);
+            if (row.upload_status === 'UPLOADING' && activeJob && !resetUploading) {
+                continue;
+            }
             if (row.upload_status === 'UPLOADING') {
                 this.db.run(`
                     UPDATE export_items
@@ -422,6 +428,7 @@ class UploadService {
                         updated_at = ?
                     WHERE id = ?
                 `, [timestamp, row.id]);
+                repaired += 1;
             }
             if (!activeJob) {
                 this.exportService?.insertUniqueJob({
@@ -433,8 +440,14 @@ class UploadService {
                     maxAttempts: 5,
                     timestamp
                 });
+                repaired += 1;
             }
         }
+        return repaired;
+    }
+
+    recoverOnStartup() {
+        return this.recoverUploadQueue({ resetUploading: true });
     }
 }
 

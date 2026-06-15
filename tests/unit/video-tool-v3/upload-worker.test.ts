@@ -302,6 +302,33 @@ test('upload worker resumes accepted chunks after offline restart and completes 
     assert.equal(existsSync(harness.outputPath), true);
 });
 
+test('upload queue recovery recreates missing queued upload job during active run', async (t) => {
+    const harness = await createHarness();
+    t.after(() => harness.close());
+
+    harness.db.run(`UPDATE jobs SET status = 'DONE' WHERE id = ?`, [ids.job]);
+
+    assert.equal(harness.db.all(`
+        SELECT id
+        FROM jobs
+        WHERE export_item_id = ?
+          AND type = 'UPLOAD_ITEM'
+          AND status IN ('QUEUED', 'RUNNING', 'WAITING_NETWORK', 'WAITING_AUTH')
+    `, [ids.exportItem]).length, 0);
+
+    assert.equal(harness.uploadService.recoverUploadQueue(), 1);
+
+    const activeJob = harness.db.get(`
+        SELECT *
+        FROM jobs
+        WHERE export_item_id = ?
+          AND type = 'UPLOAD_ITEM'
+          AND status = 'QUEUED'
+    `, [ids.exportItem]);
+    assert.ok(activeJob);
+    assert.equal(harness.db.get('SELECT upload_status FROM export_items WHERE id = ?', [ids.exportItem]).upload_status, 'QUEUED');
+});
+
 test('upload worker waits for auth and resumes only its upload job', async (t) => {
     const harness = await createHarness();
     t.after(() => harness.close());

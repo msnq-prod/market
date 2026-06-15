@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { resolveProjectPath } from '../utils/projectPaths.ts';
 import {
+    assertVideoToolV3RunItemUploadable,
     VideoToolV3HttpError,
     commitVideoToolV3ItemVideo,
     loadVideoToolV3RunItemForUpload
@@ -134,10 +135,14 @@ export const createVideoToolV3UploadIntent = async (runId: string, itemId: strin
     const checksumSha256 = parseSha256(body.checksum_sha256, 'checksum_sha256');
     const chunkSizeBytes = parsePositiveInteger(body.chunk_size_bytes, 'chunk_size_bytes');
 
-    const { runItem } = await loadVideoToolV3RunItemForUpload(runId, itemId);
+    const { run, runItem } = await loadVideoToolV3RunItemForUpload(runId, itemId);
     if (runItem.serial_number !== serialNumber) {
         throw new VideoToolV3HttpError('serial_number не совпадает с run item.', 400);
     }
+    assertVideoToolV3RunItemUploadable(run, runItem, {
+        checksumSha256,
+        allowIdempotentReplay: true
+    });
 
     const uploadId = buildUploadId(runId, itemId, checksumSha256);
     try {

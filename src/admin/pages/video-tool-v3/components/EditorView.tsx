@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VideoToolV3Api, VideoToolV3IpcError, VideoToolV3Segment, VideoToolV3Snapshot, VideoToolV3UiState } from '../types';
 import {
     buildSegmentDisplayMeta,
@@ -81,6 +81,8 @@ export function EditorView({
 }: EditorViewProps) {
     const totalTimelineDuration = Math.max(1, getTotalTimelineDuration(snapshot.sources));
     const [undoStack, setUndoStack] = useState<VideoToolV3Segment[][]>([]);
+    const [draftSegments, setDraftSegments] = useState<VideoToolV3Segment[] | null>(null);
+    const draftSegmentsRef = useRef<VideoToolV3Segment[] | null>(null);
     const [viewportState, setViewportState] = useState<TimelineViewport>(() => clampViewport({
         startMs: 0,
         durationMs: totalTimelineDuration
@@ -92,7 +94,11 @@ export function EditorView({
         [totalTimelineDuration, viewportState]
     );
 
-    const orderedSegments = useMemo(() => normalizePositions(snapshot.segments), [snapshot.segments]);
+    const persistedSegments = useMemo(() => normalizePositions(snapshot.segments), [snapshot.segments]);
+    const orderedSegments = useMemo(
+        () => normalizePositions(draftSegments ?? persistedSegments),
+        [draftSegments, persistedSegments]
+    );
     const playhead = useMemo(
         () => getPlayhead(uiState.playheadMs, orderedSegments, snapshot.sources),
         [orderedSegments, snapshot.sources, uiState.playheadMs]
@@ -158,10 +164,13 @@ export function EditorView({
         return onSaveSegments(normalizePositions(segments));
     }, [onSaveSegments]);
 
-    const saveUndoable = useCallback(async (segments: VideoToolV3Segment[]) => {
-        const previousSegments = normalizePositions(orderedSegments);
-        setUndoStack((current) => [...current.slice(-19), previousSegments]);
-        return saveNext(segments);
+    const saveUndoable = useCallback(async (segments: VideoToolV3Segment[], previousSegments = orderedSegments) => {
+        const normalizedPreviousSegments = normalizePositions(previousSegments);
+        const saved = await saveNext(segments);
+        if (saved) {
+            setUndoStack((current) => [...current.slice(-19), normalizedPreviousSegments]);
+        }
+        return saved;
     }, [orderedSegments, saveNext]);
 
     const handleUndo = useCallback(() => {
@@ -225,14 +234,15 @@ export function EditorView({
         )));
     }, [canDelete, orderedSegments, saveUndoable, selectedSegment]);
 
-    const handleMoveBoundary = useCallback((segmentId: string, edge: 'start' | 'end', globalMs: number) => {
+    const applyBoundaryMove = useCallback((segments: VideoToolV3Segment[], segmentId: string, edge: 'start' | 'end', globalMs: number) => {
         const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
-        const target = orderedSegments.find((segment) => segment.id === segmentId);
-        if (!target || target.deleted) return;
+        const normalizedSegments = normalizePositions(segments);
+        const target = normalizedSegments.find((segment) => segment.id === segmentId);
+        if (!target || target.deleted) return normalizedSegments;
         const sourceOffset = offsets.get(target.source_id) ?? 0;
         const localMs = Math.max(0, Math.round(globalMs - sourceOffset));
 
-        void saveUndoable(orderedSegments.map((segment) => {
+        return normalizePositions(normalizedSegments.map((segment) => {
             if (segment.id !== segmentId || segment.deleted) return segment;
             if (edge === 'start') {
                 return {
@@ -247,7 +257,25 @@ export function EditorView({
                 end_ms: Math.min(sourceDuration, Math.max(segment.start_ms + MIN_SEGMENT_DURATION_MS, localMs))
             };
         }));
-    }, [offsets, orderedSegments, saveUndoable, snapshot.sources]);
+    }, [offsets, snapshot.sources]);
+
+    const setBoundaryDraft = useCallback((segments: VideoToolV3Segment[] | null) => {
+        draftSegmentsRef.current = segments;
+        setDraftSegments(segments);
+    }, []);
+
+    const handleMoveBoundary = useCallback((segmentId: string, edge: 'start' | 'end', globalMs: number, commit: boolean) => {
+        const baseSegments = draftSegmentsRef.current ?? orderedSegments;
+        const previousSegments = draftSegmentsRef.current ? persistedSegments : orderedSegments;
+        const nextSegments = applyBoundaryMove(baseSegments, segmentId, edge, globalMs);
+        if (!commit) {
+            setBoundaryDraft(nextSegments);
+            return;
+        }
+
+        setBoundaryDraft(null);
+        void saveUndoable(nextSegments, previousSegments);
+    }, [applyBoundaryMove, orderedSegments, persistedSegments, saveUndoable, setBoundaryDraft]);
 
     const handleZoom = useCallback((factor: number) => {
         const nextDuration = viewport.durationMs * factor;

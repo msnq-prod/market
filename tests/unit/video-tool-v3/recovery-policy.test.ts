@@ -32,6 +32,18 @@ test('auth jobs resume only after access token changes', () => {
     assert.equal(resumed, 1);
 });
 
+test('app schedules queue after runtime upload recovery repairs jobs', () => {
+    const app = new VideoToolV3App({
+        app: { getPath: () => '/tmp' }
+    });
+    let scheduled = 0;
+    app.uploadService = { recoverUploadQueue: () => 1 };
+    app.queueEngine = { schedule: () => { scheduled += 1; } };
+
+    assert.equal(app.recoverUploadQueueAndSchedule(), 1);
+    assert.equal(scheduled, 1);
+});
+
 test('retry delay uses capped exponential backoff with jitter', () => {
     assert.equal(getRetryDelayMs(1, () => 0), 2_000);
     assert.equal(getRetryDelayMs(3, () => 0.5), 8_500);
@@ -70,6 +82,6 @@ test('local database migrates existing export_runs to replace_existing', async (
     const columns = migrated.all('PRAGMA table_info(export_runs)');
 
     assert.equal(columns.some((column: { name: string }) => column.name === 'replace_existing'), true);
-    assert.equal(migrated.get('SELECT version FROM schema_migrations WHERE version = 2').version, 2);
+    assert.equal(migrated.get('SELECT version FROM schema_migrations WHERE version = 3').version, 3);
     migrated.close();
 });

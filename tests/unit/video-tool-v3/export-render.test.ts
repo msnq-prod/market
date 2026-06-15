@@ -316,6 +316,25 @@ test('startRun creates manifest/items/jobs and renders items independently', asy
     assert.equal(items.every((item: { upload_status: string }) => item.upload_status === 'QUEUED'), true);
 });
 
+test('startRun blocks existing item videos unless replaceExisting is confirmed', async (t) => {
+    const harness = await createHarness(1);
+    t.after(() => harness.close());
+
+    harness.db.run(`
+        UPDATE project_items
+        SET existing_video_url = '/uploads/videos/v3/existing.mp4'
+        WHERE project_id = ?
+    `, [harness.projectId]);
+
+    await assert.rejects(
+        () => harness.exportService.startRun(harness.projectId, { replaceExisting: false }),
+        (error: { code?: string }) => error.code === 'ITEM_VIDEO_EXISTS'
+    );
+
+    const run = await harness.exportService.startRun(harness.projectId, { replaceExisting: true });
+    assert.equal(run.replace_existing, 1);
+});
+
 test('render preserves audible prepared audio in final output', async (t) => {
     const harness = await createHarness(1, { withAudio: true });
     t.after(() => harness.close());

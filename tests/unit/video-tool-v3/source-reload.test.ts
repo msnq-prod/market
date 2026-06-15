@@ -130,3 +130,57 @@ test('replaceSource hard reloads the same file path and stales completed local a
     assert.equal(existsSync(outputPath), false);
     assert.deepEqual(queued, [{ sourceId }]);
 });
+
+test('loadOrCreateProject refreshes existing batch and item truth from server', async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stones-video-v3-project-refresh-'));
+    const fileStore = await new VideoToolV3FileStore({ rootDir: root }).init();
+    const db = await new VideoToolV3Database({ dbPath: fileStore.getDatabasePath() }).init();
+    t.after(() => {
+        db.close();
+        rmSync(root, { recursive: true, force: true });
+    });
+
+    const batchId = 'batch-refresh';
+    const payloads = [
+        {
+            batch: { id: batchId, status: 'DRAFT', expected_output_count: 1 },
+            items: [{
+                id: 'item-refresh',
+                item_seq: 1,
+                serial_number: 'SERIAL-OLD',
+                item_video_url: null,
+                clone_url: '/clone/SERIAL-OLD'
+            }]
+        },
+        {
+            batch: { id: batchId, status: 'RECEIVED', expected_output_count: 1 },
+            items: [{
+                id: 'item-refresh',
+                item_seq: 1,
+                serial_number: 'SERIAL-NEW',
+                item_video_url: '/uploads/videos/v3/batch/run/SERIAL-NEW.mp4',
+                clone_url: '/clone/SERIAL-NEW'
+            }]
+        }
+    ];
+    let fetchCount = 0;
+    const projectService = new ProjectService({
+        db,
+        serverClient: {
+            fetchBatch: async () => payloads[Math.min(fetchCount++, payloads.length - 1)]
+        },
+        fileStore
+    });
+
+    const initial = await projectService.loadOrCreateProject(batchId);
+    assert.equal(initial.project.batch_status, 'DRAFT');
+    assert.equal(initial.items[0].serial_number, 'SERIAL-OLD');
+    assert.equal(initial.items[0].existing_video_url, null);
+
+    const refreshed = await projectService.loadOrCreateProject(batchId);
+    assert.equal(fetchCount, 2);
+    assert.equal(refreshed.project.batch_status, 'RECEIVED');
+    assert.equal(refreshed.items[0].serial_number, 'SERIAL-NEW');
+    assert.equal(refreshed.items[0].existing_video_url, '/uploads/videos/v3/batch/run/SERIAL-NEW.mp4');
+    assert.equal(refreshed.items[0].clone_url, '/clone/SERIAL-NEW');
+});

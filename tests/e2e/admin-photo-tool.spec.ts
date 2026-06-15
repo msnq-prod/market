@@ -525,23 +525,21 @@ test('API: legacy photo apply accepts batches above shared 100-file upload limit
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
     const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 101);
+    const formData = new FormData();
+    formData.append('base_photo_state_token', toolPayload.batch.photo_state_token);
+    formData.append('manifest', JSON.stringify(toolPayload.items.map((item, index) => ({
+        item_id: item.id,
+        item_seq: item.item_seq,
+        source: 'upload',
+        file_index: index
+    }))));
+    toolPayload.items.forEach((_, index) => {
+        formData.append('files', new Blob([TINY_JPEG], { type: 'image/jpeg' }), `legacy-large-${index + 1}.jpg`);
+    });
 
     const response = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
-        multipart: {
-            base_photo_state_token: toolPayload.batch.photo_state_token,
-            manifest: JSON.stringify(toolPayload.items.map((item, index) => ({
-                item_id: item.id,
-                item_seq: item.item_seq,
-                source: 'upload',
-                file_index: index
-            }))),
-            files: toolPayload.items.map((_, index) => ({
-                name: `legacy-large-${index + 1}.jpg`,
-                mimeType: 'image/jpeg',
-                buffer: TINY_JPEG
-            }))
-        }
+        multipart: formData
     });
 
     expect(response.ok()).toBeTruthy();
@@ -767,7 +765,7 @@ test('API: photo tool v2 uploads items, commits atomically and marks stale commi
     });
 });
 
-test.skip('UI: admin resolves duplicate item numbers and saves photo assignments', async ({ page, request }) => {
+test('UI: admin reviews photo assignments without silent reassignment or discard', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const { productId } = await createProductFixture({ isPublished: false });
@@ -775,9 +773,13 @@ test.skip('UI: admin resolves duplicate item numbers and saves photo assignments
     const batchId = toolPayload.batch.id;
 
     await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page);
     await page.goto(`/admin/photo-tool/${batchId}`);
     await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await expect(page.getByTestId('photo-tool-heading')).toContainText('Назначение фотографий');
     await expect(page.getByTestId('photo-step-quality')).toBeVisible();
+    await expect(page.getByTestId('photo-step-quality')).toHaveAttribute('aria-current', 'step');
+    await expect(page.getByTestId('photo-step-export')).toContainText('Проверка');
     await page.getByTestId('photo-preset-standard').click();
     await expect(page.getByTestId('photo-quality-input')).toHaveValue('88');
     await expect(page.getByTestId('photo-max-width-input')).toHaveValue('1600');
@@ -803,27 +805,53 @@ test.skip('UI: admin resolves duplicate item numbers and saves photo assignments
         }
     ]);
 
+    await expect(page.getByTestId('photo-step-quality')).toHaveAttribute('aria-current', 'step');
+    await expect(page.getByTestId('photo-draft-summary')).toContainText('+3 фото');
+    await expect(page.getByText('Локальное').first()).toBeVisible();
+    await page.getByTestId('photo-step-assign').click();
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('001');
     await expect(page.getByTestId('photo-assignment-input-next')).toHaveValue('002');
 
     await page.getByTestId('photo-assignment-input-center').fill('002');
+    await expect(page.getByTestId('photo-assignment-conflict-center')).toContainText('Номер 002 уже занят');
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
     await page.getByTestId('photo-assignment-input-center').press('Enter');
-    await expect(page.getByTestId('photo-coverage')).toContainText('1/2');
-    await expect(page.getByTestId('photo-list-status-1')).toHaveText('Без назначения');
-    await expect(page.getByTestId('photo-unassigned-overlay-1')).toBeVisible();
+    await expect(page.getByTestId('photo-feedback-banner')).toHaveAttribute('role', 'alert');
+    await expect(page.getByTestId('photo-list-status-1')).toHaveText('Позиция 002');
+    await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
+    await page.getByTestId('photo-assignment-input-center').fill('001');
+    await expect(page.getByTestId('photo-assignment-conflict-center')).toHaveCount(0);
 
     await page.getByTestId('photo-reverse-assignment').click();
+    await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('001');
+    await expect(page.getByTestId('photo-assignment-input-next')).toHaveValue('002');
+    page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('Переназначить все фото');
+        await dialog.accept();
+    });
+    await page.getByTestId('photo-reassign-all').click();
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('002');
     await expect(page.getByTestId('photo-assignment-input-next')).toHaveValue('001');
+    await expect(page.getByTestId('photo-undo')).toBeVisible();
+    await page.getByTestId('photo-undo').click();
+    await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('001');
+    await expect(page.getByTestId('photo-assignment-input-next')).toHaveValue('002');
+    page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('Переназначить все фото');
+        await dialog.accept();
+    });
+    await page.getByTestId('photo-reassign-all').click();
+    await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('002');
+    await expect(page.getByTestId('photo-assignment-input-next')).toHaveValue('001');
     await page.getByTestId('photo-step-export').click();
+    await expect(page.getByTestId('photo-step-export')).toHaveAttribute('aria-current', 'step');
     await expect(page.getByTestId('photo-export-grid')).toBeVisible();
     await expect(page.getByTestId('photo-export-tile-1')).toBeVisible();
     await expect(page.getByTestId('photo-export-tile-2')).toBeVisible();
-    await page.getByTestId('photo-export-reupload-1').click();
-    await expect(page.getByText('Позиция 001 будет загружена заново при сохранении.')).toBeVisible();
+    await expect(page.getByTestId('photo-export-reupload-1')).toHaveCount(0);
+    await expect(page.getByText('Будет загружено при сохранении').first()).toBeVisible();
     await page.getByTestId('photo-export-replace-1').click();
     await page.getByTestId('photo-item-replace-input').setInputFiles({
         name: 'replacement-1.png',
@@ -833,29 +861,66 @@ test.skip('UI: admin resolves duplicate item numbers and saves photo assignments
     });
     await expect(page.getByTestId('photo-export-tile-1')).toContainText('replacement-1.png');
 
-    let observedPhotoExportSettings = false;
-    await page.route('**/api/batches/*/photo-tool/apply', async (route) => {
-        const postData = route.request().postData() || '';
-        observedPhotoExportSettings = postData.includes('photo_export_settings')
-            && postData.includes('"format":"jpeg"')
-            && postData.includes('"quality":88')
-            && postData.includes('"maxWidth":1600')
-            && postData.includes('"maxHeight":1600');
-        await route.continue();
-    });
-
     await page.getByTestId('photo-save').click();
-    await expect(page.getByText('Назначения фото сохранены.')).toBeVisible();
-    expect(observedPhotoExportSettings).toBeTruthy();
-
-    const reloadedResponse = await request.get(`/api/batches/${batchId}/photo-tool`, {
-        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    await expect(page.getByTestId('photo-extra-confirm')).toBeVisible();
+    await expect(page.getByTestId('photo-extra-confirm')).toContainText('фото без назначения');
+    await page.getByTestId('photo-extra-cancel').click();
+    await expect(page.getByTestId('photo-extra-confirm')).toHaveCount(0);
+    await page.getByTestId('photo-save').click();
+    await expect(page.getByTestId('photo-extra-confirm')).toBeVisible();
+    await page.getByTestId('photo-extra-confirm-submit').click();
+    await expect(page.getByText(/Сохранение передано в фон/)).toBeVisible();
+    await expect(page.getByText(/Лишние фото отброшены/)).toBeVisible();
+    const workflowPayload = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__photoWorkflowPayload') || '{}'));
+    expect(workflowPayload.photoExportSettings).toMatchObject({
+        format: 'jpeg',
+        quality: 88,
+        maxWidth: 1600,
+        maxHeight: 1600
     });
-    expect(reloadedResponse.ok()).toBeTruthy();
-    const reloadedPayload = await reloadedResponse.json() as PhotoToolPayload;
+    expect(workflowPayload.files).toHaveLength(2);
+});
 
-    expect(reloadedPayload.items).toHaveLength(2);
-    expect(reloadedPayload.items.every((item) => typeof item.item_photo_url === 'string' && item.item_photo_url.includes('/uploads/photos/'))).toBeTruthy();
+test('UI: extra photos can remain in draft after save', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+    const batchId = toolPayload.batch.id;
+
+    await page.setViewportSize({ width: 1024, height: 760 });
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page);
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await expect(page.getByTestId('photo-save')).toBeVisible();
+
+    await page.getByTestId('photo-upload-input').setInputFiles([
+        {
+            name: 'keep-assigned.png',
+            mimeType: 'image/png',
+            buffer: TINY_PNG,
+            lastModified: new Date('2026-04-06T10:00:00.000Z').getTime()
+        },
+        {
+            name: 'keep-extra.png',
+            mimeType: 'image/png',
+            buffer: TINY_PNG,
+            lastModified: new Date('2026-04-06T10:01:00.000Z').getTime()
+        }
+    ]);
+
+    await expect(page.getByTestId('photo-draft-summary')).toContainText('+2 фото');
+    await expect(page.getByTestId('photo-list-status-1')).toHaveText('Без назначения');
+    await page.getByTestId('photo-save').click();
+    await expect(page.getByTestId('photo-extra-confirm')).toBeVisible();
+    await page.getByTestId('photo-extra-keep-submit').click();
+    await expect(page.getByText(/Лишние фото оставлены в черновике/)).toBeVisible();
+    await expect(page.getByTestId('photo-draft-summary')).toBeVisible();
+    await expect(page.getByTestId('photo-list-status-1')).toHaveText('Без назначения');
+
+    const workflowPayload = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__photoWorkflowPayload') || '{}'));
+    expect(workflowPayload.files).toHaveLength(1);
 });
 
 test('UI: desktop photo workflow receives export settings', async ({ page, request }) => {
@@ -887,10 +952,7 @@ test('UI: desktop photo workflow receives export settings', async ({ page, reque
     ]);
 
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
-    await page.getByTestId('photo-assignment-input-center').fill('002');
-    await expect(page.getByTestId('photo-coverage')).toContainText('1/2');
-    await expect(page.getByTestId('photo-save')).toBeDisabled();
-    await page.getByTestId('photo-assignment-input-center').fill('001');
+    await page.getByTestId('photo-step-assign').click();
     await expect(page.getByTestId('photo-coverage')).toContainText('2/2');
     await page.getByTestId('photo-save').click();
     await expect(page.getByText(/Сохранение передано в фон/)).toBeVisible();
@@ -976,7 +1038,7 @@ test('UI: active desktop photo workflow locks editing controls', async ({ page, 
     });
     await page.goto(`/admin/photo-tool/${batchId}`);
     await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
-    await expect(page.getByTestId('photo-workflow-banner')).toContainText('Редактирование заблокировано до завершения workflow.');
+    await expect(page.getByTestId('photo-workflow-banner')).toContainText('Редактирование заблокировано до завершения фоновой задачи.');
     await expect(page.getByTestId('photo-sort-name')).toBeDisabled();
     await expect(page.getByTestId('photo-preset-standard')).toBeDisabled();
 
@@ -989,6 +1051,77 @@ test('UI: active desktop photo workflow locks editing controls', async ({ page, 
 
     await page.getByTestId('photo-step-export').click();
     await expect(page.getByTestId('photo-export-clear-1')).toBeDisabled();
+});
+
+test('UI: terminal desktop photo workflow shows in-page recovery banner', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page, {
+        workflowSnapshot: {
+            workflows: [
+                {
+                    id: 'photo-workflow-failed-e2e',
+                    kind: 'PHOTO_APPLY_WORKFLOW',
+                    batchId,
+                    phase: 'failed',
+                    progress: { completed: 0, total: 1 },
+                    routePath: `/admin/photo-tool/${batchId}`,
+                    lastError: 'upload failed',
+                    createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
+                    updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
+                    uploadState: null
+                }
+            ],
+            counts: { failed: 1 }
+        }
+    });
+
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    const terminalBanner = page.getByTestId('photo-workflow-terminal-banner');
+    await expect(terminalBanner).toBeVisible();
+    await expect(terminalBanner).toHaveAttribute('role', 'alert');
+    await expect(terminalBanner).toContainText('Ошибка');
+    await expect(terminalBanner).toContainText('upload failed');
+    await expect(page.getByTestId('photo-workflow-banner')).toHaveCount(0);
+});
+
+test('UI: unsaved Photo Tool edits block SPA navigation', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page);
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await page.getByTestId('photo-upload-input').setInputFiles({
+        name: 'nav-guard.png',
+        mimeType: 'image/png',
+        buffer: TINY_PNG,
+        lastModified: new Date('2026-04-05T12:00:00.000Z').getTime()
+    });
+    await expect(page.getByTestId('photo-draft-summary')).toContainText('+1 фото');
+
+    page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('Есть несохраненные изменения');
+        await dialog.dismiss();
+    });
+    await page.getByTestId('photo-back-to-acceptance').click();
+    await expect(page).toHaveURL(new RegExp(`/admin/photo-tool/${batchId}`));
+
+    page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('Есть несохраненные изменения');
+        await dialog.accept();
+    });
+    await page.getByTestId('photo-back-to-acceptance').click();
+    await expect(page).toHaveURL(/\/admin\/acceptance$/);
 });
 
 test('UI: desktop hotkeys navigate carousel, stage assignment numbers and remove binding with Delete', async ({ page, request }) => {
@@ -1024,6 +1157,7 @@ test('UI: desktop hotkeys navigate carousel, stage assignment numbers and remove
         }
     ]);
 
+    await page.getByTestId('photo-step-assign').click();
     await expect(page.getByTestId('photo-coverage')).toContainText('3/3');
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('001');
     await page.getByTestId('photo-card-center').click();
@@ -1041,18 +1175,24 @@ test('UI: desktop hotkeys navigate carousel, stage assignment numbers and remove
     await expect(page.getByTestId('photo-list-status-2')).toHaveText('Позиция 003');
 
     await page.keyboard.press('Enter');
-    await expect(page.getByTestId('photo-list-status-0')).toHaveText('Позиция 003');
-    await expect(page.getByTestId('photo-list-status-2')).toHaveText('Без назначения');
-    await expect(page.getByTestId('photo-unassigned-overlay-2')).toBeVisible();
+    await expect(page.getByTestId('photo-assignment-conflict-center')).toContainText('Номер 003 уже занят');
+    await expect(page.getByTestId('photo-list-status-0')).toHaveText('Без назначения');
+    await expect(page.getByTestId('photo-list-status-2')).toHaveText('Позиция 003');
 
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
     await page.keyboard.type('001');
     await expect(page.getByTestId('photo-assignment-input-center')).toHaveValue('001');
-    await expect(page.getByTestId('photo-list-status-0')).toHaveText('Позиция 003');
+    await expect(page.getByTestId('photo-list-status-0')).toHaveText('Без назначения');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('photo-list-status-0')).toHaveText('Позиция 001');
+    await expect(page.getByTestId('photo-coverage')).toContainText('3/3');
 
     await page.keyboard.press('ArrowRight');
     await expect(page.getByTestId('photo-assignment-input-center').last()).toHaveValue('002');
     await expect(page.getByTestId('photo-list-status-0')).toHaveText('Позиция 001');
-    await expect(page.getByTestId('photo-coverage')).toContainText('2/3');
+    await expect(page.getByTestId('photo-coverage')).toContainText('3/3');
 });
 
 test('UI: stale local photo draft is restored as conflict instead of being deleted', async ({ page, request }) => {
