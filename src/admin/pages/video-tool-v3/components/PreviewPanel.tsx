@@ -1,4 +1,4 @@
-import { Camera, Maximize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
+import { Camera, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
 import { useCallback, useEffect, useRef } from 'react';
 import { PREVIEW_SEEK_TOLERANCE_MS, resolvePreviewTimeUpdate } from '../previewSync';
 import { formatTimecode } from '../timelineModel';
@@ -166,16 +166,6 @@ export function PreviewPanel({
                     <button type="button" onClick={onNextCut} className="rounded p-2 hover:bg-white/8" aria-label="next cut">
                         <SkipForward size={21} />
                     </button>
-                </div>
-
-                <div className="mt-auto flex items-center justify-between pt-3 text-sm text-white/65">
-                    <button type="button" className="rounded-lg border border-white/10 px-3 py-2 hover:bg-white/8">
-                        По размеру
-                    </button>
-                    <div className="flex gap-3">
-                        <Maximize size={21} />
-                        <Camera size={21} />
-                    </div>
                 </div>
             </div>
         </aside>

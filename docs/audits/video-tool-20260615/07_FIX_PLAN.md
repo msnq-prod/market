@@ -19,30 +19,30 @@
 
 ## P2
 
-1. Align Video Tool ACL.
-   - Either remove `SALES_MANAGER` from backend route roles or update UI/product policy.
+1. Align Video Tool ACL. Done.
+   - Removed `SALES_MANAGER` from backend route roles and documented HQ-only access.
 
-2. Fix preview cache invalidation.
-   - Include source revision/checksum in preview URL and React cache key.
+2. Fix preview cache invalidation. Done.
+   - Included source revision/checksum/status/update timestamp in preview URL and React cache key.
 
-3. Make server commit file movement transaction-safe.
-   - Avoid replacing final public path before DB commit, or add cleanup/restore on failure.
+3. Make server commit file movement transaction-safe. Done.
+   - Added cleanup for final public path when DB commit fails.
 
-4. Expose waiting auth/network state.
+4. Expose waiting auth/network state. Done.
    - Add waiting counts to snapshot.
    - Render paused job counts consistently in export status.
 
-5. Unify UI blockers.
+5. Unify UI blockers. Done.
    - Shared helper for prepare/editor/export blockers.
 
-6. Remove or implement dead preview controls.
+6. Remove or implement dead preview controls. Done.
 
-7. Update `docs/video-tool-v3/*` and `docs/SYSTEM_USAGE_GUIDE_RU.md`.
+7. Update `docs/video-tool-v3/*` and `docs/SYSTEM_USAGE_GUIDE_RU.md`. Done.
 
 ## P3
 
-1. Preempt queue timer when a new immediate schedule is requested.
-2. Update hotkey help.
+1. Preempt queue timer when a new immediate schedule is requested. Done.
+2. Update hotkey help. Done.
 
 ## Suggested Tests
 
@@ -55,4 +55,4 @@
 
 ## Deferred
 
-P2/P3 items remain outside this P1-only pass.
+Full Playwright suite remains outside this pass unless requested separately.

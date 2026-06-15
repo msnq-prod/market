@@ -19,7 +19,7 @@ import {
 } from '../services/videoToolV3UploadIntentService.ts';
 
 const router = express.Router();
-const STAFF_ROLES = ['ADMIN', 'MANAGER', 'SALES_MANAGER'] as const;
+const STAFF_ROLES = ['ADMIN', 'MANAGER'] as const;
 
 router.use(authenticateToken, requireRole(STAFF_ROLES));
 

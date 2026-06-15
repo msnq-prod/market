@@ -1,9 +1,9 @@
 import { FolderOpen, Play, RotateCcw, Square } from 'lucide-react';
 import { useMemo } from 'react';
 import type { VideoToolV3Snapshot } from '../types';
+import { getActiveSegments, getActiveSources, getExportBlockers } from '../exportBlockers';
 import { ExportItemTile } from './ExportItemTile';
 
-const MIN_SEGMENT_DURATION_MS = 500;
 const terminalRunStatuses = ['COMPLETED', 'CANCELLED', 'STALE', 'FAILED'];
 
 const runLabels: Record<string, string> = {
@@ -21,55 +21,11 @@ const qualityLabels: Record<string, string> = {
     high: 'Высокое'
 };
 
-const segmentDuration = (startMs: number, endMs: number) => Math.max(0, endMs - startMs);
-
 const formatBytes = (value: number | null | undefined) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return 'нет данных';
     if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} ГБ`;
     if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(0)} МБ`;
     return `${Math.max(0, value).toFixed(0)} Б`;
-};
-
-const getActiveSegments = (snapshot: VideoToolV3Snapshot) =>
-    snapshot.segments.filter((segment) => !segment.deleted).sort((left, right) => left.position - right.position);
-
-const getActiveSources = (snapshot: VideoToolV3Snapshot) =>
-    snapshot.sources.filter((source) => source.status !== 'DELETED');
-
-const getBlockers = (snapshot: VideoToolV3Snapshot) => {
-    const project = snapshot.project;
-    const activeSegments = getActiveSegments(snapshot);
-    const activeSources = getActiveSources(snapshot);
-    const tailCount = Math.max(0, activeSegments.length - 1);
-    const expectedItems = project?.expected_output_count ?? snapshot.items.length;
-    const blockers: string[] = [];
-
-    if (!project) {
-        blockers.push('Проект не создан.');
-    }
-    if (project && project.batch_status !== 'RECEIVED') {
-        blockers.push('Партия должна быть RECEIVED.');
-    }
-    if (activeSources.length === 0) {
-        blockers.push('Добавьте source.');
-    }
-    if (activeSources.some((source) => source.status !== 'READY')) {
-        blockers.push('Все исходники должны быть готовы.');
-    }
-    if (activeSegments.length === 0) {
-        blockers.push('Нет intro segment.');
-    }
-    if (tailCount !== expectedItems) {
-        blockers.push(`Товарных segment: ${tailCount}, ожидается: ${expectedItems}.`);
-    }
-    if (activeSegments.some((segment) => segmentDuration(segment.start_ms, segment.end_ms) < MIN_SEGMENT_DURATION_MS)) {
-        blockers.push('Есть segment короче 500 ms.');
-    }
-    if (snapshot.items.some((item) => !item.serial_number)) {
-        blockers.push('Есть item без serial_number.');
-    }
-
-    return blockers;
 };
 
 type ExportViewProps = {
@@ -104,7 +60,7 @@ export function ExportView({
     onSyncAuth
 }: ExportViewProps) {
     const run = snapshot.activeRun;
-    const blockers = useMemo(() => getBlockers(snapshot), [snapshot]);
+    const blockers = useMemo(() => getExportBlockers(snapshot), [snapshot]);
     const itemByItemId = useMemo(() => new Map(snapshot.items.map((item) => [item.item_id, item])), [snapshot.items]);
     const activeSegments = useMemo(() => getActiveSegments(snapshot), [snapshot]);
     const activeSources = useMemo(() => getActiveSources(snapshot), [snapshot]);
@@ -117,6 +73,7 @@ export function ExportView({
         || ['QUEUED', 'UPLOADING', 'PAUSED_OFFLINE', 'AUTH_REQUIRED'].includes(item.upload_status)
     )).length;
     const totalItems = snapshot.exportItems.length;
+    const waitingJobs = (snapshot.counts.waitingNetworkJobs ?? 0) + (snapshot.counts.waitingAuthJobs ?? 0);
     const overallProgress = totalItems > 0
         ? Math.round((((renderedCount / totalItems) + (uploadedCount / totalItems)) / 2) * 100)
         : 0;
@@ -296,7 +253,7 @@ export function ExportView({
                             <div className="h-full rounded-full bg-emerald-400" style={{ width: `${overallProgress}%` }} />
                         </div>
                         <p className="mt-2 text-sm text-gray-400">
-                            Render ошибок: {renderFailedCount}. Upload ошибок: {uploadFailedCount}. Jobs: {snapshot.counts.queuedJobs + snapshot.counts.runningJobs}.
+                            Render ошибок: {renderFailedCount}. Upload ошибок: {uploadFailedCount}. Jobs: {snapshot.counts.queuedJobs + snapshot.counts.runningJobs}. Ожидают: {waitingJobs}.
                         </p>
                     </div>
                     <div className="flex flex-wrap gap-2">

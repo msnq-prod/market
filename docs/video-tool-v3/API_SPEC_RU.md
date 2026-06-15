@@ -1,12 +1,13 @@
 # Video Tool v3: API specification
 
-Все endpoints требуют staff auth.
+Все endpoints требуют HQ staff auth.
 
 Разрешенные роли:
 
 - `ADMIN`
 - `MANAGER`
-- `SALES_MANAGER`
+
+`SALES_MANAGER` не имеет доступа к Video Tool: UI редиректит sales-only роль в sales-кабинет, backend возвращает `403`.
 
 Базовый префикс:
 
@@ -277,4 +278,3 @@ type ApiError = {
 - `UPLOAD_INTENT_EXPIRED`
 - `UPLOAD_CHUNK_CONFLICT`
 - `UPLOAD_CHUNKS_MISSING`
-

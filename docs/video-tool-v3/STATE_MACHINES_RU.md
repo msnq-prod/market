@@ -39,6 +39,8 @@ FAILED -> QUEUED retry
 
 - `WAITING_NETWORK` допустим только для upload.
 - `WAITING_AUTH` допустим только для upload.
+- `WAITING_NETWORK` и `WAITING_AUTH` входят в active queue counts и показываются отдельно от `QUEUED/RUNNING`.
+- при появлении более ранней работы scheduler должен сдвинуть уже поставленный timer вперед.
 - prepare/render не должны ждать сеть.
 - job берет lock перед запуском.
 - после restart stale `RUNNING` job нужно восстановить.
@@ -107,9 +109,9 @@ STALE -> ACTIVE new run only
 
 При старте Electron:
 
-1. `jobs.RUNNING` старше 5 минут:
+1. `jobs.RUNNING` после restart:
    - prepare/render -> `FAILED`;
-   - upload -> `QUEUED`, если output file есть, иначе `FAILED`.
+   - upload -> `QUEUED`.
 2. `source.PREPARING|PROBING|COPYING` без running job -> `PREPARE_FAILED`.
 3. `export_item.RENDERING` без running job -> `RENDER_FAILED`.
 4. `export_item.UPLOADING` без running job -> `QUEUED`, если output file есть.
@@ -122,4 +124,3 @@ STALE -> ACTIVE new run only
 - Upload `UPLOADED -> UPLOADING`.
 - Run `COMPLETED -> ACTIVE`.
 - Any state -> delete physical output, если upload не завершен.
-

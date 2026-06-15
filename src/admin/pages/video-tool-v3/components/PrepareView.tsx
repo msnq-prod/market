@@ -1,5 +1,6 @@
 import { FolderOpen, Plus } from 'lucide-react';
 import type { VideoQualityPreset, VideoToolV3Snapshot } from '../types';
+import { getActiveSources, getExportBlockers } from '../exportBlockers';
 import { SourceList } from './SourceList';
 
 const qualityLabels: Record<string, string> = {
@@ -53,17 +54,11 @@ export function PrepareView({
     onShowProjectFolder
 }: PrepareViewProps) {
     const project = snapshot.project;
-    const activeSources = snapshot.sources.filter((source) => source.status !== 'DELETED');
+    const activeSources = getActiveSources(snapshot);
     const readySources = activeSources.filter((source) => source.status === 'READY');
     const diskFreeBytes = snapshot.disk?.freeBytes ?? null;
     const prepareProgress = getPrepareProgress(snapshot);
-    const blockers = [
-        !project ? 'Проект еще не создан.' : null,
-        project && project.batch_status !== 'RECEIVED' ? 'Партия должна быть в статусе RECEIVED.' : null,
-        activeSources.length === 0 ? 'Добавьте исходное видео.' : null,
-        activeSources.some((source) => source.status !== 'READY') ? 'Все исходники должны быть готовы.' : null,
-        snapshot.items.some((item) => !item.serial_number) ? 'У всех item должен быть serial number.' : null
-    ].filter(Boolean);
+    const blockers = getExportBlockers(snapshot);
 
     return (
         <div className="space-y-5">

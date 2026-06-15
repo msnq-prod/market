@@ -2,7 +2,7 @@
 
 ## Summary
 
-No P0 found.
+No P0 found. All listed P1/P2/P3 findings are fixed.
 
 | Severity | Count |
 | --- | ---: |
@@ -85,7 +85,7 @@ Status:
 
 Fixed in `src/admin/pages/video-tool-v3/components/EditorTimeline.tsx` and `src/admin/pages/video-tool-v3/components/EditorView.tsx`.
 
-### F-04 - P2 - UI and API role policy disagree
+### F-04 - P2 - UI and API role policy disagree - fixed
 
 Evidence:
 
@@ -104,7 +104,11 @@ Fix:
 
 Align backend ACL with HQ UI policy, or explicitly document and expose the sales role behavior.
 
-### F-05 - P2 - Source preview cache can show stale media after replace/reprepare
+Status:
+
+Fixed in `server/routes/videoToolV3.ts` and `docs/video-tool-v3/API_SPEC_RU.md`.
+
+### F-05 - P2 - Source preview cache can show stale media after replace/reprepare - fixed
 
 Evidence:
 
@@ -124,7 +128,11 @@ Fix:
 
 Include `source_revision`, prepared checksum, or updated timestamp in preview URL/cache key. Clear cached URL when source revision changes.
 
-### F-06 - P2 - Public file is moved before DB transaction commits
+Status:
+
+Fixed in `electron/hq/videoToolV3/index.cjs`, `src/admin/pages/video-tool-v3/components/EditorView.tsx`, and `src/admin/pages/video-tool-v3/types.ts`.
+
+### F-06 - P2 - Public file is moved before DB transaction commits - fixed
 
 Evidence:
 
@@ -143,7 +151,11 @@ Fix:
 
 Move to final path after DB preconditions succeed, or clean up/restore on transaction failure.
 
-### F-07 - P2 - Waiting auth/network jobs are underrepresented in UI counts
+Status:
+
+Fixed in `server/services/videoToolV3RunService.ts` by cleaning up final public output if the DB transaction fails.
+
+### F-07 - P2 - Waiting auth/network jobs are underrepresented in UI counts - fixed
 
 Evidence:
 
@@ -162,7 +174,11 @@ Fix:
 
 Expose waiting counts in snapshot and render them in export/source status blocks.
 
-### F-08 - P2 - Prepare blockers do not match export validation
+Status:
+
+Fixed in `electron/hq/videoToolV3/db.cjs`, `src/admin/pages/video-tool-v3/components/ExportView.tsx`, `src/admin/pages/video-tool-v3/components/SourceList.tsx`, and `tests/unit/video-tool-v3/recovery-policy.test.ts`.
+
+### F-08 - P2 - Prepare blockers do not match export validation - fixed
 
 Evidence:
 
@@ -182,7 +198,11 @@ Fix:
 
 Use one shared blocker builder for prepare/editor/export.
 
-### F-09 - P2 - Preview controls contain dead buttons
+Status:
+
+Fixed in `src/admin/pages/video-tool-v3/exportBlockers.ts`, `PrepareView.tsx`, `EditorView.tsx`, and `ExportView.tsx`.
+
+### F-09 - P2 - Preview controls contain dead buttons - fixed
 
 Evidence:
 
@@ -200,7 +220,11 @@ Fix:
 
 Implement handlers or remove/disable these controls.
 
-### F-10 - P2 - Docs are stale against current IPC/state/runtime
+Status:
+
+Fixed in `src/admin/pages/video-tool-v3/components/PreviewPanel.tsx` by removing dead controls.
+
+### F-10 - P2 - Docs are stale against current IPC/state/runtime - fixed
 
 Evidence:
 
@@ -222,7 +246,11 @@ Fix:
 
 Update docs after P1 behavior is fixed and mark code as source of truth until then.
 
-### F-11 - P3 - Queue scheduler does not preempt existing timer
+Status:
+
+Fixed in `docs/video-tool-v3/API_SPEC_RU.md`, `docs/video-tool-v3/IPC_SPEC_RU.md`, `docs/video-tool-v3/STATE_MACHINES_RU.md`, and `docs/SYSTEM_USAGE_GUIDE_RU.md`.
+
+### F-11 - P3 - Queue scheduler does not preempt existing timer - fixed
 
 Evidence:
 
@@ -240,7 +268,11 @@ Fix:
 
 Track next scheduled time and preempt when new delay is earlier.
 
-### F-12 - P3 - Hotkey help is incomplete
+Status:
+
+Fixed in `electron/hq/videoToolV3/queueEngine.cjs` and `tests/unit/video-tool-v3/recovery-policy.test.ts`.
+
+### F-12 - P3 - Hotkey help is incomplete - fixed
 
 Evidence:
 
@@ -258,3 +290,7 @@ Operator help does not match actual keyboard behavior.
 Fix:
 
 Update help popup or change hotkeys to conventional modifiers.
+
+Status:
+
+Fixed in `src/admin/pages/video-tool-v3/components/SegmentStrip.tsx`.

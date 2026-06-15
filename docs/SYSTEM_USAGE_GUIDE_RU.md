@@ -314,6 +314,7 @@ npm run dev:e2e
 - Video Tool v3 работает через IPC `window.stones.videoToolV3`;
 - подготовка и рендер выполняются локально в HQ Desktop и не зависят от сети;
 - сеть нужна только для upload готовых файлов через `/api/video-tool-v3`;
+- доступ к Video Tool есть у `ADMIN` и `MANAGER`; `SALES_MANAGER` работает только в sales-разделах;
 - backend фиксирует финальные item-файлы и обновляет `Item.item_video_url`;
 - failed render/upload можно повторить на уровне item.
 
@@ -581,10 +582,11 @@ Endpoint:
 
 Проверьте:
 
-- локальный helper отвечает и версия протокола совпадает;
-- не выбрана уже `COMPLETED` или `CANCELLED` session;
-- для частичной дозагрузки используется `retry-tail`;
-- исходник успешно импортирован в helper.
+- Video Tool открыт в HQ Desktop, не в браузере;
+- исходники `READY`, товарных segment ровно столько же, сколько items;
+- нет segment короче 500 ms и нет item без `serial_number`;
+- при `AUTH_REQUIRED` выполните синхронизацию входа, при `PAUSED_OFFLINE` проверьте сеть;
+- failed render/upload повторяется на уровне item или пачкой из Export.
 
 ### 14.5 Партия не финализируется
 

@@ -27,6 +27,7 @@ class VideoToolV3QueueEngine extends EventEmitter {
         this.handlers = new Map();
         this.running = false;
         this.timer = null;
+        this.timerRunAt = null;
         this.currentTick = null;
         this.activeControllers = new Map();
     }
@@ -52,6 +53,7 @@ class VideoToolV3QueueEngine extends EventEmitter {
         if (this.timer) {
             clearTimeout(this.timer);
             this.timer = null;
+            this.timerRunAt = null;
         }
         if (this.currentTick) {
             await this.currentTick.catch(() => undefined);
@@ -59,11 +61,21 @@ class VideoToolV3QueueEngine extends EventEmitter {
     }
 
     schedule(delayMs = this.pollIntervalMs) {
-        if (!this.running || this.timer) {
+        if (!this.running) {
             return;
         }
+
+        const nextRunAt = Date.now() + Math.max(0, delayMs);
+        if (this.timer && this.timerRunAt !== null && this.timerRunAt <= nextRunAt) {
+            return;
+        }
+        if (this.timer) {
+            clearTimeout(this.timer);
+        }
+        this.timerRunAt = nextRunAt;
         this.timer = setTimeout(() => {
             this.timer = null;
+            this.timerRunAt = null;
             this.currentTick = this.tick()
                 .catch((error) => this.emit('error', error))
                 .finally(() => {
@@ -72,7 +84,7 @@ class VideoToolV3QueueEngine extends EventEmitter {
                         this.schedule(this.pollIntervalMs);
                     }
                 });
-        }, delayMs);
+        }, Math.max(0, nextRunAt - Date.now()));
     }
 
     enqueue({

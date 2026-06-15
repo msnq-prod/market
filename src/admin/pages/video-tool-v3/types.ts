@@ -48,6 +48,7 @@ export type VideoToolV3Source = {
     duration_ms: number;
     status: 'NEW' | 'COPYING' | 'PROBING' | 'PREPARING' | 'READY' | 'PREPARE_FAILED' | 'MISSING' | 'DELETED' | string;
     error_message: string | null;
+    updated_at?: string;
 };
 
 export type VideoToolV3Segment = {
@@ -115,6 +116,8 @@ export type VideoToolV3Snapshot = {
         activeSegments: number;
         queuedJobs: number;
         runningJobs: number;
+        waitingNetworkJobs?: number;
+        waitingAuthJobs?: number;
     };
     network?: {
         online: boolean;
@@ -138,6 +141,7 @@ export type VideoToolV3IpcError = {
 
 export type SourcePreviewUrlResponse = {
     previewUrl: string;
+    cacheKey?: string;
 };
 
 export type VideoToolV3ActionResponse = {

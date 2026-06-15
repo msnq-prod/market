@@ -9,7 +9,7 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const { VideoToolV3App } = require('../../../electron/hq/videoToolV3/index.cjs');
 const { VideoToolV3Database } = require('../../../electron/hq/videoToolV3/db.cjs');
-const { getRetryDelayMs } = require('../../../electron/hq/videoToolV3/queueEngine.cjs');
+const { VideoToolV3QueueEngine, getRetryDelayMs } = require('../../../electron/hq/videoToolV3/queueEngine.cjs');
 const Database = require('better-sqlite3');
 
 test('auth jobs resume only after access token changes', () => {
@@ -48,6 +48,67 @@ test('retry delay uses capped exponential backoff with jitter', () => {
     assert.equal(getRetryDelayMs(1, () => 0), 2_000);
     assert.equal(getRetryDelayMs(3, () => 0.5), 8_500);
     assert.equal(getRetryDelayMs(20, () => 0.9), 60_000);
+});
+
+test('queue scheduler preempts later timer with earlier work', async () => {
+    const engine = new VideoToolV3QueueEngine({
+        db: {
+            transaction: (fn: () => void) => fn(),
+            run: () => ({ changes: 0 })
+        },
+        pollIntervalMs: 1_000
+    });
+    engine.running = true;
+    let ticks = 0;
+    engine.tick = async () => {
+        ticks += 1;
+        engine.running = false;
+    };
+
+    engine.schedule(60_000);
+    engine.schedule(0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(ticks, 1);
+    await engine.stop();
+});
+
+test('local snapshot counts waiting upload jobs separately', async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stones-video-v3-counts-'));
+    const dbPath = path.join(root, 'state.sqlite');
+    const db = await new VideoToolV3Database({ dbPath }).init();
+    t.after(() => {
+        db.close();
+        rmSync(root, { recursive: true, force: true });
+    });
+    const now = new Date().toISOString();
+
+    db.run(`
+        INSERT INTO projects (
+            id, batch_id, batch_status, expected_output_count, quality_preset, active_run_id, created_at, updated_at
+        )
+        VALUES ('project-counts', 'batch-counts', 'RECEIVED', 1, 'standard', NULL, ?, ?)
+    `, [now, now]);
+
+    for (const [id, status] of [
+        ['job-queued', 'QUEUED'],
+        ['job-running', 'RUNNING'],
+        ['job-network', 'WAITING_NETWORK'],
+        ['job-auth', 'WAITING_AUTH']
+    ] as const) {
+        db.run(`
+            INSERT INTO jobs (
+                id, project_id, type, status, priority, attempts, max_attempts, run_after, created_at, updated_at
+            )
+            VALUES (?, 'project-counts', 'UPLOAD_ITEM', ?, 100, 0, 5, ?, ?, ?)
+        `, [id, status, now, now, now]);
+    }
+
+    const snapshot = db.getSnapshot('batch-counts');
+    assert.equal(snapshot.counts.queuedJobs, 1);
+    assert.equal(snapshot.counts.runningJobs, 1);
+    assert.equal(snapshot.counts.waitingNetworkJobs, 1);
+    assert.equal(snapshot.counts.waitingAuthJobs, 1);
 });
 
 test('local database migrates existing export_runs to replace_existing', async (t) => {

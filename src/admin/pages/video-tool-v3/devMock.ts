@@ -99,7 +99,8 @@ export const createVideoToolV3DevMock = (): VideoToolV3Api => ({
         return snapshot;
     },
     getSourcePreviewUrl: async () => ({
-        previewUrl: 'data:video/mp4;base64,AAAA'
+        previewUrl: 'data:video/mp4;base64,AAAA',
+        cacheKey: 'source-v3-e2e:0::READY:2026-06-15T00:00:00.000Z'
     }),
     startExport: async () => snapshot,
     retryItemRender: async () => snapshot,

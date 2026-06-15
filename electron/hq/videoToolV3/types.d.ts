@@ -63,6 +63,8 @@ export type VideoToolV3Snapshot = {
     activeSegments: number;
     queuedJobs: number;
     runningJobs: number;
+    waitingNetworkJobs?: number;
+    waitingAuthJobs?: number;
   };
   network?: {
     online: boolean;
@@ -95,7 +97,7 @@ export type VideoToolV3Api = {
   deleteSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
   updateQuality(projectId: string, preset: VideoQualityPreset): Promise<VideoToolV3Snapshot>;
   saveSegments(batchId: string, segments: Array<Record<string, unknown>>): Promise<VideoToolV3Snapshot>;
-  getSourcePreviewUrl(sourceId: string): Promise<{ previewUrl: string }>;
+  getSourcePreviewUrl(sourceId: string): Promise<{ previewUrl: string; cacheKey?: string }>;
   startExport(projectId: string, replaceExisting?: boolean): Promise<VideoToolV3Snapshot>;
   retryItemRender(exportItemId: string): Promise<VideoToolV3Snapshot>;
   retryItemUpload(exportItemId: string): Promise<VideoToolV3Snapshot>;

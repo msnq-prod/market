@@ -257,8 +257,27 @@ class VideoToolV3App extends EventEmitter {
     async getSourcePreviewUrl(sourceId) {
         this.ensureInitialized();
         await this.projectService.getSourcePreviewPath(sourceId);
+        const source = this.db.get(`
+            SELECT source_revision, prepared_checksum_sha256, status, updated_at
+            FROM source_assets
+            WHERE id = ?
+            LIMIT 1
+        `, [sourceId]);
+        const cacheKey = [
+            sourceId,
+            source?.source_revision ?? 0,
+            source?.prepared_checksum_sha256 || '',
+            source?.status || '',
+            source?.updated_at || ''
+        ].join(':');
+        const params = new URLSearchParams({
+            revision: String(source?.source_revision ?? 0),
+            checksum: source?.prepared_checksum_sha256 || '',
+            updatedAt: source?.updated_at || ''
+        });
         return {
-            previewUrl: `${PREVIEW_PROTOCOL}://source/${encodeURIComponent(sourceId)}`
+            previewUrl: `${PREVIEW_PROTOCOL}://source/${encodeURIComponent(sourceId)}?${params.toString()}`,
+            cacheKey
         };
     }
 

@@ -31,6 +31,8 @@ const getSourceJobLabel = (snapshot: VideoToolV3Snapshot, sourceId: string) => {
     const labels: Record<string, string> = {
         QUEUED: 'В очереди подготовки',
         RUNNING: 'Подготовка идет',
+        WAITING_NETWORK: 'Ожидает сеть',
+        WAITING_AUTH: 'Ожидает вход',
         FAILED: 'Job завершился ошибкой'
     };
     return labels[job.status] || job.status;

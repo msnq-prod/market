@@ -29,6 +29,7 @@ Executed during audit:
 - `npm run test:unit`
 - `npm run lint`
 - `npm run build`
+- `npx playwright test tests/e2e/admin-video-tool-v3-upload.spec.ts --workers=1`
 - `git diff --check`
 
 Results:
@@ -36,15 +37,16 @@ Results:
 - Audit directory exists with 10 Markdown files.
 - `git diff --check` returned no whitespace errors.
 - Trailing whitespace search returned no matches.
-- `git status --short docs/audits/video-tool-20260615` shows the audit directory as untracked.
+- `git status --short` shows modified audit files and Video Tool code/docs changes.
 - P1 regression unit tests passed.
 - Trim drag e2e passed.
 - Full unit suite passed.
 - Lint passed.
 - Build passed.
+- Targeted Video Tool v3 Playwright spec passed: 7/7.
 
 ## Not Run
 
 - Full Playwright suite.
 
-Reason: P1 scope used targeted e2e plus full unit/lint/build.
+Reason: P2/P3 pass used targeted Video Tool e2e plus full unit/lint/build.

@@ -8,21 +8,27 @@ Renderer must not access filesystem paths directly.
 
 ```ts
 export type VideoToolV3Api = {
-  getSnapshot(batchId: string): Promise<VideoToolV3Snapshot>;
-  selectSources(batchId: string): Promise<VideoToolV3Snapshot>;
-  retryPrepareSource(sourceId: string): Promise<void>;
-  replaceSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
-  deleteSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot>;
-  updateQuality(projectId: string, preset: VideoQualityPreset): Promise<void>;
-  saveSegments(projectId: string, segments: TimelineSegmentPatch[]): Promise<VideoToolV3Snapshot>;
-  startExport(projectId: string, options?: StartExportOptions): Promise<ExportRunSnapshot>;
-  retryItemRender(exportItemId: string): Promise<void>;
-  retryItemUpload(exportItemId: string): Promise<void>;
-  cancelItem(exportItemId: string): Promise<void>;
-  cancelRun(runId: string): Promise<void>;
-  openClone(cloneUrl: string): Promise<void>;
-  showProjectFolder(projectId: string): Promise<void>;
+  getSnapshot(batchId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  selectSources(batchId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  retryPrepareSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  replaceSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  deleteSource(batchId: string, sourceId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  updateQuality(projectId: string, preset: VideoQualityPreset): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  saveSegments(batchId: string, segments: TimelineSegmentPatch[]): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  getSourcePreviewUrl(sourceId: string): Promise<SourcePreviewUrlResponse | VideoToolV3IpcError>;
+  startExport(projectId: string, replaceExisting?: boolean): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  retryItemRender(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  retryItemUpload(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  cancelItem(exportItemId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  cancelRun(runId: string): Promise<VideoToolV3Snapshot | VideoToolV3IpcError>;
+  openClone(cloneUrl: string): Promise<{ ok: true } | VideoToolV3IpcError>;
+  showProjectFolder(projectId: string): Promise<{ ok: true } | VideoToolV3IpcError>;
   onEvent(handler: (event: VideoToolV3Event) => void): () => void;
+};
+
+type SourcePreviewUrlResponse = {
+  previewUrl: string;
+  cacheKey?: string;
 };
 ```
 
@@ -36,6 +42,7 @@ videoV3:replaceSource
 videoV3:deleteSource
 videoV3:updateQuality
 videoV3:saveSegments
+videoV3:getSourcePreviewUrl
 videoV3:startExport
 videoV3:retryItemRender
 videoV3:retryItemUpload
@@ -145,17 +152,43 @@ Rules:
 - validate before save;
 - if active run is not completed, mark it `STALE`.
 
+### `getSourcePreviewUrl`
+
+Input:
+
+```ts
+type GetSourcePreviewUrlInput = {
+  sourceId: string;
+};
+```
+
+Output:
+
+```ts
+type SourcePreviewUrlResponse = {
+  previewUrl: string;
+  cacheKey?: string;
+};
+```
+
+Rules:
+
+- preview URL uses `video-tool-v3://source/:sourceId`;
+- URL query/cache key must change when `source_revision`, prepared checksum, status, or `updated_at` changes;
+- renderer caches preview by cache key, not only by source id.
+
 ### `startExport`
 
 Input:
 
 ```ts
-type StartExportOptions = {
-  replaceExisting: boolean;
+type StartExportInput = {
+  projectId: string;
+  replaceExisting?: boolean;
 };
 ```
 
-Output: `ExportRunSnapshot`.
+Output: `VideoToolV3Snapshot`.
 
 Rules:
 
@@ -182,10 +215,10 @@ Rules:
 ```ts
 type VideoToolV3Event =
   | { type: 'snapshot'; batchId: string; snapshot: VideoToolV3Snapshot }
-  | { type: 'job-progress'; jobId: string; progress: number }
+  | { type: 'job-progress'; jobId: string; sourceId?: string | null; exportItemId?: string | null; progress: number }
   | { type: 'source-updated'; batchId: string; sourceId: string }
   | { type: 'export-item-updated'; batchId: string; exportItemId: string }
-  | { type: 'network-changed'; online: boolean }
+  | { type: 'network-changed'; online: boolean; apiReachable?: boolean; authenticated?: boolean }
   | { type: 'error'; batchId?: string; message: string };
 ```
 
@@ -202,16 +235,8 @@ All handler errors return:
 ```ts
 type IpcErrorPayload = {
   error: string;
-  code:
-    | 'VALIDATION_FAILED'
-    | 'SOURCE_NOT_FOUND'
-    | 'RUN_NOT_FOUND'
-    | 'ITEM_NOT_FOUND'
-    | 'FILE_MISSING'
-    | 'NETWORK_ERROR'
-    | 'AUTH_REQUIRED'
-    | 'FFMPEG_ERROR'
-    | 'UNKNOWN';
+  code?: string;
+  details?: unknown;
 };
 ```
 

@@ -718,77 +718,89 @@ export const commitVideoToolV3ItemVideo = async (input: {
     await fs.mkdir(outputDir, { recursive: true });
     await fs.rm(tempFinalPath, { force: true });
     await moveFileSafely(input.sourceFilePath, tempFinalPath);
-    await fs.rename(tempFinalPath, finalPath);
 
-    const result = await prisma.$transaction(async (tx) => {
-        await tx.videoToolV3Item.update({
-            where: { id: runItem.id },
-            data: {
-                status: 'UPLOADED',
-                file_url: publicUrl,
-                checksum_sha256: input.checksumSha256,
-                file_size_bytes: input.fileSizeBytes,
-                error_message: null,
-                uploaded_at: new Date()
-            }
+    let finalPathMoved = false;
+    let result;
+    try {
+        await fs.rename(tempFinalPath, finalPath);
+        finalPathMoved = true;
+
+        result = await prisma.$transaction(async (tx) => {
+            await tx.videoToolV3Item.update({
+                where: { id: runItem.id },
+                data: {
+                    status: 'UPLOADED',
+                    file_url: publicUrl,
+                    checksum_sha256: input.checksumSha256,
+                    file_size_bytes: input.fileSizeBytes,
+                    error_message: null,
+                    uploaded_at: new Date()
+                }
+            });
+
+            await tx.item.update({
+                where: { id: input.itemId },
+                data: { item_video_url: publicUrl }
+            });
+
+            const uploadedCount = await tx.videoToolV3Item.count({
+                where: { run_id: run.id, status: 'UPLOADED' }
+            });
+
+            const nextStatus = uploadedCount >= run.expected_count
+                ? 'COMPLETED'
+                : uploadedCount > 0
+                    ? 'PARTIAL'
+                    : 'OPEN';
+
+            const updatedRun = await tx.videoToolV3Run.update({
+                where: { id: run.id },
+                data: {
+                    status: nextStatus,
+                    uploaded_count: uploadedCount,
+                    completed_at: nextStatus === 'COMPLETED' ? new Date() : null
+                }
+            });
+
+            await writeSecurityAuditLog(tx, {
+                action: runItem.file_url ? 'VIDEO_TOOL_V3_ITEM_OVERWRITTEN' : 'VIDEO_TOOL_V3_ITEM_UPLOADED',
+                user_id: input.userId,
+                entity_type: 'item',
+                entity_id: input.itemId,
+                details: {
+                    batch_id: run.batch_id,
+                    run_id: run.id,
+                    item_id: input.itemId,
+                    serial_number: input.serialNumber,
+                    file_url: publicUrl,
+                    checksum_sha256: input.checksumSha256,
+                    file_size_bytes: input.fileSizeBytes
+                }
+            });
+
+            return {
+                run: {
+                    id: updatedRun.id,
+                    status: updatedRun.status,
+                    expected_count: updatedRun.expected_count,
+                    uploaded_count: updatedRun.uploaded_count
+                },
+                uploaded: {
+                    item_id: input.itemId,
+                    serial_number: input.serialNumber,
+                    file_url: publicUrl,
+                    checksum_sha256: input.checksumSha256,
+                    clone_url: `/clone/${encodeURIComponent(input.serialNumber)}`
+                }
+            };
         });
-
-        await tx.item.update({
-            where: { id: input.itemId },
-            data: { item_video_url: publicUrl }
-        });
-
-        const uploadedCount = await tx.videoToolV3Item.count({
-            where: { run_id: run.id, status: 'UPLOADED' }
-        });
-
-        const nextStatus = uploadedCount >= run.expected_count
-            ? 'COMPLETED'
-            : uploadedCount > 0
-                ? 'PARTIAL'
-                : 'OPEN';
-
-        const updatedRun = await tx.videoToolV3Run.update({
-            where: { id: run.id },
-            data: {
-                status: nextStatus,
-                uploaded_count: uploadedCount,
-                completed_at: nextStatus === 'COMPLETED' ? new Date() : null
-            }
-        });
-
-        await writeSecurityAuditLog(tx, {
-            action: runItem.file_url ? 'VIDEO_TOOL_V3_ITEM_OVERWRITTEN' : 'VIDEO_TOOL_V3_ITEM_UPLOADED',
-            user_id: input.userId,
-            entity_type: 'item',
-            entity_id: input.itemId,
-            details: {
-                batch_id: run.batch_id,
-                run_id: run.id,
-                item_id: input.itemId,
-                serial_number: input.serialNumber,
-                file_url: publicUrl,
-                checksum_sha256: input.checksumSha256,
-                file_size_bytes: input.fileSizeBytes
-            }
-        });
-
-        return {
-            run: {
-                id: updatedRun.id,
-                status: updatedRun.status,
-                expected_count: updatedRun.expected_count,
-                uploaded_count: updatedRun.uploaded_count
-            },
-            uploaded: {
-                item_id: input.itemId,
-                serial_number: input.serialNumber,
-                file_url: publicUrl,
-                checksum_sha256: input.checksumSha256,
-                clone_url: `/clone/${encodeURIComponent(input.serialNumber)}`
-            }
-        };
-    });
+    } catch (error) {
+        await fs.rm(tempFinalPath, { force: true }).catch(() => undefined);
+        if (finalPathMoved) {
+            await fs.rm(finalPath, { force: true }).catch(() => undefined);
+        }
+        throw error;
+    }
 
     await cleanupSupersededVideoToolV3Files(run.batch_id, run.id);
     return result;

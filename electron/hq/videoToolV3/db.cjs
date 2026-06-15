@@ -145,7 +145,9 @@ class VideoToolV3Database {
                     sources: 0,
                     activeSegments: 0,
                     queuedJobs: 0,
-                    runningJobs: 0
+                    runningJobs: 0,
+                    waitingNetworkJobs: 0,
+                    waitingAuthJobs: 0
                 }
             };
         }
@@ -187,7 +189,9 @@ class VideoToolV3Database {
                 sources: sources.length,
                 activeSegments: segments.filter((segment) => !segment.deleted).length,
                 queuedJobs: jobs.filter((job) => job.status === 'QUEUED').length,
-                runningJobs: jobs.filter((job) => job.status === 'RUNNING').length
+                runningJobs: jobs.filter((job) => job.status === 'RUNNING').length,
+                waitingNetworkJobs: jobs.filter((job) => job.status === 'WAITING_NETWORK').length,
+                waitingAuthJobs: jobs.filter((job) => job.status === 'WAITING_AUTH').length
             }
         };
     }

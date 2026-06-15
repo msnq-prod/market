@@ -33,9 +33,10 @@ export function SegmentStrip({ segments, totalDurationMs, onSelect }: SegmentStr
                                 <div className="mb-2 font-medium text-white">Горячие клавиши</div>
                                 <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-3 gap-y-1.5">
                                     <span className="font-mono text-sky-300">C</span><span>Разрезать по playhead</span>
-                                    <span className="font-mono text-sky-300">Z</span><span>Откатить правку</span>
+                                    <span className="font-mono text-sky-300">Z</span><span>Откатить без Ctrl</span>
                                     <span className="font-mono text-sky-300">Del</span><span>Удалить / восстановить</span>
                                     <span className="font-mono text-sky-300">Space</span><span>Play / pause</span>
+                                    <span className="font-mono text-sky-300">, .</span><span>Шаг на кадр</span>
                                     <span className="font-mono text-sky-300">← →</span><span>К соседнему разрезу</span>
                                     <span className="font-mono text-sky-300">+ -</span><span>Масштаб</span>
                                     <span className="font-mono text-sky-300">F</span><span>По размеру</span>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VideoToolV3Api, VideoToolV3IpcError, VideoToolV3Segment, VideoToolV3Snapshot, VideoToolV3UiState } from '../types';
+import { getExportBlockers } from '../exportBlockers';
 import {
     buildSegmentDisplayMeta,
     canCutAtPlayhead,
@@ -37,35 +38,6 @@ const normalizePositions = (segments: VideoToolV3Segment[]) =>
 const isIpcError = (value: { previewUrl: string } | VideoToolV3IpcError): value is VideoToolV3IpcError =>
     'error' in value && typeof value.error === 'string';
 
-const getExportBlockers = (snapshot: VideoToolV3Snapshot) => {
-    const project = snapshot.project;
-    const activeSegments = snapshot.segments.filter((segment) => !segment.deleted);
-    const tailCount = Math.max(0, activeSegments.length - 1);
-    const expectedItems = project?.expected_output_count ?? snapshot.items.length;
-    const blockers = [];
-
-    if (activeSegments.length === 0) {
-        blockers.push('Нет intro segment.');
-    }
-    if (tailCount !== expectedItems) {
-        blockers.push(`Товарных segment: ${tailCount}, ожидается: ${expectedItems}.`);
-    }
-    if (snapshot.sources.some((source) => source.status !== 'READY')) {
-        blockers.push('Есть source не READY.');
-    }
-    if (!project || project.batch_status !== 'RECEIVED') {
-        blockers.push('Партия должна быть RECEIVED.');
-    }
-    if (snapshot.items.some((item) => !item.serial_number)) {
-        blockers.push('Есть item без serial_number.');
-    }
-    if (snapshot.segments.some((segment) => getSegmentDuration(segment) < MIN_SEGMENT_DURATION_MS)) {
-        blockers.push('Есть segment короче 500 ms.');
-    }
-
-    return blockers;
-};
-
 type EditorViewProps = {
     snapshot: VideoToolV3Snapshot;
     uiState: VideoToolV3UiState;
@@ -87,7 +59,7 @@ export function EditorView({
         startMs: 0,
         durationMs: totalTimelineDuration
     }, totalTimelineDuration));
-    const [previewUrlBySourceId, setPreviewUrlBySourceId] = useState<Record<string, string>>({});
+    const [previewUrlByCacheKey, setPreviewUrlByCacheKey] = useState<Record<string, string>>({});
     const [previewLoadError, setPreviewLoadError] = useState<string | null>(null);
     const viewport = useMemo(
         () => clampViewport(viewportState, totalTimelineDuration),
@@ -118,7 +90,19 @@ export function EditorView({
     const canDelete = Boolean(selectedSegment) && (Boolean(selectedSegment?.deleted) || activeSegments.length > 1);
     const offsets = useMemo(() => getSourceOffsets(snapshot.sources), [snapshot.sources]);
     const sourceGlobalStartMs = playhead.sourceId ? offsets.get(playhead.sourceId) ?? 0 : 0;
-    const sourcePreviewUrl = playhead.sourceId ? previewUrlBySourceId[playhead.sourceId] ?? null : null;
+    const previewSource = playhead.sourceId
+        ? snapshot.sources.find((source) => source.id === playhead.sourceId) ?? null
+        : null;
+    const previewCacheKey = previewSource
+        ? [
+            previewSource.id,
+            previewSource.source_revision ?? 0,
+            previewSource.prepared_checksum_sha256 ?? '',
+            previewSource.status,
+            previewSource.updated_at ?? ''
+        ].join(':')
+        : null;
+    const sourcePreviewUrl = previewCacheKey ? previewUrlByCacheKey[previewCacheKey] ?? null : null;
     const previewError = previewLoadError ?? (!getApi()?.getSourcePreviewUrl ? 'IPC preview URL недоступен.' : null);
 
     useEffect(() => {
@@ -129,7 +113,7 @@ export function EditorView({
     }, [onUiStateChange, orderedSegments, snapshot.sources, uiState.playheadMs, uiState.selectedSegmentId]);
 
     useEffect(() => {
-        if (!playhead.sourceId || previewUrlBySourceId[playhead.sourceId]) return;
+        if (!playhead.sourceId || !previewCacheKey || previewUrlByCacheKey[previewCacheKey]) return;
         const api = getApi();
         if (!api?.getSourcePreviewUrl) {
             return;
@@ -144,9 +128,9 @@ export function EditorView({
                     return;
                 }
                 setPreviewLoadError(null);
-                setPreviewUrlBySourceId((current) => ({
+                setPreviewUrlByCacheKey((current) => ({
                     ...current,
-                    [playhead.sourceId as string]: result.previewUrl
+                    [previewCacheKey]: result.previewUrl
                 }));
             })
             .catch((error) => {
@@ -158,7 +142,7 @@ export function EditorView({
         return () => {
             cancelled = true;
         };
-    }, [playhead.sourceId, previewUrlBySourceId]);
+    }, [playhead.sourceId, previewCacheKey, previewUrlByCacheKey]);
 
     const saveNext = useCallback(async (segments: VideoToolV3Segment[]) => {
         return onSaveSegments(normalizePositions(segments));
