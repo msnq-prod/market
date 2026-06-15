@@ -520,6 +520,36 @@ test('API: photo tool enforces ACL and applies only complete manifests', async (
     expect(legacyApplyResponse.ok()).toBeTruthy();
 });
 
+test('API: legacy photo apply accepts batches above shared 100-file upload limit', async ({ request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 101);
+
+    const response = await request.post(`/api/batches/${toolPayload.batch.id}/photo-tool/apply`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        multipart: {
+            base_photo_state_token: toolPayload.batch.photo_state_token,
+            manifest: JSON.stringify(toolPayload.items.map((item, index) => ({
+                item_id: item.id,
+                item_seq: item.item_seq,
+                source: 'upload',
+                file_index: index
+            }))),
+            files: toolPayload.items.map((_, index) => ({
+                name: `legacy-large-${index + 1}.jpg`,
+                mimeType: 'image/jpeg',
+                buffer: TINY_JPEG
+            }))
+        }
+    });
+
+    expect(response.ok()).toBeTruthy();
+    const payload = await response.json() as PhotoToolPayload;
+    expect(payload.items).toHaveLength(101);
+    expect(payload.items.every((item) => item.item_photo_url?.startsWith('/uploads/photos/'))).toBeTruthy();
+});
+
 test('API: concurrent photo apply rejects stale writer', async ({ request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);

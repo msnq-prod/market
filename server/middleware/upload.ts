@@ -596,14 +596,18 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
     }
 };
 
-export const upload = multer({
+export const DEFAULT_UPLOAD_MAX_FILES = 100;
+
+export const createSharedUpload = (options: { maxFiles?: number } = {}) => multer({
     storage,
     fileFilter,
     limits: {
-        files: 100,
+        files: options.maxFiles ?? DEFAULT_UPLOAD_MAX_FILES,
         fileSize: UPLOAD_MAX_FILE_SIZE_BYTES
     }
 });
+
+export const upload = createSharedUpload();
 
 export const runSharedUploadSingle = (req: Request, res: Response, fieldName = 'file') =>
     new Promise<void>((resolve, reject) => {

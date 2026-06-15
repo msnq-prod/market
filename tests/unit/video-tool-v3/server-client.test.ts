@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { ServerClient, VideoToolV3ServerError } = require('../../../electron/hq/videoToolV3/serverClient.cjs');
 
-test('fetchBatch falls back to legacy video-tool endpoint when v3 route is unavailable', async (t) => {
+test('fetchBatch uses only v3 endpoint when batch is unavailable', async (t) => {
     const originalFetch = globalThis.fetch;
     const requestedPaths: string[] = [];
     t.after(() => {
@@ -15,17 +15,8 @@ test('fetchBatch falls back to legacy video-tool endpoint when v3 route is unava
     globalThis.fetch = (async (input: string | URL | Request) => {
         const url = new URL(String(input));
         requestedPaths.push(url.pathname);
-        if (url.pathname.startsWith('/api/video-tool-v3/')) {
-            return new Response(JSON.stringify({ error: 'Not found' }), {
-                status: 404,
-                headers: { 'content-type': 'application/json' }
-            });
-        }
-        return new Response(JSON.stringify({
-            batch: { id: 'batch-1', status: 'RECEIVED', expected_output_count: 1 },
-            items: [{ id: 'item-1', serial_number: 'SERIAL-1' }]
-        }), {
-            status: 200,
+        return new Response(JSON.stringify({ error: 'Not found' }), {
+            status: 404,
             headers: { 'content-type': 'application/json' }
         });
     }) as typeof fetch;
@@ -34,12 +25,14 @@ test('fetchBatch falls back to legacy video-tool endpoint when v3 route is unava
         getApiOrigin: async () => 'https://example.test',
         getAccessToken: () => 'token'
     });
-    const payload = await client.fetchBatch('batch-1');
 
-    assert.equal(payload.batch.id, 'batch-1');
+    await assert.rejects(
+        () => client.fetchBatch('batch-1'),
+        (error: InstanceType<typeof VideoToolV3ServerError>) =>
+            error instanceof VideoToolV3ServerError && error.status === 404
+    );
     assert.deepEqual(requestedPaths, [
-        '/api/video-tool-v3/batches/batch-1',
-        '/api/batches/batch-1/video-tool'
+        '/api/video-tool-v3/batches/batch-1'
     ]);
 });
 

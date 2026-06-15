@@ -1,6 +1,7 @@
 import express from 'express';
+import multer from 'multer';
 import { authenticateToken } from '../../middleware/auth.ts';
-import { normalizeSharedUploadedFiles, upload } from '../../middleware/upload.ts';
+import { cleanupSharedUploadedFiles, createSharedUpload, normalizeSharedUploadedFiles } from '../../middleware/upload.ts';
 import type { PhotoUploadNormalizationOptions } from '../../middleware/upload.ts';
 import type { AuthRequest } from '../../middleware/auth.ts';
 import { isStaffRole } from '../../utils/collectionWorkflow.ts';
@@ -14,6 +15,8 @@ const DEFAULT_PHOTO_EXPORT_SETTINGS: Required<PhotoUploadNormalizationOptions> =
     maxWidth: 1200,
     maxHeight: 1200
 };
+const LEGACY_PHOTO_TOOL_APPLY_MAX_FILES = 500;
+const photoToolApplyUpload = createSharedUpload({ maxFiles: LEGACY_PHOTO_TOOL_APPLY_MAX_FILES });
 
 const createPhotoExportSettingsError = (message: string) =>
     Object.assign(new Error(message), { statusCode: 400 });
@@ -66,6 +69,21 @@ const parsePhotoExportSettings = (value: unknown): Required<PhotoUploadNormaliza
 
 const parsePhotoPreNormalized = (value: unknown) => value === '1' || value === 'true';
 const SHA256_RE = /^[a-f0-9]{64}$/;
+
+const normalizePhotoToolUploadError = (error: unknown) => {
+    if (!(error instanceof multer.MulterError)) {
+        return error;
+    }
+
+    const message = error.code === 'LIMIT_FILE_COUNT'
+        ? `За один запуск photo-tool можно загрузить не более ${LEGACY_PHOTO_TOOL_APPLY_MAX_FILES} файлов.`
+        : error.message || 'Некорректная загрузка файлов photo-tool.';
+
+    return Object.assign(new Error(message), {
+        statusCode: 400,
+        code: error.code
+    });
+};
 
 const isSafePreNormalizedManifest = (value: unknown) => {
     if (typeof value !== 'string') {
@@ -123,9 +141,9 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
         if (!isStaffRole(req.user.role)) return res.sendStatus(403);
 
         await new Promise<void>((resolve, reject) => {
-            upload.array('files')(req, res, (error) => {
+            photoToolApplyUpload.array('files')(req, res, (error) => {
                 if (error) {
-                    reject(error);
+                    reject(normalizePhotoToolUploadError(error));
                     return;
                 }
 
@@ -154,6 +172,8 @@ router.post('/:id/photo-tool/apply', authenticateToken, async (req: AuthRequest,
             batch_id: req.params.id,
             queue_job_id: typeof requestBody?.queue_job_id === 'string' ? requestBody.queue_job_id : null
         }, error);
+        uploadedFiles = uploadedFiles.length ? uploadedFiles : ((req.files as Express.Multer.File[] | undefined) ?? []);
+        await cleanupSharedUploadedFiles(uploadedFiles);
         const statusCode = getErrorStatusCode(error);
         const message = getErrorMessage(error, 'Не удалось применить назначения photo-tool.');
         const code = getErrorCode(error);

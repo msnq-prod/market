@@ -410,10 +410,10 @@ export function VideoToolV3Controller() {
             <main className="mx-auto flex h-full w-full max-w-none flex-col gap-2 px-3 py-2">
                 <nav className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-[#15171b] p-1">
                     <Link
-                        to="/admin/video-tool"
+                        to="/admin/acceptance"
                         className="rounded-md border border-white/10 px-4 py-2 text-sm text-gray-300 transition hover:bg-white/10 hover:text-white"
                     >
-                        ← Главное меню
+                        ← Приемка
                     </Link>
                     <span className="h-7 w-px bg-white/10" />
                     {tabs.map((tab) => (

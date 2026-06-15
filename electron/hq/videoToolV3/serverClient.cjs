@@ -90,14 +90,7 @@ class ServerClient {
 
     async fetchBatch(batchId) {
         const safeBatchId = encode(batchId);
-        try {
-            return await this.request(`/api/video-tool-v3/batches/${safeBatchId}`);
-        } catch (error) {
-            if (!(error instanceof VideoToolV3ServerError) || error.status !== 404) {
-                throw error;
-            }
-            return this.request(`/api/batches/${safeBatchId}/video-tool`);
-        }
+        return this.request(`/api/video-tool-v3/batches/${safeBatchId}`);
     }
 
     async createRun({ batchId, clientRunId, manifest, expectedCount, replaceExisting = false, signal = undefined }) {
