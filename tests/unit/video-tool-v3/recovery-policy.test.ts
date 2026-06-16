@@ -9,6 +9,7 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const { VideoToolV3App } = require('../../../electron/hq/videoToolV3/index.cjs');
 const { VideoToolV3Database } = require('../../../electron/hq/videoToolV3/db.cjs');
+const { ProjectService } = require('../../../electron/hq/videoToolV3/projectService.cjs');
 const { VideoToolV3QueueEngine, getRetryDelayMs } = require('../../../electron/hq/videoToolV3/queueEngine.cjs');
 const Database = require('better-sqlite3');
 
@@ -41,6 +42,89 @@ test('app schedules queue after runtime upload recovery repairs jobs', () => {
     app.queueEngine = { schedule: () => { scheduled += 1; } };
 
     assert.equal(app.recoverUploadQueueAndSchedule(), 1);
+    assert.equal(scheduled, 1);
+});
+
+test('app schedules queue for existing runnable jobs even without recovery repairs', () => {
+    const app = new VideoToolV3App({
+        app: { getPath: () => '/tmp' }
+    });
+    let scheduled = 0;
+    app.uploadService = { recoverUploadQueue: () => 0 };
+    app.queueEngine = { schedule: () => { scheduled += 1; } };
+    app.db = { get: () => ({ id: 'queued-upload-job' }) };
+
+    assert.equal(app.recoverUploadQueueAndSchedule(), 0);
+    assert.equal(scheduled, 1);
+});
+
+test('network recovery resumes auth-paused upload jobs when token is available', () => {
+    const app = new VideoToolV3App({
+        app: { getPath: () => '/tmp' }
+    });
+    let scheduled = 0;
+    let resumeInput: { network?: boolean; auth?: boolean } | null = null;
+    app.uploadService = {
+        resumePausedJobs: (input: { network?: boolean; auth?: boolean }) => {
+            resumeInput = input;
+            return 2;
+        }
+    };
+    app.queueEngine = { schedule: () => { scheduled += 1; } };
+
+    assert.equal(app.resumePausedUploadsForNetworkState({
+        online: true,
+        apiReachable: true,
+        authenticated: true
+    }), 2);
+    assert.deepEqual(resumeInput, { network: true, auth: true });
+    assert.equal(scheduled, 1);
+});
+
+test('prepare recovery recreates missing job for NEW source', async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stones-video-v3-prepare-recovery-'));
+    const dbPath = path.join(root, 'state.sqlite');
+    const db = await new VideoToolV3Database({ dbPath }).init();
+    t.after(() => {
+        db.close();
+        rmSync(root, { recursive: true, force: true });
+    });
+    const now = new Date().toISOString();
+
+    db.run(`
+        INSERT INTO projects (
+            id, batch_id, batch_status, expected_output_count, quality_preset, active_run_id, created_at, updated_at
+        )
+        VALUES ('project-prepare-recovery', 'batch-prepare-recovery', 'RECEIVED', 1, 'standard', NULL, ?, ?)
+    `, [now, now]);
+    db.run(`
+        INSERT INTO source_assets (
+            id, project_id, position, original_name, original_external_path, original_size_bytes,
+            original_last_modified, duration_ms, status, created_at, updated_at
+        )
+        VALUES ('source-prepare-recovery', 'project-prepare-recovery', 0, 'source.mp4', ?, 1, 1, 0, 'NEW', ?, ?)
+    `, [path.join(root, 'source.mp4'), now, now]);
+
+    let scheduled = 0;
+    const queued: Array<{ projectId: string; sourceId: string; type: string }> = [];
+    const service = new ProjectService({
+        db,
+        serverClient: { fetchBatch: async () => ({ batch: {}, items: [] }) },
+        fileStore: {},
+        getQueueEngine: () => ({
+            enqueue: (job: { projectId: string; sourceId: string; type: string }) => queued.push(job),
+            schedule: () => { scheduled += 1; }
+        })
+    });
+
+    assert.equal(service.recoverPrepareQueue(), 1);
+    assert.deepEqual(queued, [{
+        projectId: 'project-prepare-recovery',
+        sourceId: 'source-prepare-recovery',
+        type: 'PREPARE_SOURCE',
+        priority: 20,
+        maxAttempts: 1
+    }]);
     assert.equal(scheduled, 1);
 });
 

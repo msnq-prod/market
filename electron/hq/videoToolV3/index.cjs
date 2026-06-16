@@ -119,26 +119,16 @@ class VideoToolV3App extends EventEmitter {
         this.queueEngine.registerHandler('UPLOAD_ITEM', (job, context) => this.uploadWorker.handle(job, context));
 
         this.networkService.on('change', (state) => {
-            const resumed = this.uploadService.resumePausedJobs({
-                network: state.online && state.apiReachable
-            });
+            this.resumePausedUploadsForNetworkState(state, { forceScheduleWhenOnline: true });
             this.emit('event', {
                 type: 'network-changed',
                 online: state.online,
                 apiReachable: state.apiReachable,
                 authenticated: state.authenticated
             });
-            if (resumed > 0 || (state.online && this.queueEngine)) {
-                this.queueEngine.schedule(0);
-            }
         });
         this.networkService.on('checked', (state) => {
-            const resumed = this.uploadService.resumePausedJobs({
-                network: state.online && state.apiReachable
-            });
-            if (resumed > 0) {
-                this.queueEngine.schedule(0);
-            }
+            this.resumePausedUploadsForNetworkState(state);
         });
         this.queueEngine.on('job-progress', (event) => {
             this.emit('event', {
@@ -201,11 +191,38 @@ class VideoToolV3App extends EventEmitter {
     }
 
     recoverUploadQueueAndSchedule() {
+        const rendered = this.exportService?.recoverRenderQueue?.() || 0;
         const repaired = this.uploadService?.recoverUploadQueue?.() || 0;
-        if (repaired > 0) {
+        const prepared = this.projectService?.recoverPrepareQueue?.() || 0;
+        if (rendered > 0 || repaired > 0 || prepared > 0 || this.hasQueuedWork()) {
             this.queueEngine?.schedule?.(0);
         }
-        return repaired;
+        return rendered + repaired + prepared;
+    }
+
+    resumePausedUploadsForNetworkState(state, { forceScheduleWhenOnline = false } = {}) {
+        const resumed = this.uploadService?.resumePausedJobs?.({
+            network: Boolean(state?.online && state?.apiReachable),
+            auth: Boolean(state?.authenticated)
+        }) || 0;
+        if (resumed > 0 || (forceScheduleWhenOnline && state?.online && this.queueEngine)) {
+            this.queueEngine?.schedule?.(0);
+        }
+        return resumed;
+    }
+
+    hasQueuedWork() {
+        if (!this.db) {
+            return false;
+        }
+        const row = this.db.get(`
+            SELECT id
+            FROM jobs
+            WHERE status = 'QUEUED'
+              AND run_after <= ?
+            LIMIT 1
+        `, [new Date().toISOString()]);
+        return Boolean(row);
     }
 
     async getSnapshot(batchId) {

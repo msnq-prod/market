@@ -1050,6 +1050,41 @@ class ProjectService {
                 `, [nowIso(), source.id]);
             }
         }
+
+        this.recoverPrepareQueue();
+    }
+
+    recoverPrepareQueue() {
+        const queueEngine = this.getQueueEngine?.();
+        if (!queueEngine) {
+            return 0;
+        }
+        const rows = this.db.all(`
+            SELECT source_assets.id, source_assets.project_id
+            FROM source_assets
+            WHERE source_assets.status = 'NEW'
+              AND source_assets.original_external_path IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM jobs
+                WHERE jobs.source_id = source_assets.id
+                  AND jobs.type = 'PREPARE_SOURCE'
+                  AND jobs.status IN ('QUEUED', 'RUNNING')
+              )
+        `);
+        for (const row of rows) {
+            queueEngine.enqueue({
+                projectId: row.project_id,
+                sourceId: row.id,
+                type: 'PREPARE_SOURCE',
+                priority: 20,
+                maxAttempts: 1
+            });
+        }
+        if (rows.length > 0) {
+            queueEngine.schedule?.(0);
+        }
+        return rows.length;
     }
 }
 

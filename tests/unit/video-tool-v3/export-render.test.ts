@@ -316,6 +316,28 @@ test('startRun creates manifest/items/jobs and renders items independently', asy
     assert.equal(items.every((item: { upload_status: string }) => item.upload_status === 'QUEUED'), true);
 });
 
+test('render recovery recreates missing queued render job', async (t) => {
+    const harness = await createHarness(1);
+    t.after(() => harness.close());
+
+    const run = await harness.exportService.startRun(harness.projectId);
+    harness.db.run(`
+        UPDATE jobs
+        SET status = 'DONE'
+        WHERE run_id = ? AND type = 'RENDER_ITEM'
+    `, [run.id]);
+
+    assert.equal(harness.exportService.recoverRenderQueue(), 1);
+    const activeRenderJobs = harness.db.all(`
+        SELECT id
+        FROM jobs
+        WHERE run_id = ?
+          AND type = 'RENDER_ITEM'
+          AND status = 'QUEUED'
+    `, [run.id]);
+    assert.equal(activeRenderJobs.length, 1);
+});
+
 test('startRun blocks existing item videos unless replaceExisting is confirmed', async (t) => {
     const harness = await createHarness(1);
     t.after(() => harness.close());

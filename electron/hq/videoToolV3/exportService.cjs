@@ -592,6 +592,37 @@ class ExportService {
         for (const run of runs) {
             this.reconcileRun(run.id);
         }
+        return this.recoverRenderQueue();
+    }
+
+    recoverRenderQueue() {
+        const rows = this.db.all(`
+            SELECT export_items.id, export_items.run_id, export_runs.project_id
+            FROM export_items
+            JOIN export_runs ON export_runs.id = export_items.run_id
+            WHERE export_items.render_status = 'QUEUED'
+              AND export_runs.status NOT IN ('COMPLETED', 'CANCELLED', 'STALE')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM jobs
+                WHERE jobs.export_item_id = export_items.id
+                  AND jobs.type = 'RENDER_ITEM'
+                  AND jobs.status IN (${ACTIVE_JOB_STATUSES.map(() => '?').join(', ')})
+              )
+        `, ACTIVE_JOB_STATUSES);
+        const timestamp = nowIso();
+        for (const row of rows) {
+            this.insertUniqueJob({
+                projectId: row.project_id,
+                runId: row.run_id,
+                exportItemId: row.id,
+                type: 'RENDER_ITEM',
+                priority: 40,
+                maxAttempts: 1,
+                timestamp
+            });
+        }
+        return rows.length;
     }
 
     getExportItem(exportItemId) {
