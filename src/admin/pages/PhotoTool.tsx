@@ -212,6 +212,7 @@ const emptyWorkflowSnapshot: StonesMediaWorkflowSnapshot = { workflows: [], coun
 const terminalWorkflowPhases = new Set(['completed', 'cancelled', 'failed', 'stale']);
 
 const workflowPhaseLabel: Record<string, string> = {
+    staging: 'Подготовка файлов',
     queued: 'В очереди',
     converting: 'Конвертация',
     uploading: 'Загрузка',
@@ -224,11 +225,51 @@ const workflowPhaseLabel: Record<string, string> = {
     cancelled: 'Отменено'
 };
 
+const workflowPhaseActionLabel: Record<string, string> = {
+    staging: 'подготовка файлов',
+    queued: 'ожидание запуска',
+    converting: 'конвертация',
+    uploading: 'загрузка',
+    verifying: 'проверка результата',
+    paused_offline: 'ожидание связи с сервером',
+    auth_required: 'ожидание повторного входа',
+    stale: 'конфликт данных',
+    failed: 'ошибка',
+    completed: 'готово',
+    cancelled: 'отменено'
+};
+
+const workflowItemStatusLabel: Record<string, string> = {
+    pending: 'ожидает',
+    normalizing: 'конвертация',
+    uploading: 'загрузка',
+    uploaded: 'загружено',
+    reused: 'оставлено',
+    committed: 'применено',
+    failed: 'ошибка',
+    cancelled: 'отменено'
+};
+
 const normalizeWorkflowError = (value: string | null | undefined) => {
     const message = String(value || '').trim();
     if (!message) return '';
-    if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline/i.test(message)) {
-        return 'Сервер недоступен. Фоновая задача продолжит работу после восстановления связи.';
+    if (/PHOTO_TOOL_RUN_STALE|Фото партии уже изменились|state.*stale/i.test(message)) {
+        return 'Партия изменилась после старта загрузки. Проверьте назначения и сохраните заново.';
+    }
+    if (/UPLOAD_INTENT_EXPIRED|intent ист[eе]к/i.test(message)) {
+        return 'Upload-сессия истекла. Задача повторит загрузку автоматически.';
+    }
+    if (/UPLOAD_LIMIT_EXCEEDED|too large|слишком больш|превышает лимит|file exceeds/i.test(message)) {
+        return 'Файл слишком большой для обработки. Замените фото на более легкое.';
+    }
+    if (/CHECKSUM_MISMATCH|UPLOAD_CHUNK_CONFLICT|checksum|chunk.*conflict|truncated/i.test(message)) {
+        return 'Файл изменился или поврежден при загрузке. Замените фото и сохраните заново.';
+    }
+    if (/sharp|heic|heif|decode|unsupported image|Input file contains unsupported/i.test(message)) {
+        return 'Фото не удалось прочитать или конвертировать. Замените файл.';
+    }
+    if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline|timeout/i.test(message)) {
+        return 'Сервер недоступен. Задача повторит загрузку после восстановления связи.';
     }
     if (/401|403|auth|token|войти/i.test(message)) {
         return 'Нужно войти в HQ заново. После входа фоновая задача продолжит работу.';
@@ -241,10 +282,79 @@ const isActiveWorkflow = (workflow: StonesMediaWorkflow | null | undefined) =>
 
 const buildWorkflowStatusText = (workflow: StonesMediaWorkflow | null | undefined) => {
     if (!workflow) return '';
-    const phase = workflowPhaseLabel[workflow.phase] || workflow.phase;
+    const completed = Math.max(workflow.progress.completed || 0, 0);
     const total = Math.max(workflow.progress.total || 0, 0);
-    const error = normalizeWorkflowError(workflow.lastError);
-    return `${phase}: ${total} фото${error ? `. ${error}` : ''}`;
+    const progress = total > 0 ? `${Math.min(completed, total)}/${total}` : `${total}`;
+    return `Обработка фото: ${progress}`;
+};
+
+const buildWorkflowPillValue = (workflow: StonesMediaWorkflow) => {
+    const phase = workflowPhaseLabel[workflow.phase] || workflow.phase;
+    const completed = Math.max(workflow.progress.completed || 0, 0);
+    const total = Math.max(workflow.progress.total || 0, 0);
+
+    return total > 0 ? `${phase} ${Math.min(completed, total)}/${total}` : phase;
+};
+
+const formatWorkflowUpdatedAgo = (value: string | null | undefined) => {
+    const timestamp = Date.parse(value || '');
+    if (!Number.isFinite(timestamp)) {
+        return 'обновлено недавно';
+    }
+
+    const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 60) return `обновлено ${seconds} сек назад`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `обновлено ${minutes} мин назад`;
+    const hours = Math.round(minutes / 60);
+    return `обновлено ${hours} ч назад`;
+};
+
+const formatWorkflowSeq = (value: string | number | null | undefined) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? String(numeric).padStart(3, '0') : String(value || '').trim();
+};
+
+const getWorkflowFailedSeqs = (workflow: StonesMediaWorkflow) => {
+    const failedItems = workflow.uploadState?.failedItems || [];
+    if (failedItems.length > 0) {
+        return failedItems.map((item) => formatWorkflowSeq(item.itemSeq)).filter(Boolean);
+    }
+    return (workflow.uploadState?.failedSerials || []).map(formatWorkflowSeq).filter(Boolean);
+};
+
+const buildWorkflowDetailText = (workflow: StonesMediaWorkflow) => {
+    const details: string[] = [];
+    const currentItem = workflow.uploadState?.currentItem || null;
+    const phase = workflowPhaseActionLabel[workflow.phase] || workflow.phase;
+    if (currentItem) {
+        const itemPhase = workflowItemStatusLabel[currentItem.status] || phase;
+        const fileName = currentItem.fileName ? ` · ${currentItem.fileName}` : '';
+        details.push(`Сейчас: ${itemPhase}, позиция ${formatWorkflowSeq(currentItem.itemSeq)}${fileName}`);
+    } else {
+        details.push(`Сейчас: ${phase}`);
+    }
+
+    const failedSeqs = getWorkflowFailedSeqs(workflow);
+    if (failedSeqs.length > 0) {
+        details.push(`Ошибки: ${failedSeqs.slice(0, 6).join(', ')}${failedSeqs.length > 6 ? '…' : ''}`);
+    }
+
+    const normalizedError = normalizeWorkflowError(workflow.lastError);
+    if (normalizedError) {
+        details.push(normalizedError);
+    } else if (workflow.phase === 'stale') {
+        details.push('Партия изменилась. Проверьте назначения и сохраните заново.');
+    } else if (workflow.phase === 'cancelled') {
+        details.push('Отменено пользователем.');
+    }
+
+    if (workflow.nextAttemptAt && ['paused_offline', 'auth_required'].includes(workflow.phase)) {
+        details.push(`Следующий retry: ${new Date(workflow.nextAttemptAt).toLocaleTimeString()}`);
+    }
+
+    details.push(formatWorkflowUpdatedAgo(workflow.updatedAt));
+    return details.join('. ');
 };
 
 const padItemSeq = (value: number | null) => value == null ? '' : String(value).padStart(3, '0');
@@ -995,8 +1105,10 @@ export function PhotoTool() {
     const activePhotoWorkflow = isActiveWorkflow(batchPhotoWorkflow) ? batchPhotoWorkflow : null;
     const workflowLocked = Boolean(activePhotoWorkflow);
     const photoWorkflowStatusText = buildWorkflowStatusText(batchPhotoWorkflow);
+    const photoWorkflowDetailText = batchPhotoWorkflow ? buildWorkflowDetailText(batchPhotoWorkflow) : '';
+    const workflowIsCancelled = batchPhotoWorkflow?.phase === 'cancelled';
     const workflowNeedsAttention = Boolean(
-        batchPhotoWorkflow && ['failed', 'stale', 'auth_required', 'cancelled'].includes(batchPhotoWorkflow.phase)
+        batchPhotoWorkflow && ['failed', 'stale', 'auth_required', 'paused_offline'].includes(batchPhotoWorkflow.phase)
     );
     const workflowAttentionTone: BannerTone = batchPhotoWorkflow?.phase === 'failed' ? 'error' : 'warning';
     const workflowLockedReason = workflowLocked ? 'Заблокировано: идет фоновое сохранение фото.' : '';
@@ -2350,7 +2462,7 @@ export function PhotoTool() {
                                 {batchPhotoWorkflow && (
                                     <StatusPill
                                         label="Фон"
-                                        value={workflowPhaseLabel[batchPhotoWorkflow.phase] || batchPhotoWorkflow.phase}
+                                        value={buildWorkflowPillValue(batchPhotoWorkflow)}
                                         tone={workflowNeedsAttention || activePhotoWorkflow ? 'warning' : batchPhotoWorkflow.phase === 'completed' ? 'success' : 'default'}
                                     />
                                 )}
@@ -2394,14 +2506,37 @@ export function PhotoTool() {
                             role="alert"
                             aria-live="polite"
                         >
-                            <span>
-                                {photoWorkflowStatusText || 'Фоновая задача требует внимания.'} Откройте Status Center для восстановления.
-                                {activePhotoWorkflow ? ' Редактирование заблокировано до завершения фоновой задачи.' : ''}
-                            </span>
+                            <div className="min-w-0">
+                                <p className="font-semibold">{photoWorkflowStatusText || 'Фоновая задача требует внимания.'}</p>
+                                <p className="mt-1 text-xs opacity-80">
+                                    {photoWorkflowDetailText || 'Откройте Status Center для восстановления.'}
+                                    {activePhotoWorkflow ? ' Редактирование заблокировано до завершения фоновой задачи.' : ''}
+                                </p>
+                            </div>
                             <button
                                 type="button"
                                 onClick={() => openDesktopStatusCenter(batchPhotoWorkflow.id)}
                                 className="rounded-xl bg-white/12 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/18"
+                            >
+                                Открыть Status Center
+                            </button>
+                        </section>
+                    )}
+
+                    {workflowIsCancelled && batchPhotoWorkflow && (
+                        <section
+                            data-testid="photo-workflow-cancelled-banner"
+                            className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[0.04] px-5 py-3 text-sm text-white/72 xl:px-8"
+                            aria-live="polite"
+                        >
+                            <div className="min-w-0">
+                                <p className="font-semibold">{photoWorkflowStatusText || 'Обработка фото отменена.'}</p>
+                                <p className="mt-1 text-xs text-white/52">{photoWorkflowDetailText || 'Отменено пользователем.'}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => openDesktopStatusCenter(batchPhotoWorkflow.id)}
+                                className="rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/16"
                             >
                                 Открыть Status Center
                             </button>
@@ -2413,7 +2548,12 @@ export function PhotoTool() {
                             data-testid="photo-workflow-banner"
                             className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-400/20 bg-sky-500/10 px-5 py-3 text-sm text-sky-50 xl:px-8"
                         >
-                            <span>{photoWorkflowStatusText || 'Фоновое сохранение фото выполняется.'} Редактирование заблокировано до завершения фоновой задачи.</span>
+                            <div className="min-w-0">
+                                <p className="font-semibold">{photoWorkflowStatusText || 'Фоновое сохранение фото выполняется.'}</p>
+                                <p className="mt-1 text-xs text-sky-100/72">
+                                    {photoWorkflowDetailText} Редактирование заблокировано до завершения фоновой задачи.
+                                </p>
+                            </div>
                             <button
                                 type="button"
                                 onClick={() => openDesktopStatusCenter(activePhotoWorkflow.id)}

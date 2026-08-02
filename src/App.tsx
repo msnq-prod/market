@@ -17,9 +17,15 @@ import { AdminLayout } from './admin/components/AdminLayout'
 import { AdminFullscreenRoute } from './admin/components/AdminFullscreenRoute'
 import { DesktopAuthGate } from './admin/components/DesktopAuthGate'
 import { HqDesktopDownloadPlaceholder } from './admin/components/HqDesktopDownloadPlaceholder'
-import { Dashboard } from './admin/pages/Dashboard'
-import { Products } from './admin/pages/Products'
-import { Brandbook } from './admin/pages/Brandbook'
+import {
+  Dashboard,
+  SystemStatusDashboardWorkspace
+} from './admin/pages/Dashboard'
+import {
+  ProductLocationsWorkspace,
+  ProductPublicationWorkspace,
+  Products
+} from './admin/pages/Products'
 import { Settings } from './admin/pages/Settings'
 import { useStore } from './store'
 import { hasWebGLSupport } from './utils/webgl'
@@ -28,11 +34,53 @@ import { isStonesDesktop } from './utils/desktop'
 
 const VideoToolV3Page = React.lazy(() => import('./admin/pages/video-tool-v3/VideoToolV3Page').then((module) => ({ default: module.VideoToolV3Page })))
 const PhotoTool = React.lazy(() => import('./admin/pages/PhotoTool').then((module) => ({ default: module.PhotoTool })))
-const SidebarV2Prototype = React.lazy(() => import('./admin/prototypes/sidebar-v2/SidebarV2Prototype').then((module) => ({ default: module.SidebarV2Prototype })))
-const WorkspacesPrototype = React.lazy(() => import('./admin/prototypes/workspaces/WorkspacesPrototype').then((module) => ({ default: module.WorkspacesPrototype })))
-const MegaMenuPrototype = React.lazy(() => import('./admin/prototypes/mega-menu/MegaMenuPrototype').then((module) => ({ default: module.MegaMenuPrototype })))
-const CommandMatrixPrototype = React.lazy(() => import('./admin/prototypes/command-matrix/CommandMatrixPrototype').then((module) => ({ default: module.CommandMatrixPrototype })))
-const FocusDeckPrototype = React.lazy(() => import('./admin/prototypes/focus-deck/FocusDeckPrototype').then((module) => ({ default: module.FocusDeckPrototype })))
+const PlanetLabels = React.lazy(() => import('./admin/pages/PlanetLabels').then((module) => ({ default: module.PlanetLabels })))
+const legacyOrderRoutes: Record<string, string> = {
+  NEW: '/admin/orders/new',
+  IN_PROGRESS: '/admin/orders/in-progress',
+  PACKED: '/admin/orders/packed',
+  DELIVERY: '/admin/orders/delivery',
+  RETURNS: '/admin/orders/returns',
+  CLOSED: '/admin/orders/closed'
+}
+
+function LegacyOrdersRedirect() {
+  const location = useLocation()
+  const queue = new URLSearchParams(location.search).get('queue') || ''
+  return <Navigate to={legacyOrderRoutes[queue] || '/admin/orders/new'} replace />
+}
+
+function LegacyAcceptanceRedirect() {
+  const location = useLocation()
+  const view = new URLSearchParams(location.search).get('view')
+  const target = view === 'media'
+    ? '/admin/acceptance/media'
+    : view === 'ready'
+      ? '/admin/acceptance/ready'
+      : '/admin/acceptance/batches'
+  return <Navigate to={target} replace />
+}
+
+function LegacyWarehouseRedirect() {
+  const location = useLocation()
+  const view = new URLSearchParams(location.search).get('view')
+  if (!view) return <Warehouse />
+  const target = view === 'maintenance'
+    ? '/admin/warehouse/maintenance'
+    : view === 'requests'
+      ? '/admin/warehouse/requests'
+      : '/admin/warehouse'
+  return <Navigate to={target} replace />
+}
+
+function LegacyTelegramRedirect() {
+  const location = useLocation()
+  const view = new URLSearchParams(location.search).get('view')
+  const target = view === 'recipients' || view === 'events' || view === 'chats' || view === 'test'
+    ? `/admin/telegram/${view}`
+    : '/admin/telegram'
+  return <Navigate to={target} replace />
+}
 
 type StonesDebugWindow = Window & {
   __STONES_DEBUG__?: {
@@ -600,20 +648,42 @@ import { Dashboard as PartnerDashboard } from './partner/pages/Dashboard'
 import { Batches as PartnerBatches } from './partner/pages/Batches'
 import { CreateBatch } from './partner/pages/CreateBatch'
 import { Finance } from './partner/pages/Finance'
-import { Acceptance } from './admin/pages/Acceptance'
+import {
+  AcceptanceBatchesWorkspace,
+  AcceptanceMediaWorkspace,
+  AcceptanceReadyWorkspace
+} from './admin/pages/Acceptance'
 import { Allocation } from './admin/pages/Allocation'
 import { Users } from './admin/pages/Users'
 import { DigitalClone } from './public/pages/DigitalClone'
 import { NotFound } from './public/pages/NotFound'
 import { CloneContent } from './admin/pages/CloneContent'
-import { Warehouse } from './admin/pages/Warehouse'
-import { Orders } from './admin/pages/Orders'
+import {
+  Warehouse,
+  WarehouseMaintenanceWorkspace,
+  WarehouseRequestsWorkspace
+} from './admin/pages/Warehouse'
+import {
+    ClosedOrdersWorkspace,
+    DeliveryOrdersWorkspace,
+    InProgressOrdersWorkspace,
+    NewOrdersWorkspace,
+    PackedOrdersWorkspace,
+    ReturnsOrdersWorkspace
+} from './admin/pages/Orders'
 import { Clients } from './admin/pages/Clients'
 import { SalesInventory } from './admin/pages/SalesInventory'
 import { SalesHistory } from './admin/pages/SalesHistory'
-import { VideoToolLauncher } from './admin/pages/VideoToolLauncher'
 import { QrPrint as AdminQrPrint } from './admin/pages/QrPrint'
-import { TelegramBots } from './admin/pages/TelegramBots'
+import { QrPrintWorkspace } from './admin/pages/QrPrintWorkspace'
+import { PlanetLabelsWorkspace } from './admin/pages/PlanetLabelsWorkspace'
+import {
+  TelegramBots,
+  TelegramChatsWorkspace,
+  TelegramEventsWorkspace,
+  TelegramRecipientsWorkspace,
+  TelegramTestWorkspace
+} from './admin/pages/TelegramBots'
 
 function DesktopOnlyToolRoute({ toolName, children }: { toolName: string; children: React.ReactNode }) {
   const location = useLocation()
@@ -642,62 +712,6 @@ function App() {
         {/* Admin Routes */}
         <Route path="/admin/login" element={<PartnerLogin portal="admin" />} />
         <Route
-          path="/admin/prototypes/sidebar-v2"
-          element={(
-            <AdminFullscreenRoute>
-              <SidebarV2Prototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
-          path="/admin/prototypes/workspaces"
-          element={(
-            <AdminFullscreenRoute>
-              <WorkspacesPrototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
-          path="/admin/prototypes/workspaces/:workspaceId"
-          element={(
-            <AdminFullscreenRoute>
-              <WorkspacesPrototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
-          path="/admin/prototypes/mega-menu"
-          element={(
-            <AdminFullscreenRoute>
-              <MegaMenuPrototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
-          path="/admin/prototypes/command-matrix"
-          element={(
-            <AdminFullscreenRoute>
-              <CommandMatrixPrototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
-          path="/admin/prototypes/command-matrix/:featureId"
-          element={(
-            <AdminFullscreenRoute>
-              <CommandMatrixPrototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
-          path="/admin/prototypes/focus-deck"
-          element={(
-            <AdminFullscreenRoute>
-              <FocusDeckPrototype />
-            </AdminFullscreenRoute>
-          )}
-        />
-        <Route
           path="/admin/photo-tool/:batchId"
           element={(
             <AdminFullscreenRoute>
@@ -718,6 +732,16 @@ function App() {
           )}
         />
         <Route
+          path="/admin/planet-labels"
+          element={(
+            <AdminFullscreenRoute>
+              <Suspense fallback={null}>
+                <PlanetLabels />
+              </Suspense>
+            </AdminFullscreenRoute>
+          )}
+        />
+        <Route
           path="/admin/qr/print"
           element={(
             <AdminFullscreenRoute>
@@ -727,20 +751,47 @@ function App() {
         />
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Dashboard />} />
-          <Route path="orders" element={<Orders />} />
+          <Route path="system/status" element={<SystemStatusDashboardWorkspace />} />
+          <Route path="orders" element={<LegacyOrdersRedirect />} />
+          <Route path="orders/new" element={<NewOrdersWorkspace />} />
+          <Route path="orders/in-progress" element={<InProgressOrdersWorkspace />} />
+          <Route path="orders/packed" element={<PackedOrdersWorkspace />} />
+          <Route path="orders/delivery" element={<DeliveryOrdersWorkspace />} />
+          <Route path="orders/returns" element={<ReturnsOrdersWorkspace />} />
+          <Route path="orders/closed" element={<ClosedOrdersWorkspace />} />
           <Route path="clients" element={<Clients />} />
           <Route path="inventory" element={<SalesInventory />} />
           <Route path="sales-history" element={<SalesHistory />} />
-          <Route path="locations" element={<Navigate to="/admin/products" replace />} />
+          <Route path="locations" element={<Navigate to="/admin/products/locations" replace />} />
           <Route path="products" element={<Products />} />
-          <Route path="brandbook" element={<Brandbook />} />
-          <Route path="acceptance" element={<Acceptance />} />
+          <Route path="products/locations" element={<ProductLocationsWorkspace />} />
+          <Route path="products/publication" element={<ProductPublicationWorkspace />} />
+          <Route path="acceptance" element={<LegacyAcceptanceRedirect />} />
+          <Route path="acceptance/batches" element={<AcceptanceBatchesWorkspace />} />
+          <Route path="acceptance/media" element={<AcceptanceMediaWorkspace />} />
+          <Route path="acceptance/ready" element={<AcceptanceReadyWorkspace />} />
           <Route path="allocation" element={<Allocation />} />
-          <Route path="warehouse" element={<Warehouse />} />
-          <Route path="video-tool" element={<VideoToolLauncher />} />
+          <Route path="warehouse" element={<LegacyWarehouseRedirect />} />
+          <Route path="warehouse/items" element={<Navigate to="/admin/warehouse" replace />} />
+          <Route path="warehouse/maintenance" element={<WarehouseMaintenanceWorkspace />} />
+          <Route path="warehouse/requests" element={<WarehouseRequestsWorkspace />} />
+          <Route path="qr" element={<QrPrintWorkspace />} />
+          <Route path="planet-labels/workspace" element={<PlanetLabelsWorkspace />} />
+          <Route path="media" element={<Navigate to="/admin/acceptance/batches" replace />} />
+          <Route path="media/photo" element={<Navigate to="/admin/acceptance/batches" replace />} />
+          <Route path="media/video" element={<Navigate to="/admin/acceptance/batches" replace />} />
+          <Route path="media/runtime" element={<Navigate to="/admin/system/status" replace />} />
+          <Route path="media/diagnostics" element={<Navigate to="/admin/acceptance/batches" replace />} />
+          <Route path="video-tool" element={<Navigate to="/admin/acceptance/batches" replace />} />
           <Route path="users" element={<Users />} />
           <Route path="settings" element={<Settings />} />
-          <Route path="telegram-bots" element={<TelegramBots />} />
+          <Route path="settings/files" element={<Navigate to="/admin/settings" replace />} />
+          <Route path="telegram" element={<TelegramBots />} />
+          <Route path="telegram/recipients" element={<TelegramRecipientsWorkspace />} />
+          <Route path="telegram/events" element={<TelegramEventsWorkspace />} />
+          <Route path="telegram/chats" element={<TelegramChatsWorkspace />} />
+          <Route path="telegram/test" element={<TelegramTestWorkspace />} />
+          <Route path="telegram-bots" element={<LegacyTelegramRedirect />} />
           <Route path="clone-content" element={<CloneContent />} />
         </Route>
 

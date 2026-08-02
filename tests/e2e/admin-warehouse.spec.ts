@@ -109,43 +109,82 @@ test('API: admin can delete videos for a whole batch', async ({ request }) => {
     expect(items.every((item) => item.item_video_url === null)).toBeTruthy();
 });
 
-test('UI: admin navigates warehouse tree, sees grouped items and opens item modal in read-only mode', async ({ page, request }) => {
+test('UI: поиск заявок на сбор фильтрует строки без загрузки items', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const fixture = await createFinalizeReadyFixture();
+    const createResponse = await request.post('/api/collection-requests', {
+        headers: authHeaders(admin.accessToken),
+        data: {
+            product_id: fixture.productId,
+            requested_qty: 3,
+            note: '[e2e] warehouse requests search'
+        }
+    });
+    expect(createResponse.ok()).toBeTruthy();
+    const created = await createResponse.json() as { id: string };
+
+    await setAdminSession(page, admin);
+    await page.goto('/admin/warehouse/requests');
+    await expect(page.getByRole('heading', { name: 'Заявки на сбор' })).toBeVisible();
+    await page.getByLabel('Поиск заявок на сбор').fill(created.id);
+    const requestRow = page.getByTestId(`collection-request-row-${created.id}`);
+    await expect(requestRow).toBeVisible();
+    await expect(requestRow).toContainText(fixture.productName);
+
+    await page.getByLabel('Поиск заявок на сбор').fill('не-существующая-заявка');
+    await expect(requestRow).toHaveCount(0);
+});
+
+test('UI: склад показывает агрегаты и открывает item только по точному поиску', async ({ page, request }) => {
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const fixture = await createWarehouseFixture();
 
     await setAdminSession(page, admin);
     await page.goto('/admin/warehouse');
 
-    await expect(page.getByRole('heading', { name: 'Складская структура' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Склад HQ' })).toBeVisible();
+    const productRow = page.locator('[data-testid^="warehouse-product-row-"]').filter({ hasText: fixture.productName });
+    await expect(productRow).toBeVisible();
+    await expect(productRow).toContainText(fixture.locationName);
+    await expect(page.getByText(`${fixture.serialFamily}001`, { exact: true })).toHaveCount(0);
 
-    const locationButton = page.getByRole('button').filter({ hasText: fixture.locationName }).first();
-    await locationButton.click();
+    await page.getByLabel('Поиск по складу').fill(`${fixture.serialFamily}001`);
+    const itemRow = page.getByTestId(`warehouse-item-result-${fixture.editableItemId}`);
+    await expect(itemRow).toBeVisible();
+    await itemRow.getByRole('button', { name: 'Открыть' }).click();
 
-    const productButton = page.getByRole('button').filter({ hasText: fixture.productName }).first();
-    await productButton.click();
-
-    await page.getByRole('button', { name: 'Партии' }).first().click();
-    const firstBatchButton = page.getByRole('button').filter({ hasText: fixture.firstBatchId }).first();
-    await firstBatchButton.click();
-    const secondBatchButton = page.getByRole('button').filter({ hasText: fixture.secondBatchId }).first();
-    await secondBatchButton.click();
-
-    const soldTile = page.locator('button').filter({ hasText: `${fixture.serialFamily}004` }).first();
-    await expect(soldTile).toBeVisible();
-    await expect(soldTile).toHaveClass(/opacity-55/);
-
-    await page.getByRole('button', { name: 'Все товары' }).first().click();
-    await expect(page.getByText(fixture.serialFamily, { exact: true })).toBeVisible();
-
-    const editableTile = page.locator('button').filter({ hasText: `${fixture.serialFamily}001` }).first();
-    await editableTile.click();
-
-    const tempIdField = page.locator('label').filter({ hasText: 'temp_id' }).locator('input');
-    await expect(tempIdField).toBeVisible();
-    await expect(tempIdField).toBeDisabled();
-    await expect(page.getByText('В MVP карточка item доступна только для просмотра.')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Сохранить' })).toHaveCount(0);
+    const details = page.getByTestId('warehouse-item-details');
+    await expect(details).toBeVisible();
+    await expect(details).toContainText(fixture.firstBatchId);
+    await expect(details).toContainText('Склад HQ');
+    await expect(details.locator('input')).toHaveCount(0);
     await page.getByRole('button', { name: 'Закрыть' }).click();
+});
+
+test('UI: allocation выбирает партию без рендера items и распределяет выбранные позиции', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const fixture = await createWarehouseFixture();
+
+    await setAdminSession(page, admin);
+    await page.goto('/admin/allocation');
+    await page.getByLabel('Поиск позиций для распределения').fill(fixture.firstBatchId);
+
+    const batchRow = page.getByTestId(`allocation-batch-row-${fixture.firstBatchId}`);
+    await expect(batchRow).toBeVisible();
+    await expect(page.getByText(`${fixture.serialFamily}001`, { exact: true })).toHaveCount(0);
+
+    await page.getByTestId(`allocation-select-batch-${fixture.firstBatchId}`).click();
+    await expect(page.getByTestId('allocation-bulk-bar')).toContainText('Выбрано: 1');
+    await page.getByTestId('allocation-submit').click();
+    await page.getByTestId('allocation-confirm').click();
+    await expect(page.getByText('Распределено позиций: 1')).toBeVisible();
+
+    const itemResponse = await request.get(`/api/items/${fixture.editableItemId}`, {
+        headers: { Authorization: `Bearer ${admin.accessToken}` }
+    });
+    expect(itemResponse.ok()).toBeTruthy();
+    const item = await itemResponse.json() as { status: string };
+    expect(item.status).toBe('STOCK_ONLINE');
 });
 
 test.afterAll(async () => {

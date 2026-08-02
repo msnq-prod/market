@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import {
     Activity,
     BadgeInfo,
@@ -93,6 +94,7 @@ const jobTypeLabel: Record<string, string> = {
 };
 
 const workflowPhaseLabel: Record<string, string> = {
+    staging: 'Подготовка файлов',
     queued: 'В очереди',
     converting: 'Конвертация',
     uploading: 'Загрузка',
@@ -105,14 +107,45 @@ const workflowPhaseLabel: Record<string, string> = {
     cancelled: 'Отменено'
 };
 
+const workflowItemStatusLabel: Record<string, string> = {
+    pending: 'ожидает',
+    normalizing: 'конвертация',
+    uploading: 'загрузка',
+    uploaded: 'загружено',
+    reused: 'оставлено',
+    committed: 'применено',
+    failed: 'ошибка',
+    cancelled: 'отменено'
+};
+
 const normalizeQueueOrWorkflowError = (value: string | null | undefined) => {
     const message = String(value || '').trim();
     if (!message) {
         return '';
     }
 
+    if (/PHOTO_TOOL_RUN_STALE|Фото партии уже изменились|state.*stale/i.test(message)) {
+        return 'Партия изменилась после старта загрузки. Проверьте назначения и сохраните заново.';
+    }
+
+    if (/UPLOAD_INTENT_EXPIRED|intent ист[eе]к/i.test(message)) {
+        return 'Upload-сессия истекла. Задача повторит загрузку автоматически.';
+    }
+
+    if (/UPLOAD_LIMIT_EXCEEDED|too large|слишком больш|превышает лимит|file exceeds/i.test(message)) {
+        return 'Файл слишком большой для обработки. Замените фото на более легкое.';
+    }
+
+    if (/CHECKSUM_MISMATCH|UPLOAD_CHUNK_CONFLICT|checksum|chunk.*conflict|truncated/i.test(message)) {
+        return 'Файл изменился или поврежден при загрузке. Замените фото и сохраните заново.';
+    }
+
+    if (/sharp|heic|heif|decode|unsupported image|Input file contains unsupported/i.test(message)) {
+        return 'Фото не удалось прочитать или конвертировать. Замените файл.';
+    }
+
     if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ENETUNREACH|network|offline|timeout/i.test(message)) {
-        return 'Сервер недоступен. Задача продолжит работу после восстановления связи.';
+        return 'Сервер недоступен. Задача повторит загрузку после восстановления связи.';
     }
 
     if (/401|403|auth|token|войти/i.test(message)) {
@@ -154,7 +187,7 @@ const activeQueueStatuses = new Set(['queued', 'uploading', 'retrying']);
 
 function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
     return (
-        <span className={`inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium ${statusToneClass[tone]}`}>
+        <span className={`flex min-h-7 min-w-0 w-full items-center gap-1.5 overflow-hidden rounded-full border px-2.5 text-[11px] font-medium ${statusToneClass[tone]}`}>
             {children}
         </span>
     );
@@ -233,23 +266,39 @@ const formatCheckedAt = (value: string | null | undefined) => {
     return date.toLocaleString();
 };
 
-const getPhotoWorkflowStagePercent = (phase: StonesMediaWorkflow['phase']) => {
-    if (phase === 'completed') {
-        return 100;
+const getWorkflowProgress = (workflow: StonesMediaWorkflow) => {
+    const total = Math.max(workflow.progress.total || 0, 0);
+    const completed = workflow.phase === 'completed'
+        ? total
+        : Math.min(Math.max(workflow.progress.completed || 0, 0), total);
+    const percent = total > 0 ? clampPercent((completed / total) * 100) : 0;
+
+    return { completed, total, percent };
+};
+
+const formatWorkflowSeq = (value: string | number | null | undefined) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? String(numeric).padStart(3, '0') : String(value || '').trim();
+};
+
+const formatWorkflowUpdatedAgo = (value: string | null | undefined) => {
+    const timestamp = Date.parse(value || '');
+    if (!Number.isFinite(timestamp)) return 'обновлено недавно';
+    const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 60) return `обновлено ${seconds} сек назад`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `обновлено ${minutes} мин назад`;
+    return `обновлено ${Math.round(minutes / 60)} ч назад`;
+};
+
+const getWorkflowIssueText = (workflow: StonesMediaWorkflow, normalizedLastError: string) => {
+    if (workflow.phase === 'stale') {
+        return 'Партия изменилась. Откройте Photo Tool, проверьте назначения и сохраните заново.';
     }
-    if (phase === 'verifying') {
-        return 82;
+    if (workflow.phase === 'cancelled') {
+        return 'Отменено пользователем.';
     }
-    if (phase === 'uploading') {
-        return 58;
-    }
-    if (phase === 'converting') {
-        return 28;
-    }
-    if (phase === 'queued') {
-        return 8;
-    }
-    return 0;
+    return normalizedLastError;
 };
 
 function MiniProgressStrip({ item }: { item: BackgroundProgress }) {
@@ -365,6 +414,7 @@ function WorkflowRow({
     onCancel: (workflowId: string) => void;
     onOpen: (workflow: StonesMediaWorkflow) => void;
 }) {
+    const [confirmingCancel, setConfirmingCancel] = useState(false);
     const canRetry = workflow.phase === 'failed' || workflow.phase === 'auth_required' || workflow.phase === 'paused_offline';
     const canCancel = !['completed', 'cancelled', 'stale'].includes(workflow.phase);
     const tone = workflow.phase === 'failed'
@@ -376,9 +426,21 @@ function WorkflowRow({
             : workflow.phase === 'completed'
                 ? 'border-emerald-400/20 bg-emerald-400/10'
                 : 'border-sky-400/20 bg-sky-400/10';
-    const total = Math.max(workflow.progress.total || 0, 0);
-    const detail = `${total} фото`;
+    const progress = getWorkflowProgress(workflow);
+    const detail = `${progress.completed}/${progress.total} фото`;
     const normalizedLastError = normalizeQueueOrWorkflowError(workflow.lastError);
+    const issueText = getWorkflowIssueText(workflow, normalizedLastError);
+    const rawLastError = String(workflow.lastError || '').trim();
+    const currentItem = workflow.uploadState?.currentItem || null;
+    const failedItems = workflow.uploadState?.failedItems || [];
+    const statusCounts = workflow.uploadState?.statusCounts || {};
+    const stageChips = [
+        { label: 'Ожидает', value: statusCounts.pending || 0 },
+        { label: 'Обработка', value: (statusCounts.normalizing || 0) + (statusCounts.uploading || 0) },
+        { label: 'Загружено', value: (statusCounts.uploaded || 0) + (statusCounts.reused || 0) },
+        { label: 'Готово', value: statusCounts.committed || 0 },
+        { label: 'Ошибки', value: statusCounts.failed || 0 }
+    ];
 
     return (
         <div className={`rounded-2xl border p-3 ${tone}`}>
@@ -390,16 +452,53 @@ function WorkflowRow({
                     <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">{workflowPhaseLabel[workflow.phase] || workflow.phase}</p>
                     <p className="mt-1 text-xs text-gray-300">
                         Batch: {workflow.summary?.batchLabel || workflow.batchId.slice(0, 8)} · {workflow.summary?.subtitle || detail}
+                        {workflow.summary?.subtitle ? ` · ${detail}` : ''}
                         {workflow.summary?.currentSerial ? ` · сейчас ${workflow.summary.currentSerial}` : ''}
                     </p>
                     {workflow.nextAttemptAt ? (
                         <p className="mt-1 text-xs text-gray-500">Следующая попытка: {new Date(workflow.nextAttemptAt).toLocaleString()}</p>
                     ) : null}
                     {workflow.stuck ? <p className="mt-1 text-xs font-semibold text-amber-100">Возможный stuck</p> : null}
-                    {normalizedLastError ? (
-                        <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
-                            {normalizedLastError}
+                    <p className="mt-1 text-xs text-gray-500">{formatWorkflowUpdatedAgo(workflow.updatedAt)}</p>
+                    {currentItem ? (
+                        <p className="mt-2 text-xs text-gray-300">
+                            Сейчас: {workflowItemStatusLabel[currentItem.status] || currentItem.status}, позиция {formatWorkflowSeq(currentItem.itemSeq)}
+                            {currentItem.fileName ? ` · ${currentItem.fileName}` : ''}
                         </p>
+                    ) : null}
+                    <div data-testid={`workflow-stage-chips-${workflow.id}`} className="mt-2 flex flex-wrap gap-1.5">
+                        {stageChips.map((chip) => (
+                            <span
+                                key={chip.label}
+                                className={`rounded-full border px-2 py-1 text-[10px] ${chip.label === 'Ошибки' && chip.value > 0
+                                    ? 'border-red-300/25 bg-red-500/10 text-red-100'
+                                    : 'border-white/10 bg-white/[0.04] text-gray-300'
+                                }`}
+                            >
+                                {chip.label}: {chip.value}
+                            </span>
+                        ))}
+                    </div>
+                    {failedItems.length > 0 ? (
+                        <div className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
+                            <p className="font-semibold">Проблемные позиции: {failedItems.map((item) => formatWorkflowSeq(item.itemSeq)).join(', ')}</p>
+                            {failedItems.slice(0, 3).map((item) => (
+                                <p key={`${item.itemSeq}:${item.fileName || ''}`} className="mt-1 text-red-100/75">
+                                    {formatWorkflowSeq(item.itemSeq)}{item.fileName ? ` · ${item.fileName}` : ''}: {normalizeQueueOrWorkflowError(item.error) || 'Ошибка обработки фото.'}
+                                </p>
+                            ))}
+                        </div>
+                    ) : null}
+                    {issueText ? (
+                        <p className="mt-2 rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-xs leading-5 text-red-100/85">
+                            {issueText}
+                        </p>
+                    ) : null}
+                    {rawLastError && normalizedLastError !== rawLastError ? (
+                        <details className="mt-2 rounded-xl border border-white/10 bg-black/20 px-2.5 py-2 text-xs text-gray-300">
+                            <summary className="cursor-pointer text-gray-400">Техническая ошибка</summary>
+                            <p className="mt-1 break-words text-gray-500">{rawLastError}</p>
+                        </details>
                     ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
@@ -413,7 +512,10 @@ function WorkflowRow({
                     {canRetry ? (
                         <button
                             type="button"
-                            onClick={() => onRetry(workflow.id)}
+                            onClick={() => {
+                                setConfirmingCancel(false);
+                                onRetry(workflow.id);
+                            }}
                             className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 text-[11px] text-gray-200 transition hover:bg-white/5"
                         >
                             <RefreshCw size={12} />
@@ -423,7 +525,8 @@ function WorkflowRow({
                     {canCancel ? (
                         <button
                             type="button"
-                            onClick={() => onCancel(workflow.id)}
+                            data-testid={`workflow-cancel-request-${workflow.id}`}
+                            onClick={() => setConfirmingCancel(true)}
                             className="inline-flex min-h-8 items-center rounded-lg border border-red-400/25 px-2.5 text-[11px] text-red-100 transition hover:bg-red-500/10"
                         >
                             Отменить
@@ -432,13 +535,39 @@ function WorkflowRow({
                 </div>
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/30">
-                <div className="h-full rounded-full bg-white/70 transition-[width]" style={{ width: `${workflow.progress.total > 0 ? Math.round((workflow.progress.completed / workflow.progress.total) * 100) : 0}%` }} />
+                <div className="h-full rounded-full bg-white/70 transition-[width]" style={{ width: `${progress.percent}%` }} />
             </div>
+            {confirmingCancel ? (
+                <div className="mt-3 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs text-red-50">
+                    <p>Остановить фоновую задачу? Уже загруженные файлы могут остаться на сервере.</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                            type="button"
+                            data-testid={`workflow-cancel-confirm-${workflow.id}`}
+                            onClick={() => {
+                                setConfirmingCancel(false);
+                                onCancel(workflow.id);
+                            }}
+                            className="rounded-lg bg-red-200 px-2.5 py-1.5 font-semibold text-red-950 transition hover:bg-red-100"
+                        >
+                            Остановить
+                        </button>
+                        <button
+                            type="button"
+                            data-testid={`workflow-cancel-dismiss-${workflow.id}`}
+                            onClick={() => setConfirmingCancel(false)}
+                            className="rounded-lg border border-white/10 px-2.5 py-1.5 font-semibold text-gray-200 transition hover:bg-white/5"
+                        >
+                            Не отменять
+                        </button>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }
 
-export function DesktopStatusCenter() {
+export function DesktopStatusCenter({ label = 'Status Center' }: { label?: string } = {}) {
     const location = useLocation();
     const desktop = getStonesDesktop();
     const isDesktopRuntime = isStonesDesktop() && Boolean(desktop);
@@ -520,14 +649,15 @@ export function DesktopStatusCenter() {
     const backgroundProgress = useMemo<BackgroundProgress[]>(() => {
         const photoQueueJobs = queue.jobs.filter((job) => job.type === 'PHOTO_TOOL_APPLY');
         const photoWorkflows = workflows.filter((workflow) => workflow.kind === 'PHOTO_APPLY_WORKFLOW');
+        const visiblePhotoWorkflows = photoWorkflows.filter((workflow) => workflow.phase !== 'cancelled');
 
         const photoQueueTotal = photoQueueJobs.reduce((total, job) => total + Math.max(1, Number(job.summary?.total || 1)), 0);
-        const photoQueueDone = photoQueueJobs.reduce((total, job) => total + (job.status === 'done' ? Math.max(1, Number(job.summary?.total || 1)) : 0), 0);
-        const photoWorkflowTotal = photoWorkflows.reduce((total, workflow) => total + Math.max(1, workflow.progress.total || 1), 0);
-        const photoWorkflowDone = photoWorkflows.reduce((total, workflow) => {
-            const units = Math.max(1, workflow.progress.total || 1);
-            return total + (units * getPhotoWorkflowStagePercent(workflow.phase) / 100);
+        const photoQueueDone = photoQueueJobs.reduce((total, job) => {
+            const units = Math.max(1, Number(job.summary?.total || 1));
+            return total + (units * getQueueJobProgressPercent(job) / 100);
         }, 0);
+        const photoWorkflowTotal = visiblePhotoWorkflows.reduce((total, workflow) => total + getWorkflowProgress(workflow).total, 0);
+        const photoWorkflowDone = visiblePhotoWorkflows.reduce((total, workflow) => total + getWorkflowProgress(workflow).completed, 0);
         const photoTotal = photoQueueTotal + photoWorkflowTotal;
         const photoDone = photoQueueDone + photoWorkflowDone;
         const photoActive = photoQueueJobs.filter((job) => activeQueueStatuses.has(job.status)).length
@@ -547,7 +677,7 @@ export function DesktopStatusCenter() {
                 failed: photoFailed,
                 blocked: photoBlocked
             }
-        ].filter((item) => item.active > 0 || item.failed > 0 || item.blocked > 0 || item.percent > 0);
+        ].filter((item) => item.active > 0 || item.failed > 0 || item.blocked > 0);
     }, [queue.jobs, workflows]);
 
     const headerSummary = useMemo(() => {
@@ -950,7 +1080,7 @@ export function DesktopStatusCenter() {
                 >
                     {refreshing ? <LoaderCircle size={15} className="animate-spin" /> : <Activity size={15} />}
                     <span className="text-left">
-                        <span className="block leading-4">Status Center</span>
+                        <span className="block leading-4">{label}</span>
                         <span className="block text-[10px] font-normal opacity-75">{headerSummary}</span>
                     </span>
                 </button>
@@ -959,7 +1089,7 @@ export function DesktopStatusCenter() {
                 ))}
             </div>
 
-            {open ? (
+            {open ? createPortal(
                 <div className="fixed inset-0 z-50">
                     <button
                         type="button"
@@ -967,10 +1097,10 @@ export function DesktopStatusCenter() {
                         className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
                         onClick={() => setOpen(false)}
                     />
-                    <aside className="absolute right-0 top-0 flex h-full w-full max-w-[640px] flex-col border-l border-white/10 bg-[#101216] shadow-2xl">
-                        <header className="shrink-0 border-b border-white/8 px-5 py-4">
+                    <aside className="absolute right-0 top-0 flex h-full w-full max-w-[640px] min-w-0 flex-col overflow-hidden border-l border-white/10 bg-[#101216] shadow-2xl">
+                        <header className="shrink-0 min-w-0 border-b border-white/8 px-5 py-4">
                             <div className="flex items-start justify-between gap-3">
-                                <div>
+                                <div className="min-w-0">
                                     <p className="text-xs uppercase tracking-[0.22em] text-gray-500">ZAGARAMI admin</p>
                                     <h2 className="mt-1 text-xl font-semibold text-white">Status Center</h2>
                                     <p className="mt-1 text-sm text-gray-400">
@@ -989,62 +1119,68 @@ export function DesktopStatusCenter() {
                                 </button>
                             </div>
 
-                            <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                            <div className="mt-4 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                                 <StatusBadge tone={isDesktopRuntime ? networkTone : (webStatus.apiReachable ? 'ok' : webStatus.online ? 'warning' : 'offline')}>
                                     <Wifi size={13} />
-                                    {isDesktopRuntime
-                                        ? diagnostics?.network.apiReachable ? 'API доступен' : 'API недоступен'
-                                        : webStatus.apiReachable ? 'API доступен' : 'API недоступен'}
+                                    <span className="min-w-0 truncate">
+                                        {isDesktopRuntime
+                                            ? diagnostics?.network.apiReachable ? 'API доступен' : 'API недоступен'
+                                            : webStatus.apiReachable ? 'API доступен' : 'API недоступен'}
+                                    </span>
                                 </StatusBadge>
                                 {isDesktopRuntime ? (
                                     <>
                                         <StatusBadge tone={queueTone}>
                                             <UploadCloud size={13} />
-                                            {queueCounts.blockedAuth > 0 ? `Нужен вход: ${queueCounts.blockedAuth}` : queueCounts.failed > 0 ? `Ошибки загрузки: ${queueCounts.failed}` : queueCounts.stuck > 0 ? `Stuck: ${queueCounts.stuck}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : 'Очередь чистая'}
+                                            <span className="min-w-0 truncate">
+                                                {queueCounts.blockedAuth > 0 ? `Нужен вход: ${queueCounts.blockedAuth}` : queueCounts.failed > 0 ? `Ошибки загрузки: ${queueCounts.failed}` : queueCounts.stuck > 0 ? `Stuck: ${queueCounts.stuck}` : queueCounts.active > 0 ? `В работе: ${queueCounts.active}` : 'Очередь чистая'}
+                                            </span>
                                         </StatusBadge>
                                         <StatusBadge tone={workflowTone}>
                                             <Activity size={13} />
-                                            {(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Нужен вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Offline: ${diagnostics?.workflows?.blockedOffline}` : failedWorkflowCount > 0 ? `Workflow ошибки: ${failedWorkflowCount}` : totalStaleWorkflowCount > 0 ? `Конфликт фото: ${totalStaleWorkflowCount}` : (diagnostics?.workflows?.stuck || 0) > 0 ? `Stuck: ${diagnostics?.workflows?.stuck}` : activeWorkflowCount > 0 ? `Workflow: ${activeWorkflowCount}` : 'Workflow чисты'}
+                                            <span className="min-w-0 truncate">
+                                                {(diagnostics?.workflows?.blockedAuth || 0) > 0 ? `Нужен вход: ${diagnostics?.workflows?.blockedAuth}` : (diagnostics?.workflows?.blockedOffline || 0) > 0 ? `Offline: ${diagnostics?.workflows?.blockedOffline}` : failedWorkflowCount > 0 ? `Workflow ошибки: ${failedWorkflowCount}` : totalStaleWorkflowCount > 0 ? `Конфликт фото: ${totalStaleWorkflowCount}` : (diagnostics?.workflows?.stuck || 0) > 0 ? `Stuck: ${diagnostics?.workflows?.stuck}` : activeWorkflowCount > 0 ? `Workflow: ${activeWorkflowCount}` : 'Workflow чисты'}
+                                            </span>
                                         </StatusBadge>
                                         <StatusBadge tone={updateTone}>
                                             <Download size={13} />
-                                            {updateLabel}
+                                            <span className="min-w-0 truncate">{updateLabel}</span>
                                         </StatusBadge>
                                     </>
                                 ) : (
                                     <>
                                         <StatusBadge tone="ok">
                                             <BadgeInfo size={13} />
-                                            {currentRoleLabel}
+                                            <span className="min-w-0 truncate">{currentRoleLabel}</span>
                                         </StatusBadge>
                                         <StatusBadge tone="checking">
                                             <Info size={13} />
-                                            {location.pathname}
+                                            <span className="min-w-0 truncate">{location.pathname}</span>
                                         </StatusBadge>
                                         <StatusBadge tone="warning">
                                             <HardDrive size={13} />
-                                            Desktop-фон недоступен
+                                            <span className="min-w-0 truncate">Desktop-фон недоступен</span>
                                         </StatusBadge>
                                     </>
                                 )}
                             </div>
                         </header>
 
-                        <nav className="shrink-0 border-b border-white/8 px-3 py-2">
+                        <nav className="shrink-0 min-w-0 border-b border-white/8 px-3 py-2">
                             <div className="flex flex-wrap gap-1">
                                 {tabs.map((tab) => (
                                     <button
                                         key={tab.id}
                                         type="button"
                                         onClick={() => setActiveTab(tab.id)}
-                                        className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-xl px-3 text-xs font-medium transition ${
+                                        className={`inline-flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-xl px-3 text-xs font-medium transition ${
                                             activeTab === tab.id
                                                 ? 'bg-white text-zinc-950'
                                                 : 'text-gray-400 hover:bg-white/[0.05] hover:text-white'
                                         }`}
                                     >
                                         {tab.icon}
-                                        {tab.label}
+                                        <span className="truncate">{tab.label}</span>
                                     </button>
                                 ))}
                             </div>
@@ -1536,7 +1672,8 @@ export function DesktopStatusCenter() {
                             </div>
                         </footer>
                     </aside>
-                </div>
+                </div>,
+                document.body
             ) : null}
         </>
     );

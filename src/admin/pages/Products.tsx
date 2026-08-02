@@ -1,23 +1,55 @@
-import React, { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, PencilLine, Plus, QrCode } from 'lucide-react';
-import { Button, Input, Modal, Textarea } from '../components/ui';
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useState,
+    type ChangeEvent,
+    type FormEvent,
+    type ReactNode,
+    type SyntheticEvent
+} from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+    Eye,
+    EyeOff,
+    Languages,
+    PackagePlus,
+    PencilLine,
+    Plus,
+    RefreshCw,
+    Trash2,
+    X
+} from 'lucide-react';
 import { TranslationModal } from '../components/TranslationModal';
+import {
+    AdminAction,
+    AdminInlineError,
+    AdminSearchField,
+    AdminSelect,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState,
+    adminFieldClassName
+} from '../components/AdminWorkspaceUI';
 import { apiFetch } from '../../utils/apiFetch';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
-import { getBatchStatusMeta } from '../../../shared/domain/policy';
+
+type LocationTranslation = {
+    language_id: number;
+    name: string;
+    country: string;
+    description?: string;
+};
 
 type Location = {
     id: string;
     lat: number;
     lng: number;
     image?: string | null;
-    translations: Array<{
-        language_id: number;
-        name: string;
-        country: string;
-        description?: string;
-    }>;
+    translations: LocationTranslation[];
 };
 
 type Category = {
@@ -32,84 +64,6 @@ type ProductTranslation = {
     language_id: number;
     name: string;
     description: string;
-};
-
-type ItemTranslation = {
-    language_id: number;
-    name: string;
-    description?: string;
-    country?: string;
-};
-
-type BatchItem = {
-    id: string;
-    batch_id: string;
-    product_id: string | null;
-    temp_id: string;
-    serial_number: string | null;
-    status: string;
-    is_sold: boolean;
-    sales_channel?: string | null;
-    photo_url?: string | null;
-    source_photo_url?: string | null;
-    item_photo_url?: string | null;
-    item_video_url?: string | null;
-    item_seq?: number | null;
-    activation_date?: string | null;
-    price_sold?: number | null;
-    commission_hq?: number | null;
-    collected_date?: string | null;
-    collected_time?: string | null;
-    created_at: string;
-    updated_at?: string | null;
-    clone_url: string | null;
-    qr_url: string | null;
-};
-
-type ItemDetail = BatchItem & {
-    batch: {
-        id: string;
-        status: string;
-        daily_batch_seq?: number | null;
-        collected_date?: string | null;
-        collected_time?: string | null;
-        owner?: {
-            id: string;
-            name: string;
-            email: string;
-        } | null;
-    };
-    product?: {
-        id: string;
-        image: string;
-        country_code: string;
-        location_code: string;
-        item_code: string;
-        location_description?: string | null;
-        is_published: boolean;
-        translations: ItemTranslation[];
-        location?: {
-            id: string;
-            translations: ItemTranslation[];
-        } | null;
-    } | null;
-};
-
-type ItemFormState = {
-    temp_id: string;
-    serial_number: string;
-    item_seq: string;
-    status: string;
-    is_sold: boolean;
-    sales_channel: string;
-    photo_url: string;
-    item_photo_url: string;
-    item_video_url: string;
-    collected_date: string;
-    collected_time: string;
-    activation_date: string;
-    price_sold: string;
-    commission_hq: string;
 };
 
 type ProductView = {
@@ -127,19 +81,8 @@ type ProductView = {
     is_published: boolean;
     available_stock: number;
     translations: ProductTranslation[];
-    category?: {
-        translations: Array<{
-            language_id: number;
-            name: string;
-        }>;
-    };
+    category?: Category;
     location?: Location;
-    batches: Array<{
-        id: string;
-        status: string;
-        created_at: string;
-        items_count: number;
-    }>;
 };
 
 type UserOption = {
@@ -162,7 +105,6 @@ type ProductForm = {
     location_code: string;
     item_code: string;
     location_description: string;
-    is_published: boolean;
 };
 
 type CollectionOrderForm = {
@@ -175,47 +117,6 @@ type CollectionOrderForm = {
     note: string;
 };
 
-type StockFilter = 'ALL' | 'IN_STOCK' | 'OUT_OF_STOCK';
-type PublicationFilter = 'ALL' | 'PUBLISHED' | 'HIDDEN';
-
-type LocationView = {
-    id: string;
-    image: string;
-    source: Location;
-    locationName: string;
-    country: string;
-    totalProducts: number;
-    publishedCount: number;
-    hiddenCount: number;
-    stockCount: number;
-    items: ProductView[];
-};
-
-const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
-    const translation = translations.find((item) => item.language_id === 2)
-        || translations.find((item) => item.language_id === 1)
-        || translations[0];
-    const value = translation?.[field];
-    return typeof value === 'string' ? value : '';
-};
-
-const itemStatusMeta: Record<string, { label: string; className: string }> = {
-    NEW: { label: 'Новый', className: 'bg-gray-800 text-gray-300' },
-    REJECTED: { label: 'Отклонен', className: 'bg-red-500/15 text-red-200' },
-    STOCK_HQ: { label: 'На складе HQ', className: 'bg-emerald-500/15 text-emerald-200' },
-    STOCK_ONLINE: { label: 'Онлайн', className: 'bg-blue-500/15 text-blue-200' },
-    ON_CONSIGNMENT: { label: 'Консигнация', className: 'bg-amber-500/15 text-amber-200' },
-    SOLD_ONLINE: { label: 'Продан онлайн', className: 'bg-indigo-500/15 text-indigo-200' },
-    ACTIVATED: { label: 'Активирован', className: 'bg-violet-500/15 text-violet-200' }
-};
-
-type BatchReadinessTone = 'ready' | 'warning' | 'muted';
-
-type BatchReadiness = {
-    tone: BatchReadinessTone;
-    label: string;
-};
-
 type LocationForm = {
     name: string;
     country: string;
@@ -225,8 +126,13 @@ type LocationForm = {
     description: string;
 };
 
+type StockFilter = 'ALL' | 'IN_STOCK' | 'OUT_OF_STOCK';
+type PublicationFilter = 'ALL' | 'PUBLISHED' | 'HIDDEN';
+type ProductsWorkspaceView = 'catalog' | 'locations' | 'publication';
+
 const BASE_LANGUAGE_ID = 2;
 const ACCEPT_IMMEDIATELY_OPTION = '__accept_immediately__';
+const FALLBACK_IMAGE = '/locations/crystal-caves.jpg';
 
 const emptyProductForm: ProductForm = {
     name: '',
@@ -240,8 +146,7 @@ const emptyProductForm: ProductForm = {
     country_code: 'RUS',
     location_code: '',
     item_code: '',
-    location_description: '',
-    is_published: false
+    location_description: ''
 };
 
 const emptyOrderForm: CollectionOrderForm = {
@@ -263,79 +168,37 @@ const emptyLocationForm: LocationForm = {
     description: ''
 };
 
-const formatDateOnly = (value?: string | null) => {
-    if (!value) return '';
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+const inputClassName = `${adminFieldClassName} w-full px-3`;
+const textareaClassName = 'min-h-[96px] w-full resize-y rounded-lg border border-[#2a3039] bg-[#151a21] px-3 py-2.5 text-[13px] text-[#eef2f6] outline-none transition placeholder:text-[#727b88] focus:border-[#4c91f3]';
+const fileInputClassName = 'block w-full text-[13px] text-[#89919d] file:mr-3 file:rounded-md file:border file:border-[#333b46] file:bg-[#191f27] file:px-3 file:py-2 file:text-[13px] file:font-medium file:text-[#d5dae0] hover:file:border-[#4a5562] hover:file:bg-[#202832]';
+
+const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
+    const translation = translations.find((item) => item.language_id === BASE_LANGUAGE_ID)
+        || translations.find((item) => item.language_id === 1)
+        || translations[0];
+    const value = translation?.[field];
+    return typeof value === 'string' ? value : '';
 };
 
-const formatDateTimeLocalInput = (value?: string | null) => {
-    if (!value) return '';
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return '';
+const getLocationName = (location?: Location) => (
+    location ? getDefaultTranslationValue(location.translations, 'name') || 'Без названия' : 'Локация не найдена'
+);
 
-    const pad = (part: number) => String(part).padStart(2, '0');
-    return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
-};
+const getLocationCountry = (location?: Location) => (
+    location ? getDefaultTranslationValue(location.translations, 'country') || 'Без страны' : 'Без страны'
+);
 
-const buildItemFormState = (item: ItemDetail): ItemFormState => ({
-    temp_id: item.temp_id,
-    serial_number: item.serial_number || '',
-    item_seq: item.item_seq == null ? '' : String(item.item_seq),
-    status: item.status,
-    is_sold: item.is_sold,
-    sales_channel: item.sales_channel || '',
-    photo_url: item.source_photo_url || '',
-    item_photo_url: item.item_photo_url || '',
-    item_video_url: item.item_video_url || '',
-    collected_date: formatDateOnly(item.collected_date),
-    collected_time: item.collected_time || '',
-    activation_date: formatDateTimeLocalInput(item.activation_date),
-    price_sold: item.price_sold == null ? '' : String(item.price_sold),
-    commission_hq: item.commission_hq == null ? '' : String(item.commission_hq)
-});
+const getProductName = (product: ProductView) => (
+    getDefaultTranslationValue(product.translations, 'name') || 'Без названия'
+);
 
-const createItemPath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
-const createFallbackImage = '/locations/crystal-caves.jpg';
-const handleImageFallback = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    const fallbackUrl = new URL(createFallbackImage, window.location.origin).href;
-    if (event.currentTarget.src !== fallbackUrl) {
-        event.currentTarget.src = createFallbackImage;
-    }
-};
-const readOnlyInputClassName = 'w-full rounded-xl border border-gray-800 bg-gray-900 px-4 py-3 text-sm text-gray-300 outline-none disabled:cursor-not-allowed disabled:opacity-100';
-const filterSelectClassName = 'h-10 rounded-xl border border-white/8 bg-[#11141a] px-3 text-sm text-gray-200 outline-none transition focus:border-blue-300/50';
-const productSelectClassName = 'h-12 w-full rounded-2xl border border-white/8 bg-[#15181f] px-4 text-sm text-white outline-none transition focus:border-blue-300/60';
-const productFileInputClassName = 'block w-full text-sm text-gray-400 file:mr-4 file:rounded-xl file:border-0 file:bg-white/[0.07] file:px-4 file:py-2.5 file:text-sm file:font-medium file:text-gray-100 hover:file:bg-white/[0.1]';
+const getProductDescription = (product: ProductView) => (
+    getDefaultTranslationValue(product.translations, 'description')
+);
 
-const getBatchReadiness = (items: BatchItem[] | undefined, isLoading: boolean): BatchReadiness => {
-    if (isLoading) {
-        return { tone: 'muted', label: 'Проверяем приемку...' };
-    }
-
-    if (!items) {
-        return { tone: 'muted', label: 'Раскройте для проверки' };
-    }
-
-    if (items.length === 0) {
-        return { tone: 'warning', label: 'Нет камней в партии' };
-    }
-
-    const missing = [
-        { label: 'фото', count: items.filter((item) => !item.item_photo_url).length },
-        { label: 'видео', count: items.filter((item) => !item.item_video_url).length },
-        { label: 'серийник', count: items.filter((item) => !item.serial_number).length },
-        { label: 'QR', count: items.filter((item) => !item.qr_url).length }
-    ].filter((item) => item.count > 0);
-
-    if (missing.length === 0) {
-        return { tone: 'ready', label: 'Приемка готова' };
-    }
-
-    return {
-        tone: 'warning',
-        label: `Не хватает: ${missing.map((item) => `${item.label} ${item.count}`).join(' · ')}`
-    };
+const handleImageFallback = (event: SyntheticEvent<HTMLImageElement>) => {
+    const fallbackUrl = new URL(FALLBACK_IMAGE, window.location.origin).href;
+    if (event.currentTarget.src !== fallbackUrl) event.currentTarget.src = FALLBACK_IMAGE;
 };
 
 const getErrorMessage = async (response: Response, fallback: string) => {
@@ -343,40 +206,54 @@ const getErrorMessage = async (response: Response, fallback: string) => {
     return payload.error || fallback;
 };
 
+const getPublicationReadiness = (product: ProductView) => {
+    const missing: string[] = [];
+    if (!getProductName(product) || getProductName(product) === 'Без названия') missing.push('название');
+    if (!getProductDescription(product)) missing.push('описание');
+    if (!product.image) missing.push('изображение');
+    if (!product.location_id) missing.push('локация');
+    if (!product.category_id) missing.push('категория');
+    if (!product.country_code || !product.location_code || !product.item_code) missing.push('коды');
+    if (!Number.isFinite(Number(product.price))) missing.push('цена');
+    return missing;
+};
+
 export function Products() {
+    return <ProductsWorkspace />;
+}
+
+export function ProductLocationsWorkspace() {
+    return <ProductsWorkspace routeView="locations" />;
+}
+
+export function ProductPublicationWorkspace() {
+    return <ProductsWorkspace routeView="publication" />;
+}
+
+function ProductsWorkspace({ routeView }: { routeView?: ProductsWorkspaceView } = {}) {
+    const [searchParams] = useSearchParams();
+    const workspaceView = routeView || viewParamToProductsWorkspace(searchParams.get('view'));
     const [products, setProducts] = useState<ProductView[]>([]);
     const [locations, setLocations] = useState<Location[]>([]);
     const [categories, setCategories] = useState<Category[]>([]);
     const [franchisees, setFranchisees] = useState<UserOption[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [screenError, setScreenError] = useState('');
-
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [editingProductId, setEditingProductId] = useState<string | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
-    const [isSaving, setIsSaving] = useState(false);
-    const [formData, setFormData] = useState<ProductForm>(emptyProductForm);
-
-    const [expandedProductId, setExpandedProductId] = useState('');
-    const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
-    const [batchItemsById, setBatchItemsById] = useState<Record<string, BatchItem[]>>({});
-    const [batchLoadingIds, setBatchLoadingIds] = useState<Record<string, boolean>>({});
-    const [batchErrors, setBatchErrors] = useState<Record<string, string>>({});
-    const [publishingId, setPublishingId] = useState('');
-
-    const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
-    const [creatingOrder, setCreatingOrder] = useState(false);
-    const [orderForm, setOrderForm] = useState<CollectionOrderForm>(emptyOrderForm);
-    const [selectedItemId, setSelectedItemId] = useState('');
-    const [selectedItem, setSelectedItem] = useState<ItemDetail | null>(null);
-    const [itemForm, setItemForm] = useState<ItemFormState | null>(null);
-    const [itemLoading, setItemLoading] = useState(false);
-    const [itemError, setItemError] = useState('');
-    const [selectedLocationId, setSelectedLocationId] = useState('');
+    const [query, setQuery] = useState('');
     const [countryFilter, setCountryFilter] = useState('ALL');
     const [stockFilter, setStockFilter] = useState<StockFilter>('ALL');
     const [publicationFilter, setPublicationFilter] = useState<PublicationFilter>('ALL');
-    const [isLocationEditMode, setIsLocationEditMode] = useState(false);
+
+    const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+    const [editingProductId, setEditingProductId] = useState<string | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
+    const [isSavingProduct, setIsSavingProduct] = useState(false);
+    const [productForm, setProductForm] = useState<ProductForm>(emptyProductForm);
+
+    const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
+    const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+    const [orderForm, setOrderForm] = useState<CollectionOrderForm>(emptyOrderForm);
+
     const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
     const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
     const [locationForm, setLocationForm] = useState<LocationForm>(emptyLocationForm);
@@ -384,140 +261,99 @@ export function Products() {
     const [isLocationSaving, setIsLocationSaving] = useState(false);
     const [isLocationTranslationOpen, setIsLocationTranslationOpen] = useState(false);
     const [selectedLocationForTranslation, setSelectedLocationForTranslation] = useState<Location | null>(null);
+    const [publishingId, setPublishingId] = useState('');
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         setIsLoading(true);
         setScreenError('');
         try {
-            const [locRes, prodRes, catRes, usersRes] = await Promise.all([
+            const [locationsResponse, productsResponse, categoriesResponse, usersResponse] = await Promise.all([
                 apiFetch('/api/locations'),
                 authFetch('/api/products'),
                 apiFetch('/api/categories'),
                 authFetch('/api/users')
             ]);
 
-            if (!locRes.ok) {
-                const payload = await locRes.json().catch(() => ({ error: 'Не удалось загрузить локации.' }));
-                throw new Error(payload.error || 'Не удалось загрузить локации.');
-            }
-            if (!prodRes.ok) {
-                const payload = await prodRes.json().catch(() => ({ error: 'Не удалось загрузить товары.' }));
-                throw new Error(payload.error || 'Не удалось загрузить товары.');
-            }
-            if (!catRes.ok) {
-                const payload = await catRes.json().catch(() => ({ error: 'Не удалось загрузить категории.' }));
-                throw new Error(payload.error || 'Не удалось загрузить категории.');
-            }
-            if (!usersRes.ok) {
-                const payload = await usersRes.json().catch(() => ({ error: 'Не удалось загрузить пользователей.' }));
-                throw new Error(payload.error || 'Не удалось загрузить пользователей.');
-            }
+            if (!locationsResponse.ok) throw new Error(await getErrorMessage(locationsResponse, 'Не удалось загрузить локации.'));
+            if (!productsResponse.ok) throw new Error(await getErrorMessage(productsResponse, 'Не удалось загрузить товары.'));
+            if (!categoriesResponse.ok) throw new Error(await getErrorMessage(categoriesResponse, 'Не удалось загрузить категории.'));
+            if (!usersResponse.ok) throw new Error(await getErrorMessage(usersResponse, 'Не удалось загрузить пользователей.'));
 
-            const locData = await locRes.json() as Location[];
-            const prodData = await prodRes.json() as ProductView[];
-            const catData = await catRes.json() as Category[];
-            const usersData = await usersRes.json() as UserOption[];
+            const [locationData, productData, categoryData, userData] = await Promise.all([
+                locationsResponse.json() as Promise<Location[]>,
+                productsResponse.json() as Promise<ProductView[]>,
+                categoriesResponse.json() as Promise<Category[]>,
+                usersResponse.json() as Promise<UserOption[]>
+            ]);
 
-            setLocations(locData);
-            setProducts(prodData);
-            setCategories(catData);
-            setFranchisees(usersData.filter((user) => user.role === 'FRANCHISEE'));
+            setLocations(locationData);
+            setProducts(productData);
+            setCategories(categoryData);
+            setFranchisees(userData.filter((user) => user.role === 'FRANCHISEE'));
         } catch (error) {
             console.error(error);
-            setScreenError(error instanceof Error ? error.message : 'Не удалось загрузить экран товаров.');
+            setScreenError(error instanceof Error ? error.message : 'Не удалось загрузить рабочую область.');
         } finally {
             setIsLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
         void fetchData();
-    }, []);
+    }, [fetchData]);
 
-    const countryOptions = useMemo(() => {
-        const countries = new Set<string>();
-
-        for (const location of locations) {
-            const locationProducts = products.filter((product) => product.location_id === location.id);
-            const country = getDefaultTranslationValue(location.translations, 'country')
-                || locationProducts[0]?.country_code
-                || 'Без страны';
-            countries.add(country);
-        }
-
-        return [...countries].sort((a, b) => a.localeCompare(b, 'ru'));
-    }, [locations, products]);
-
-    const locationViews = useMemo<LocationView[]>(() => {
-        return locations
-            .map((location) => {
-                const locationName = getDefaultTranslationValue(location.translations, 'name') || 'Без локации';
-                const rawItems = products.filter((product) => product.location_id === location.id);
-                const country = getDefaultTranslationValue(location.translations, 'country')
-                    || rawItems[0]?.country_code
-                    || 'Без страны';
-
-                const filteredItems = rawItems.filter((product) => {
-                    if (stockFilter === 'IN_STOCK' && product.available_stock <= 0) return false;
-                    if (stockFilter === 'OUT_OF_STOCK' && product.available_stock > 0) return false;
-                    if (publicationFilter === 'PUBLISHED' && !product.is_published) return false;
-                    if (publicationFilter === 'HIDDEN' && product.is_published) return false;
-                    return true;
-                });
-
-                return {
-                    id: location.id,
-                    image: location.image || createFallbackImage,
-                    source: location,
-                    locationName,
-                    country,
-                    totalProducts: rawItems.length,
-                    publishedCount: rawItems.filter((product) => product.is_published).length,
-                    hiddenCount: rawItems.filter((product) => !product.is_published).length,
-                    stockCount: rawItems.reduce((sum, product) => sum + product.available_stock, 0),
-                    items: filteredItems
-                };
-            })
-            .filter((location) => {
-                if (countryFilter !== 'ALL' && location.country !== countryFilter) return false;
-                if ((stockFilter !== 'ALL' || publicationFilter !== 'ALL') && location.items.length === 0) return false;
-                return true;
-            });
-    }, [countryFilter, locations, products, publicationFilter, stockFilter]);
-
-    const selectedLocation = useMemo(
-        () => locationViews.find((location) => location.id === selectedLocationId) || null,
-        [locationViews, selectedLocationId]
+    const locationsById = useMemo(
+        () => new Map(locations.map((location) => [location.id, location])),
+        [locations]
     );
 
-    useEffect(() => {
-        if (selectedLocationId && !locationViews.some((location) => location.id === selectedLocationId)) {
-            setSelectedLocationId('');
-        }
-    }, [locationViews, selectedLocationId]);
+    const countryOptions = useMemo(() => {
+        const countries = new Set(locations.map((location) => getLocationCountry(location)));
+        return [...countries].sort((left, right) => left.localeCompare(right, 'ru'));
+    }, [locations]);
 
-    const hasActiveFilters = countryFilter !== 'ALL' || stockFilter !== 'ALL' || publicationFilter !== 'ALL';
+    const normalizedQuery = query.trim().toLowerCase();
 
-    const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const visibleProducts = useMemo(() => products
+        .filter((product) => {
+            const location = locationsById.get(product.location_id) || product.location;
+            const name = getProductName(product);
+            const haystack = `${name} ${product.country_code}${product.location_code}${product.item_code} ${getLocationName(location)}`.toLowerCase();
+            if (normalizedQuery && !haystack.includes(normalizedQuery)) return false;
+            if (countryFilter !== 'ALL' && getLocationCountry(location) !== countryFilter) return false;
+            if (stockFilter === 'IN_STOCK' && product.available_stock <= 0) return false;
+            if (stockFilter === 'OUT_OF_STOCK' && product.available_stock > 0) return false;
+            return true;
+        })
+        .sort((left, right) => getProductName(left).localeCompare(getProductName(right), 'ru')),
+    [countryFilter, locationsById, normalizedQuery, products, stockFilter]);
+
+    const visibleLocations = useMemo(() => locations
+        .filter((location) => {
+            const haystack = `${getLocationName(location)} ${getLocationCountry(location)}`.toLowerCase();
+            if (normalizedQuery && !haystack.includes(normalizedQuery)) return false;
+            return countryFilter === 'ALL' || getLocationCountry(location) === countryFilter;
+        })
+        .sort((left, right) => getLocationName(left).localeCompare(getLocationName(right), 'ru')),
+    [countryFilter, locations, normalizedQuery]);
+
+    const publicationProducts = useMemo(() => visibleProducts.filter((product) => (
+        publicationFilter === 'ALL'
+        || (publicationFilter === 'PUBLISHED' && product.is_published)
+        || (publicationFilter === 'HIDDEN' && !product.is_published)
+    )), [publicationFilter, visibleProducts]);
+
+    const handleProductImageUpload = async (event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-
-        const form = new FormData();
-        form.append('file', file);
-
+        const uploadData = new FormData();
+        uploadData.append('file', file);
         setIsUploading(true);
         try {
-            const response = await authFetch('/api/upload/photo', {
-                method: 'POST',
-                body: form
-            });
-
-            const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить изображение.' }));
-            if (!response.ok || !payload.url) {
-                throw new Error(payload.error || 'Не удалось загрузить изображение.');
-            }
-
-            setFormData((prev) => ({ ...prev, image: payload.url }));
+            const response = await authFetch('/api/upload/photo', { method: 'POST', body: uploadData });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload.url) throw new Error(payload.error || 'Не удалось загрузить изображение.');
+            setProductForm((current) => ({ ...current, image: payload.url }));
         } catch (error) {
             console.error(error);
             alert(error instanceof Error ? error.message : 'Не удалось загрузить изображение.');
@@ -527,22 +363,19 @@ export function Products() {
         }
     };
 
-    const openCreateModal = (locationId = '') => {
+    const openCreateProduct = () => {
         setEditingProductId(null);
-        setFormData({
-            ...emptyProductForm,
-            location_id: locationId || selectedLocationId
-        });
-        setIsModalOpen(true);
+        setProductForm(emptyProductForm);
+        setIsProductModalOpen(true);
     };
 
-    const openEditModal = (product: ProductView) => {
+    const openEditProduct = (product: ProductView) => {
         setEditingProductId(product.id);
-        setFormData({
-            name: getDefaultTranslationValue(product.translations, 'name'),
-            description: getDefaultTranslationValue(product.translations, 'description'),
+        setProductForm({
+            name: getProductName(product),
+            description: getProductDescription(product),
             price: String(product.price),
-            image: product.image,
+            image: product.image || '',
             wildberries_url: product.wildberries_url || '',
             ozon_url: product.ozon_url || '',
             category_id: product.category_id,
@@ -550,38 +383,135 @@ export function Products() {
             country_code: product.country_code,
             location_code: product.location_code,
             item_code: product.item_code,
-            location_description: product.location_description || '',
-            is_published: product.is_published
+            location_description: product.location_description || ''
         });
-        setIsModalOpen(true);
+        setIsProductModalOpen(true);
     };
 
     const closeProductModal = () => {
-        setIsModalOpen(false);
+        setIsProductModalOpen(false);
         setEditingProductId(null);
-        setFormData(emptyProductForm);
+        setProductForm(emptyProductForm);
     };
 
-    const handleLocationImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleSaveProduct = async (event: FormEvent) => {
+        event.preventDefault();
+        if (!productForm.location_id || !productForm.category_id) {
+            alert('Выберите локацию и категорию.');
+            return;
+        }
+        if (!productForm.name.trim() || !productForm.description.trim()) {
+            alert('Укажите название и описание товара.');
+            return;
+        }
+
+        const existingProduct = editingProductId
+            ? products.find((product) => product.id === editingProductId)
+            : undefined;
+        const translations = [
+            {
+                language_id: BASE_LANGUAGE_ID,
+                name: productForm.name.trim(),
+                description: productForm.description.trim()
+            },
+            ...(existingProduct?.translations.filter((translation) => translation.language_id !== BASE_LANGUAGE_ID) || [])
+        ];
+
+        setIsSavingProduct(true);
+        try {
+            const response = await authFetch(editingProductId ? `/api/products/${editingProductId}` : '/api/products', {
+                method: editingProductId ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    price: Number(productForm.price),
+                    image: productForm.image || 'https://placehold.co/400x300/333/fff?text=No+Image',
+                    wildberries_url: productForm.wildberries_url.trim(),
+                    ozon_url: productForm.ozon_url.trim(),
+                    category_id: productForm.category_id,
+                    location_id: productForm.location_id,
+                    country_code: productForm.country_code.trim(),
+                    location_code: productForm.location_code.trim(),
+                    item_code: productForm.item_code.trim(),
+                    location_description: productForm.location_description.trim(),
+                    is_published: existingProduct?.is_published ?? false,
+                    translations
+                })
+            });
+            if (!response.ok) throw new Error(await getErrorMessage(response, 'Не удалось сохранить карточку товара.'));
+            closeProductModal();
+            await fetchData();
+        } catch (error) {
+            console.error(error);
+            alert(error instanceof Error ? error.message : 'Не удалось сохранить карточку товара.');
+        } finally {
+            setIsSavingProduct(false);
+        }
+    };
+
+    const openOrderModal = (product: ProductView) => {
+        setOrderForm({
+            ...emptyOrderForm,
+            productId: product.id,
+            productName: getProductName(product)
+        });
+        setIsOrderModalOpen(true);
+    };
+
+    const closeOrderModal = () => {
+        setIsOrderModalOpen(false);
+        setOrderForm(emptyOrderForm);
+    };
+
+    const handleCreateOrder = async (event: FormEvent) => {
+        event.preventDefault();
+        const quantity = Number(orderForm.requested_qty);
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
+            alert('Количество должно быть числом от 1 до 999.');
+            return;
+        }
+        const acceptImmediately = orderForm.target_user_id === ACCEPT_IMMEDIATELY_OPTION;
+        if (acceptImmediately && (!orderForm.collected_date || !orderForm.collected_time)) {
+            alert('Для сценария «Принять сразу» укажите дату и время сбора.');
+            return;
+        }
+
+        setIsCreatingOrder(true);
+        try {
+            const response = await authFetch('/api/collection-requests', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    product_id: orderForm.productId,
+                    requested_qty: quantity,
+                    target_user_id: acceptImmediately ? null : orderForm.target_user_id || null,
+                    accept_immediately: acceptImmediately,
+                    collected_date: acceptImmediately ? orderForm.collected_date : undefined,
+                    collected_time: acceptImmediately ? orderForm.collected_time : undefined,
+                    note: orderForm.note.trim() || null
+                })
+            });
+            if (!response.ok) throw new Error(await getErrorMessage(response, 'Не удалось создать заказ на сбор.'));
+            closeOrderModal();
+            alert(acceptImmediately ? 'Партия создана и принята.' : 'Заказ на сбор создан.');
+        } catch (error) {
+            console.error(error);
+            alert(error instanceof Error ? error.message : 'Не удалось создать заказ на сбор.');
+        } finally {
+            setIsCreatingOrder(false);
+        }
+    };
+
+    const handleLocationImageUpload = async (event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-
         const uploadData = new FormData();
         uploadData.append('file', file);
-
         setIsLocationUploading(true);
         try {
-            const response = await authFetch('/api/upload/photo', {
-                method: 'POST',
-                body: uploadData
-            });
-
+            const response = await authFetch('/api/upload/photo', { method: 'POST', body: uploadData });
             const payload = await response.json().catch(() => ({}));
-            if (!response.ok || !payload.url) {
-                throw new Error(payload.error || 'Не удалось загрузить изображение локации.');
-            }
-
-            setLocationForm((prev) => ({ ...prev, image: payload.url }));
+            if (!response.ok || !payload.url) throw new Error(payload.error || 'Не удалось загрузить изображение локации.');
+            setLocationForm((current) => ({ ...current, image: payload.url }));
         } catch (error) {
             console.error(error);
             alert(error instanceof Error ? error.message : 'Не удалось загрузить изображение локации.');
@@ -591,26 +521,25 @@ export function Products() {
         }
     };
 
-    const openLocationEditModal = (location: Location) => {
-        const baseTranslation = location.translations.find((translation) => translation.language_id === BASE_LANGUAGE_ID)
-            || location.translations.find((translation) => translation.language_id === 1)
-            || { name: '', country: '', description: '' };
-
-        setEditingLocationId(location.id);
-        setLocationForm({
-            name: baseTranslation.name,
-            country: baseTranslation.country,
-            lat: String(location.lat),
-            lng: String(location.lng),
-            image: location.image || '',
-            description: baseTranslation.description || ''
-        });
+    const openCreateLocation = () => {
+        setEditingLocationId(null);
+        setLocationForm(emptyLocationForm);
         setIsLocationModalOpen(true);
     };
 
-    const openLocationCreateModal = () => {
-        setEditingLocationId(null);
-        setLocationForm(emptyLocationForm);
+    const openEditLocation = (location: Location) => {
+        const translation = location.translations.find((item) => item.language_id === BASE_LANGUAGE_ID)
+            || location.translations.find((item) => item.language_id === 1)
+            || { name: '', country: '', description: '' };
+        setEditingLocationId(location.id);
+        setLocationForm({
+            name: translation.name,
+            country: translation.country,
+            lat: String(location.lat),
+            lng: String(location.lng),
+            image: location.image || '',
+            description: translation.description || ''
+        });
         setIsLocationModalOpen(true);
     };
 
@@ -620,57 +549,45 @@ export function Products() {
         setLocationForm(emptyLocationForm);
     };
 
-    const handleSaveLocation = async (event: React.FormEvent) => {
+    const handleSaveLocation = async (event: FormEvent) => {
         event.preventDefault();
-
-        const lat = parseFloat(locationForm.lat);
-        const lng = parseFloat(locationForm.lng);
-
-        if (Number.isNaN(lat) || Number.isNaN(lng)) {
+        const lat = Number(locationForm.lat);
+        const lng = Number(locationForm.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
             alert('Укажите корректные координаты локации.');
+            return;
+        }
+        if (!locationForm.name.trim() || !locationForm.country.trim()) {
+            alert('Укажите название и страну локации.');
             return;
         }
 
         const currentLocation = locations.find((location) => location.id === editingLocationId);
-        const baseTranslation = {
-            language_id: BASE_LANGUAGE_ID,
-            name: locationForm.name.trim(),
-            country: locationForm.country.trim(),
-            description: locationForm.description.trim()
-        };
-        const additionalTranslations = currentLocation
-            ? currentLocation.translations
+        const translations = [
+            {
+                language_id: BASE_LANGUAGE_ID,
+                name: locationForm.name.trim(),
+                country: locationForm.country.trim(),
+                description: locationForm.description.trim()
+            },
+            ...(currentLocation?.translations
                 .filter((translation) => translation.language_id !== BASE_LANGUAGE_ID)
                 .map((translation) => ({
                     language_id: translation.language_id,
                     name: translation.name,
                     country: translation.country,
                     description: translation.description || ''
-                }))
-            : [];
-
-        if (!baseTranslation.name || !baseTranslation.country) {
-            alert('Укажите название и страну локации.');
-            return;
-        }
+                })) || [])
+        ];
 
         setIsLocationSaving(true);
         try {
             const response = await authFetch(editingLocationId ? `/api/locations/${editingLocationId}` : '/api/locations', {
                 method: editingLocationId ? 'PUT' : 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    lat,
-                    lng,
-                    image: locationForm.image,
-                    translations: [baseTranslation, ...additionalTranslations]
-                })
+                body: JSON.stringify({ lat, lng, image: locationForm.image, translations })
             });
-
-            if (!response.ok) {
-                throw new Error(await getErrorMessage(response, 'Не удалось сохранить локацию.'));
-            }
-
+            if (!response.ok) throw new Error(await getErrorMessage(response, 'Не удалось сохранить локацию.'));
             closeLocationModal();
             await fetchData();
         } catch (error) {
@@ -682,82 +599,14 @@ export function Products() {
     };
 
     const handleDeleteLocation = async (location: Location) => {
-        const locationName = getDefaultTranslationValue(location.translations, 'name') || 'эту локацию';
-        if (!confirm(`Скрыть локацию "${locationName}" из интерфейса? Восстановление возможно только напрямую из БД.`)) return;
-
+        if (!confirm(`Скрыть локацию «${getLocationName(location)}»?`)) return;
         try {
             const response = await authFetch(`/api/locations/${location.id}`, { method: 'DELETE' });
-            if (!response.ok) {
-                throw new Error(await getErrorMessage(response, 'Не удалось удалить локацию.'));
-            }
-
-            if (selectedLocationId === location.id) {
-                setSelectedLocationId('');
-            }
+            if (!response.ok) throw new Error(await getErrorMessage(response, 'Не удалось скрыть локацию.'));
             await fetchData();
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Не удалось удалить локацию.');
-        }
-    };
-
-    const handleSaveProduct = async (event: React.FormEvent) => {
-        event.preventDefault();
-
-        if (!formData.location_id || !formData.category_id) {
-            alert('Выберите локацию и категорию.');
-            return;
-        }
-
-        const baseTranslation = {
-            language_id: 2,
-            name: formData.name.trim(),
-            description: formData.description.trim()
-        };
-
-        if (!baseTranslation.name || !baseTranslation.description) {
-            alert('Укажите название и описание товара.');
-            return;
-        }
-
-        const existing = editingProductId ? products.find((product) => product.id === editingProductId) : null;
-        const additionalTranslations = existing
-            ? existing.translations.filter((translation) => translation.language_id !== 2)
-            : [];
-
-        setIsSaving(true);
-        try {
-            const response = await authFetch(editingProductId ? `/api/products/${editingProductId}` : '/api/products', {
-                method: editingProductId ? 'PUT' : 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    price: Number(formData.price),
-                    image: formData.image || 'https://placehold.co/400x300/333/fff?text=No+Image',
-                    wildberries_url: formData.wildberries_url.trim(),
-                    ozon_url: formData.ozon_url.trim(),
-                    category_id: formData.category_id,
-                    location_id: formData.location_id,
-                    country_code: formData.country_code.trim(),
-                    location_code: formData.location_code.trim(),
-                    item_code: formData.item_code.trim(),
-                    location_description: formData.location_description.trim(),
-                    is_published: formData.is_published,
-                    translations: [baseTranslation, ...additionalTranslations]
-                })
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось сохранить товар-шаблон.' }));
-                throw new Error(payload.error || 'Не удалось сохранить товар-шаблон.');
-            }
-
-            closeProductModal();
-            await fetchData();
-        } catch (error) {
-            console.error(error);
-            alert(error instanceof Error ? error.message : 'Не удалось сохранить товар-шаблон.');
-        } finally {
-            setIsSaving(false);
+            alert(error instanceof Error ? error.message : 'Не удалось скрыть локацию.');
         }
     };
 
@@ -769,590 +618,175 @@ export function Products() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ is_published: !product.is_published })
             });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось изменить публикацию.' }));
-                throw new Error(payload.error || 'Не удалось изменить публикацию.');
-            }
-
+            if (!response.ok) throw new Error(await getErrorMessage(response, 'Не удалось изменить видимость.'));
             await fetchData();
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Не удалось изменить публикацию.');
+            alert(error instanceof Error ? error.message : 'Не удалось изменить видимость.');
         } finally {
             setPublishingId('');
         }
     };
 
-    const openOrderModal = (product: ProductView) => {
-        setOrderForm({
-            productId: product.id,
-            productName: getDefaultTranslationValue(product.translations, 'name') || `Товар ${product.id}`,
-            requested_qty: '',
-            target_user_id: '',
-            collected_date: '',
-            collected_time: '',
-            note: ''
-        });
-        setIsOrderModalOpen(true);
-    };
-
-    const closeOrderModal = () => {
-        setIsOrderModalOpen(false);
-        setOrderForm(emptyOrderForm);
-    };
-
-    const handleCreateOrder = async (event: React.FormEvent) => {
-        event.preventDefault();
-
-        const qty = Number(orderForm.requested_qty);
-        if (!Number.isInteger(qty) || qty < 1 || qty > 999) {
-            alert('Количество должно быть числом от 1 до 999.');
-            return;
-        }
-
-        const acceptImmediately = orderForm.target_user_id === ACCEPT_IMMEDIATELY_OPTION;
-        if (acceptImmediately && (!orderForm.collected_date || !orderForm.collected_time)) {
-            alert('Для сценария «Принять сразу» укажите дату и время сбора.');
-            return;
-        }
-
-        setCreatingOrder(true);
-        try {
-            const response = await authFetch('/api/collection-requests', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    product_id: orderForm.productId,
-                    requested_qty: qty,
-                    target_user_id: acceptImmediately ? null : orderForm.target_user_id || null,
-                    accept_immediately: acceptImmediately,
-                    collected_date: acceptImmediately ? orderForm.collected_date : undefined,
-                    collected_time: acceptImmediately ? orderForm.collected_time : undefined,
-                    note: orderForm.note.trim() || null
-                })
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось создать заказ на сбор.' }));
-                throw new Error(payload.error || 'Не удалось создать заказ на сбор.');
-            }
-
-            closeOrderModal();
-            alert(acceptImmediately ? 'Партия создана и принята.' : 'Заказ на сбор создан.');
-        } catch (error) {
-            console.error(error);
-            alert(error instanceof Error ? error.message : 'Не удалось создать заказ на сбор.');
-        } finally {
-            setCreatingOrder(false);
-        }
-    };
-
-    const loadBatchItems = async (batchId: string) => {
-        setBatchLoadingIds((prev) => ({ ...prev, [batchId]: true }));
-        setBatchErrors((prev) => ({ ...prev, [batchId]: '' }));
-
-        try {
-            const response = await authFetch(`/api/items/batch/${batchId}`);
-            const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить товары партии.' }));
-            if (!response.ok) {
-                throw new Error(payload.error || 'Не удалось загрузить товары партии.');
-            }
-
-            setBatchItemsById((prev) => ({ ...prev, [batchId]: payload as BatchItem[] }));
-        } catch (error) {
-            console.error(error);
-            setBatchErrors((prev) => ({ ...prev, [batchId]: error instanceof Error ? error.message : 'Не удалось загрузить товары партии.' }));
-        } finally {
-            setBatchLoadingIds((prev) => ({ ...prev, [batchId]: false }));
-        }
-    };
-
-    const toggleBatch = async (batchId: string) => {
-        const nextExpanded = !expandedBatchIds[batchId];
-        setExpandedBatchIds((prev) => ({ ...prev, [batchId]: nextExpanded }));
-
-        if (nextExpanded && batchItemsById[batchId] === undefined && !batchLoadingIds[batchId]) {
-            await loadBatchItems(batchId);
-        }
-    };
-
-    const toggleProduct = async (product: ProductView) => {
-        const nextExpanded = expandedProductId !== product.id;
-        setExpandedProductId(nextExpanded ? product.id : '');
-
-        if (!nextExpanded) return;
-
-        const unloadedBatches = product.batches.filter((batch) => batchItemsById[batch.id] === undefined && !batchLoadingIds[batch.id]);
-        await Promise.all(unloadedBatches.map((batch) => loadBatchItems(batch.id)));
-    };
-
-    const openBatchQrPrint = (batchId: string) => {
-        const params = new URLSearchParams({
-            batchId,
-            mode: 'all'
-        });
-        window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
-    };
-
-    const openItemModal = async (itemId: string) => {
-        setSelectedItemId(itemId);
-        setSelectedItem(null);
-        setItemForm(null);
-        setItemError('');
-        setItemLoading(true);
-
-        try {
-            const response = await authFetch(`/api/items/${itemId}`);
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить Item.' }));
-                throw new Error(payload.error || 'Не удалось загрузить Item.');
-            }
-
-            const payload = await response.json() as ItemDetail;
-            setSelectedItem(payload);
-            setItemForm(buildItemFormState(payload));
-        } catch (error) {
-            console.error(error);
-            setItemError(error instanceof Error ? error.message : 'Не удалось загрузить Item.');
-        } finally {
-            setItemLoading(false);
-        }
-    };
-
-    const closeItemModal = () => {
-        setSelectedItemId('');
-        setSelectedItem(null);
-        setItemForm(null);
-        setItemError('');
-        setItemLoading(false);
-    };
+    const commonHeaderControls = (
+        <>
+            <div className="ml-auto w-full max-w-[480px]">
+                <AdminSearchField
+                    value={query}
+                    onChange={setQuery}
+                    placeholder={workspaceView === 'locations' ? 'Название или страна' : 'Название, код или локация'}
+                    ariaLabel="Поиск"
+                />
+            </div>
+            <AdminSelect
+                label="Страна"
+                value={countryFilter}
+                onChange={setCountryFilter}
+                options={[{ value: 'ALL', label: 'Все страны' }, ...countryOptions.map((country) => ({ value: country, label: country }))]}
+                className="w-[170px]"
+            />
+        </>
+    );
 
     return (
-        <div className="space-y-5">
-            <section className="admin-panel rounded-[24px] px-4 py-4">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                    <div className="flex flex-wrap gap-2">
-                        <select
-                            value={countryFilter}
-                            onChange={(event) => setCountryFilter(event.target.value)}
-                            className={filterSelectClassName}
-                            aria-label="Фильтр по стране"
-                        >
-                            <option value="ALL">Все страны</option>
-                            {countryOptions.map((country) => (
-                                <option key={country} value={country}>{country}</option>
-                            ))}
-                        </select>
-                        <select
-                            value={stockFilter}
-                            onChange={(event) => setStockFilter(event.target.value as StockFilter)}
-                            className={filterSelectClassName}
-                            aria-label="Фильтр по остатку"
-                        >
-                            <option value="ALL">Любой остаток</option>
-                            <option value="IN_STOCK">В наличии</option>
-                            <option value="OUT_OF_STOCK">Нет остатка</option>
-                        </select>
-                        <select
-                            value={publicationFilter}
-                            onChange={(event) => setPublicationFilter(event.target.value as PublicationFilter)}
-                            className={filterSelectClassName}
-                            aria-label="Фильтр публикации"
-                        >
-                            <option value="ALL">Все статусы сайта</option>
-                            <option value="PUBLISHED">На сайте</option>
-                            <option value="HIDDEN">Скрыт</option>
-                        </select>
-                        {hasActiveFilters ? (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setCountryFilter('ALL');
-                                    setStockFilter('ALL');
-                                    setPublicationFilter('ALL');
-                                }}
-                                className="h-10 rounded-xl px-3 text-sm text-gray-500 transition hover:bg-white/[0.04] hover:text-gray-200"
-                            >
-                                Сбросить
-                            </button>
-                        ) : null}
-                    </div>
-
-                    {selectedLocation ? (
-                        <Button onClick={() => openCreateModal(selectedLocation.id)}>+ Добавить шаблон</Button>
-                    ) : (
-                        <div className="flex flex-wrap gap-2">
-                            {isLocationEditMode ? (
-                                <Button variant="primary" onClick={openLocationCreateModal}>
-                                    <Plus size={16} />
-                                    Добавить локацию
-                                </Button>
-                            ) : null}
-                            <Button
-                                variant={isLocationEditMode ? 'secondary' : 'primary'}
-                                onClick={() => setIsLocationEditMode((prev) => !prev)}
-                            >
-                                {isLocationEditMode ? 'Готово' : 'Редактировать локации'}
-                            </Button>
-                        </div>
-                    )}
-                </div>
-            </section>
-
-            {screenError && (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
-                    {screenError}
-                </div>
-            )}
-
-            {isLoading ? (
-                <div className="rounded-2xl border border-white/6 bg-[#14161b] px-6 py-8 text-center text-gray-400">
-                    Загрузка товарных шаблонов...
-                </div>
-            ) : selectedLocation ? (
-                <section className="space-y-4">
-                    <div className="admin-panel rounded-[24px] px-5 py-4">
-                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                            <button
-                                type="button"
-                                onClick={() => setSelectedLocationId('')}
-                                className="inline-flex w-fit items-center gap-2 rounded-xl px-3 py-2 text-sm text-gray-400 transition hover:bg-white/[0.04] hover:text-white"
-                            >
-                                <ChevronLeft size={16} />
-                                Локации
-                            </button>
-                            <div className="min-w-0 flex-1 md:text-center">
-                                <h2 className="truncate text-xl font-semibold text-white">{selectedLocation.locationName}</h2>
-                                <p className="mt-1 text-sm text-gray-500">
-                                    {selectedLocation.country} · {selectedLocation.items.length} шаблон(ов) по текущим фильтрам
-                                </p>
-                            </div>
-                            <div className="flex flex-wrap gap-2 md:justify-end">
-                                <SummaryPill label="На сайте" value={selectedLocation.publishedCount} />
-                                <SummaryPill label="Остаток" value={selectedLocation.stockCount} />
-                            </div>
-                        </div>
-                    </div>
-
-                    {selectedLocation.items.length === 0 ? (
-                        <div className="rounded-2xl border border-white/6 bg-[#14161b] px-6 py-8 text-sm text-gray-500">
-                            В этой локации нет шаблонов по выбранным фильтрам.
-                        </div>
-                    ) : (
-                        <div className="space-y-3">
-                            {selectedLocation.items.map((product) => (
-                                <ProductTemplateRow
-                                    key={product.id}
-                                    product={product}
-                                    isExpanded={expandedProductId === product.id}
-                                    publishing={publishingId === product.id}
-                                    expandedBatchIds={expandedBatchIds}
-                                    batchItemsById={batchItemsById}
-                                    batchLoadingIds={batchLoadingIds}
-                                    batchErrors={batchErrors}
-                                    onTogglePublish={handleTogglePublish}
-                                    onCreateOrder={openOrderModal}
-                                    onEdit={openEditModal}
-                                    onToggleProduct={toggleProduct}
-                                    onToggleBatch={toggleBatch}
-                                    onBatchQrPrint={openBatchQrPrint}
-                                    onSelectItem={openItemModal}
-                                />
-                            ))}
-                        </div>
-                    )}
-                </section>
-            ) : (
-                <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {locationViews.map((location) => (
-                        <LocationTile
-                            key={location.id}
-                            location={location}
-                            isEditMode={isLocationEditMode}
-                            onSelect={() => setSelectedLocationId(location.id)}
-                            onEdit={() => openLocationEditModal(location.source)}
-                            onTranslate={() => {
-                                setSelectedLocationForTranslation(location.source);
+        <>
+            <AdminWorkspace data-testid={`planet-${workspaceView}-workspace`}>
+                {workspaceView === 'catalog' ? (
+                    <>
+                        <AdminWorkspaceHeader title="Карточки товаров" count={`Карточек: ${visibleProducts.length}`}>
+                            {commonHeaderControls}
+                            <AdminSelect
+                                label="Остаток"
+                                value={stockFilter}
+                                onChange={(value) => setStockFilter(value as StockFilter)}
+                                options={[
+                                    { value: 'ALL', label: 'Любой остаток' },
+                                    { value: 'IN_STOCK', label: 'В наличии' },
+                                    { value: 'OUT_OF_STOCK', label: 'Нет остатка' }
+                                ]}
+                                className="w-[155px]"
+                            />
+                            <RefreshAction loading={isLoading} onClick={() => void fetchData()} />
+                            <AdminAction onClick={openCreateProduct} data-testid="planet-product-create">
+                                <Plus size={16} /> Новая карточка
+                            </AdminAction>
+                        </AdminWorkspaceHeader>
+                        {screenError ? <AdminInlineError>{screenError}</AdminInlineError> : null}
+                        <ProductTable
+                            products={visibleProducts}
+                            locationsById={locationsById}
+                            loading={isLoading}
+                            onEdit={openEditProduct}
+                            onOrder={openOrderModal}
+                        />
+                    </>
+                ) : workspaceView === 'locations' ? (
+                    <>
+                        <AdminWorkspaceHeader title="Локации" count={`Локаций: ${visibleLocations.length}`}>
+                            {commonHeaderControls}
+                            <RefreshAction loading={isLoading} onClick={() => void fetchData()} />
+                            <AdminAction onClick={openCreateLocation} data-testid="planet-location-create">
+                                <Plus size={16} /> Новая локация
+                            </AdminAction>
+                        </AdminWorkspaceHeader>
+                        {screenError ? <AdminInlineError>{screenError}</AdminInlineError> : null}
+                        <LocationsTable
+                            locations={visibleLocations}
+                            products={products}
+                            loading={isLoading}
+                            onEdit={openEditLocation}
+                            onTranslate={(location) => {
+                                setSelectedLocationForTranslation(location);
                                 setIsLocationTranslationOpen(true);
                             }}
-                            onDelete={() => void handleDeleteLocation(location.source)}
+                            onDelete={(location) => void handleDeleteLocation(location)}
                         />
-                    ))}
-                    {locationViews.length === 0 && (
-                        <div className="rounded-2xl border border-white/6 bg-[#14161b] px-6 py-8 text-sm text-gray-500">
-                            Локации по выбранным фильтрам не найдены.
-                        </div>
-                    )}
-                </section>
-            )}
+                    </>
+                ) : (
+                    <>
+                        <AdminWorkspaceHeader title="Публикация" count={`Карточек: ${publicationProducts.length}`}>
+                            {commonHeaderControls}
+                            <AdminSelect
+                                label="Видимость"
+                                value={publicationFilter}
+                                onChange={(value) => setPublicationFilter(value as PublicationFilter)}
+                                options={[
+                                    { value: 'ALL', label: 'Любая видимость' },
+                                    { value: 'PUBLISHED', label: 'На сайте' },
+                                    { value: 'HIDDEN', label: 'Скрыты' }
+                                ]}
+                                className="w-[170px]"
+                            />
+                            <RefreshAction loading={isLoading} onClick={() => void fetchData()} />
+                        </AdminWorkspaceHeader>
+                        {screenError ? <AdminInlineError>{screenError}</AdminInlineError> : null}
+                        <PublicationTable
+                            products={publicationProducts}
+                            locationsById={locationsById}
+                            loading={isLoading}
+                            publishingId={publishingId}
+                            onToggle={handleTogglePublish}
+                        />
+                    </>
+                )}
+            </AdminWorkspace>
 
-            <Modal
-                isOpen={isModalOpen}
+            <WorkspaceModal
+                open={isProductModalOpen}
+                title={editingProductId ? 'Редактировать карточку' : 'Новая карточка товара'}
                 onClose={closeProductModal}
-                title={editingProductId ? 'Редактировать товар-шаблон' : 'Новый товар-шаблон'}
-                className="max-w-5xl p-0"
+                maxWidth="max-w-[980px]"
+                testId="planet-product-modal"
             >
-                <form onSubmit={handleSaveProduct} className="flex max-h-[calc(90vh-86px)] flex-col">
-                    <div className="grid flex-1 gap-5 overflow-y-auto px-6 pb-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-                        <div className="space-y-5">
-                            <FormPanel title="Основное" description="Название и тексты, которые увидит клиент.">
-                                <Input
-                                    label="Название"
-                                    value={formData.name}
-                                    onChange={(event) => setFormData((prev) => ({ ...prev, name: event.target.value }))}
-                                    required
-                                />
-                                <Textarea
-                                    label="Описание товара"
-                                    value={formData.description}
-                                    onChange={(event) => setFormData((prev) => ({ ...prev, description: event.target.value }))}
-                                    rows={5}
-                                    required
-                                    className="min-h-[132px]"
-                                />
-                                <Textarea
-                                    label="Описание места"
-                                    value={formData.location_description}
-                                    onChange={(event) => setFormData((prev) => ({ ...prev, location_description: event.target.value }))}
-                                    rows={4}
-                                    className="min-h-[108px]"
-                                />
-                            </FormPanel>
+                <ProductFormView
+                    form={productForm}
+                    setForm={setProductForm}
+                    categories={categories}
+                    locations={locations}
+                    uploading={isUploading}
+                    saving={isSavingProduct}
+                    onUpload={handleProductImageUpload}
+                    onCancel={closeProductModal}
+                    onSubmit={handleSaveProduct}
+                />
+            </WorkspaceModal>
 
-                            <FormPanel title="Медиа и каналы" description="Изображение и ссылки маркетплейсов.">
-                                <Input
-                                    label="Изображение"
-                                    value={formData.image}
-                                    onChange={(event) => setFormData((prev) => ({ ...prev, image: event.target.value }))}
-                                    placeholder="/uploads/... или https://..."
-                                />
-                                <div className="rounded-2xl border border-white/8 bg-[#15181f] px-4 py-3">
-                                    <label className="mb-2 block text-sm font-medium text-gray-400">Загрузить файл</label>
-                                    <input className={productFileInputClassName} type="file" accept="image/*" onChange={handleImageUpload} />
-                                    {isUploading && <p className="mt-2 text-xs text-gray-500">Загрузка изображения...</p>}
-                                </div>
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                    <Input
-                                        label="Wildberries URL"
-                                        value={formData.wildberries_url}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, wildberries_url: event.target.value }))}
-                                    />
-                                    <Input
-                                        label="Ozon URL"
-                                        value={formData.ozon_url}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, ozon_url: event.target.value }))}
-                                    />
-                                </div>
-                            </FormPanel>
-                        </div>
-
-                        <aside className="space-y-5">
-                            <FormPanel title="Параметры" description="Цена, категория и локация шаблона.">
-                                <Input
-                                    label="Цена"
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    value={formData.price}
-                                    onChange={(event) => setFormData((prev) => ({ ...prev, price: event.target.value }))}
-                                    required
-                                />
-                                <div>
-                                    <label className="mb-1.5 block text-sm font-medium text-gray-400">Категория</label>
-                                    <select
-                                        value={formData.category_id}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, category_id: event.target.value }))}
-                                        className={productSelectClassName}
-                                        required
-                                    >
-                                        <option value="">Выберите категорию</option>
-                                        {categories.map((category) => (
-                                            <option key={category.id} value={category.id}>
-                                                {getDefaultTranslationValue(category.translations, 'name')}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="mb-1.5 block text-sm font-medium text-gray-400">Локация</label>
-                                    <select
-                                        value={formData.location_id}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, location_id: event.target.value }))}
-                                        className={productSelectClassName}
-                                        required
-                                    >
-                                        <option value="">Выберите локацию</option>
-                                        {locations.map((location) => (
-                                            <option key={location.id} value={location.id}>
-                                                {getDefaultTranslationValue(location.translations, 'name')}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </FormPanel>
-
-                            <FormPanel title="Коды" description="Используются для серийных номеров и QR.">
-                                <div className="grid grid-cols-3 gap-3">
-                                    <Input
-                                        label="Страна"
-                                        maxLength={3}
-                                        value={formData.country_code}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, country_code: event.target.value.toUpperCase() }))}
-                                        required
-                                    />
-                                    <Input
-                                        label="Локация"
-                                        maxLength={3}
-                                        value={formData.location_code}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, location_code: event.target.value.toUpperCase() }))}
-                                        required
-                                    />
-                                    <Input
-                                        label="Товар"
-                                        maxLength={8}
-                                        value={formData.item_code}
-                                        onChange={(event) => setFormData((prev) => ({ ...prev, item_code: event.target.value.toUpperCase() }))}
-                                        required
-                                    />
-                                </div>
-                            </FormPanel>
-
-                            <label className={`flex items-center justify-between gap-4 rounded-[24px] border px-4 py-4 transition ${formData.is_published ? 'border-emerald-400/20 bg-emerald-500/10' : 'border-red-400/20 bg-red-500/10'}`}>
-                                <span>
-                                    <span className="block text-sm font-semibold text-white">Публикация</span>
-                                    <span className="mt-1 block text-xs text-gray-500">
-                                        {formData.is_published ? 'Шаблон будет виден на сайте.' : 'Шаблон останется скрытым.'}
-                                    </span>
-                                </span>
-                                <input
-                                    type="checkbox"
-                                    checked={formData.is_published}
-                                    onChange={(event) => setFormData((prev) => ({ ...prev, is_published: event.target.checked }))}
-                                    className="h-5 w-5 rounded border-white/20 bg-[#11141a] text-emerald-400"
-                                />
-                            </label>
-                        </aside>
-                    </div>
-
-                    <div className="sticky bottom-0 flex flex-col gap-3 border-t border-white/6 bg-[#171a20]/95 px-6 py-4 backdrop-blur md:flex-row md:items-center md:justify-between">
-                        <p className="text-xs text-gray-500">Поля названия, описания, цены, категории, локации и кодов обязательны.</p>
-                        <div className="flex justify-end gap-3">
-                            <Button type="button" variant="ghost" onClick={closeProductModal}>Отмена</Button>
-                            <Button type="submit" disabled={isSaving}>
-                                {isSaving ? 'Сохранение...' : editingProductId ? 'Сохранить' : 'Создать'}
-                            </Button>
-                        </div>
-                    </div>
-                </form>
-            </Modal>
-
-            <Modal
-                isOpen={isLocationModalOpen}
-                onClose={closeLocationModal}
+            <WorkspaceModal
+                open={isLocationModalOpen}
                 title={editingLocationId ? 'Редактировать локацию' : 'Новая локация'}
-                className="max-w-5xl p-0"
+                onClose={closeLocationModal}
+                maxWidth="max-w-[820px]"
+                testId="planet-location-modal"
             >
-                <form onSubmit={handleSaveLocation} className="flex max-h-[calc(90vh-86px)] flex-col">
-                    <div className="grid flex-1 gap-5 overflow-y-auto px-6 pb-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-                        <div className="space-y-5">
-                            <FormPanel title="Основное" description="Название и описание, которые используются в витрине и паспортах.">
-                                <Input
-                                    label="Название локации"
-                                    value={locationForm.name}
-                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, name: event.target.value }))}
-                                    required
-                                />
-                                <Input
-                                    label="Страна"
-                                    value={locationForm.country}
-                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, country: event.target.value }))}
-                                    required
-                                />
-                                <Textarea
-                                    label="Описание"
-                                    value={locationForm.description}
-                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, description: event.target.value }))}
-                                    rows={5}
-                                    className="min-h-[132px]"
-                                />
-                            </FormPanel>
+                <LocationFormView
+                    form={locationForm}
+                    setForm={setLocationForm}
+                    uploading={isLocationUploading}
+                    saving={isLocationSaving}
+                    onUpload={handleLocationImageUpload}
+                    onCancel={closeLocationModal}
+                    onSubmit={handleSaveLocation}
+                />
+            </WorkspaceModal>
 
-                            <FormPanel title="Медиа" description="Изображение для карточки локации и публичной витрины.">
-                                <Input
-                                    label="URL изображения"
-                                    value={locationForm.image}
-                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, image: event.target.value }))}
-                                    placeholder="/uploads/... или /locations/..."
-                                />
-                                <div className="rounded-2xl border border-white/8 bg-[#15181f] px-4 py-3">
-                                    <label className="mb-2 block text-sm font-medium text-gray-400">Загрузить файл</label>
-                                    <input
-                                        className={productFileInputClassName}
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={handleLocationImageUpload}
-                                        disabled={isLocationUploading}
-                                    />
-                                    {isLocationUploading ? <p className="mt-2 text-xs text-gray-500">Загрузка изображения...</p> : null}
-                                    {locationForm.image ? (
-                                        <button
-                                            type="button"
-                                            onClick={() => setLocationForm((prev) => ({ ...prev, image: '' }))}
-                                            className="mt-2 text-xs text-gray-400 transition hover:text-white"
-                                        >
-                                            Убрать изображение
-                                        </button>
-                                    ) : null}
-                                </div>
-                            </FormPanel>
-                        </div>
+            <WorkspaceModal
+                open={isOrderModalOpen}
+                title="Заказ на сбор"
+                onClose={closeOrderModal}
+                maxWidth="max-w-[560px]"
+                testId="planet-product-order-modal"
+            >
+                <CollectionOrderFormView
+                    form={orderForm}
+                    setForm={setOrderForm}
+                    franchisees={franchisees}
+                    saving={isCreatingOrder}
+                    onCancel={closeOrderModal}
+                    onSubmit={handleCreateOrder}
+                />
+            </WorkspaceModal>
 
-                        <aside className="space-y-5">
-                            <FormPanel title="Координаты" description="Точка на глобусе и в публичном паспорте товара.">
-                                <Input
-                                    label="Широта"
-                                    type="number"
-                                    step="any"
-                                    value={locationForm.lat}
-                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, lat: event.target.value }))}
-                                    required
-                                />
-                                <Input
-                                    label="Долгота"
-                                    type="number"
-                                    step="any"
-                                    value={locationForm.lng}
-                                    onChange={(event) => setLocationForm((prev) => ({ ...prev, lng: event.target.value }))}
-                                    required
-                                />
-                            </FormPanel>
-
-                            <FormPanel title="Превью" description="Так изображение будет выглядеть в карточке локации.">
-                                <div className="aspect-[4/3] overflow-hidden rounded-2xl border border-white/8 bg-[#0f1217]">
-                                    {locationForm.image ? (
-                                        <img src={locationForm.image} alt="Превью локации" className="h-full w-full object-cover" />
-                                    ) : (
-                                        <div className="flex h-full items-center justify-center text-xs text-gray-600">Нет изображения</div>
-                                    )}
-                                </div>
-                            </FormPanel>
-                        </aside>
-                    </div>
-
-                    <div className="sticky bottom-0 flex flex-col gap-3 border-t border-white/6 bg-[#171a20]/95 px-6 py-4 backdrop-blur md:flex-row md:items-center md:justify-between">
-                        <p className="text-xs text-gray-500">Поля названия, страны и координат обязательны.</p>
-                        <div className="flex justify-end gap-3">
-                            <Button type="button" variant="ghost" onClick={closeLocationModal}>Отмена</Button>
-                            <Button type="submit" disabled={isLocationSaving}>
-                                {isLocationSaving ? 'Сохранение...' : editingLocationId ? 'Сохранить' : 'Создать'}
-                            </Button>
-                        </div>
-                    </div>
-                </form>
-            </Modal>
-
-            {selectedLocationForTranslation && (
+            {selectedLocationForTranslation ? (
                 <TranslationModal
                     isOpen={isLocationTranslationOpen}
                     onClose={() => {
@@ -1361,7 +795,7 @@ export function Products() {
                     }}
                     baseData={selectedLocationForTranslation}
                     type="LOCATION"
-                    onSave={async (newTranslations) => {
+                    onSave={async (translations) => {
                         const response = await authFetch(`/api/locations/${selectedLocationForTranslation.id}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
@@ -1369,621 +803,541 @@ export function Products() {
                                 lat: selectedLocationForTranslation.lat,
                                 lng: selectedLocationForTranslation.lng,
                                 image: selectedLocationForTranslation.image,
-                                translations: newTranslations
+                                translations
                             })
                         });
-
-                        if (!response.ok) {
-                            throw new Error(await getErrorMessage(response, 'Не удалось сохранить переводы.'));
-                        }
-
+                        if (!response.ok) throw new Error(await getErrorMessage(response, 'Не удалось сохранить переводы.'));
                         await fetchData();
                     }}
                 />
-            )}
-
-            <Modal
-                isOpen={isOrderModalOpen}
-                onClose={closeOrderModal}
-                title="Создать заказ на сбор"
-            >
-                <form onSubmit={handleCreateOrder} className="space-y-4">
-                    <div className="rounded-xl border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-300">
-                        Шаблон: <span className="text-white font-medium">{orderForm.productName}</span>
-                    </div>
-
-                    <Input
-                        label="Количество камней"
-                        type="number"
-                        min="1"
-                        max="999"
-                        inputMode="numeric"
-                        value={orderForm.requested_qty}
-                        onChange={(event) => setOrderForm((prev) => ({ ...prev, requested_qty: event.target.value.replace(/[^\d]/g, '') }))}
-                        required
-                    />
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-1.5">Назначить партнеру</label>
-                        <select
-                            value={orderForm.target_user_id}
-                            onChange={(event) => setOrderForm((prev) => ({ ...prev, target_user_id: event.target.value }))}
-                            className="w-full rounded-lg border border-gray-700 bg-gray-900 px-4 py-2.5 text-white"
-                        >
-                            <option value="">Общий пул для всех партнеров</option>
-                            <option value={ACCEPT_IMMEDIATELY_OPTION}>Принять сразу</option>
-                            {franchisees.map((user) => (
-                                <option key={user.id} value={user.id}>
-                                    {user.name} ({user.email})
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {orderForm.target_user_id === ACCEPT_IMMEDIATELY_OPTION && (
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                            <Input
-                                label="Дата сбора"
-                                type="date"
-                                value={orderForm.collected_date}
-                                onChange={(event) => setOrderForm((prev) => ({ ...prev, collected_date: event.target.value }))}
-                                required
-                            />
-                            <Input
-                                label="Время сбора"
-                                type="time"
-                                value={orderForm.collected_time}
-                                onChange={(event) => setOrderForm((prev) => ({ ...prev, collected_time: event.target.value }))}
-                                required
-                            />
-                        </div>
-                    )}
-
-                    <Textarea
-                        label="Комментарий"
-                        value={orderForm.note}
-                        onChange={(event) => setOrderForm((prev) => ({ ...prev, note: event.target.value }))}
-                        rows={3}
-                    />
-
-                    <div className="flex justify-end gap-3 pt-2">
-                        <Button type="button" variant="ghost" onClick={closeOrderModal}>Отмена</Button>
-                        <Button type="submit" disabled={creatingOrder}>
-                            {creatingOrder ? 'Создание...' : 'Создать заказ'}
-                        </Button>
-                    </div>
-                </form>
-            </Modal>
-
-            <Modal
-                isOpen={Boolean(selectedItemId)}
-                onClose={closeItemModal}
-                title={selectedItem ? (selectedItem.serial_number || selectedItem.temp_id) : 'Карточка item'}
-                className="max-w-4xl"
-            >
-                {itemLoading ? (
-                    <div className="py-10 text-center text-gray-400">Загрузка карточки...</div>
-                ) : itemError && !selectedItem ? (
-                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                        {itemError}
-                    </div>
-                ) : selectedItem && itemForm ? (
-                    <div className="space-y-6">
-                        {itemError && (
-                            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                                {itemError}
-                            </div>
-                        )}
-
-                        <div className="rounded-2xl border border-gray-800 bg-gray-950 px-4 py-4 text-sm text-gray-300">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <StatusPill meta={itemStatusMeta[selectedItem.status]} fallbackLabel={selectedItem.status} compact />
-                                <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">{selectedItem.batch.id}</span>
-                                {selectedItem.product && (
-                                    <span className="rounded-full border border-gray-700 px-2.5 py-1 text-xs text-gray-300">
-                                        {selectedItem.product.country_code}{selectedItem.product.location_code}{selectedItem.product.item_code}
-                                    </span>
-                                )}
-                            </div>
-                            <p className="mt-3 text-xs text-gray-500">ID: {selectedItem.id}</p>
-                            <p className="mt-1 text-xs text-gray-500">Серийный номер: {selectedItem.serial_number || 'Не указан'}</p>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                <a href={selectedItem.qr_url || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500">
-                                    <QrCode size={16} /> QR
-                                </a>
-                                {createItemPath(selectedItem.serial_number) && (
-                                    <a href={createItemPath(selectedItem.serial_number) || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800">
-                                        <ExternalLink size={16} /> Паспорт
-                                    </a>
-                                )}
-                            </div>
-                        </div>
-
-                        <SectionTitle title="Идентификация" />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="temp_id">
-                                <input value={itemForm.temp_id} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="serial_number">
-                                <input value={itemForm.serial_number} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="item_seq">
-                                <input value={itemForm.item_seq} readOnly disabled className={readOnlyInputClassName} inputMode="numeric" />
-                            </Field>
-                            <Field label="status">
-                                <input value={itemStatusMeta[itemForm.status]?.label || itemForm.status} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                        </div>
-
-                        <SectionTitle title="Логистика" />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="collected_date">
-                                <input type="date" value={itemForm.collected_date} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="collected_time">
-                                <input type="time" value={itemForm.collected_time} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="sales_channel">
-                                <input value={itemForm.sales_channel || 'Не назначен'} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="is_sold">
-                                <label className="flex h-[46px] items-center gap-3 rounded-xl border border-gray-800 bg-gray-900 px-4 text-sm text-gray-400">
-                                    <input
-                                        type="checkbox"
-                                        checked={itemForm.is_sold}
-                                        readOnly
-                                        disabled
-                                        className="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500"
-                                    />
-                                    Продан
-                                </label>
-                            </Field>
-                        </div>
-
-                        <SectionTitle title="Media" />
-                        <div className="grid gap-4">
-                            <Field label="photo_url">
-                                <input value={itemForm.photo_url} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="item_photo_url">
-                                <input value={itemForm.item_photo_url} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="item_video_url">
-                                <input value={itemForm.item_video_url} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                        </div>
-
-                        <SectionTitle title="Продажа / финансы" />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="activation_date">
-                                <input type="datetime-local" value={itemForm.activation_date} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="price_sold">
-                                <input value={itemForm.price_sold} readOnly disabled className={readOnlyInputClassName} inputMode="decimal" />
-                            </Field>
-                            <Field label="commission_hq">
-                                <input value={itemForm.commission_hq} readOnly disabled className={readOnlyInputClassName} inputMode="decimal" />
-                            </Field>
-                        </div>
-
-                        <div className="flex flex-wrap justify-end gap-3">
-                            <Button variant="ghost" onClick={closeItemModal}>Закрыть</Button>
-                        </div>
-                    </div>
-                ) : null}
-            </Modal>
-        </div>
+            ) : null}
+        </>
     );
 }
 
-function LocationTile({
-    location,
-    isEditMode,
-    onSelect,
+function ProductTable({
+    products,
+    locationsById,
+    loading,
+    onEdit,
+    onOrder
+}: {
+    products: ProductView[];
+    locationsById: Map<string, Location>;
+    loading: boolean;
+    onEdit: (product: ProductView) => void;
+    onOrder: (product: ProductView) => void;
+}) {
+    return (
+        <AdminTableSurface minWidth={1040}>
+            {loading ? (
+                <AdminWorkspaceState state="loading">Загрузка карточек…</AdminWorkspaceState>
+            ) : products.length === 0 ? (
+                <AdminWorkspaceState state="empty">Карточки не найдены</AdminWorkspaceState>
+            ) : (
+                <table className="w-full border-collapse text-left text-[13px]" data-testid="planet-products-table">
+                    <thead className="bg-[#10151b] text-[#8f98a4]">
+                        <tr className="h-12 border-b border-[#2a3039]">
+                            <TableHeader>Карточка</TableHeader>
+                            <TableHeader>Локация</TableHeader>
+                            <TableHeader>Коды</TableHeader>
+                            <TableHeader align="right">Цена</TableHeader>
+                            <TableHeader align="right">Остаток</TableHeader>
+                            <TableHeader align="right">Действия</TableHeader>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {products.map((product) => {
+                            const location = locationsById.get(product.location_id) || product.location;
+                            return (
+                                <tr
+                                    key={product.id}
+                                    className="border-b border-[#252b33] bg-[#11161d] text-[#d8dde3] transition hover:bg-[#151b22] last:border-b-0"
+                                    data-testid={`planet-product-row-${product.id}`}
+                                >
+                                    <td className="max-w-[360px] px-4 py-3">
+                                        <div className="flex min-w-0 items-center gap-3">
+                                            <img
+                                                src={product.image || FALLBACK_IMAGE}
+                                                alt=""
+                                                onError={handleImageFallback}
+                                                className="h-11 w-11 shrink-0 rounded-md border border-[#2a3039] object-cover"
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="truncate font-medium text-[#f1f4f7]">{getProductName(product)}</div>
+                                                <div className="mt-1 truncate text-[12px] text-[#7f8894]">{getProductDescription(product) || 'Без описания'}</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td className="max-w-[210px] px-4 py-3">
+                                        <div className="truncate">{getLocationName(location)}</div>
+                                        <div className="mt-1 truncate text-[12px] text-[#7f8894]">{getLocationCountry(location)}</div>
+                                    </td>
+                                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[12px] text-[#aeb6c0]">
+                                        {product.country_code} · {product.location_code} · {product.item_code}
+                                    </td>
+                                    <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-[#f1f4f7]">{formatRub(product.price)}</td>
+                                    <td className="px-4 py-3 text-right">
+                                        <span className={product.available_stock > 0 ? 'text-emerald-200' : 'text-[#7f8894]'}>{product.available_stock}</span>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <div className="flex justify-end gap-2">
+                                            <AdminAction
+                                                tone="secondary"
+                                                className="min-h-8 px-2.5"
+                                                onClick={() => onEdit(product)}
+                                                data-testid={`planet-product-edit-${product.id}`}
+                                            >
+                                                <PencilLine size={14} /> Изменить
+                                            </AdminAction>
+                                            <AdminAction
+                                                className="min-h-8 px-2.5"
+                                                onClick={() => onOrder(product)}
+                                                data-testid={`planet-product-order-${product.id}`}
+                                            >
+                                                <PackagePlus size={14} /> Заказать сбор
+                                            </AdminAction>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            )}
+        </AdminTableSurface>
+    );
+}
+
+function LocationsTable({
+    locations,
+    products,
+    loading,
     onEdit,
     onTranslate,
     onDelete
 }: {
-    location: LocationView;
-    isEditMode: boolean;
-    onSelect: () => void;
-    onEdit: () => void;
-    onTranslate: () => void;
-    onDelete: () => void;
+    locations: Location[];
+    products: ProductView[];
+    loading: boolean;
+    onEdit: (location: Location) => void;
+    onTranslate: (location: Location) => void;
+    onDelete: (location: Location) => void;
 }) {
-    return (
-        <article className="admin-panel group relative overflow-hidden rounded-[24px] p-0 text-left transition hover:border-white/10 hover:bg-[#1b1e24]">
-            {!isEditMode && (
-                <button
-                    type="button"
-                    onClick={onSelect}
-                    className="absolute inset-0 z-10 rounded-[24px]"
-                    aria-label={`Открыть шаблоны локации ${location.locationName}`}
-                />
-            )}
-            <div className="relative h-[126px] overflow-hidden">
-                <img
-                    src={location.image}
-                    alt={location.locationName}
-                    onError={handleImageFallback}
-                    className="h-full w-full object-cover opacity-80 transition duration-500 group-hover:scale-105 group-hover:opacity-95"
-                />
-                <div className="absolute inset-x-0 bottom-0 h-[86px] bg-gradient-to-b from-[#14161b]/0 via-[#14161b]/70 to-[#14161b]" />
-                {!isEditMode && (
-                    <div className="absolute right-4 top-4 rounded-full border border-white/10 bg-black/35 p-2 text-gray-300 backdrop-blur">
-                        <ChevronRight size={16} className="transition group-hover:translate-x-0.5 group-hover:text-white" />
-                    </div>
-                )}
-                <div className="absolute inset-x-5 bottom-4 min-w-0">
-                    <h2 className="truncate text-lg font-semibold text-white">{location.locationName}</h2>
-                    <p className="mt-1 text-sm text-gray-400">{location.country}</p>
-                </div>
-            </div>
-            <div className="px-5 pb-5 pt-4">
-                {isEditMode ? (
-                    <div className="relative z-20 grid grid-cols-3 gap-2">
-                        <LocationActionButton onClick={onEdit}>Изменить</LocationActionButton>
-                        <LocationActionButton onClick={onTranslate}>Перевод</LocationActionButton>
-                        <LocationActionButton tone="danger" onClick={onDelete}>Удалить</LocationActionButton>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-4 gap-2 text-sm">
-                        <LocationMetric label="Шаблоны" value={location.totalProducts} />
-                        <LocationMetric label="На сайте" value={location.publishedCount} />
-                        <LocationMetric label="Скрыт" value={location.hiddenCount} />
-                        <LocationMetric label="Остаток" value={location.stockCount} />
-                    </div>
-                )}
-            </div>
-        </article>
-    );
-}
-
-function LocationActionButton({
-    children,
-    tone = 'default',
-    onClick
-}: {
-    children: ReactNode;
-    tone?: 'default' | 'danger';
-    onClick: () => void;
-}) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`h-9 rounded-xl border px-2 text-sm font-medium transition ${tone === 'danger'
-                ? 'border-red-400/20 bg-red-500/10 text-red-100 hover:bg-red-500/15'
-                : 'border-white/8 bg-white/[0.04] text-gray-200 hover:bg-white/[0.07] hover:text-white'
-                }`}
-        >
-            {children}
-        </button>
-    );
-}
-
-function FormPanel({
-    title,
-    description,
-    children
-}: {
-    title: string;
-    description: string;
-    children: ReactNode;
-}) {
-    return (
-        <section className="rounded-[24px] border border-white/6 bg-[#11141a] p-4">
-            <div className="mb-4">
-                <h3 className="text-sm font-semibold text-white">{title}</h3>
-                <p className="mt-1 text-xs leading-5 text-gray-500">{description}</p>
-            </div>
-            <div className="space-y-4">
-                {children}
-            </div>
-        </section>
-    );
-}
-
-function LocationMetric({ label, value }: { label: string; value: number }) {
-    return (
-        <div>
-            <div className="text-lg font-semibold leading-none text-white">{value}</div>
-            <div className="mt-1 text-xs text-gray-500">{label}</div>
-        </div>
-    );
-}
-
-function SummaryPill({ label, value }: { label: string; value: number }) {
-    return (
-        <span className="inline-flex min-h-9 items-center gap-2 rounded-full border border-white/8 bg-white/[0.04] px-3 text-sm text-gray-300">
-            <span className="text-gray-500">{label}</span>
-            <span className="font-semibold text-white">{value}</span>
-        </span>
-    );
-}
-
-function PublishSwitch({
-    checked,
-    disabled,
-    onClick
-}: {
-    checked: boolean;
-    disabled: boolean;
-    onClick: () => void;
-}) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
-            className={`relative inline-flex h-8 w-[108px] shrink-0 items-center rounded-full border p-1 text-[11px] font-semibold transition disabled:cursor-wait disabled:opacity-60 ${checked
-                ? 'border-emerald-400/25 bg-emerald-500/20 text-emerald-100'
-                : 'border-red-400/25 bg-red-500/15 text-red-100'
-                }`}
-        >
-            <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-current opacity-70 transition-transform ${checked ? 'translate-x-[80px]' : 'translate-x-0'}`} />
-            <span className={`pointer-events-none relative z-10 flex w-full items-center leading-none ${checked ? 'justify-start pl-2 pr-7' : 'justify-end pl-7 pr-2'}`}>
-                {disabled ? 'Ожидание...' : checked ? 'На сайте' : 'Скрыт'}
-            </span>
-        </button>
-    );
-}
-
-function ProductTemplateRow({
-    product,
-    isExpanded,
-    publishing,
-    expandedBatchIds,
-    batchItemsById,
-    batchLoadingIds,
-    batchErrors,
-    onTogglePublish,
-    onCreateOrder,
-    onEdit,
-    onToggleProduct,
-    onToggleBatch,
-    onBatchQrPrint,
-    onSelectItem
-}: {
-    product: ProductView;
-    isExpanded: boolean;
-    publishing: boolean;
-    expandedBatchIds: Record<string, boolean>;
-    batchItemsById: Record<string, BatchItem[]>;
-    batchLoadingIds: Record<string, boolean>;
-    batchErrors: Record<string, string>;
-    onTogglePublish: (product: ProductView) => void | Promise<void>;
-    onCreateOrder: (product: ProductView) => void;
-    onEdit: (product: ProductView) => void;
-    onToggleProduct: (product: ProductView) => void | Promise<void>;
-    onToggleBatch: (batchId: string) => void | Promise<void>;
-    onBatchQrPrint: (batchId: string) => void;
-    onSelectItem: (itemId: string) => void | Promise<void>;
-}) {
-    const name = getDefaultTranslationValue(product.translations, 'name') || 'Без названия';
-    const description = getDefaultTranslationValue(product.translations, 'description');
+    const counts = useMemo(() => {
+        const result = new Map<string, { total: number; published: number; stock: number }>();
+        for (const product of products) {
+            const current = result.get(product.location_id) || { total: 0, published: 0, stock: 0 };
+            current.total += 1;
+            current.published += product.is_published ? 1 : 0;
+            current.stock += product.available_stock;
+            result.set(product.location_id, current);
+        }
+        return result;
+    }, [products]);
 
     return (
-        <article className="admin-panel rounded-[24px] px-5 py-4">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-3">
-                        <h3 className="min-w-0 text-lg font-semibold text-white">{name}</h3>
-                        <span className="text-lg font-semibold text-gray-100">{formatRub(product.price)}</span>
-                        <PublishSwitch
-                            checked={product.is_published}
-                            disabled={publishing}
-                            onClick={() => void onTogglePublish(product)}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => onEdit(product)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-white/[0.05] hover:text-white"
-                            aria-label={`Изменить ${name}`}
-                        >
-                            <PencilLine size={16} />
-                        </button>
-                    </div>
-
-                    <p className="mt-3 max-w-4xl text-sm leading-6 text-gray-400">
-                        <span className="mr-2 text-xs font-medium uppercase tracking-[0.18em] text-gray-600">Описание товара</span>
-                        {description || 'Описание не заполнено.'}
-                    </p>
-
-                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-                        <span className="font-medium text-gray-600">Коды:</span>
-                        <span>{product.country_code}</span>
-                        <span className="h-3 border-l border-white/10" />
-                        <span>{product.location_code}</span>
-                        <span className="h-3 border-l border-white/10" />
-                        <span>{product.item_code}</span>
-                    </div>
-
-                    {product.location_description && (
-                        <p className="mt-3 rounded-xl border border-white/6 bg-black/20 px-3 py-2 text-sm leading-6 text-gray-300">
-                            <span className="mr-2 text-xs font-medium uppercase tracking-[0.18em] text-gray-600">Описание места</span>
-                            {product.location_description}
-                        </p>
-                    )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 xl:max-w-[320px] xl:justify-end">
-                    <span className="inline-flex h-9 items-center rounded-full border border-blue-400/15 bg-blue-500/10 px-3 text-sm text-blue-100">
-                        В наличии: {product.available_stock}
-                    </span>
-                    <button
-                        type="button"
-                        onClick={() => onCreateOrder(product)}
-                        className="inline-flex h-9 items-center rounded-full border border-white/8 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:bg-white/[0.07]"
-                    >
-                        Создать заказ
-                    </button>
-                </div>
-            </div>
-
-            <div className="mt-4 flex justify-end border-t border-white/6 pt-3">
-                <button
-                    type="button"
-                    data-testid={`product-expand-${product.id}`}
-                    onClick={() => void onToggleProduct(product)}
-                    className="inline-flex h-9 items-center gap-2 rounded-full border border-white/8 bg-white/[0.04] px-3 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
-                >
-                    {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                    Партии: {product.batches.length}
-                </button>
-            </div>
-
-            {isExpanded && (
-                <div className="mt-4 rounded-2xl border border-white/6 bg-[#0f1217] p-3">
-                    {product.batches.length === 0 ? (
-                        <p className="px-2 py-3 text-sm text-gray-500">У этого шаблона пока нет партий.</p>
-                    ) : (
-                        <div className="space-y-2">
-                            {product.batches.map((batch) => {
-                                const isBatchExpanded = Boolean(expandedBatchIds[batch.id]);
-                                const loadedBatchItems = batchItemsById[batch.id];
-                                const batchItems = loadedBatchItems || [];
-                                const isBatchLoading = Boolean(batchLoadingIds[batch.id]);
-                                const batchError = batchErrors[batch.id];
-                                const readiness = getBatchReadiness(loadedBatchItems, isBatchLoading);
-
-                                return (
-                                    <div key={batch.id} className="rounded-xl border border-white/6 bg-[#141821]">
-                                        <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
-                                            <button
-                                                type="button"
-                                                className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                                                onClick={() => void onToggleBatch(batch.id)}
-                                            >
-                                                <div className="mt-0.5 text-gray-500">
-                                                    {isBatchExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                                                </div>
-                                                <div className="min-w-0">
-                                                    <p className="truncate text-sm font-semibold text-white">{batch.id}</p>
-                                                    <p className="text-xs text-gray-500">
-                                                        {new Date(batch.created_at).toLocaleString('ru-RU')} · камней: {batch.items_count}
-                                                    </p>
-                                                </div>
-                                            </button>
-                                            <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(batch.status).className}`}>
-                                                    {getBatchStatusMeta(batch.status).label}
-                                                </span>
-                                                <BatchReadinessPill readiness={readiness} />
-                                                <button
-                                                    type="button"
-                                                    data-testid={`product-batch-qr-${batch.id}`}
-                                                    onClick={() => onBatchQrPrint(batch.id)}
-                                                    className="inline-flex items-center gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100 transition hover:bg-blue-500/20"
-                                                >
-                                                    <QrCode size={14} />
-                                                    QR
-                                                </button>
+        <AdminTableSurface minWidth={1040}>
+            {loading ? (
+                <AdminWorkspaceState state="loading">Загрузка локаций…</AdminWorkspaceState>
+            ) : locations.length === 0 ? (
+                <AdminWorkspaceState state="empty">Локации не найдены</AdminWorkspaceState>
+            ) : (
+                <table className="w-full border-collapse text-left text-[13px]" data-testid="planet-locations-table">
+                    <thead className="bg-[#10151b] text-[#8f98a4]">
+                        <tr className="h-12 border-b border-[#2a3039]">
+                            <TableHeader>Локация</TableHeader>
+                            <TableHeader>Координаты</TableHeader>
+                            <TableHeader align="right">Карточки</TableHeader>
+                            <TableHeader align="right">На сайте</TableHeader>
+                            <TableHeader align="right">Остаток</TableHeader>
+                            <TableHeader align="right">Действия</TableHeader>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {locations.map((location) => {
+                            const metrics = counts.get(location.id) || { total: 0, published: 0, stock: 0 };
+                            return (
+                                <tr
+                                    key={location.id}
+                                    className="border-b border-[#252b33] bg-[#11161d] text-[#d8dde3] transition hover:bg-[#151b22] last:border-b-0"
+                                    data-testid={`planet-location-row-${location.id}`}
+                                >
+                                    <td className="max-w-[360px] px-4 py-3">
+                                        <div className="flex min-w-0 items-center gap-3">
+                                            <img
+                                                src={location.image || FALLBACK_IMAGE}
+                                                alt=""
+                                                onError={handleImageFallback}
+                                                className="h-11 w-16 shrink-0 rounded-md border border-[#2a3039] object-cover"
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="truncate font-medium text-[#f1f4f7]">{getLocationName(location)}</div>
+                                                <div className="mt-1 truncate text-[12px] text-[#7f8894]">{getLocationCountry(location)}</div>
                                             </div>
                                         </div>
-
-                                        {isBatchExpanded && (
-                                            <div className="border-t border-white/6 px-4 py-4">
-                                                {isBatchLoading ? (
-                                                    <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-sm text-gray-400">
-                                                        Загрузка товаров партии...
-                                                    </div>
-                                                ) : batchError ? (
-                                                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                                                        {batchError}
-                                                    </div>
-                                                ) : batchItems.length === 0 ? (
-                                                    <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-sm text-gray-500">
-                                                        В этой партии пока нет товаров.
-                                                    </div>
-                                                ) : (
-                                                    <ItemGrid items={batchItems} onSelectItem={onSelectItem} />
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
+                                    </td>
+                                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[12px] text-[#aeb6c0]">
+                                        {Number.isFinite(location.lat) && Number.isFinite(location.lng)
+                                            ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
+                                            : '—'}
+                                    </td>
+                                    <td className="px-4 py-3 text-right">{metrics.total}</td>
+                                    <td className="px-4 py-3 text-right text-emerald-200">{metrics.published}</td>
+                                    <td className="px-4 py-3 text-right">{metrics.stock}</td>
+                                    <td className="px-4 py-3">
+                                        <div className="flex justify-end gap-2">
+                                            <AdminAction tone="secondary" className="min-h-8 px-2.5" onClick={() => onEdit(location)} data-testid={`planet-location-edit-${location.id}`}>
+                                                <PencilLine size={14} /> Изменить
+                                            </AdminAction>
+                                            <AdminAction tone="secondary" className="min-h-8 px-2.5" onClick={() => onTranslate(location)} data-testid={`planet-location-translate-${location.id}`}>
+                                                <Languages size={14} /> Переводы
+                                            </AdminAction>
+                                            <AdminAction tone="danger" className="min-h-8 px-2.5" onClick={() => onDelete(location)} data-testid={`planet-location-delete-${location.id}`}>
+                                                <Trash2 size={14} /> Скрыть
+                                            </AdminAction>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
             )}
-        </article>
+        </AdminTableSurface>
     );
 }
 
-function BatchReadinessPill({ readiness }: { readiness: BatchReadiness }) {
-    const className = {
-        ready: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100',
-        warning: 'border-amber-400/25 bg-amber-500/10 text-amber-100',
-        muted: 'border-white/8 bg-white/[0.04] text-gray-400'
-    }[readiness.tone];
-
-    return (
-        <span className={`inline-flex min-h-7 max-w-full items-center rounded-full border px-3 py-1 text-xs font-medium ${className}`}>
-            <span className="truncate">{readiness.label}</span>
-        </span>
-    );
-}
-
-function StatusPill({
-    meta,
-    fallbackLabel,
-    compact = false
+function PublicationTable({
+    products,
+    locationsById,
+    loading,
+    publishingId,
+    onToggle
 }: {
-    meta?: { label: string; className: string };
-    fallbackLabel: string;
-    compact?: boolean;
+    products: ProductView[];
+    locationsById: Map<string, Location>;
+    loading: boolean;
+    publishingId: string;
+    onToggle: (product: ProductView) => void | Promise<void>;
 }) {
     return (
-        <span className={`inline-flex items-center rounded-full px-3 py-1 font-medium ${compact ? 'text-[11px]' : 'text-xs'} ${meta?.className || 'bg-gray-700 text-gray-200 border border-gray-600'}`}>
-            {meta?.label || fallbackLabel}
-        </span>
+        <AdminTableSurface minWidth={940}>
+            {loading ? (
+                <AdminWorkspaceState state="loading">Загрузка публикации…</AdminWorkspaceState>
+            ) : products.length === 0 ? (
+                <AdminWorkspaceState state="empty">Карточки не найдены</AdminWorkspaceState>
+            ) : (
+                <table className="w-full border-collapse text-left text-[13px]" data-testid="planet-publication-table">
+                    <thead className="bg-[#10151b] text-[#8f98a4]">
+                        <tr className="h-12 border-b border-[#2a3039]">
+                            <TableHeader>Карточка</TableHeader>
+                            <TableHeader>Локация</TableHeader>
+                            <TableHeader>Готовность</TableHeader>
+                            <TableHeader>Видимость</TableHeader>
+                            <TableHeader align="right">Действие</TableHeader>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {products.map((product) => {
+                            const location = locationsById.get(product.location_id) || product.location;
+                            const missing = getPublicationReadiness(product);
+                            return (
+                                <tr
+                                    key={product.id}
+                                    className="border-b border-[#252b33] bg-[#11161d] text-[#d8dde3] transition hover:bg-[#151b22] last:border-b-0"
+                                    data-testid={`planet-publication-row-${product.id}`}
+                                >
+                                    <td className="max-w-[360px] px-4 py-3">
+                                        <div className="truncate font-medium text-[#f1f4f7]">{getProductName(product)}</div>
+                                        <div className="mt-1 truncate font-mono text-[12px] text-[#7f8894]">{product.country_code}{product.location_code}{product.item_code}</div>
+                                    </td>
+                                    <td className="max-w-[230px] px-4 py-3">
+                                        <div className="truncate">{getLocationName(location)}</div>
+                                        <div className="mt-1 truncate text-[12px] text-[#7f8894]">{getLocationCountry(location)}</div>
+                                    </td>
+                                    <td className="max-w-[330px] px-4 py-3">
+                                        <AdminStatus label={missing.length === 0 ? 'Готова' : 'Нужно заполнить'} tone={missing.length === 0 ? 'success' : 'warning'} />
+                                        {missing.length > 0 ? <div className="mt-1.5 truncate text-[12px] text-[#8f98a4]">{missing.join(', ')}</div> : null}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <AdminStatus label={product.is_published ? 'На сайте' : 'Скрыта'} tone={product.is_published ? 'success' : 'neutral'} />
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <AdminAction
+                                            tone={product.is_published ? 'secondary' : 'primary'}
+                                            className="min-h-8 min-w-[118px] px-2.5"
+                                            disabled={publishingId === product.id}
+                                            onClick={() => void onToggle(product)}
+                                            data-testid={`planet-publication-toggle-${product.id}`}
+                                        >
+                                            {product.is_published ? <EyeOff size={14} /> : <Eye size={14} />}
+                                            {publishingId === product.id ? 'Сохранение…' : product.is_published ? 'Скрыть' : 'Показать'}
+                                        </AdminAction>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            )}
+        </AdminTableSurface>
     );
 }
 
-function ItemGrid({ items, onSelectItem }: { items: BatchItem[]; onSelectItem: (itemId: string) => void | Promise<void> }) {
+function ProductFormView({
+    form,
+    setForm,
+    categories,
+    locations,
+    uploading,
+    saving,
+    onUpload,
+    onCancel,
+    onSubmit
+}: {
+    form: ProductForm;
+    setForm: (update: (current: ProductForm) => ProductForm) => void;
+    categories: Category[];
+    locations: Location[];
+    uploading: boolean;
+    saving: boolean;
+    onUpload: (event: ChangeEvent<HTMLInputElement>) => void | Promise<void>;
+    onCancel: () => void;
+    onSubmit: (event: FormEvent) => void | Promise<void>;
+}) {
     return (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {items.map((item) => {
-                const previewImage = item.item_photo_url || item.photo_url || createFallbackImage;
-                return (
-                    <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => void onSelectItem(item.id)}
-                        className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 text-left transition hover:border-blue-500/50 hover:bg-gray-900 ${item.is_sold ? 'opacity-55' : ''}`}
-                    >
-                        <div className="aspect-square bg-gray-900">
-                            <img src={previewImage} alt={item.serial_number || item.temp_id} onError={handleImageFallback} className="h-full w-full object-cover" />
+        <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col" data-testid="planet-product-form">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
+                    <ModalField label="Название" className="md:col-span-2">
+                        <input className={inputClassName} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Описание товара" className="md:col-span-2">
+                        <textarea className={textareaClassName} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Локация">
+                        <select className={inputClassName} value={form.location_id} onChange={(event) => setForm((current) => ({ ...current, location_id: event.target.value }))} required>
+                            <option value="">Выберите локацию</option>
+                            {locations.map((location) => <option key={location.id} value={location.id}>{getLocationName(location)}</option>)}
+                        </select>
+                    </ModalField>
+                    <ModalField label="Категория">
+                        <select className={inputClassName} value={form.category_id} onChange={(event) => setForm((current) => ({ ...current, category_id: event.target.value }))} required>
+                            <option value="">Выберите категорию</option>
+                            {categories.map((category) => <option key={category.id} value={category.id}>{getDefaultTranslationValue(category.translations, 'name')}</option>)}
+                        </select>
+                    </ModalField>
+                    <ModalField label="Цена">
+                        <input className={inputClassName} type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Изображение">
+                        <input className={inputClassName} value={form.image} onChange={(event) => setForm((current) => ({ ...current, image: event.target.value }))} placeholder="/uploads/... или https://..." />
+                    </ModalField>
+                    <ModalField label="Загрузить изображение" className="md:col-span-2">
+                        <div className="rounded-lg border border-[#2a3039] bg-[#151a21] px-3 py-2.5">
+                            <input className={fileInputClassName} type="file" accept="image/*" onChange={onUpload} disabled={uploading} />
+                            {uploading ? <div className="mt-2 text-[12px] text-[#89919d]">Загрузка…</div> : null}
                         </div>
-                        <div className="space-y-2 px-3 py-3">
-                            <div className="flex items-start justify-between gap-2">
-                                <p className="min-w-0 truncate text-sm font-semibold text-white">{item.serial_number || item.temp_id}</p>
-                                <StatusPill meta={itemStatusMeta[item.status]} fallbackLabel={item.status} compact />
-                            </div>
-                            <p className="truncate text-xs text-gray-500">Пакет: {item.temp_id}</p>
-                            <div className="flex items-center justify-between text-xs text-gray-500">
-                                <span>{item.is_sold ? 'Продан' : 'Не продан'}</span>
-                                <span>{item.sales_channel || '—'}</span>
-                            </div>
+                    </ModalField>
+                    <ModalField label="Описание места" className="md:col-span-2">
+                        <textarea className={textareaClassName} value={form.location_description} onChange={(event) => setForm((current) => ({ ...current, location_description: event.target.value }))} />
+                    </ModalField>
+                    <ModalField label="Код страны">
+                        <input className={inputClassName} maxLength={3} value={form.country_code} onChange={(event) => setForm((current) => ({ ...current, country_code: event.target.value.toUpperCase() }))} required />
+                    </ModalField>
+                    <ModalField label="Код локации">
+                        <input className={inputClassName} maxLength={3} value={form.location_code} onChange={(event) => setForm((current) => ({ ...current, location_code: event.target.value.toUpperCase() }))} required />
+                    </ModalField>
+                    <ModalField label="Код товара">
+                        <input className={inputClassName} maxLength={8} value={form.item_code} onChange={(event) => setForm((current) => ({ ...current, item_code: event.target.value.toUpperCase() }))} required />
+                    </ModalField>
+                    <div />
+                    <ModalField label="Wildberries URL">
+                        <input className={inputClassName} value={form.wildberries_url} onChange={(event) => setForm((current) => ({ ...current, wildberries_url: event.target.value }))} />
+                    </ModalField>
+                    <ModalField label="Ozon URL">
+                        <input className={inputClassName} value={form.ozon_url} onChange={(event) => setForm((current) => ({ ...current, ozon_url: event.target.value }))} />
+                    </ModalField>
+                </div>
+            </div>
+            <ModalFooter>
+                <AdminAction tone="secondary" onClick={onCancel}>Отмена</AdminAction>
+                <AdminAction type="submit" disabled={saving} data-testid="planet-product-save">{saving ? 'Сохранение…' : 'Сохранить'}</AdminAction>
+            </ModalFooter>
+        </form>
+    );
+}
+
+function LocationFormView({
+    form,
+    setForm,
+    uploading,
+    saving,
+    onUpload,
+    onCancel,
+    onSubmit
+}: {
+    form: LocationForm;
+    setForm: (update: (current: LocationForm) => LocationForm) => void;
+    uploading: boolean;
+    saving: boolean;
+    onUpload: (event: ChangeEvent<HTMLInputElement>) => void | Promise<void>;
+    onCancel: () => void;
+    onSubmit: (event: FormEvent) => void | Promise<void>;
+}) {
+    return (
+        <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col" data-testid="planet-location-form">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
+                    <ModalField label="Название">
+                        <input className={inputClassName} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Страна">
+                        <input className={inputClassName} value={form.country} onChange={(event) => setForm((current) => ({ ...current, country: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Широта">
+                        <input className={inputClassName} type="number" step="any" value={form.lat} onChange={(event) => setForm((current) => ({ ...current, lat: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Долгота">
+                        <input className={inputClassName} type="number" step="any" value={form.lng} onChange={(event) => setForm((current) => ({ ...current, lng: event.target.value }))} required />
+                    </ModalField>
+                    <ModalField label="Описание" className="md:col-span-2">
+                        <textarea className={textareaClassName} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} />
+                    </ModalField>
+                    <ModalField label="Изображение" className="md:col-span-2">
+                        <input className={inputClassName} value={form.image} onChange={(event) => setForm((current) => ({ ...current, image: event.target.value }))} placeholder="/uploads/... или /locations/..." />
+                    </ModalField>
+                    <ModalField label="Загрузить изображение" className="md:col-span-2">
+                        <div className="rounded-lg border border-[#2a3039] bg-[#151a21] px-3 py-2.5">
+                            <input className={fileInputClassName} type="file" accept="image/*" onChange={onUpload} disabled={uploading} />
+                            {uploading ? <div className="mt-2 text-[12px] text-[#89919d]">Загрузка…</div> : null}
                         </div>
+                    </ModalField>
+                </div>
+            </div>
+            <ModalFooter>
+                <AdminAction tone="secondary" onClick={onCancel}>Отмена</AdminAction>
+                <AdminAction type="submit" disabled={saving} data-testid="planet-location-save">{saving ? 'Сохранение…' : 'Сохранить'}</AdminAction>
+            </ModalFooter>
+        </form>
+    );
+}
+
+function CollectionOrderFormView({
+    form,
+    setForm,
+    franchisees,
+    saving,
+    onCancel,
+    onSubmit
+}: {
+    form: CollectionOrderForm;
+    setForm: (update: (current: CollectionOrderForm) => CollectionOrderForm) => void;
+    franchisees: UserOption[];
+    saving: boolean;
+    onCancel: () => void;
+    onSubmit: (event: FormEvent) => void | Promise<void>;
+}) {
+    return (
+        <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col" data-testid="planet-product-order-form">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+                <div className="rounded-lg border border-[#2a3039] bg-[#151a21] px-3 py-2.5 text-[13px] text-[#d8dde3]">{form.productName}</div>
+                <ModalField label="Количество">
+                    <input className={inputClassName} type="number" min="1" max="999" inputMode="numeric" value={form.requested_qty} onChange={(event) => setForm((current) => ({ ...current, requested_qty: event.target.value.replace(/[^\d]/g, '') }))} required />
+                </ModalField>
+                <ModalField label="Исполнитель">
+                    <select className={inputClassName} value={form.target_user_id} onChange={(event) => setForm((current) => ({ ...current, target_user_id: event.target.value }))}>
+                        <option value="">Общий пул партнеров</option>
+                        <option value={ACCEPT_IMMEDIATELY_OPTION}>Принять сразу</option>
+                        {franchisees.map((user) => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}
+                    </select>
+                </ModalField>
+                {form.target_user_id === ACCEPT_IMMEDIATELY_OPTION ? (
+                    <div className="grid grid-cols-2 gap-4">
+                        <ModalField label="Дата сбора">
+                            <input className={inputClassName} type="date" value={form.collected_date} onChange={(event) => setForm((current) => ({ ...current, collected_date: event.target.value }))} required />
+                        </ModalField>
+                        <ModalField label="Время сбора">
+                            <input className={inputClassName} type="time" value={form.collected_time} onChange={(event) => setForm((current) => ({ ...current, collected_time: event.target.value }))} required />
+                        </ModalField>
+                    </div>
+                ) : null}
+                <ModalField label="Комментарий">
+                    <textarea className={textareaClassName} value={form.note} onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))} />
+                </ModalField>
+            </div>
+            <ModalFooter>
+                <AdminAction tone="secondary" onClick={onCancel}>Отмена</AdminAction>
+                <AdminAction type="submit" disabled={saving} data-testid="planet-product-order-submit">{saving ? 'Создание…' : 'Создать заказ'}</AdminAction>
+            </ModalFooter>
+        </form>
+    );
+}
+
+function WorkspaceModal({
+    open,
+    title,
+    onClose,
+    children,
+    maxWidth,
+    testId
+}: {
+    open: boolean;
+    title: string;
+    onClose: () => void;
+    children: ReactNode;
+    maxWidth: string;
+    testId: string;
+}) {
+    if (!open) return null;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-5 py-5" role="presentation" onMouseDown={onClose}>
+            <section
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
+                className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-[#2a3039] bg-[#11161d] shadow-[0_28px_90px_rgba(0,0,0,0.5)] ${maxWidth}`}
+                onMouseDown={(event) => event.stopPropagation()}
+                data-testid={testId}
+            >
+                <header className="flex min-h-16 items-center justify-between gap-4 border-b border-[#2a3039] px-5">
+                    <h2 className="text-lg font-semibold text-[#f3f6f8]">{title}</h2>
+                    <button type="button" onClick={onClose} aria-label="Закрыть" className="flex h-9 w-9 items-center justify-center rounded-md border border-[#303842] bg-[#181e26] text-[#a8b0ba] transition hover:text-white">
+                        <X size={17} />
                     </button>
-                );
-            })}
+                </header>
+                {children}
+            </section>
         </div>
     );
 }
 
-function SectionTitle({ title }: { title: string }) {
-    return <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-400">{title}</h3>;
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function ModalField({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
     return (
-        <label className="block">
-            <span className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500">{label}</span>
+        <label className={`block min-w-0 ${className}`}>
+            <span className="mb-1.5 block text-[12px] font-medium text-[#a8b0ba]">{label}</span>
             {children}
         </label>
     );
+}
+
+function ModalFooter({ children }: { children: ReactNode }) {
+    return <footer className="flex justify-end gap-2 border-t border-[#2a3039] bg-[#10151b] px-5 py-4">{children}</footer>;
+}
+
+function RefreshAction({ loading, onClick }: { loading: boolean; onClick: () => void }) {
+    return (
+        <AdminAction tone="secondary" aria-label="Обновить" className="h-11 min-h-11 w-11 px-0" onClick={onClick}>
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+        </AdminAction>
+    );
+}
+
+function TableHeader({ children, align = 'left' }: { children: ReactNode; align?: 'left' | 'right' }) {
+    return <th className={`px-4 py-3 text-[12px] font-medium ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</th>;
+}
+
+function viewParamToProductsWorkspace(value: string | null): ProductsWorkspaceView {
+    return value === 'locations' || value === 'publication' ? value : 'catalog';
 }

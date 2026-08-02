@@ -109,30 +109,30 @@ test('Sales manager can search, edit and process checkout заявки without l
     await page.locator('input[type="password"]').fill(SALES_PASSWORD);
     await page.getByRole('button', { name: 'Войти' }).click();
 
-    await expect(page).toHaveURL(/\/admin\/orders$/);
-    await expect(page.getByRole('heading', { name: 'Заказы с сайта' })).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/orders\/new$/);
+    await expect(page.getByRole('heading', { name: 'Новые заказы', exact: true })).toBeVisible();
 
     await page.goto('/admin/clients');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Клиенты' })).toBeVisible();
     await page.goto('/admin/inventory');
-    await expect(page.getByRole('heading', { name: 'Наличие в продаже' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Наличие', exact: true })).toBeVisible();
     await page.goto('/admin/sales-history');
     await expect(page.getByRole('main').getByRole('heading', { name: 'История продаж' })).toBeVisible();
-    await page.goto('/admin/orders');
+    await page.goto('/admin/orders/new');
 
     await page.getByLabel('Поиск по заказам').fill(username);
 
-    const orderRow = page.locator('aside button').filter({ hasText: username }).first();
+    const orderRow = page.locator('[data-testid^="order-row-"]').filter({ hasText: username }).first();
     await expect(orderRow).toBeVisible();
-    await orderRow.click();
+    await orderRow.getByRole('button', { name: 'Открыть' }).click();
 
-    const detailPane = page.getByRole('heading', { name: /Заказ #/ }).locator('xpath=ancestor::section[1]');
+    const detailPane = page.getByTestId('order-drawer');
 
     await expect(detailPane.getByText(initialAddress)).toBeVisible();
     await expect(detailPane.getByText(initialComment)).toBeVisible();
     await expect(detailPane.getByText('НОВАЯ').first()).toBeVisible();
 
-    await detailPane.getByRole('button', { name: 'Редактировать' }).click();
+    await detailPane.getByRole('button', { name: 'Изменить данные' }).click();
     await detailPane.getByLabel('Контактный телефон').fill(updatedPhone);
     await detailPane.getByLabel('Email').fill(updatedEmail);
     await detailPane.getByLabel('Адрес доставки').fill(updatedAddress);
@@ -145,8 +145,7 @@ test('Sales manager can search, edit and process checkout заявки without l
     await expect(detailPane.getByText(updatedAddress)).toBeVisible();
     await expect(detailPane.getByText(updatedComment)).toBeVisible();
     await expect(detailPane.getByText(internalNote)).toBeVisible();
-    await expect(page.locator('aside button').filter({ hasText: updatedPhone }).first()).toBeVisible();
-    await expect(page.locator('aside button').filter({ hasText: updatedAddress }).first()).toBeVisible();
+    await expect(page.locator('[data-testid^="order-row-"]').filter({ hasText: updatedPhone }).first()).toBeVisible();
 
     await detailPane.getByRole('button', { name: 'Принять' }).click();
     await expect(detailPane.getByText('В РАБОТЕ').first()).toBeVisible();
@@ -168,9 +167,15 @@ test('Sales manager can search, edit and process checkout заявки without l
     await expect(detailPane.getByText('ОТПРАВЛЕН').first()).toBeVisible();
 
     await detailPane.getByRole('button', { name: 'Синхронизировать' }).click();
-    await page.getByRole('button', { name: 'Закрытые' }).click();
-    await expect(page.locator('aside button').filter({ hasText: username }).first()).toBeVisible();
-    await expect(detailPane.getByText('ПОЛУЧЕН').first()).toBeVisible();
+    await expect(page.getByTestId('order-drawer')).toHaveCount(0);
+    await page.goto('/admin/orders/closed');
+    await page.getByLabel('Поиск по заказам').fill(username);
+    const closedOrderRow = page.locator('[data-testid^="order-row-"]').filter({ hasText: username }).first();
+    await expect(closedOrderRow).toBeVisible();
+    await closedOrderRow.getByRole('button', { name: 'Открыть' }).click();
+    const closedDetailPane = page.getByTestId('order-drawer');
+    await expect(closedDetailPane.getByText('ПОЛУЧЕН').first()).toBeVisible();
+    await expect(closedDetailPane.getByTestId('order-stage-actions')).toHaveCount(0);
 
     const salesAuth = await loginViaApi(request, SALES_EMAIL, SALES_PASSWORD);
     const salesQuery = new URLSearchParams({
@@ -240,19 +245,32 @@ test('Sales manager can search, edit and process checkout заявки without l
     expect(buyerOrder?.internal_note).toBeUndefined();
 });
 
-test('Sales cabinet ACL: sales manager sees all 4 sales screens, manager is redirected away', async ({ page }) => {
+test('Sales cabinet ACL: sales manager sees every sales workspace, manager is redirected away', async ({ page }) => {
     await page.goto('/admin/login');
     await page.locator('input[type="email"]').fill(SALES_EMAIL);
     await page.locator('input[type="password"]').fill(SALES_PASSWORD);
     await page.getByRole('button', { name: 'Войти' }).click();
-    await page.waitForURL(/\/admin\/orders$/);
+    await page.waitForURL(/\/admin\/orders\/new$/);
 
     await page.goto('/admin/orders');
-    await expect(page.getByRole('heading', { name: 'Заказы с сайта' })).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/orders\/new$/);
+    await expect(page.getByRole('heading', { name: 'Новые заказы', exact: true })).toBeVisible();
+    await page.goto('/admin/orders/new');
+    await expect(page.getByRole('heading', { name: 'Новые заказы', exact: true })).toBeVisible();
+    await page.goto('/admin/orders/in-progress');
+    await expect(page.getByRole('heading', { name: 'Заказы в работе', exact: true })).toBeVisible();
+    await page.goto('/admin/orders/packed');
+    await expect(page.getByRole('heading', { name: 'Упакованные заказы', exact: true })).toBeVisible();
+    await page.goto('/admin/orders/delivery');
+    await expect(page.getByRole('heading', { name: 'Доставка', exact: true })).toBeVisible();
+    await page.goto('/admin/orders/returns');
+    await expect(page.getByRole('heading', { name: 'Возвраты', exact: true })).toBeVisible();
+    await page.goto('/admin/orders/closed');
+    await expect(page.getByRole('heading', { name: 'Закрытые заказы', exact: true })).toBeVisible();
     await page.goto('/admin/clients');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Клиенты' })).toBeVisible();
     await page.goto('/admin/inventory');
-    await expect(page.getByRole('heading', { name: 'Наличие в продаже' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Наличие', exact: true })).toBeVisible();
     await page.goto('/admin/sales-history');
     await expect(page.getByRole('main').getByRole('heading', { name: 'История продаж' })).toBeVisible();
 
@@ -262,6 +280,8 @@ test('Sales cabinet ACL: sales manager sees all 4 sales screens, manager is redi
     await page.getByRole('button', { name: 'Войти' }).click();
     await page.waitForURL(/\/admin$/);
 
+    await page.goto('/admin/orders/new');
+    await page.waitForURL(/\/admin$/);
     await page.goto('/admin/clients');
     await page.waitForURL(/\/admin$/);
     await page.goto('/admin/inventory');
@@ -351,19 +371,20 @@ test('Sales inventory supports filters, serial search and item detail', async ({
     await page.waitForURL(/\/admin\/orders$/);
 
     await page.goto('/admin/inventory');
-    await expect(page.getByRole('heading', { name: 'Наличие в продаже' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Наличие', exact: true })).toBeVisible();
     await expect(page.getByTestId('inventory-page-size')).toHaveValue('300');
 
     await page.getByLabel('Поиск по наличию').fill(serialNumber);
     await expect(page.getByTestId(`inventory-row-${productId}`)).toBeVisible();
 
-    await page.getByTestId('inventory-stock-filter').selectOption('OUT');
+    await page.getByTestId('inventory-stock-filter').locator('select').selectOption('OUT');
     await expect(page.getByText('По текущим фильтрам товаров не найдено.')).toBeVisible();
 
-    await page.getByTestId('inventory-stock-filter').selectOption('FREE');
+    await page.getByTestId('inventory-stock-filter').locator('select').selectOption('FREE');
     await expect(page.getByTestId(`inventory-row-${productId}`)).toBeVisible();
 
     await page.getByLabel(`Раскрыть ${productName}`).click();
+    await page.getByText('В резерве', { exact: true }).click();
     await expect(page.getByText(serialNumber)).toBeVisible();
     await expect(page.getByLabel(`Открыть клон ${serialNumber}`)).toBeVisible();
     await expect(page.getByText(/Резерв: заказ/)).toBeVisible();

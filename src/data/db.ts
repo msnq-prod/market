@@ -49,6 +49,12 @@ export interface Location {
     lat: number;
     lng: number;
     image?: string;
+    label_desktop_offset?: number;
+    label_desktop_vertical_offset?: number;
+    label_desktop_direction?: 'UP' | 'DOWN';
+    label_mobile_offset?: number;
+    label_mobile_vertical_offset?: number;
+    label_mobile_direction?: 'UP' | 'DOWN';
     translations: {
         language_id: number;
         name: string;

@@ -1,13 +1,33 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Archive, Boxes, ChevronDown, ChevronRight, ExternalLink, Layers3, MapPin, Package, QrCode, Trash2, Search, VideoOff } from 'lucide-react';
-import { Button, Modal } from '../components/ui';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import {
+    Box,
+    ChevronLeft,
+    ChevronRight,
+    ExternalLink,
+    QrCode,
+    Settings2,
+    Trash2,
+    VideoOff
+} from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import {
+    AdminAction,
+    AdminDrawer,
+    AdminInlineError,
+    AdminSearchField,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState
+} from '../components/AdminWorkspaceUI';
 
 type Translation = {
     language_id: number;
     name: string;
-    description?: string;
-    country?: string;
+    description?: string | null;
+    country?: string | null;
 };
 
 type BatchItem = {
@@ -35,56 +55,41 @@ type BatchItem = {
     qr_url: string | null;
 };
 
+type BatchProduct = {
+    id: string;
+    image: string;
+    country_code: string;
+    location_code: string;
+    item_code: string;
+    location_description?: string | null;
+    is_published?: boolean;
+    translations: Translation[];
+    location?: {
+        id: string;
+        translations: Translation[];
+    } | null;
+};
+
 type BatchView = {
     id: string;
     status: string;
     created_at: string;
     updated_at: string;
-    collected_date?: string | null;
-    collected_time?: string | null;
-    gps_lat?: number | null;
-    gps_lng?: number | null;
-    daily_batch_seq?: number | null;
     owner?: {
         id: string;
         name: string;
         email: string;
     };
-    product?: {
-        id: string;
-        image: string;
-        country_code: string;
-        location_code: string;
-        item_code: string;
-        location_description?: string | null;
-        translations: Translation[];
-        location?: {
-            id: string;
-            translations: Translation[];
-        } | null;
-    } | null;
+    product?: BatchProduct | null;
     items: BatchItem[];
 };
 
 type CollectionRequestView = {
     id: string;
     title: string;
-    note?: string | null;
     requested_qty: number;
     status: string;
     created_at: string;
-    product?: {
-        id: string;
-        image: string;
-        country_code: string;
-        location_code: string;
-        item_code: string;
-        is_published: boolean;
-        translations: Translation[];
-        location?: {
-            translations: Translation[];
-        };
-    } | null;
     target_user?: {
         id: string;
         name: string;
@@ -95,6 +100,7 @@ type CollectionRequestView = {
         name: string;
         email: string;
     } | null;
+    product?: BatchProduct | null;
     batch?: {
         id: string;
         status: string;
@@ -113,88 +119,69 @@ type ItemDetail = BatchItem & {
     batch: {
         id: string;
         status: string;
-        daily_batch_seq?: number | null;
-        collected_date?: string | null;
-        collected_time?: string | null;
         owner?: {
             id: string;
             name: string;
             email: string;
         } | null;
     };
-    product?: {
-        id: string;
-        image: string;
-        country_code: string;
-        location_code: string;
-        item_code: string;
-        location_description?: string | null;
-        is_published: boolean;
-        translations: Translation[];
-        location?: {
-            id: string;
-            translations: Translation[];
-        } | null;
-    } | null;
+    product?: BatchProduct | null;
 };
 
-type ItemFormState = {
-    temp_id: string;
-    serial_number: string;
-    item_seq: string;
-    status: string;
-    is_sold: boolean;
-    sales_channel: string;
-    photo_url: string;
-    item_photo_url: string;
-    item_video_url: string;
-    collected_date: string;
-    collected_time: string;
-    activation_date: string;
-    price_sold: string;
-    commission_hq: string;
-};
-
-type ProductGroup = {
+type WarehouseProductRow = {
     key: string;
-    name: string;
-    product: BatchView['product'] | null;
-    batches: BatchView[];
-    items: BatchItem[];
-    unsoldCount: number;
-    statusCounts: Record<string, number>;
+    productName: string;
+    locationName: string;
+    productCode: string;
+    batchCount: number;
+    total: number;
+    stockHq: number;
+    stockOnline: number;
+    consignment: number;
+    activated: number;
 };
 
-type LocationGroup = {
-    key: string;
-    name: string;
-    productGroups: ProductGroup[];
-    itemCount: number;
-    unsoldCount: number;
-    statusCounts: Record<string, number>;
+type WarehouseItemMatch = {
+    item: BatchItem;
+    batchId: string;
+    productName: string;
+    locationName: string;
 };
 
-const workflowStatusMeta: Record<string, { label: string; className: string }> = {
-    OPEN: { label: 'Открыт', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
-    IN_PROGRESS: { label: 'В работе', className: 'bg-amber-500/15 text-amber-200 border border-amber-500/30' },
-    IN_TRANSIT: { label: 'В пути', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
-    DRAFT: { label: 'Черновик', className: 'bg-amber-500/15 text-amber-200 border border-amber-500/30' },
-    TRANSIT: { label: 'В пути', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
-    RECEIVED: { label: 'Принята', className: 'bg-white/[0.06] text-gray-100 border border-white/12' },
-    IN_STOCK: { label: 'На складе', className: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30' },
-    FINISHED: { label: 'Завершена', className: 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/30' },
-    ERROR: { label: 'Ошибка', className: 'bg-red-500/15 text-red-200 border border-red-500/30' },
-    CANCELLED: { label: 'Отменена', className: 'bg-red-500/15 text-red-200 border border-red-500/30' }
+type WarehouseWorkspaceView = 'stock' | 'items' | 'maintenance' | 'requests';
+type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+const PAGE_SIZE = 10;
+const STOCK_COLUMNS = 'minmax(360px, 1.7fr) 92px repeat(4, 112px)';
+const ITEM_COLUMNS = 'minmax(250px, 1.2fr) minmax(210px, 1fr) minmax(190px, 1fr) 150px 150px';
+const REQUEST_COLUMNS = 'minmax(330px, 1.5fr) 92px 138px minmax(180px, .9fr) minmax(210px, 1fr) 120px 112px';
+const MAINTENANCE_COLUMNS = 'minmax(340px, 1.5fr) 130px 92px 92px 118px minmax(280px, 1fr)';
+
+const batchStatusMeta: Record<string, { label: string; tone: StatusTone }> = {
+    DRAFT: { label: 'Черновик', tone: 'warning' },
+    TRANSIT: { label: 'В пути', tone: 'info' },
+    RECEIVED: { label: 'Принята', tone: 'info' },
+    ERROR: { label: 'Ошибка', tone: 'danger' },
+    FINISHED: { label: 'Завершена', tone: 'success' }
 };
 
-const itemStatusMeta: Record<string, { label: string; className: string }> = {
-    NEW: { label: 'Новый', className: 'bg-[#1b1e24] text-gray-300' },
-    REJECTED: { label: 'Отклонен', className: 'bg-red-500/15 text-red-200' },
-    STOCK_HQ: { label: 'На складе HQ', className: 'bg-emerald-500/15 text-emerald-200' },
-    STOCK_ONLINE: { label: 'Онлайн', className: 'bg-white/[0.06] text-gray-100' },
-    ON_CONSIGNMENT: { label: 'Консигнация', className: 'bg-amber-500/15 text-amber-200' },
-    SOLD_ONLINE: { label: 'Продан онлайн', className: 'bg-white/[0.06] text-gray-100' },
-    ACTIVATED: { label: 'Активирован', className: 'bg-white/[0.06] text-gray-100' }
+const requestStatusMeta: Record<string, { label: string; tone: StatusTone }> = {
+    OPEN: { label: 'Открыта', tone: 'neutral' },
+    IN_PROGRESS: { label: 'В работе', tone: 'warning' },
+    IN_TRANSIT: { label: 'В пути', tone: 'info' },
+    RECEIVED: { label: 'Принята', tone: 'info' },
+    IN_STOCK: { label: 'На складе', tone: 'success' },
+    CANCELLED: { label: 'Отменена', tone: 'danger' }
+};
+
+const itemStatusMeta: Record<string, { label: string; tone: StatusTone }> = {
+    NEW: { label: 'Новая', tone: 'neutral' },
+    REJECTED: { label: 'Отклонена', tone: 'danger' },
+    STOCK_HQ: { label: 'Склад HQ', tone: 'success' },
+    STOCK_ONLINE: { label: 'Онлайн', tone: 'info' },
+    ON_CONSIGNMENT: { label: 'Консигнация', tone: 'warning' },
+    SOLD_ONLINE: { label: 'Продана', tone: 'info' },
+    ACTIVATED: { label: 'Активирована', tone: 'success' }
 };
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
@@ -205,12 +192,25 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
     return typeof value === 'string' ? value : '';
 };
 
-const formatStatusCount = (statusCounts: Record<string, number>, status: string) => statusCounts[status] || 0;
+const normalize = (value: string) => value.trim().toLocaleLowerCase('ru');
 
-const countItemStatuses = (items: BatchItem[]) => items.reduce<Record<string, number>>((acc, item) => {
-    acc[item.status] = (acc[item.status] || 0) + 1;
-    return acc;
-}, {});
+const getProductName = (product?: BatchProduct | null) => (
+    product ? getDefaultTranslationValue(product.translations, 'name') || 'Без названия' : 'Без товара'
+);
+
+const getLocationName = (product?: BatchProduct | null) => {
+    if (!product) return 'Без локации';
+    const translatedName = product.location
+        ? getDefaultTranslationValue(product.location.translations, 'name')
+        : '';
+    return translatedName || product.location_description || product.location_code || 'Без локации';
+};
+
+const getProductCode = (product?: BatchProduct | null) => (
+    product
+        ? [product.country_code, product.location_code, product.item_code].filter(Boolean).join(' · ')
+        : 'LEGACY'
+);
 
 const formatDateTime = (value?: string | null) => {
     if (!value) return '—';
@@ -218,291 +218,193 @@ const formatDateTime = (value?: string | null) => {
     return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleString('ru-RU');
 };
 
-const formatDateOnly = (value?: string | null) => {
-    if (!value) return '';
+const formatDate = (value?: string | null) => {
+    if (!value) return '—';
     const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+    return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString('ru-RU');
 };
 
-const formatDateTimeLocalInput = (value?: string | null) => {
-    if (!value) return '';
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return '';
+const formatMoney = (value?: number | null) => (
+    value == null ? '—' : `${new Intl.NumberFormat('ru-RU').format(value)} ₽`
+);
 
-    const pad = (part: number) => String(part).padStart(2, '0');
-    return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
-};
-
-const buildItemFormState = (item: ItemDetail): ItemFormState => ({
-    temp_id: item.temp_id,
-    serial_number: item.serial_number || '',
-    item_seq: item.item_seq == null ? '' : String(item.item_seq),
-    status: item.status,
-    is_sold: item.is_sold,
-    sales_channel: item.sales_channel || '',
-    photo_url: item.source_photo_url || '',
-    item_photo_url: item.item_photo_url || '',
-    item_video_url: item.item_video_url || '',
-    collected_date: formatDateOnly(item.collected_date),
-    collected_time: item.collected_time || '',
-    activation_date: formatDateTimeLocalInput(item.activation_date),
-    price_sold: item.price_sold == null ? '' : String(item.price_sold),
-    commission_hq: item.commission_hq == null ? '' : String(item.commission_hq)
-});
-
-const getSerialFamily = (serialNumber: string | null) => {
-    if (!serialNumber) {
-        return 'Без серийного номера';
-    }
-
-    return serialNumber.length > 3 ? serialNumber.slice(0, -3) : serialNumber;
-};
-
-const sortItems = (items: BatchItem[]) => [...items].sort((left, right) => {
-    const leftKey = left.serial_number || left.temp_id;
-    const rightKey = right.serial_number || right.temp_id;
-    return leftKey.localeCompare(rightKey, 'ru');
-});
-
-const createItemPath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
-
-const createFallbackImage = '/locations/crystal-caves.jpg';
+const getStatus = (
+    status: string,
+    source: Record<string, { label: string; tone: StatusTone }>
+) => source[status] || { label: status, tone: 'neutral' as const };
 
 export function Warehouse() {
-    const [requests, setRequests] = useState<CollectionRequestView[]>([]);
+    return <WarehouseWorkspace routeView="stock" />;
+}
+
+export function WarehouseItemsWorkspace() {
+    return <WarehouseWorkspace routeView="items" />;
+}
+
+export function WarehouseMaintenanceWorkspace() {
+    return <WarehouseWorkspace routeView="maintenance" />;
+}
+
+export function WarehouseRequestsWorkspace() {
+    return <WarehouseWorkspace routeView="requests" />;
+}
+
+function WarehouseWorkspace({ routeView }: { routeView: WarehouseWorkspaceView }) {
+    const hasLoadedRef = useRef(false);
     const [batches, setBatches] = useState<BatchView[]>([]);
+    const [requests, setRequests] = useState<CollectionRequestView[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-
-    const [expandedLocationKeys, setExpandedLocationKeys] = useState<Record<string, boolean>>({});
-    const [expandedProductKeys, setExpandedProductKeys] = useState<Record<string, boolean>>({});
-    const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
-    const [productModes, setProductModes] = useState<Record<string, 'batches' | 'all-items'>>({});
-
+    const [query, setQuery] = useState('');
+    const [page, setPage] = useState(1);
     const [selectedItemId, setSelectedItemId] = useState('');
     const [selectedItem, setSelectedItem] = useState<ItemDetail | null>(null);
-    const [itemForm, setItemForm] = useState<ItemFormState | null>(null);
     const [itemLoading, setItemLoading] = useState(false);
     const [itemError, setItemError] = useState('');
     const [deletingBatchId, setDeletingBatchId] = useState('');
     const [deletingBatchVideosId, setDeletingBatchVideosId] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
 
-    const loadData = async (showSpinner = true) => {
-        if (showSpinner) {
-            setLoading(true);
-        }
+    const loadData = useCallback(async (showSpinner = true) => {
+        if (showSpinner) setLoading(true);
         setError('');
+
         try {
-            const [requestsRes, batchesRes] = await Promise.all([
-                authFetch('/api/collection-requests'),
-                authFetch('/api/batches')
-            ]);
-
-            if (!requestsRes.ok || !batchesRes.ok) {
-                throw new Error('Не удалось загрузить складские данные.');
+            if (routeView === 'requests') {
+                const response = await authFetch('/api/collection-requests');
+                if (!response.ok) throw new Error('Не удалось загрузить заявки на сбор.');
+                setRequests(await response.json() as CollectionRequestView[]);
+            } else {
+                const response = await authFetch('/api/batches');
+                if (!response.ok) throw new Error('Не удалось загрузить складские данные.');
+                setBatches(await response.json() as BatchView[]);
             }
-
-            setRequests(await requestsRes.json() as CollectionRequestView[]);
-            setBatches(await batchesRes.json() as BatchView[]);
         } catch (loadError) {
             console.error(loadError);
-            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить складские данные.');
+            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить данные.');
         } finally {
-            if (showSpinner) {
-                setLoading(false);
-            }
+            if (showSpinner) setLoading(false);
         }
-    };
+    }, [routeView]);
 
     useEffect(() => {
+        if (hasLoadedRef.current) return;
+        hasLoadedRef.current = true;
         void loadData();
-    }, []);
+    }, [loadData]);
 
-    const groupedLocations = useMemo<LocationGroup[]>(() => {
-        const locationMap = new Map<string, {
-            key: string;
-            name: string;
-            productMap: Map<string, {
-                key: string;
-                name: string;
-                product: BatchView['product'] | null;
-                batches: BatchView[];
-            }>;
-        }>();
+    useEffect(() => {
+        setPage(1);
+    }, [query]);
 
-        const searchLower = searchQuery.trim().toLowerCase();
-        const filteredBatches = batches.map(batch => {
-            const filteredItems = searchLower 
-                ? batch.items.filter(item => 
-                    item.serial_number?.toLowerCase().includes(searchLower) || 
-                    item.temp_id.toLowerCase().includes(searchLower)
-                  )
-                : batch.items;
-            return { ...batch, items: filteredItems };
-        }).filter(batch => batch.items.length > 0);
+    const productRows = useMemo(() => buildWarehouseProductRows(batches), [batches]);
+    const exactItemMatches = useMemo(() => findExactItems(batches, query), [batches, query]);
+    const filteredProductRows = useMemo(() => {
+        const normalizedQuery = normalize(query);
+        if (!normalizedQuery) return productRows;
 
-        for (const batch of filteredBatches) {
-            const locationKey = batch.product?.location?.id || 'no-location';
-            const locationName = batch.product?.location
-                ? getDefaultTranslationValue(batch.product.location.translations, 'name')
-                : 'Без локации';
-            const productKey = batch.product?.id || `${locationKey}:no-product`;
-            const productName = batch.product
-                ? getDefaultTranslationValue(batch.product.translations, 'name')
-                : 'Без товара';
+        return productRows.filter((row) => (
+            [row.productName, row.locationName, row.productCode]
+                .join(' ')
+                .toLocaleLowerCase('ru')
+                .includes(normalizedQuery)
+        ));
+    }, [productRows, query]);
 
-            if (!locationMap.has(locationKey)) {
-                locationMap.set(locationKey, {
-                    key: locationKey,
-                    name: locationName,
-                    productMap: new Map()
-                });
-            }
+    const filteredRequests = useMemo(() => {
+        const normalizedQuery = normalize(query);
+        if (!normalizedQuery) return requests;
 
-            const locationGroup = locationMap.get(locationKey)!;
-            if (!locationGroup.productMap.has(productKey)) {
-                locationGroup.productMap.set(productKey, {
-                    key: productKey,
-                    name: productName,
-                    product: batch.product || null,
-                    batches: []
-                });
-            }
+        return requests.filter((request) => {
+            const productName = request.product ? getProductName(request.product) : request.title;
+            const haystack = [
+                request.id,
+                request.title,
+                productName,
+                getLocationName(request.product),
+                request.status,
+                getStatus(request.status, requestStatusMeta).label,
+                request.target_user?.name || '',
+                request.accepted_by_user?.name || '',
+                request.batch?.id || '',
+                request.batch ? getStatus(request.batch.status, batchStatusMeta).label : ''
+            ].join(' ').toLocaleLowerCase('ru');
+            return haystack.includes(normalizedQuery);
+        });
+    }, [query, requests]);
 
-            locationGroup.productMap.get(productKey)!.batches.push(batch);
-        }
-
-        return [...locationMap.values()]
-            .map((locationGroup) => {
-                const productGroups = [...locationGroup.productMap.values()]
-                    .map((group): ProductGroup => {
-                        const items = sortItems(group.batches.flatMap((batch) => batch.items));
-                        return {
-                            key: group.key,
-                            name: group.name,
-                            product: group.product,
-                            batches: [...group.batches].sort((left, right) => right.created_at.localeCompare(left.created_at)),
-                            items,
-                            unsoldCount: items.filter((item) => !item.is_sold).length,
-                            statusCounts: countItemStatuses(items)
-                        };
-                    })
-                    .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-
-                const allItems = productGroups.flatMap((productGroup) => productGroup.items);
-
-                return {
-                    key: locationGroup.key,
-                    name: locationGroup.name,
-                    productGroups,
-                    itemCount: allItems.length,
-                    unsoldCount: allItems.filter((item) => !item.is_sold).length,
-                    statusCounts: countItemStatuses(allItems)
-                };
+    const maintenanceBatches = useMemo(() => {
+        const normalizedQuery = normalize(query);
+        return [...batches]
+            .filter((batch) => {
+                if (!normalizedQuery) return true;
+                const haystack = [
+                    batch.id,
+                    batch.owner?.name || '',
+                    getProductName(batch.product),
+                    getLocationName(batch.product),
+                    ...batch.items.flatMap((item) => [item.serial_number || '', item.temp_id])
+                ].join(' ').toLocaleLowerCase('ru');
+                return haystack.includes(normalizedQuery);
             })
-            .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-    }, [batches, searchQuery]);
+            .sort((left, right) => right.created_at.localeCompare(left.created_at));
+    }, [batches, query]);
 
-    const summary = useMemo(() => {
-        const allItems = batches.flatMap((batch) => batch.items);
-        return {
-            locations: groupedLocations.length,
-            products: groupedLocations.reduce((total, location) => total + location.productGroups.length, 0),
-            totalItems: allItems.length,
-            stockHq: allItems.filter((item) => item.status === 'STOCK_HQ' && !item.is_sold).length,
-            stockOnline: allItems.filter((item) => item.status === 'STOCK_ONLINE' && !item.is_sold).length,
-            consignment: allItems.filter((item) => item.status === 'ON_CONSIGNMENT' && !item.is_sold).length
-        };
-    }, [batches, groupedLocations]);
-
-    const openItemModal = async (itemId: string) => {
+    const openItem = async (itemId: string) => {
         setSelectedItemId(itemId);
         setSelectedItem(null);
-        setItemForm(null);
         setItemError('');
         setItemLoading(true);
 
         try {
             const response = await authFetch(`/api/items/${itemId}`);
             if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить Item.' }));
-                throw new Error(payload.error || 'Не удалось загрузить Item.');
+                const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить позицию.' }));
+                throw new Error(payload.error || 'Не удалось загрузить позицию.');
             }
-
-            const payload = await response.json() as ItemDetail;
-            setSelectedItem(payload);
-            setItemForm(buildItemFormState(payload));
+            setSelectedItem(await response.json() as ItemDetail);
         } catch (loadError) {
             console.error(loadError);
-            setItemError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить Item.');
+            setItemError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить позицию.');
         } finally {
             setItemLoading(false);
         }
     };
 
-    const closeItemModal = () => {
+    const closeItem = () => {
         setSelectedItemId('');
         setSelectedItem(null);
-        setItemForm(null);
         setItemError('');
         setItemLoading(false);
     };
 
-    const setProductMode = (productKey: string, mode: 'batches' | 'all-items') => {
-        setProductModes((current) => ({ ...current, [productKey]: mode }));
-        setExpandedProductKeys((current) => ({ ...current, [productKey]: true }));
-    };
-
     const handleDeleteBatch = async (batchId: string) => {
-        if (!window.confirm(`Скрыть партию ${batchId} из интерфейса? Восстановление возможно только напрямую из БД.`)) {
-            return;
-        }
+        if (!window.confirm(`Скрыть партию ${batchId} из интерфейса? Восстановление возможно только напрямую из БД.`)) return;
 
         setDeletingBatchId(batchId);
         setError('');
-
         try {
-            const response = await authFetch(`/api/batches/${batchId}`, {
-                method: 'DELETE'
-            });
-
-            const payload = await response.json().catch(() => ({ error: 'Не удалось удалить партию.' }));
-            if (!response.ok) {
-                throw new Error(payload.error || 'Не удалось удалить партию.');
-            }
-
+            const response = await authFetch(`/api/batches/${batchId}`, { method: 'DELETE' });
+            const payload = await response.json().catch(() => ({ error: 'Не удалось скрыть партию.' }));
+            if (!response.ok) throw new Error(payload.error || 'Не удалось скрыть партию.');
             await loadData(false);
         } catch (deleteError) {
             console.error(deleteError);
-            setError(deleteError instanceof Error ? deleteError.message : 'Не удалось удалить партию.');
+            setError(deleteError instanceof Error ? deleteError.message : 'Не удалось скрыть партию.');
         } finally {
             setDeletingBatchId('');
         }
     };
 
     const handleDeleteBatchVideos = async (batchId: string, videoCount: number) => {
-        if (videoCount <= 0) {
-            return;
-        }
-
-        if (!window.confirm(`Удалить видео у всех товаров партии ${batchId}? Будет очищено ссылок: ${videoCount}.`)) {
-            return;
-        }
+        if (videoCount <= 0) return;
+        if (!window.confirm(`Удалить видео у всех товаров партии ${batchId}? Будет очищено ссылок: ${videoCount}.`)) return;
 
         setDeletingBatchVideosId(batchId);
         setError('');
-
         try {
-            const response = await authFetch(`/api/batches/${batchId}/videos`, {
-                method: 'DELETE'
-            });
-
+            const response = await authFetch(`/api/batches/${batchId}/videos`, { method: 'DELETE' });
             const payload = await response.json().catch(() => ({ error: 'Не удалось удалить видео партии.' }));
-            if (!response.ok) {
-                throw new Error(payload.error || 'Не удалось удалить видео партии.');
-            }
-
+            if (!response.ok) throw new Error(payload.error || 'Не удалось удалить видео партии.');
             await loadData(false);
         } catch (deleteError) {
             console.error(deleteError);
@@ -512,520 +414,612 @@ export function Warehouse() {
         }
     };
 
-    const renderGroupedItems = (items: BatchItem[]) => {
-        const groups = new Map<string, BatchItem[]>();
-
-        for (const item of sortItems(items)) {
-            const groupKey = getSerialFamily(item.serial_number);
-            if (!groups.has(groupKey)) {
-                groups.set(groupKey, []);
-            }
-            groups.get(groupKey)!.push(item);
-        }
-
-        return [...groups.entries()]
-            .sort((left, right) => left[0].localeCompare(right[0], 'ru'))
-            .map(([groupKey, groupItems]) => (
-                <div key={groupKey} className="rounded-2xl border border-white/6 bg-[#0f1217]">
-                    <div className="flex items-center justify-between border-b border-white/6 px-4 py-3">
-                        <div>
-                            <p className="text-sm font-semibold text-white">{groupKey}</p>
-                            <p className="text-xs text-gray-500">Группа по семейству серийного номера</p>
-                        </div>
-                        <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-gray-300">
-                            {groupItems.length} шт.
-                        </span>
-                    </div>
-                    <ItemGrid items={groupItems} onSelectItem={openItemModal} />
-                </div>
-            ));
-    };
+    let content: ReactNode;
+    if (routeView === 'requests') {
+        content = (
+            <RequestsMatrix
+                requests={filteredRequests}
+                loading={loading}
+                query={query}
+                onQueryChange={setQuery}
+                page={page}
+                onPageChange={setPage}
+            />
+        );
+    } else if (routeView === 'maintenance') {
+        content = (
+            <MaintenanceMatrix
+                batches={maintenanceBatches}
+                loading={loading}
+                query={query}
+                onQueryChange={setQuery}
+                page={page}
+                onPageChange={setPage}
+                deletingBatchId={deletingBatchId}
+                deletingBatchVideosId={deletingBatchVideosId}
+                onDeleteBatch={handleDeleteBatch}
+                onDeleteBatchVideos={handleDeleteBatchVideos}
+            />
+        );
+    } else {
+        content = (
+            <StockMatrix
+                productRows={filteredProductRows}
+                exactItems={exactItemMatches}
+                loading={loading}
+                query={query}
+                onQueryChange={setQuery}
+                page={page}
+                onPageChange={setPage}
+                onOpenItem={openItem}
+            />
+        );
+    }
 
     return (
-        <div className="space-y-8">
-            <header className="space-y-2">
-                <h1 className="text-2xl font-bold text-white">Складская структура</h1>
-                <p className="text-sm text-gray-400">
-                    Навигация по остатку в формате <code className="font-mono text-gray-300">{'локация -> товар -> партия -> item'}</code>. Приемка и media-операции остаются в <code className="font-mono text-gray-300">/admin/acceptance</code>.
-                </p>
-            </header>
+        <>
+            <AdminWorkspace data-testid={`warehouse-workspace-${routeView}`}>
+                {error ? <AdminInlineError>{error}</AdminInlineError> : null}
+                {content}
+            </AdminWorkspace>
 
-            {error && (
-                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
-                    {error}
-                </div>
+            {selectedItemId ? (
+                <AdminDrawer title={selectedItem?.serial_number || selectedItem?.temp_id || 'Позиция склада'} onClose={closeItem}>
+                    {itemLoading ? (
+                        <AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState>
+                    ) : itemError ? (
+                        <AdminWorkspaceState state="error">{itemError}</AdminWorkspaceState>
+                    ) : selectedItem ? (
+                        <ItemDetails item={selectedItem} />
+                    ) : null}
+                </AdminDrawer>
+            ) : null}
+        </>
+    );
+}
+
+function StockMatrix({
+    productRows,
+    exactItems,
+    loading,
+    query,
+    onQueryChange,
+    page,
+    onPageChange,
+    onOpenItem
+}: {
+    productRows: WarehouseProductRow[];
+    exactItems: WarehouseItemMatch[];
+    loading: boolean;
+    query: string;
+    onQueryChange: (value: string) => void;
+    page: number;
+    onPageChange: (page: number) => void;
+    onOpenItem: (itemId: string) => void;
+}) {
+    const itemMode = exactItems.length > 0;
+    const activeCount = itemMode ? exactItems.length : productRows.length;
+    const pageCount = Math.max(1, Math.ceil(activeCount / PAGE_SIZE));
+    const safePage = Math.min(page, pageCount);
+    const start = (safePage - 1) * PAGE_SIZE;
+    const visibleItems = exactItems.slice(start, start + PAGE_SIZE);
+    const visibleProducts = productRows.slice(start, start + PAGE_SIZE);
+
+    return (
+        <>
+            <AdminWorkspaceHeader title="Склад HQ" count={itemMode ? `Найдено позиций: ${activeCount}` : `Товаров: ${activeCount}`}>
+                <AdminSearchField
+                    value={query}
+                    onChange={onQueryChange}
+                    placeholder="Товар, локация или точный serial / temp_id"
+                    ariaLabel="Поиск по складу"
+                    className="ml-auto max-w-[640px] flex-1"
+                />
+                <Link
+                    to="/admin/warehouse/maintenance"
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-[#333b46] bg-[#191f27] px-3 text-[13px] font-medium text-[#d5dae0] transition hover:border-[#4a5562] hover:bg-[#202832]"
+                >
+                    <Settings2 size={15} />
+                    Обслуживание
+                </Link>
+            </AdminWorkspaceHeader>
+
+            {itemMode ? (
+                <ExactItemsTable items={visibleItems} loading={loading} onOpenItem={onOpenItem} />
+            ) : (
+                <AdminTableSurface minWidth={930}>
+                    <MatrixHeader columns={STOCK_COLUMNS} labels={['Товар и локация', 'Всего', 'Склад HQ', 'Онлайн', 'Консигнация', 'Активировано']} />
+                    {loading ? (
+                        <AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState>
+                    ) : visibleProducts.length === 0 ? (
+                        <AdminWorkspaceState state="empty">Ничего не найдено</AdminWorkspaceState>
+                    ) : (
+                        visibleProducts.map((row) => (
+                            <div
+                                key={row.key}
+                                data-testid={`warehouse-product-row-${row.key}`}
+                                className="grid min-h-[70px] border-b border-[#272d35] bg-[#141a21] last:border-b-0 hover:bg-[#171e26]"
+                                style={{ gridTemplateColumns: STOCK_COLUMNS }}
+                            >
+                                <IdentityCell
+                                    title={row.productName}
+                                    subtitle={row.locationName}
+                                    meta={`${row.productCode} · партий: ${row.batchCount}`}
+                                />
+                                <NumberCell value={row.total} />
+                                <NumberCell value={row.stockHq} accent="success" />
+                                <NumberCell value={row.stockOnline} accent="info" />
+                                <NumberCell value={row.consignment} />
+                                <NumberCell value={row.activated} last />
+                            </div>
+                        ))
+                    )}
+                </AdminTableSurface>
             )}
 
-            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-                <SummaryCard title="Локации" value={summary.locations} icon={<MapPin size={18} />} />
-                <SummaryCard title="Товары" value={summary.products} icon={<Package size={18} />} />
-                <SummaryCard title="Все items" value={summary.totalItems} icon={<Boxes size={18} />} />
-                <SummaryCard title="HQ" value={summary.stockHq} icon={<Archive size={18} />} />
-                <SummaryCard title="Онлайн" value={summary.stockOnline} icon={<Layers3 size={18} />} />
-                <SummaryCard title="Консигнация" value={summary.consignment} icon={<Boxes size={18} />} />
-            </section>
-
-            <section className="rounded-3xl border border-white/6 bg-[#14161b]">
-                <div className="border-b border-white/6 px-6 py-5">
-                    <h2 className="text-lg font-semibold text-white">Дерево склада</h2>
-                    <p className="mt-1 text-sm text-gray-500">
-                        Сначала локации каталога, затем товары. Для каждого товара можно включить режим `Партии` или `Все товары`.
-                    </p>
-                    <div className="mt-4 flex max-w-md items-center gap-3 rounded-xl border border-white/10 bg-[#0f1217] px-3 py-2">
-                        <Search size={18} className="text-gray-500" />
-                        <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Поиск по серийному номеру..."
-                            className="w-full bg-transparent text-sm text-white placeholder:text-gray-600 focus:outline-none"
-                        />
-                    </div>
-                </div>
-
-                {loading ? (
-                    <div className="px-6 py-10 text-gray-400">Загрузка складской структуры...</div>
-                ) : groupedLocations.length === 0 ? (
-                    <div className="px-6 py-10 text-gray-500">Склад пока пуст. Создайте партии и переведите их в складской поток.</div>
-                ) : (
-                    <div className="divide-y divide-gray-800">
-                        {groupedLocations.map((location) => {
-                            const isLocationExpanded = Boolean(expandedLocationKeys[location.key]);
-
-                            return (
-                                <div key={location.key} className="px-4 py-4 sm:px-6">
-                                    <button
-                                        type="button"
-                                        className="flex w-full items-start gap-4 rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-4 text-left transition hover:border-white/10 hover:bg-[#14161b]"
-                                        onClick={() => setExpandedLocationKeys((current) => ({ ...current, [location.key]: !isLocationExpanded }))}
-                                    >
-                                        <div className="mt-1 text-gray-500">
-                                            {isLocationExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex flex-wrap items-center gap-3">
-                                                <p className="text-base font-semibold text-white">{location.name}</p>
-                                                <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-gray-300">
-                                                    {location.productGroups.length} товаров
-                                                </span>
-                                            </div>
-                                            <p className="mt-2 text-sm text-gray-400">
-                                                Всего items: {location.itemCount} • непроданных: {location.unsoldCount}
-                                            </p>
-                                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                <StatusCounter label="STOCK_HQ" value={formatStatusCount(location.statusCounts, 'STOCK_HQ')} />
-                                                <StatusCounter label="STOCK_ONLINE" value={formatStatusCount(location.statusCounts, 'STOCK_ONLINE')} />
-                                                <StatusCounter label="ON_CONSIGNMENT" value={formatStatusCount(location.statusCounts, 'ON_CONSIGNMENT')} />
-                                                <StatusCounter label="ACTIVATED" value={formatStatusCount(location.statusCounts, 'ACTIVATED')} />
-                                            </div>
-                                        </div>
-                                    </button>
-
-                                    {isLocationExpanded && (
-                                        <div className="mt-4 space-y-4 pl-2 sm:pl-6">
-                                            {location.productGroups.map((productGroup) => {
-                                                const isProductExpanded = Boolean(expandedProductKeys[productGroup.key]);
-                                                const mode = productModes[productGroup.key] || 'batches';
-                                                const productCode = productGroup.product
-                                                    ? `${productGroup.product.country_code}${productGroup.product.location_code}${productGroup.product.item_code}`
-                                                    : 'LEGACY';
-
-                                                return (
-                                                    <div key={productGroup.key} className="rounded-2xl border border-white/6 bg-[#0f1217]">
-                                                        <div className="flex flex-col gap-4 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
-                                                            <button
-                                                                type="button"
-                                                                className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                                                                onClick={() => setExpandedProductKeys((current) => ({ ...current, [productGroup.key]: !isProductExpanded }))}
-                                                            >
-                                                                <div className="mt-1 text-gray-500">
-                                                                    {isProductExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                                                                </div>
-                                                                <div className="min-w-0">
-                                                                    <div className="flex flex-wrap items-center gap-3">
-                                                                        <p className="text-sm font-semibold text-white">{productGroup.name}</p>
-                                                                        <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-gray-300">
-                                                                            {productCode}
-                                                                        </span>
-                                                                    </div>
-                                                                    <p className="mt-2 text-sm text-gray-400">
-                                                                        Всего items: {productGroup.items.length} • непроданных: {productGroup.unsoldCount}
-                                                                    </p>
-                                                                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                                        <StatusCounter label="HQ" value={formatStatusCount(productGroup.statusCounts, 'STOCK_HQ')} compact />
-                                                                        <StatusCounter label="Онлайн" value={formatStatusCount(productGroup.statusCounts, 'STOCK_ONLINE')} compact />
-                                                                        <StatusCounter label="Консигнация" value={formatStatusCount(productGroup.statusCounts, 'ON_CONSIGNMENT')} compact />
-                                                                        <StatusCounter label="Активированы" value={formatStatusCount(productGroup.statusCounts, 'ACTIVATED')} compact />
-                                                                    </div>
-                                                                </div>
-                                                            </button>
-
-                                                            <div className="flex flex-wrap gap-2 lg:justify-end">
-                                                                <ModeButton
-                                                                    active={mode === 'batches'}
-                                                                    label="Партии"
-                                                                    onClick={() => setProductMode(productGroup.key, 'batches')}
-                                                                />
-                                                                <ModeButton
-                                                                    active={mode === 'all-items'}
-                                                                    label="Все товары"
-                                                                    onClick={() => setProductMode(productGroup.key, 'all-items')}
-                                                                />
-                                                            </div>
-                                                        </div>
-
-                                                        {isProductExpanded && (
-                                                            <div className="border-t border-white/6 px-4 py-4">
-                                                                {mode === 'batches' ? (
-                                                                    <div className="space-y-4">
-                                                                        {productGroup.batches.map((batch) => {
-                                                                            const isBatchExpanded = Boolean(expandedBatchIds[batch.id]);
-                                                                            const soldCount = batch.items.filter((item) => item.is_sold).length;
-                                                                            const unsoldCount = batch.items.length - soldCount;
-                                                                            const videoCount = batch.items.filter((item) => Boolean(item.item_video_url)).length;
-
-                                                                            return (
-                                                                                <div key={batch.id} className="rounded-2xl border border-white/6 bg-[#14161b]">
-                                                                                    <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
-                                                                                        <button
-                                                                                            type="button"
-                                                                                            className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                                                                                            onClick={() => setExpandedBatchIds((current) => ({ ...current, [batch.id]: !isBatchExpanded }))}
-                                                                                        >
-                                                                                            <div className="mt-1 text-gray-500">
-                                                                                                {isBatchExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                                                                                            </div>
-                                                                                            <div className="min-w-0">
-                                                                                                <div className="flex flex-wrap items-center gap-3">
-                                                                                                    <p className="font-medium text-white">{batch.id}</p>
-                                                                                                    <StatusPill meta={workflowStatusMeta[batch.status]} fallbackLabel={batch.status} />
-                                                                                                </div>
-                                                                                                <p className="mt-2 text-sm text-gray-400">
-                                                                                                    {batch.owner?.name || 'Без владельца'} • {formatDateTime(batch.created_at)}
-                                                                                                </p>
-                                                                                                <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Всего: {batch.items.length}</span>
-                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Непроданных: {unsoldCount}</span>
-                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Проданных: {soldCount}</span>
-                                                                                                    <span className="rounded-full border border-white/10 px-3 py-1">Видео: {videoCount}</span>
-                                                                                                </div>
-                                                                                            </div>
-                                                                                        </button>
-                                                                                        <div className="flex flex-wrap gap-2 lg:justify-end">
-                                                                                            <button
-                                                                                                type="button"
-                                                                                                onClick={() => void handleDeleteBatchVideos(batch.id, videoCount)}
-                                                                                                disabled={deletingBatchVideosId === batch.id || videoCount === 0}
-                                                                                                className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 px-3 py-2 text-xs text-amber-100 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                                            >
-                                                                                                <VideoOff size={14} />
-                                                                                                {deletingBatchVideosId === batch.id ? 'Удаляем...' : 'Удалить видео'}
-                                                                                            </button>
-                                                                                            <button
-                                                                                                type="button"
-                                                                                                onClick={() => void handleDeleteBatch(batch.id)}
-                                                                                                disabled={deletingBatchId === batch.id}
-                                                                                                className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-50"
-                                                                                            >
-                                                                                                <Trash2 size={14} />
-                                                                                                {deletingBatchId === batch.id ? 'Скрываем...' : 'Скрыть'}
-                                                                                            </button>
-                                                                                        </div>
-                                                                                    </div>
-
-                                                                                    {isBatchExpanded && (
-                                                                                        <ItemGrid items={batch.items} onSelectItem={openItemModal} />
-                                                                                    )}
-                                                                                </div>
-                                                                            );
-                                                                        })}
-                                                                    </div>
-                                                                ) : (
-                                                                    <div className="space-y-4">
-                                                                        {renderGroupedItems(productGroup.items)}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </section>
-
-            <section className="rounded-3xl border border-white/6 bg-[#14161b]">
-                <div className="border-b border-white/6 px-6 py-5">
-                    <h2 className="text-lg font-semibold text-white">Заказы на сбор</h2>
-                    <p className="mt-1 text-sm text-gray-500">Вторичный блок. Складская навигация выше, а запросы на сбор остаются как контекст планирования.</p>
-                </div>
-
-                {loading ? (
-                    <div className="px-6 py-8 text-gray-400">Загрузка заказов...</div>
-                ) : requests.length === 0 ? (
-                    <div className="px-6 py-8 text-gray-500">Заказов на сбор пока нет.</div>
-                ) : (
-                    <div className="divide-y divide-gray-800">
-                        {requests.map((request) => {
-                            const productName = request.product ? getDefaultTranslationValue(request.product.translations, 'name') : request.title;
-                            const locationName = request.product?.location
-                                ? getDefaultTranslationValue(request.product.location.translations, 'name')
-                                : 'Без локации';
-
-                            return (
-                                <article key={request.id} className="px-6 py-4">
-                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex flex-wrap items-center gap-3">
-                                                <p className="font-medium text-white">{productName}</p>
-                                                <StatusPill meta={workflowStatusMeta[request.status]} fallbackLabel={request.status} />
-                                            </div>
-                                            <p className="mt-2 text-sm text-gray-400">
-                                                {locationName} • запрос: {request.requested_qty} • доступно онлайн: {request.metrics.available_now}
-                                            </p>
-                                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                <span className="rounded-full border border-white/10 px-3 py-1">Создан: {formatDateTime(request.created_at)}</span>
-                                                {request.target_user && <span className="rounded-full border border-white/10 px-3 py-1">Назначен: {request.target_user.name}</span>}
-                                                {request.accepted_by_user && <span className="rounded-full border border-white/10 px-3 py-1">Взял: {request.accepted_by_user.name}</span>}
-                                                {request.batch && <span className="rounded-full border border-white/10 px-3 py-1">Партия: {request.batch.id}</span>}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-3 text-xs text-gray-400">
-                                            media: {request.metrics.media_ready_count}/{request.metrics.produced_count || request.requested_qty}
-                                        </div>
-                                    </div>
-                                </article>
-                            );
-                        })}
-                    </div>
-                )}
-            </section>
-
-            <Modal
-                isOpen={Boolean(selectedItemId)}
-                onClose={closeItemModal}
-                title={selectedItem ? (selectedItem.serial_number || selectedItem.temp_id) : 'Карточка item'}
-                className="max-w-4xl"
-            >
-                {itemLoading ? (
-                    <div className="py-10 text-center text-gray-400">Загрузка карточки...</div>
-                ) : itemError && !selectedItem ? (
-                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                        {itemError}
-                    </div>
-                ) : selectedItem && itemForm ? (
-                    <div className="space-y-6">
-                        {itemError && (
-                            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                                {itemError}
-                            </div>
-                        )}
-
-                        <div className="rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-4 text-sm text-gray-300">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <StatusPill meta={itemStatusMeta[selectedItem.status]} fallbackLabel={selectedItem.status} compact />
-                                <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-gray-300">{selectedItem.batch.id}</span>
-                                {selectedItem.product && (
-                                    <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-gray-300">
-                                        {selectedItem.product.country_code}{selectedItem.product.location_code}{selectedItem.product.item_code}
-                                    </span>
-                                )}
-                            </div>
-                            <p className="mt-3 text-xs text-gray-500">ID: {selectedItem.id}</p>
-                            <p className="mt-1 text-xs text-gray-500">Серийный номер: {selectedItem.serial_number || 'Не указан'}</p>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                <a href={selectedItem.qr_url || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white hover:bg-white/[0.11]">
-                                    <QrCode size={16} /> QR
-                                </a>
-                                {createItemPath(selectedItem.serial_number) && (
-                                    <a href={createItemPath(selectedItem.serial_number) || '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24]">
-                                        <ExternalLink size={16} /> Клон
-                                    </a>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-                            В MVP карточка item доступна только для просмотра. Ручное изменение статусов и финансовых полей убрано из production UI.
-                        </div>
-
-                        <SectionTitle title="Идентификация" />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="temp_id">
-                                <input value={itemForm.temp_id} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="serial_number">
-                                <input value={itemForm.serial_number} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="item_seq">
-                                <input value={itemForm.item_seq} readOnly disabled className={readOnlyInputClassName} inputMode="numeric" />
-                            </Field>
-                            <Field label="status">
-                                <input value={itemStatusMeta[itemForm.status]?.label || itemForm.status} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                        </div>
-
-                        <SectionTitle title="Логистика" />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="collected_date">
-                                <input type="date" value={itemForm.collected_date} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="collected_time">
-                                <input type="time" value={itemForm.collected_time} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="sales_channel">
-                                <input value={itemForm.sales_channel || 'Не назначен'} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="is_sold">
-                                <label className="flex h-[46px] items-center gap-3 rounded-xl border border-white/6 bg-[#14161b] px-4 text-sm text-gray-400">
-                                    <input
-                                        type="checkbox"
-                                        checked={itemForm.is_sold}
-                                        readOnly
-                                        disabled
-                                        className="h-4 w-4 rounded border-gray-600 bg-[#14161b] text-white"
-                                    />
-                                    Продан
-                                </label>
-                            </Field>
-                        </div>
-
-                        <SectionTitle title="Media" />
-                        <div className="grid gap-4">
-                            <Field label="photo_url">
-                                <input value={itemForm.photo_url} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="item_photo_url">
-                                <input value={itemForm.item_photo_url} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="item_video_url">
-                                <input value={itemForm.item_video_url} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                        </div>
-
-                        <SectionTitle title="Продажа / финансы" />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="activation_date">
-                                <input type="datetime-local" value={itemForm.activation_date} readOnly disabled className={readOnlyInputClassName} />
-                            </Field>
-                            <Field label="price_sold">
-                                <input value={itemForm.price_sold} readOnly disabled className={readOnlyInputClassName} inputMode="decimal" />
-                            </Field>
-                            <Field label="commission_hq">
-                                <input value={itemForm.commission_hq} readOnly disabled className={readOnlyInputClassName} inputMode="decimal" />
-                            </Field>
-                        </div>
-
-                        <div className="flex flex-wrap justify-end gap-3">
-                            <Button variant="ghost" onClick={closeItemModal}>Закрыть</Button>
-                        </div>
-                    </div>
-                ) : null}
-            </Modal>
-        </div>
+            <Pagination page={safePage} pageCount={pageCount} onChange={onPageChange} label="Страницы склада" />
+        </>
     );
 }
 
-function SummaryCard({ title, value, icon }: { title: string; value: number; icon: ReactNode }) {
-    return (
-        <div className="rounded-2xl border border-white/6 bg-[#14161b] px-4 py-4">
-            <div className="flex items-center justify-between text-gray-500">
-                <p className="text-sm">{title}</p>
-                {icon}
-            </div>
-            <p className="mt-3 text-2xl font-semibold text-white">{value}</p>
-        </div>
-    );
-}
-
-function StatusPill({
-    meta,
-    fallbackLabel,
-    compact = false
+function ExactItemsTable({
+    items,
+    loading,
+    onOpenItem
 }: {
-    meta?: { label: string; className: string };
-    fallbackLabel: string;
-    compact?: boolean;
+    items: WarehouseItemMatch[];
+    loading: boolean;
+    onOpenItem: (itemId: string) => void;
 }) {
     return (
-        <span className={`inline-flex items-center rounded-full px-3 py-1 font-medium ${compact ? 'text-[11px]' : 'text-xs'} ${meta?.className || 'bg-gray-700 text-gray-200 border border-gray-600'}`}>
-            {meta?.label || fallbackLabel}
-        </span>
+        <AdminTableSurface minWidth={1000}>
+            <MatrixHeader columns={ITEM_COLUMNS} labels={['Позиция', 'Товар и локация', 'Партия', 'Статус', 'Действия']} />
+            {loading ? (
+                <AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState>
+            ) : items.length === 0 ? (
+                <AdminWorkspaceState state="empty">Позиция не найдена</AdminWorkspaceState>
+            ) : (
+                items.map(({ item, batchId, productName, locationName }) => {
+                    const status = getStatus(item.status, itemStatusMeta);
+                    return (
+                        <div
+                            key={item.id}
+                            data-testid={`warehouse-item-result-${item.id}`}
+                            className="grid min-h-[70px] border-b border-[#272d35] bg-[#141a21] last:border-b-0 hover:bg-[#171e26]"
+                            style={{ gridTemplateColumns: ITEM_COLUMNS }}
+                        >
+                            <IdentityCell
+                                title={item.serial_number || item.temp_id}
+                                subtitle={`temp_id: ${item.temp_id}`}
+                                meta={item.id}
+                            />
+                            <TextCell title={productName} subtitle={locationName} />
+                            <TextCell title={batchId} subtitle={item.sales_channel || 'Канал не назначен'} mono />
+                            <div className="flex items-center border-r border-[#2a3039] px-4">
+                                <AdminStatus label={status.label} tone={status.tone} />
+                            </div>
+                            <div className="flex items-center gap-2 px-3">
+                                <AdminAction
+                                    data-testid={`warehouse-item-open-${item.id}`}
+                                    tone="primary"
+                                    onClick={() => onOpenItem(item.id)}
+                                >
+                                    Открыть
+                                </AdminAction>
+                            </div>
+                        </div>
+                    );
+                })
+            )}
+        </AdminTableSurface>
     );
 }
 
-function StatusCounter({ label, value, compact = false }: { label: string; value: number; compact?: boolean }) {
+function RequestsMatrix({
+    requests,
+    loading,
+    query,
+    onQueryChange,
+    page,
+    onPageChange
+}: {
+    requests: CollectionRequestView[];
+    loading: boolean;
+    query: string;
+    onQueryChange: (value: string) => void;
+    page: number;
+    onPageChange: (page: number) => void;
+}) {
+    const pageCount = Math.max(1, Math.ceil(requests.length / PAGE_SIZE));
+    const safePage = Math.min(page, pageCount);
+    const visibleRequests = requests.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
     return (
-        <span className={`rounded-full border border-white/10 px-3 py-1 ${compact ? 'text-[11px]' : 'text-xs'}`}>
-            {label}: {value}
-        </span>
+        <>
+            <AdminWorkspaceHeader title="Заявки на сбор" count={`Всего заявок: ${requests.length}`}>
+                <AdminSearchField
+                    value={query}
+                    onChange={onQueryChange}
+                    placeholder="Заявка, товар, партия или партнёр"
+                    ariaLabel="Поиск заявок на сбор"
+                    className="ml-auto max-w-[640px] flex-1"
+                />
+            </AdminWorkspaceHeader>
+
+            <AdminTableSurface minWidth={1180}>
+                <MatrixHeader columns={REQUEST_COLUMNS} labels={['Заявка', 'Кол-во', 'Статус', 'Партнёр', 'Партия', 'Медиа', 'Онлайн']} />
+                {loading ? (
+                    <AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState>
+                ) : visibleRequests.length === 0 ? (
+                    <AdminWorkspaceState state="empty">Заявки не найдены</AdminWorkspaceState>
+                ) : (
+                    visibleRequests.map((request) => {
+                        const status = getStatus(request.status, requestStatusMeta);
+                        const productName = request.product ? getProductName(request.product) : request.title;
+                        const partner = request.accepted_by_user || request.target_user;
+                        const mediaTotal = request.metrics.produced_count || request.requested_qty;
+
+                        return (
+                            <div
+                                key={request.id}
+                                data-testid={`collection-request-row-${request.id}`}
+                                className="grid min-h-[72px] border-b border-[#272d35] bg-[#141a21] last:border-b-0 hover:bg-[#171e26]"
+                                style={{ gridTemplateColumns: REQUEST_COLUMNS }}
+                            >
+                                <IdentityCell
+                                    title={productName}
+                                    subtitle={getLocationName(request.product)}
+                                    meta={`${request.id} · ${formatDate(request.created_at)}`}
+                                />
+                                <NumberCell value={request.requested_qty} />
+                                <div className="flex items-center border-r border-[#2a3039] px-3">
+                                    <AdminStatus label={status.label} tone={status.tone} />
+                                </div>
+                                <TextCell
+                                    title={partner?.name || 'Общий пул'}
+                                    subtitle={request.accepted_by_user ? 'Взял в работу' : request.target_user ? 'Назначен' : 'Не назначена'}
+                                />
+                                <TextCell
+                                    title={request.batch?.id || '—'}
+                                    subtitle={request.batch ? getStatus(request.batch.status, batchStatusMeta).label : 'Партии ещё нет'}
+                                    mono={Boolean(request.batch)}
+                                />
+                                <NumberCell value={`${request.metrics.media_ready_count}/${mediaTotal}`} />
+                                <NumberCell value={request.metrics.available_now} last />
+                            </div>
+                        );
+                    })
+                )}
+            </AdminTableSurface>
+
+            <Pagination page={safePage} pageCount={pageCount} onChange={onPageChange} label="Страницы заявок" />
+        </>
     );
 }
 
-function ModeButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+function MaintenanceMatrix({
+    batches,
+    loading,
+    query,
+    onQueryChange,
+    page,
+    onPageChange,
+    deletingBatchId,
+    deletingBatchVideosId,
+    onDeleteBatch,
+    onDeleteBatchVideos
+}: {
+    batches: BatchView[];
+    loading: boolean;
+    query: string;
+    onQueryChange: (value: string) => void;
+    page: number;
+    onPageChange: (page: number) => void;
+    deletingBatchId: string;
+    deletingBatchVideosId: string;
+    onDeleteBatch: (batchId: string) => void;
+    onDeleteBatchVideos: (batchId: string, videoCount: number) => void;
+}) {
+    const pageCount = Math.max(1, Math.ceil(batches.length / PAGE_SIZE));
+    const safePage = Math.min(page, pageCount);
+    const visibleBatches = batches.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+    return (
+        <>
+            <AdminWorkspaceHeader title="Обслуживание партий" count={`Всего партий: ${batches.length}`}>
+                <AdminSearchField
+                    value={query}
+                    onChange={onQueryChange}
+                    placeholder="ID партии, товар или серийный номер"
+                    ariaLabel="Поиск партий для обслуживания"
+                    className="ml-auto max-w-[640px] flex-1"
+                />
+            </AdminWorkspaceHeader>
+
+            <AdminTableSurface minWidth={1160}>
+                <MatrixHeader columns={MAINTENANCE_COLUMNS} labels={['Партия', 'Статус', 'Позиции', 'Видео', 'Без медиа', 'Действия']} />
+                {loading ? (
+                    <AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState>
+                ) : visibleBatches.length === 0 ? (
+                    <AdminWorkspaceState state="empty">Партии не найдены</AdminWorkspaceState>
+                ) : (
+                    visibleBatches.map((batch) => {
+                        const videoCount = batch.items.filter((item) => Boolean(item.item_video_url)).length;
+                        const missingMediaCount = batch.items.filter((item) => !item.item_photo_url || !item.item_video_url).length;
+                        const status = getStatus(batch.status, batchStatusMeta);
+
+                        return (
+                            <div
+                                key={batch.id}
+                                data-testid={`warehouse-maintenance-row-${batch.id}`}
+                                className="grid min-h-[72px] border-b border-[#272d35] bg-[#141a21] last:border-b-0 hover:bg-[#171e26]"
+                                style={{ gridTemplateColumns: MAINTENANCE_COLUMNS }}
+                            >
+                                <IdentityCell
+                                    title={batch.id}
+                                    subtitle={getProductName(batch.product)}
+                                    meta={`${batch.owner?.name || 'Без владельца'} · ${formatDateTime(batch.created_at)}`}
+                                />
+                                <div className="flex items-center border-r border-[#2a3039] px-3">
+                                    <AdminStatus label={status.label} tone={status.tone} />
+                                </div>
+                                <NumberCell value={batch.items.length} />
+                                <NumberCell value={videoCount} />
+                                <NumberCell value={missingMediaCount} />
+                                <div className="flex items-center gap-2 px-3">
+                                    <AdminAction
+                                        tone="secondary"
+                                        disabled={videoCount === 0 || deletingBatchVideosId === batch.id}
+                                        onClick={() => onDeleteBatchVideos(batch.id, videoCount)}
+                                    >
+                                        <VideoOff size={15} />
+                                        {deletingBatchVideosId === batch.id ? 'Удаляем…' : 'Удалить видео'}
+                                    </AdminAction>
+                                    <AdminAction
+                                        tone="danger"
+                                        disabled={deletingBatchId === batch.id}
+                                        onClick={() => onDeleteBatch(batch.id)}
+                                    >
+                                        <Trash2 size={15} />
+                                        {deletingBatchId === batch.id ? 'Скрываем…' : 'Скрыть партию'}
+                                    </AdminAction>
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+            </AdminTableSurface>
+
+            <Pagination page={safePage} pageCount={pageCount} onChange={onPageChange} label="Страницы обслуживания" />
+        </>
+    );
+}
+
+function ItemDetails({ item }: { item: ItemDetail }) {
+    const status = getStatus(item.status, itemStatusMeta);
+    const sourcePhotoUrl = item.source_photo_url || item.photo_url;
+    const links = [
+        item.qr_url ? { label: 'QR', href: item.qr_url, icon: QrCode } : null,
+        item.clone_url ? { label: 'Клон', href: item.clone_url, icon: ExternalLink } : null,
+        sourcePhotoUrl && sourcePhotoUrl !== item.item_photo_url
+            ? { label: 'Исходное фото', href: sourcePhotoUrl, icon: ExternalLink }
+            : null,
+        item.item_photo_url ? { label: 'Фото', href: item.item_photo_url, icon: ExternalLink } : null,
+        item.item_video_url ? { label: 'Видео', href: item.item_video_url, icon: ExternalLink } : null
+    ].filter((link): link is NonNullable<typeof link> => Boolean(link));
+
+    return (
+        <div className="space-y-5" data-testid="warehouse-item-details">
+            <div className="flex items-center justify-between gap-3 border-b border-[#2a3039] pb-4">
+                <div className="min-w-0">
+                    <div className="truncate text-base font-semibold text-[#f2f5f8]">{item.serial_number || item.temp_id}</div>
+                    <div className="mt-1 truncate font-mono text-xs text-[#7f8894]">{item.id}</div>
+                </div>
+                <AdminStatus label={status.label} tone={status.tone} />
+            </div>
+
+            <dl className="divide-y divide-[#252c34] border-y border-[#252c34]">
+                <DetailRow label="temp_id" value={item.temp_id} />
+                <DetailRow label="Партия" value={item.batch.id} mono />
+                <DetailRow label="Товар" value={getProductName(item.product)} />
+                <DetailRow label="Локация" value={getLocationName(item.product)} />
+                <DetailRow label="Порядковый номер" value={item.item_seq ?? '—'} />
+                <DetailRow label="Канал" value={item.sales_channel || 'Не назначен'} />
+                <DetailRow label="Продажа" value={item.is_sold ? 'Продана' : 'Не продана'} />
+                <DetailRow label="Дата сбора" value={item.collected_date ? `${formatDate(item.collected_date)} ${item.collected_time || ''}` : '—'} />
+                <DetailRow label="Активация" value={formatDateTime(item.activation_date)} />
+                <DetailRow label="Цена продажи" value={formatMoney(item.price_sold)} />
+                <DetailRow label="Комиссия HQ" value={formatMoney(item.commission_hq)} />
+            </dl>
+
+            {links.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                    {links.map(({ label, href, icon: Icon }) => (
+                        <a
+                            key={label}
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[#333b46] bg-[#191f27] px-3 text-[13px] font-medium text-[#d5dae0] transition hover:border-[#4a5562] hover:bg-[#202832]"
+                        >
+                            <Icon size={15} />
+                            {label}
+                        </a>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function buildWarehouseProductRows(batches: BatchView[]): WarehouseProductRow[] {
+    const groups = new Map<string, { product: BatchProduct | null; batchIds: Set<string>; items: BatchItem[] }>();
+
+    batches.forEach((batch) => {
+        const product = batch.product || null;
+        const key = `${product?.location?.id || 'no-location'}:${product?.id || 'no-product'}`;
+        const current = groups.get(key) || { product, batchIds: new Set<string>(), items: [] };
+        current.batchIds.add(batch.id);
+        current.items.push(...batch.items);
+        groups.set(key, current);
+    });
+
+    return [...groups.entries()]
+        .map(([key, group]) => ({
+            key,
+            productName: getProductName(group.product),
+            locationName: getLocationName(group.product),
+            productCode: getProductCode(group.product),
+            batchCount: group.batchIds.size,
+            total: group.items.length,
+            stockHq: group.items.filter((item) => item.status === 'STOCK_HQ' && !item.is_sold).length,
+            stockOnline: group.items.filter((item) => item.status === 'STOCK_ONLINE' && !item.is_sold).length,
+            consignment: group.items.filter((item) => item.status === 'ON_CONSIGNMENT' && !item.is_sold).length,
+            activated: group.items.filter((item) => item.status === 'ACTIVATED').length
+        }))
+        .sort((left, right) => {
+            const locationOrder = left.locationName.localeCompare(right.locationName, 'ru');
+            return locationOrder || left.productName.localeCompare(right.productName, 'ru');
+        });
+}
+
+function findExactItems(batches: BatchView[], query: string): WarehouseItemMatch[] {
+    const normalizedQuery = normalize(query);
+    if (!normalizedQuery) return [];
+
+    return batches.flatMap((batch) => batch.items
+        .filter((item) => (
+            normalize(item.serial_number || '') === normalizedQuery
+            || normalize(item.temp_id) === normalizedQuery
+        ))
+        .map((item) => ({
+            item,
+            batchId: batch.id,
+            productName: getProductName(batch.product),
+            locationName: getLocationName(batch.product)
+        })));
+}
+
+function MatrixHeader({ columns, labels }: { columns: string; labels: string[] }) {
+    return (
+        <div
+            className="grid min-h-[48px] border-b border-[#2a3039] bg-[#10151b] text-[12px] font-medium text-[#8f98a4]"
+            style={{ gridTemplateColumns: columns }}
+        >
+            {labels.map((label, index) => (
+                <div
+                    key={label}
+                    className={`flex items-center px-4 ${index === labels.length - 1 ? '' : 'border-r border-[#2a3039]'}`}
+                >
+                    {label}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function IdentityCell({ title, subtitle, meta }: { title: string; subtitle: string; meta: string }) {
+    return (
+        <div className="grid min-w-0 grid-cols-[36px_minmax(0,1fr)] items-center gap-3 border-r border-[#2a3039] px-4 py-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#29313a] bg-[#1d242c] text-[#d4dae1]">
+                <Box size={17} />
+            </span>
+            <div className="min-w-0">
+                <div className="truncate text-[14px] font-semibold leading-5 text-[#f1f4f7]">{title}</div>
+                <div className="truncate text-[12px] leading-4 text-[#a7afb9]">{subtitle}</div>
+                <div className="truncate text-[11px] leading-4 text-[#7f8895]">{meta}</div>
+            </div>
+        </div>
+    );
+}
+
+function TextCell({ title, subtitle, mono = false }: { title: string; subtitle?: string; mono?: boolean }) {
+    return (
+        <div className="flex min-w-0 flex-col justify-center border-r border-[#2a3039] px-4 py-2">
+            <div className={`truncate text-[13px] font-medium text-[#e7ebef] ${mono ? 'font-mono' : ''}`}>{title}</div>
+            {subtitle ? <div className="mt-1 truncate text-[11px] text-[#7f8894]">{subtitle}</div> : null}
+        </div>
+    );
+}
+
+function NumberCell({ value, last = false, accent }: { value: string | number; last?: boolean; accent?: 'success' | 'info' }) {
+    const color = accent === 'success' ? 'text-[#53dc8c]' : accent === 'info' ? 'text-[#79b9ff]' : 'text-[#eef2f6]';
+    return (
+        <div className={`flex items-center justify-end px-4 text-[16px] font-semibold tabular-nums ${color} ${last ? '' : 'border-r border-[#2a3039]'}`}>
+            {value}
+        </div>
+    );
+}
+
+function DetailRow({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
+    return (
+        <div className="grid grid-cols-[150px_minmax(0,1fr)] gap-4 py-3 text-sm">
+            <dt className="text-[#7f8894]">{label}</dt>
+            <dd className={`min-w-0 break-words text-right text-[#e5e9ed] ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
+        </div>
+    );
+}
+
+function Pagination({
+    page,
+    pageCount,
+    onChange,
+    label
+}: {
+    page: number;
+    pageCount: number;
+    onChange: (page: number) => void;
+    label: string;
+}) {
+    const visiblePages = Array.from({ length: Math.min(pageCount, 5) }, (_, index) => {
+        const start = Math.min(Math.max(page - 2, 1), Math.max(pageCount - 4, 1));
+        return start + index;
+    });
+
+    return (
+        <nav className="flex items-center justify-center gap-2 py-1" aria-label={label}>
+            <PageButton label="Предыдущая страница" disabled={page === 1} onClick={() => onChange(Math.max(1, page - 1))}>
+                <ChevronLeft size={15} />
+            </PageButton>
+            {visiblePages.map((value) => (
+                <PageButton key={value} label={`Страница ${value}`} active={value === page} onClick={() => onChange(value)}>
+                    {value}
+                </PageButton>
+            ))}
+            <PageButton label="Следующая страница" disabled={page === pageCount} onClick={() => onChange(Math.min(pageCount, page + 1))}>
+                <ChevronRight size={15} />
+            </PageButton>
+            <span className="ml-4 text-[12px] text-[#7f8894]">По {PAGE_SIZE} на странице</span>
+        </nav>
+    );
+}
+
+function PageButton({
+    children,
+    label,
+    onClick,
+    active = false,
+    disabled = false
+}: {
+    children: ReactNode;
+    label: string;
+    onClick: () => void;
+    active?: boolean;
+    disabled?: boolean;
+}) {
     return (
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-xl px-3 py-2 text-sm font-medium transition ${active
-                ? 'border border-white/16 bg-white/[0.08] text-white'
-                : 'border border-white/10 bg-[#14161b] text-gray-300 hover:bg-[#1b1e24]'
+            disabled={disabled}
+            aria-label={label}
+            aria-current={active ? 'page' : undefined}
+            className={`flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-[12px] transition ${active
+                ? 'border-[#4c91f3] bg-[#438eea] text-white shadow-[0_0_16px_rgba(76,145,243,0.26)]'
+                : 'border-[#283039] bg-[#171d24] text-[#a4acb6] hover:border-[#46515e] hover:text-white disabled:cursor-default disabled:opacity-35'
             }`}
         >
-            {label}
+            {children}
         </button>
     );
 }
-
-function ItemGrid({ items, onSelectItem }: { items: BatchItem[]; onSelectItem: (itemId: string) => void }) {
-    return (
-        <div className="grid gap-3 border-t border-white/6 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            {items.map((item) => {
-                const previewImage = item.item_photo_url || item.photo_url || createFallbackImage;
-                return (
-                    <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => void onSelectItem(item.id)}
-                        className={`overflow-hidden rounded-2xl border border-white/6 bg-[#0f1217] text-left transition hover:border-white/16 hover:bg-[#14161b] ${item.is_sold ? 'opacity-55' : ''}`}
-                    >
-                        <div className="aspect-square bg-[#14161b]">
-                            <img src={previewImage} alt={item.serial_number || item.temp_id} className="h-full w-full object-cover" />
-                        </div>
-                        <div className="space-y-2 px-3 py-3">
-                            <div className="flex items-start justify-between gap-2">
-                                <p className="min-w-0 truncate text-sm font-semibold text-white">{item.serial_number || item.temp_id}</p>
-                                <StatusPill meta={itemStatusMeta[item.status]} fallbackLabel={item.status} compact />
-                            </div>
-                            <p className="truncate text-xs text-gray-500">Пакет: {item.temp_id}</p>
-                            <div className="flex items-center justify-between text-xs text-gray-500">
-                                <span>{item.is_sold ? 'Продан' : 'Не продан'}</span>
-                                <span>{item.sales_channel || '—'}</span>
-                            </div>
-                        </div>
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
-
-function SectionTitle({ title }: { title: string }) {
-    return <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-400">{title}</h3>;
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-    return (
-        <label className="block">
-            <span className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500">{label}</span>
-            {children}
-        </label>
-    );
-}
-
-const readOnlyInputClassName = 'w-full rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 text-sm text-gray-300 outline-none disabled:cursor-not-allowed disabled:opacity-100';

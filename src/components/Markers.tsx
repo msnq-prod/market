@@ -1,10 +1,11 @@
 import { useStore } from '../store'
 import * as THREE from 'three'
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { getLocalizedValue } from '../utils/language'
 import type { Location } from '../data/db'
+import { getPlanetLabelLayout, getPlanetLabelPath, getPlanetLabelTextPosition, type PlanetLabelProfile } from '../utils/planetLabelLayout'
 
 const MARKER_Y_VAR = '--selected-location-marker-y'
 const DESCRIPTION_TOP_VAR = '--selected-location-description-top'
@@ -25,11 +26,37 @@ function syncSelectedLocationLayout(markerElement: HTMLDivElement) {
     document.documentElement.style.setProperty(DESCRIPTION_TOP_VAR, `${Math.round(descriptionTop)}px`)
 }
 
+function usePlanetLabelProfile(): PlanetLabelProfile {
+    const [profile, setProfile] = useState<PlanetLabelProfile>(() => (
+        window.innerWidth < 768 ? 'mobile' : 'desktop'
+    ))
+
+    useEffect(() => {
+        const mediaQuery = window.matchMedia('(max-width: 767px)')
+        const sync = (event?: MediaQueryListEvent) => {
+            setProfile((event ? event.matches : mediaQuery.matches) ? 'mobile' : 'desktop')
+        }
+
+        sync()
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', sync)
+            return () => mediaQuery.removeEventListener('change', sync)
+        }
+
+        mediaQuery.addListener(sync)
+        return () => mediaQuery.removeListener(sync)
+    }, [])
+
+    return profile
+}
+
 export function Markers() {
     const selectLocation = useStore((state) => state.selectLocation)
     const selectedLocation = useStore((state) => state.selectedLocation)
     const locations = useStore((state) => state.locations)
     const language = useStore((state) => state.language)
+    const profile = usePlanetLabelProfile()
 
     return (
         <group>
@@ -41,6 +68,7 @@ export function Markers() {
                     isSelected={selectedLocation?.id === loc.id}
                     hasActiveSelection={Boolean(selectedLocation)}
                     language={language}
+                    profile={profile}
                 />
             ))}
         </group>
@@ -52,13 +80,15 @@ const Marker = React.memo(function Marker({
     onClick,
     isSelected,
     hasActiveSelection,
-    language
+    language,
+    profile
 }: {
     location: Location,
     onClick: () => void,
     isSelected: boolean,
     hasActiveSelection: boolean,
-    language: number
+    language: number,
+    profile: PlanetLabelProfile
 }) {
     const ref = useRef<HTMLDivElement>(null)
     const opacityRef = useRef(1)
@@ -136,7 +166,9 @@ const Marker = React.memo(function Marker({
         }
     })
 
-    // Fixed styling for now
+    const labelLayout = getPlanetLabelLayout(location, profile)
+    const labelPath = getPlanetLabelPath(labelLayout)
+    const labelTextPosition = getPlanetLabelTextPosition(labelLayout)
 
     return (
         <group position={position}>
@@ -173,13 +205,11 @@ const Marker = React.memo(function Marker({
 
                     {/* The Connector Line (SVG) */}
                     <svg
-                        width="120"
-                        height="40"
                         className="absolute top-0 left-0 overflow-visible pointer-events-none"
-                        style={{ transform: 'translate(0px, -20px)' }}
+                        style={{ width: `${labelLayout.offset + 34}px`, height: `${labelLayout.verticalOffset + 42}px` }}
                     >
                         <path
-                            d="M 1 20 L 15 5 L 100 5"
+                            d={labelPath}
                             fill="none"
                             stroke="white"
                             strokeWidth="1"
@@ -189,9 +219,13 @@ const Marker = React.memo(function Marker({
 
                     {/* The Label */}
                     <div
-                        className={`absolute left-[15px] bottom-[15px] text-sm font-medium whitespace-nowrap transition-colors duration-200 px-1
+                        className={`absolute text-sm font-medium whitespace-nowrap transition-colors duration-200 px-1
                             ${isSelected ? 'text-red-500' : 'text-white group-hover:text-amber-400'}
                         `}
+                        style={{
+                            left: `${labelTextPosition.left}px`,
+                            top: `${labelTextPosition.top}px`
+                        }}
                     >
                         {getLocalizedValue(location, 'name', language)}
                     </div>

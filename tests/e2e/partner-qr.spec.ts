@@ -259,7 +259,7 @@ test('API: партнер завершает заказ на сбор без vid
     expect(payload.batch.status).toBe('TRANSIT');
 });
 
-test('UI e2e: партнер не видит QR-раздел, HQ сохраняет QR PDF из приемки', async ({ page, request }) => {
+test('UI e2e: партнер не видит QR-раздел, HQ сохраняет QR PDF из очереди печати', async ({ page, request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const { batchId } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
@@ -274,15 +274,15 @@ test('UI e2e: партнер не видит QR-раздел, HQ сохраня�
     expect(receiveBatchResponse.status()).toBe(200);
 
     await setSession(page, admin);
-    await page.goto('/admin/acceptance');
-    await expect(page.getByRole('heading', { name: 'Приемка' })).toBeVisible();
-
-    await page.getByPlaceholder('ID партии, товар или партнер').fill(batchId);
-    await page.getByRole('button').filter({ hasText: batchId }).first().click();
+    await page.goto('/admin/qr?context=goods');
+    await expect(page.getByRole('heading', { name: 'QR-печать' })).toBeVisible();
+    await page.getByPlaceholder('ID партии, товар или статус').fill(batchId);
+    const batchRow = page.getByTestId(`qr-batch-row-${batchId}`);
+    await expect(batchRow).toBeVisible();
 
     const [printPage] = await Promise.all([
         page.waitForEvent('popup'),
-        page.getByRole('button', { name: 'PDF всех QR' }).click()
+        batchRow.getByRole('link', { name: 'Печатать все' }).click()
     ]);
     await printPage.waitForURL(/\/admin\/qr\/print/);
     await expect(printPage.getByRole('button', { name: 'Сохранить PDF' })).toBeEnabled();
@@ -378,7 +378,7 @@ test('UI e2e: партнер не видит QR-раздел, HQ сохраня�
     await selectedPrintPage.close();
 });
 
-test('UI e2e: HQ открывает QR-сервис из товаров по кнопке партии', async ({ page, request }) => {
+test('UI e2e: HQ открывает QR-сервис из отдельной очереди QR-печати', async ({ page, request }) => {
     const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
     const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
     const { batchId } = await createTransitBatchFromRequest(request, admin.accessToken, partner.accessToken, 2);
@@ -389,15 +389,13 @@ test('UI e2e: HQ открывает QR-сервис из товаров по к�
     expect(receiveBatchResponse.status()).toBe(200);
 
     await setSession(page, admin);
-    await page.goto('/admin/products');
-    await expect(page.getByRole('heading', { name: 'Товары и локации' })).toBeVisible();
-
-    await page.getByRole('button', { name: /Карьер «Мирный», Якутия/ }).click();
-    await page.getByTestId('product-expand-prod-yak-001').click();
+    await page.goto(`/admin/qr?batchId=${encodeURIComponent(batchId)}&context=goods`);
+    await expect(page.getByTestId('qr-print-workspace')).toBeVisible();
+    await expect(page.getByTestId(`qr-batch-row-${batchId}`)).toBeVisible();
 
     const [printPage] = await Promise.all([
         page.waitForEvent('popup'),
-        page.getByTestId(`product-batch-qr-${batchId}`).click()
+        page.getByTestId(`qr-print-all-${batchId}`).click()
     ]);
     await printPage.waitForURL(/\/admin\/qr\/print/);
     await expect(printPage.getByRole('button').filter({ hasText: batchId })).toBeVisible();

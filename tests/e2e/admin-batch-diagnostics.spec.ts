@@ -145,6 +145,18 @@ const installDesktopMock = async (page: Page, preparedMedia: PreparedMedia) => {
                 },
                 update: { checked: true, updateAvailable: false }
             }),
+            ensureAdminSession: async () => ({
+                accessToken: window.localStorage.getItem('accessToken') || '',
+                role: window.localStorage.getItem('userRole') || 'ADMIN',
+                name: window.localStorage.getItem('userName') || 'Администратор HQ',
+                userId: window.localStorage.getItem('userId') || 'usr-admin',
+                user: {
+                    id: window.localStorage.getItem('userId') || 'usr-admin',
+                    role: window.localStorage.getItem('userRole') || 'ADMIN',
+                    name: window.localStorage.getItem('userName') || 'Администратор HQ',
+                    email: 'admin@stones.com'
+                }
+            }),
             checkHqUpdate: async () => ({
                 manifestUrl: '',
                 version: 'e2e',
@@ -237,8 +249,8 @@ test.describe('batch creation diagnostics', () => {
         await setAdminSession(page, admin);
         await installDesktopMock(page, preparedMedia);
 
-        await page.goto('/admin');
-        await page.getByRole('button', { name: /Status Center/i }).click();
+        await page.goto('/admin/system/status');
+        await page.getByRole('button', { name: /^Диагностика/ }).click();
         await page.getByRole('button', { name: 'Диагностика' }).click();
         await page.getByTestId('batch-diagnostics-run').click();
 

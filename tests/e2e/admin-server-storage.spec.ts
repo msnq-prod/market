@@ -232,21 +232,20 @@ test('UI smoke: admin uses server storage finder controls', async ({ page }) => 
     await setAdminSession(page);
     await page.goto('/admin/settings');
 
-    await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Дисковое пространство' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Файлы' })).toBeVisible();
     await expect(page.getByText('old-video.mp4')).toBeVisible();
     await expect(page.getByRole('link', { name: /old-video\.mp4/ })).toHaveAttribute(
         'href',
         'https://zagarami.com/uploads/old-video.mp4'
     );
 
-    await page.getByRole('button', { name: 'Папки партий' }).click();
+    await page.getByLabel('Режим').selectOption('batches');
     await expect(page.getByText('Якутия | Алмаз | 01.06.2026')).toBeVisible();
     await expect(page.getByText('old-video.mp4')).toHaveCount(0);
-    await page.locator('select').selectOption({ label: 'Якутия' });
+    await page.getByLabel('Локация').selectOption({ label: 'Якутия' });
     await expect(page.getByText('Якутия | Алмаз | 01.06.2026')).toBeVisible();
     await expect(page.getByText('Алтай | Нефрит | 10.06.2026')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Папки партий' }).click();
+    await page.getByLabel('Режим').selectOption('all');
 
     await page.getByPlaceholder('Новая папка').fill('manual');
     await page.getByRole('button', { name: 'Создать' }).click();
@@ -265,7 +264,7 @@ test('UI smoke: admin uses server storage finder controls', async ({ page }) => 
     await expect(page.getByText('added.txt')).toBeVisible();
 
     page.once('dialog', (dialog) => dialog.accept());
-    await page.locator('tr', { hasText: 'added.txt' }).getByTitle('Удалить').click();
+    await page.getByRole('button', { name: 'Удалить added.txt' }).click();
     await expect(page.getByText('Удалено: added.txt.')).toBeVisible();
     await expect(page.locator('tr', { hasText: 'added.txt' })).toHaveCount(0);
 });

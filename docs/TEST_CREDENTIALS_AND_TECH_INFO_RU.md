@@ -85,15 +85,46 @@ npm run dev
 
 - `/admin/login`
 - `/admin`
+- `/admin/operations`
+- `/admin/risks`
+- `/admin/release`
+- `/admin/system/status`
 - `/admin/orders`
+- `/admin/orders/new`
+- `/admin/orders/in-progress`
+- `/admin/orders/packed`
+- `/admin/orders/delivery`
+- `/admin/orders/returns`
 - `/admin/acceptance`
+- `/admin/acceptance/batches`
+- `/admin/acceptance/media`
+- `/admin/acceptance/ready`
 - `/admin/allocation`
 - `/admin/warehouse`
+- `/admin/warehouse/items`
+- `/admin/warehouse/maintenance`
+- `/admin/warehouse/requests`
 - `/admin/locations`
 - `/admin/products`
+- `/admin/products/locations`
+- `/admin/products/publication`
 - `/admin/users`
+- `/admin/media`
+- `/admin/media/photo`
+- `/admin/media/video`
+- `/admin/media/runtime`
+- `/admin/media/diagnostics`
+- `/admin/telegram`
+- `/admin/telegram/recipients`
+- `/admin/telegram/events`
+- `/admin/telegram/chats`
+- `/admin/telegram/test`
 - `/admin/telegram-bots`
+- `/admin/settings/files`
 - `/admin/clone-content`
+- `/admin/planet-labels/workspace`
+- `/admin/planet-labels`
+- `/admin/qr`
 - `/admin/photo-tool/:batchId` — рабочий tool только в `ZAGARAMI HQ`, в браузере заглушка скачивания
 - `/admin/video-tool/:batchId` — рабочий tool только в `ZAGARAMI HQ`, в браузере заглушка скачивания
 - `/admin/qr/print?batchId=<ID>`

@@ -37,9 +37,23 @@ ZAGARAMI состоит из четырех основных частей:
 - `/` — витрина
 - `/clone/:serialNumber` — публичный цифровой паспорт
 - `/admin/login`
+- `/admin/operations`
+- `/admin/risks`
+- `/admin/release`
+- `/admin/system/status`
+- `/admin/orders/*`
+- `/admin/acceptance/*`
+- `/admin/products/*`
+- `/admin/warehouse/*`
+- `/admin/media/*`
+- `/admin/telegram/*`
+- `/admin/settings/*`
 - `/admin/photo-tool/:batchId`
 - `/admin/video-tool/:batchId`
+- `/admin/qr`
 - `/admin/qr/print`
+- `/admin/planet-labels/workspace`
+- `/admin/planet-labels`
 - `/admin/*`
 - `/partner/login`
 - `/partner/dashboard`

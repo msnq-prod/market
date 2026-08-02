@@ -1,9 +1,21 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { MessageSquare, RefreshCw, User as UserIcon, UserPlus, X } from 'lucide-react';
 import { formatRub } from '../../utils/currency';
 import { authFetch } from '../../utils/authFetch';
 import { isAdminRole } from '../../../shared/domain/policy';
 import type { UserRole as DomainUserRole } from '../../../shared/domain/policy';
+import {
+    AdminAction,
+    AdminInlineError,
+    AdminSearchField,
+    AdminSelect,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState,
+    adminFieldClassName
+} from '../components/AdminWorkspaceUI';
 
 type UserRole = DomainUserRole | string;
 
@@ -32,6 +44,8 @@ type TelegramForm = {
     username: string;
 };
 
+type RoleFilter = 'ALL' | 'ADMIN' | 'MANAGER' | 'SALES_MANAGER' | 'FRANCHISEE';
+
 const initialCreateForm: CreateUserForm = {
     name: '',
     email: '',
@@ -46,16 +60,18 @@ const initialTelegramForm: TelegramForm = {
     username: ''
 };
 
+const roleFilters: Array<{ value: RoleFilter; label: string }> = [
+    { value: 'ALL', label: 'Все роли' },
+    { value: 'ADMIN', label: 'Админы' },
+    { value: 'MANAGER', label: 'Менеджеры HQ' },
+    { value: 'SALES_MANAGER', label: 'Продажи' },
+    { value: 'FRANCHISEE', label: 'Партнёры' }
+];
+
 const formatDateTime = (value?: string | null) => {
-    if (!value) {
-        return 'Нет данных';
-    }
-
+    if (!value) return '';
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
+    if (Number.isNaN(date.getTime())) return '';
     return new Intl.DateTimeFormat('ru-RU', {
         day: '2-digit',
         month: '2-digit',
@@ -74,6 +90,8 @@ export function Users() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
+    const [roleFilter, setRoleFilter] = useState<RoleFilter>('ALL');
+    const [searchQuery, setSearchQuery] = useState('');
 
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -88,16 +106,14 @@ export function Users() {
         setError('');
 
         try {
-            const res = await authFetch('/api/users');
-            if (!res.ok) {
-                const payload = await res.json().catch(() => ({}));
+            const response = await authFetch('/api/users');
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
                 throw new Error(payload.error || 'Не удалось загрузить пользователей.');
             }
-
-            const data = await res.json() as UserRow[];
-            setUsers(data);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Не удалось загрузить пользователей.');
+            setUsers(await response.json() as UserRow[]);
+        } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить пользователей.');
         } finally {
             setLoading(false);
         }
@@ -107,6 +123,16 @@ export function Users() {
         void fetchUsers();
     }, []);
 
+    const filteredUsers = useMemo(() => {
+        const query = searchQuery.trim().toLocaleLowerCase('ru');
+        return users.filter((user) => {
+            if (roleFilter !== 'ALL' && user.role !== roleFilter) return false;
+            if (!query) return true;
+            return [user.name, user.email || '', user.telegram_username || '', user.telegram_chat_id || '']
+                .some((value) => value.toLocaleLowerCase('ru').includes(query));
+        });
+    }, [roleFilter, searchQuery, users]);
+
     const handleCreateUser = async (event: FormEvent) => {
         event.preventDefault();
         setCreating(true);
@@ -114,23 +140,21 @@ export function Users() {
         setNotice('');
 
         try {
-            const res = await authFetch('/api/users', {
+            const response = await authFetch('/api/users', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(createForm)
             });
-
-            if (!res.ok) {
-                const payload = await res.json().catch(() => ({}));
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
                 throw new Error(payload.error || 'Не удалось создать пользователя.');
             }
-
             setIsCreateOpen(false);
             setCreateForm(initialCreateForm);
             setNotice('Пользователь создан.');
             await fetchUsers();
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Не удалось создать пользователя.');
+        } catch (createError) {
+            setError(createError instanceof Error ? createError.message : 'Не удалось создать пользователя.');
         } finally {
             setCreating(false);
         }
@@ -150,16 +174,13 @@ export function Users() {
 
     const handleSaveTelegram = async (event: FormEvent) => {
         event.preventDefault();
-        if (!telegramForm.userId) {
-            return;
-        }
-
+        if (!telegramForm.userId) return;
         setSavingTelegram(true);
         setError('');
         setNotice('');
 
         try {
-            const res = await authFetch(`/api/users/${telegramForm.userId}/telegram`, {
+            const response = await authFetch(`/api/users/${telegramForm.userId}/telegram`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -167,315 +188,205 @@ export function Users() {
                     telegram_username: telegramForm.username.trim() || null
                 })
             });
-
-            if (!res.ok) {
-                const payload = await res.json().catch(() => ({}));
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
                 throw new Error(payload.error || 'Не удалось сохранить Telegram-привязку.');
             }
-
             setIsTelegramOpen(false);
             setTelegramForm(initialTelegramForm);
             setNotice('Telegram-привязка сохранена.');
             await fetchUsers();
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Не удалось сохранить Telegram-привязку.');
+        } catch (saveError) {
+            setError(saveError instanceof Error ? saveError.message : 'Не удалось сохранить Telegram-привязку.');
         } finally {
             setSavingTelegram(false);
         }
     };
 
-    const telegramColumn = (user: UserRow) => {
-        if (!user.telegram_chat_id) {
-            return (
-                <div className="space-y-1">
-                    <div className="text-sm text-gray-400">Не привязан</div>
-                    <div className="text-xs text-gray-600">Пользователь должен отправить боту /start</div>
-                </div>
-            );
-        }
-
-        return (
-            <div className="space-y-1">
-                <div className="font-mono text-sm text-white">{user.telegram_chat_id}</div>
-                <div className="text-xs text-gray-400">
-                    {user.telegram_username ? `@${user.telegram_username}` : 'username не указан'}
-                </div>
-                <div className="text-xs text-gray-600">
-                    start: {formatDateTime(user.telegram_started_at)}
-                </div>
-            </div>
-        );
-    };
-
     return (
-        <div className="space-y-6">
-            <header className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h1 className="text-2xl font-bold text-white">Управление пользователями</h1>
-                    <p className="text-gray-500">Доступы, роли и ручная Telegram-привязка получателей уведомлений.</p>
-                </div>
-                <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-                    <button
-                        type="button"
-                        onClick={() => void fetchUsers()}
-                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-white hover:bg-gray-800 sm:flex-none"
-                    >
-                        <RefreshCw size={16} />
-                        Обновить
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setIsCreateOpen(true)}
-                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-500 sm:flex-none"
-                    >
-                        <UserPlus size={18} />
-                        Добавить пользователя
-                    </button>
-                </div>
-            </header>
+        <AdminWorkspace data-testid="users-workspace">
+            <AdminWorkspaceHeader title="Пользователи" count={`Найдено: ${filteredUsers.length}`}>
+                <AdminSearchField
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder="Имя, email или Telegram"
+                    ariaLabel="Поиск пользователей"
+                    className="ml-auto w-full max-w-[420px]"
+                />
+                <AdminSelect
+                    label="Роль"
+                    value={roleFilter}
+                    onChange={(value) => setRoleFilter(value as RoleFilter)}
+                    options={roleFilters}
+                    className="w-[170px]"
+                />
+                <AdminAction tone="secondary" onClick={() => void fetchUsers()} aria-label="Обновить пользователей" className="h-11 w-11 px-0">
+                    <RefreshCw size={16} />
+                </AdminAction>
+                <AdminAction onClick={() => setIsCreateOpen(true)} className="h-11 shrink-0">
+                    <UserPlus size={16} />
+                    Добавить
+                </AdminAction>
+            </AdminWorkspaceHeader>
 
-            {error && (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                    {error}
-                </div>
-            )}
+            {error ? <AdminInlineError>{error}</AdminInlineError> : null}
+            {notice ? (
+                <div className="rounded-lg border border-[#1fa65a]/50 bg-[#10251b] px-4 py-2.5 text-sm text-[#73e9a3]">{notice}</div>
+            ) : null}
 
-            {notice && (
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-                    {notice}
-                </div>
-            )}
-
-            <div className="overflow-x-auto rounded-xl border border-gray-800 bg-gray-900">
-                <table className="w-full min-w-[940px] text-left">
-                    <thead className="bg-gray-800 text-xs uppercase tracking-wider text-gray-400">
-                        <tr>
-                            <th className="p-4">Пользователь</th>
-                            <th className="p-4">Роль</th>
-                            <th className="p-4">Баланс</th>
-                            <th className="p-4">Telegram</th>
-                            <th className="p-4">Статус</th>
-                            {canEditTelegram && <th className="p-4 text-right">Действия</th>}
+            <AdminTableSurface minWidth={980}>
+                <table className="w-full border-collapse text-left" data-testid="users-table">
+                    <thead className="bg-[#10151b] text-[12px] font-medium text-[#8f98a4]">
+                        <tr className="h-12 border-b border-[#2a3039]">
+                            <th className="px-4 font-medium">Пользователь</th>
+                            <th className="px-4 font-medium">Роль</th>
+                            <th className="px-4 font-medium">Баланс</th>
+                            <th className="px-4 font-medium">Telegram</th>
+                            {canEditTelegram ? <th className="px-4 text-right font-medium">Действие</th> : null}
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-800">
-                        {loading && (
-                            <tr>
-                                <td colSpan={canEditTelegram ? 6 : 5} className="p-8 text-center text-gray-500">
-                                    Загрузка пользователей...
-                                </td>
-                            </tr>
-                        )}
-
-                        {!loading && users.length === 0 && (
-                            <tr>
-                                <td colSpan={canEditTelegram ? 6 : 5} className="p-8 text-center text-gray-500">
-                                    Пользователи не найдены.
-                                </td>
-                            </tr>
-                        )}
-
-                        {!loading && users.map((user) => (
-                            <tr key={user.id} className="hover:bg-gray-800/50">
-                                <td className="p-4">
+                    <tbody>
+                        {loading ? (
+                            <tr><td colSpan={canEditTelegram ? 5 : 4}><AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState></td></tr>
+                        ) : filteredUsers.length === 0 ? (
+                            <tr><td colSpan={canEditTelegram ? 5 : 4}><AdminWorkspaceState state="empty">Пользователи не найдены</AdminWorkspaceState></td></tr>
+                        ) : filteredUsers.map((user) => (
+                            <tr key={user.id} data-testid={`user-row-${user.id}`} className="h-[70px] border-b border-[#272d35] bg-[#141a21] text-[13px] last:border-b-0 hover:bg-[#171e26]">
+                                <td className="px-4">
                                     <div className="flex items-center gap-3">
-                                        <div className="rounded-full bg-gray-800 p-2">
-                                            <UserIcon size={16} className="text-gray-400" />
-                                        </div>
-                                        <div>
-                                            <div className="font-medium text-white">{user.name}</div>
-                                            <div className="text-xs text-gray-500">{user.email || 'email не указан'}</div>
-                                            <div className="mt-1 font-mono text-[10px] text-gray-600">{user.id.slice(0, 8)}...</div>
+                                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#303842] bg-[#1b222b] text-[#c8d0d9]"><UserIcon size={16} /></span>
+                                        <div className="min-w-0">
+                                            <div className="truncate font-medium text-[#eef2f6]">{user.name}</div>
+                                            <div className="mt-0.5 truncate text-[12px] text-[#7f8895]">{user.email || 'Email не указан'}</div>
                                         </div>
                                     </div>
                                 </td>
-                                <td className="p-4">
-                                    <span className={`rounded px-2 py-1 text-xs font-bold ${roleColor(user.role)}`}>
-                                        {roleLabel(user.role)}
-                                    </span>
-                                </td>
-                                <td className="p-4 text-gray-300">{formatRub(user.balance ?? '0')}</td>
-                                <td className="p-4">{telegramColumn(user)}</td>
-                                <td className="p-4">
-                                    <span className="text-sm text-green-500">Активен</span>
-                                </td>
-                                {canEditTelegram && (
-                                    <td className="p-4 text-right">
-                                        <button
-                                            type="button"
-                                            onClick={() => openTelegramModal(user)}
-                                            className="inline-flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white hover:bg-gray-800"
-                                        >
-                                            <MessageSquare size={16} />
+                                <td className="px-4"><AdminStatus label={roleLabel(user.role)} tone={roleTone(user.role)} /></td>
+                                <td className="px-4 tabular-nums text-[#d9dee4]">{formatRub(user.balance ?? '0')}</td>
+                                <td className="px-4">{telegramCell(user)}</td>
+                                {canEditTelegram ? (
+                                    <td className="px-4 text-right">
+                                        <AdminAction tone="secondary" onClick={() => openTelegramModal(user)}>
+                                            <MessageSquare size={15} />
                                             Telegram
-                                        </button>
+                                        </AdminAction>
                                     </td>
-                                )}
+                                ) : null}
                             </tr>
                         ))}
                     </tbody>
                 </table>
+            </AdminTableSurface>
+
+            {isCreateOpen ? (
+                <AdminModal title="Создать пользователя" onClose={() => setIsCreateOpen(false)}>
+                    <form className="space-y-4" onSubmit={handleCreateUser} data-testid="create-user-form">
+                        <Field label="Имя">
+                            <input required value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} className={`${adminFieldClassName} w-full px-3`} autoFocus />
+                        </Field>
+                        <Field label="Email">
+                            <input type="email" required value={createForm.email} onChange={(event) => setCreateForm((current) => ({ ...current, email: event.target.value }))} className={`${adminFieldClassName} w-full px-3`} />
+                        </Field>
+                        <Field label="Пароль">
+                            <input type="password" required minLength={8} value={createForm.password} onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))} className={`${adminFieldClassName} w-full px-3`} />
+                        </Field>
+                        <Field label="Роль">
+                            <select value={createForm.role} onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value as CreateUserForm['role'] }))} className={`${adminFieldClassName} w-full px-3`}>
+                                <option value="FRANCHISEE">Партнёр</option>
+                                {canCreateAdmin ? <option value="MANAGER">Менеджер HQ</option> : null}
+                                <option value="SALES_MANAGER">Менеджер продаж</option>
+                                {canCreateAdmin ? <option value="ADMIN">Администратор</option> : null}
+                            </select>
+                        </Field>
+                        <ModalActions onCancel={() => setIsCreateOpen(false)} loading={creating} submitLabel="Создать" loadingLabel="Создаём…" />
+                    </form>
+                </AdminModal>
+            ) : null}
+
+            {isTelegramOpen ? (
+                <AdminModal title={`Telegram · ${telegramForm.userName}`} onClose={() => setIsTelegramOpen(false)}>
+                    <form className="space-y-4" onSubmit={handleSaveTelegram} data-testid="telegram-user-form">
+                        <Field label="Chat ID">
+                            <input value={telegramForm.chatId} onChange={(event) => setTelegramForm((current) => ({ ...current, chatId: event.target.value }))} className={`${adminFieldClassName} w-full px-3 font-mono`} autoFocus />
+                        </Field>
+                        <Field label="Username">
+                            <input value={telegramForm.username} onChange={(event) => setTelegramForm((current) => ({ ...current, username: event.target.value }))} className={`${adminFieldClassName} w-full px-3`} placeholder="@username" />
+                        </Field>
+                        <ModalActions onCancel={() => setIsTelegramOpen(false)} loading={savingTelegram} submitLabel="Сохранить" loadingLabel="Сохраняем…" />
+                    </form>
+                </AdminModal>
+            ) : null}
+        </AdminWorkspace>
+    );
+}
+
+function telegramCell(user: UserRow) {
+    if (!user.telegram_chat_id) return <span className="text-[#7f8895]">Не привязан</span>;
+    return (
+        <div className="min-w-0">
+            <div className="truncate font-mono text-[12px] text-[#e1e5e9]">{user.telegram_chat_id}</div>
+            <div className="mt-0.5 truncate text-[11px] text-[#7f8895]">
+                {[user.telegram_username ? `@${user.telegram_username}` : '', formatDateTime(user.telegram_started_at)].filter(Boolean).join(' · ')}
             </div>
-
-            {isCreateOpen && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
-                    <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6">
-                        <div className="mb-5 flex items-center justify-between">
-                            <h2 className="text-xl font-semibold text-white">Создать пользователя</h2>
-                            <button type="button" onClick={() => setIsCreateOpen(false)} className="text-gray-400 hover:text-white">
-                                <X size={20} />
-                            </button>
-                        </div>
-
-                        <form className="space-y-4" onSubmit={handleCreateUser}>
-                            <div>
-                                <label className="mb-1 block text-sm text-gray-400">Имя</label>
-                                <input
-                                    required
-                                    value={createForm.name}
-                                    onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))}
-                                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
-                                    placeholder="Иван Иванов"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="mb-1 block text-sm text-gray-400">Email</label>
-                                <input
-                                    type="email"
-                                    required
-                                    value={createForm.email}
-                                    onChange={(event) => setCreateForm((current) => ({ ...current, email: event.target.value }))}
-                                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
-                                    placeholder="user@stones.com"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="mb-1 block text-sm text-gray-400">Пароль</label>
-                                <input
-                                    type="password"
-                                    required
-                                    minLength={8}
-                                    value={createForm.password}
-                                    onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
-                                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="mb-1 block text-sm text-gray-400">Роль</label>
-                                <select
-                                    value={createForm.role}
-                                    onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value as CreateUserForm['role'] }))}
-                                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
-                                >
-                                    <option value="FRANCHISEE">ФРАНЧАЙЗИ</option>
-                                    {canCreateAdmin && <option value="MANAGER">МЕНЕДЖЕР</option>}
-                                    <option value="SALES_MANAGER">МЕНЕДЖЕР ПРОДАЖ</option>
-                                    {canCreateAdmin && <option value="ADMIN">АДМИН</option>}
-                                </select>
-                            </div>
-
-                            <div className="flex gap-3 pt-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsCreateOpen(false)}
-                                    className="flex-1 rounded-lg border border-gray-700 px-4 py-2 text-gray-300 hover:bg-gray-800"
-                                >
-                                    Отмена
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={creating}
-                                    className="flex-1 rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-500 disabled:opacity-60"
-                                >
-                                    {creating ? 'Создание...' : 'Создать'}
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
-
-            {isTelegramOpen && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
-                    <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6">
-                        <div className="mb-5 flex items-center justify-between">
-                            <div>
-                                <h2 className="text-xl font-semibold text-white">Telegram-привязка</h2>
-                                <p className="text-sm text-gray-500">{telegramForm.userName}</p>
-                            </div>
-                            <button type="button" onClick={() => setIsTelegramOpen(false)} className="text-gray-400 hover:text-white">
-                                <X size={20} />
-                            </button>
-                        </div>
-
-                        <form className="space-y-4" onSubmit={handleSaveTelegram}>
-                            <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
-                                Сначала пользователь должен написать боту <span className="font-mono">/start</span>, после чего admin может перенести numeric <span className="font-mono">chat_id</span> из вкладки Telegram.
-                            </div>
-
-                            <div>
-                                <label htmlFor="telegram-chat-id" className="mb-1 block text-sm text-gray-400">Telegram chat_id</label>
-                                <input
-                                    id="telegram-chat-id"
-                                    value={telegramForm.chatId}
-                                    onChange={(event) => setTelegramForm((current) => ({ ...current, chatId: event.target.value }))}
-                                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
-                                    placeholder="123456789 или -1001234567890"
-                                />
-                            </div>
-
-                            <div>
-                                <label htmlFor="telegram-username" className="mb-1 block text-sm text-gray-400">Telegram username</label>
-                                <input
-                                    id="telegram-username"
-                                    value={telegramForm.username}
-                                    onChange={(event) => setTelegramForm((current) => ({ ...current, username: event.target.value }))}
-                                    className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
-                                    placeholder="@partner_name"
-                                />
-                            </div>
-
-                            <div className="flex gap-3 pt-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsTelegramOpen(false)}
-                                    className="flex-1 rounded-lg border border-gray-700 px-4 py-2 text-gray-300 hover:bg-gray-800"
-                                >
-                                    Отмена
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={savingTelegram}
-                                    className="flex-1 rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-500 disabled:opacity-60"
-                                >
-                                    {savingTelegram ? 'Сохранение...' : 'Сохранить'}
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
 
-function roleColor(role: string) {
-    return {
-        ADMIN: 'bg-purple-900/50 text-purple-400',
-        MANAGER: 'bg-cyan-900/50 text-cyan-400',
-        SALES_MANAGER: 'bg-orange-900/50 text-orange-300',
-        FRANCHISEE: 'bg-blue-900/50 text-blue-400'
-    }[role] || 'bg-gray-700 text-gray-300';
+function AdminModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" role="presentation" onMouseDown={onClose}>
+            <section role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md rounded-lg border border-[#2a3039] bg-[#11161d] shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                <header className="flex min-h-16 items-center justify-between border-b border-[#2a3039] px-5">
+                    <h2 className="text-lg font-semibold text-[#f3f6f8]">{title}</h2>
+                    <button type="button" onClick={onClose} aria-label="Закрыть" className="flex h-9 w-9 items-center justify-center rounded-md border border-[#303842] bg-[#181e26] text-[#a8b0ba] hover:text-white"><X size={17} /></button>
+                </header>
+                <div className="p-5">{children}</div>
+            </section>
+        </div>
+    );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+    return (
+        <label className="block">
+            <span className="mb-1.5 block text-[12px] font-medium text-[#9aa3ae]">{label}</span>
+            {children}
+        </label>
+    );
+}
+
+function ModalActions({
+    onCancel,
+    loading,
+    submitLabel,
+    loadingLabel
+}: {
+    onCancel: () => void;
+    loading: boolean;
+    submitLabel: string;
+    loadingLabel: string;
+}) {
+    return (
+        <div className="flex justify-end gap-2 border-t border-[#2a3039] pt-4">
+            <AdminAction tone="secondary" onClick={onCancel}>Отмена</AdminAction>
+            <AdminAction type="submit" disabled={loading}>{loading ? loadingLabel : submitLabel}</AdminAction>
+        </div>
+    );
+}
+
+function roleTone(role: string): 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
+    if (role === 'ADMIN') return 'danger';
+    if (role === 'MANAGER') return 'info';
+    if (role === 'SALES_MANAGER') return 'warning';
+    return 'neutral';
 }
 
 function roleLabel(role: string) {
     return {
-        ADMIN: 'АДМИН',
-        MANAGER: 'МЕНЕДЖЕР',
-        SALES_MANAGER: 'ПРОДАЖИ',
-        FRANCHISEE: 'ПАРТНЕР'
+        ADMIN: 'Администратор',
+        MANAGER: 'Менеджер HQ',
+        SALES_MANAGER: 'Продажи',
+        FRANCHISEE: 'Партнёр',
+        USER: 'Покупатель'
     }[role] || role;
 }

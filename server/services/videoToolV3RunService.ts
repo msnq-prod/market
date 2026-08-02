@@ -669,6 +669,34 @@ const cleanupSupersededVideoToolV3Files = async (batchId: string, currentRunId: 
     await fs.rmdir(path.join(VIDEO_TOOL_V3_PUBLIC_ROOT, batchId)).catch(() => undefined);
 };
 
+const reconcileVideoToolV3RunProgress = async (runId: string) => {
+    const run = await prisma.videoToolV3Run.findUnique({
+        where: { id: runId },
+        select: { id: true, expected_count: true }
+    });
+    if (!run) {
+        throw new VideoToolV3HttpError('Run не найден.', 404);
+    }
+
+    const uploadedCount = await prisma.videoToolV3Item.count({
+        where: { run_id: run.id, status: 'UPLOADED' }
+    });
+    const nextStatus = uploadedCount >= run.expected_count
+        ? 'COMPLETED'
+        : uploadedCount > 0
+            ? 'PARTIAL'
+            : 'OPEN';
+
+    return prisma.videoToolV3Run.update({
+        where: { id: run.id },
+        data: {
+            status: nextStatus,
+            uploaded_count: uploadedCount,
+            completed_at: nextStatus === 'COMPLETED' ? new Date() : null
+        }
+    });
+};
+
 export const commitVideoToolV3ItemVideo = async (input: {
     runId: string;
     itemId: string;
@@ -743,25 +771,6 @@ export const commitVideoToolV3ItemVideo = async (input: {
                 data: { item_video_url: publicUrl }
             });
 
-            const uploadedCount = await tx.videoToolV3Item.count({
-                where: { run_id: run.id, status: 'UPLOADED' }
-            });
-
-            const nextStatus = uploadedCount >= run.expected_count
-                ? 'COMPLETED'
-                : uploadedCount > 0
-                    ? 'PARTIAL'
-                    : 'OPEN';
-
-            const updatedRun = await tx.videoToolV3Run.update({
-                where: { id: run.id },
-                data: {
-                    status: nextStatus,
-                    uploaded_count: uploadedCount,
-                    completed_at: nextStatus === 'COMPLETED' ? new Date() : null
-                }
-            });
-
             await writeSecurityAuditLog(tx, {
                 action: runItem.file_url ? 'VIDEO_TOOL_V3_ITEM_OVERWRITTEN' : 'VIDEO_TOOL_V3_ITEM_UPLOADED',
                 user_id: input.userId,
@@ -780,10 +789,10 @@ export const commitVideoToolV3ItemVideo = async (input: {
 
             return {
                 run: {
-                    id: updatedRun.id,
-                    status: updatedRun.status,
-                    expected_count: updatedRun.expected_count,
-                    uploaded_count: updatedRun.uploaded_count
+                    id: run.id,
+                    status: run.status,
+                    expected_count: run.expected_count,
+                    uploaded_count: run.uploaded_count
                 },
                 uploaded: {
                     item_id: input.itemId,
@@ -801,6 +810,14 @@ export const commitVideoToolV3ItemVideo = async (input: {
         }
         throw error;
     }
+
+    const reconciledRun = await reconcileVideoToolV3RunProgress(run.id);
+    result.run = {
+        id: reconciledRun.id,
+        status: reconciledRun.status,
+        expected_count: reconciledRun.expected_count,
+        uploaded_count: reconciledRun.uploaded_count
+    };
 
     await cleanupSupersededVideoToolV3Files(run.batch_id, run.id);
     return result;

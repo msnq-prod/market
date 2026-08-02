@@ -1,8 +1,27 @@
-import { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Search } from 'lucide-react';
+import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
 import type { OrderHistory } from '../../data/db';
+import {
+    AdminAction,
+    AdminInlineError,
+    AdminSearchField,
+    AdminSelect,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState
+} from '../components/AdminWorkspaceUI';
+
+type HistoryStatusFilter = 'ALL' | 'RECEIVED' | 'RETURNED';
+
+const statusOptions = [
+    { value: 'ALL', label: 'Все результаты' },
+    { value: 'RECEIVED', label: 'Получено' },
+    { value: 'RETURNED', label: 'Возвращено' }
+];
 
 const formatOrderDate = (value: string): string => {
     const date = new Date(value);
@@ -22,156 +41,136 @@ export function SalesHistory() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [query, setQuery] = useState('');
+    const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('ALL');
     const [reloadToken, setReloadToken] = useState(0);
     const deferredQuery = useDeferredValue(query);
 
     useEffect(() => {
         const controller = new AbortController();
-
         const loadHistory = async () => {
             setLoading(true);
             setError('');
 
             try {
                 const params = new URLSearchParams();
-                if (deferredQuery.trim()) {
-                    params.set('q', deferredQuery.trim());
-                }
-
+                if (deferredQuery.trim()) params.set('q', deferredQuery.trim());
                 const response = await authFetch(`/api/sales/history${params.toString() ? `?${params.toString()}` : ''}`, {
                     signal: controller.signal
                 });
-
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить историю продаж.' }));
-                    setError(payload.error || 'Не удалось загрузить историю продаж.');
-                    setOrders([]);
-                    return;
+                    throw new Error(payload.error || 'Не удалось загрузить историю продаж.');
                 }
-
-                const data = await response.json() as OrderHistory[];
-                setOrders(data);
-            } catch (_error) {
-                if (!controller.signal.aborted) {
-                    setError('Сетевая ошибка при загрузке истории продаж.');
-                    setOrders([]);
-                }
+                setOrders(await response.json() as OrderHistory[]);
+            } catch (loadError) {
+                if (controller.signal.aborted) return;
+                setOrders([]);
+                setError(loadError instanceof Error ? loadError.message : 'Сетевая ошибка при загрузке истории продаж.');
             } finally {
-                if (!controller.signal.aborted) {
-                    setLoading(false);
-                }
+                if (!controller.signal.aborted) setLoading(false);
             }
         };
 
         void loadHistory();
-
         return () => controller.abort();
     }, [deferredQuery, reloadToken]);
 
-    const summary = useMemo(() => ({
-        delivered: orders.filter((order) => order.status === 'RECEIVED').length,
-        returned: orders.filter((order) => order.status === 'RETURNED').length,
-        revenue: orders
-            .filter((order) => order.status === 'RECEIVED')
-            .reduce((sum, order) => sum + order.total, 0)
-    }), [orders]);
+    const visibleOrders = useMemo(() => orders.filter((order) => (
+        statusFilter === 'ALL' || order.status === statusFilter
+    )), [orders, statusFilter]);
+
+    const summary = useMemo(() => {
+        let received = 0;
+        let returned = 0;
+        let revenue = 0;
+        visibleOrders.forEach((order) => {
+            if (order.status === 'RECEIVED') {
+                received += 1;
+                revenue += order.total;
+            }
+            if (order.status === 'RETURNED') returned += 1;
+        });
+        return { received, returned, revenue };
+    }, [visibleOrders]);
 
     return (
-        <div className="space-y-6">
-            <header className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold text-white">История продаж</h1>
-                    <p className="mt-1 max-w-3xl text-gray-500">
-                        Финальные продажи и возвраты без ранних отмен до отправки.
-                    </p>
-                </div>
-
-                <button
-                    type="button"
-                    onClick={() => setReloadToken((value) => value + 1)}
-                    className="bg-[#1b1e24] hover:bg-white/[0.07] text-white px-4 py-2 rounded-lg flex items-center gap-2"
+        <div data-testid="sales-history-workspace">
+            <AdminWorkspace>
+                <AdminWorkspaceHeader
+                    title="История продаж"
+                    count={`Получено: ${summary.received} · Возвраты: ${summary.returned} · Выручка: ${formatRub(summary.revenue)}`}
                 >
-                    <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-                    Обновить
-                </button>
-            </header>
-
-            {error && (
-                <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-red-200">
-                    {error}
-                </div>
-            )}
-
-            <section className="grid gap-4 md:grid-cols-3">
-                <SummaryCard title="Получено" value={summary.delivered} tone="text-emerald-300" />
-                <SummaryCard title="Возвращено" value={summary.returned} tone="text-amber-300" />
-                <SummaryCard title="Выручка" value={formatRub(summary.revenue)} tone="text-white" />
-            </section>
-
-            <section className="rounded-2xl border border-white/6 bg-[#14161b] p-5 space-y-4">
-                <label className="block space-y-2">
-                    <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по истории</span>
-                    <div className="flex items-center gap-3 rounded-xl border border-white/6 bg-[#0f1217] px-3 py-2">
-                        <Search size={16} className="text-gray-500" />
-                        <input
+                    <div className="ml-auto w-full max-w-[520px]" data-testid="sales-history-search">
+                        <AdminSearchField
                             value={query}
-                            onChange={(event) => setQuery(event.target.value)}
-                            placeholder="ID, логин, контакты"
-                            className="w-full bg-transparent text-sm text-white placeholder:text-gray-600 focus:outline-none"
+                            onChange={setQuery}
+                            placeholder="ID, покупатель или контакт"
+                            ariaLabel="Поиск истории продаж"
                         />
                     </div>
-                </label>
-
-                {loading ? (
-                    <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
-                        Загружаем историю продаж...
+                    <div data-testid="sales-history-status-filter">
+                        <AdminSelect
+                            label="Результат продажи"
+                            value={statusFilter}
+                            onChange={(value) => setStatusFilter(value as HistoryStatusFilter)}
+                            options={statusOptions}
+                            className="w-[160px]"
+                        />
                     </div>
-                ) : orders.length === 0 ? (
-                    <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
-                        История по текущему фильтру пуста.
-                    </div>
-                ) : (
-                    <div className="space-y-3">
-                        {orders.map((order) => (
-                            <div key={order.id} className="rounded-2xl border border-white/6 bg-[#0f1217] px-4 py-4">
-                                <div className="flex flex-wrap items-center justify-between gap-3">
-                                    <div>
-                                        <div className="text-sm font-medium text-white">Заказ #{order.id.slice(0, 8)}</div>
-                                        <div className="mt-1 text-xs text-gray-500">{formatOrderDate(order.updated_at)}</div>
-                                    </div>
+                    <AdminAction
+                        tone="secondary"
+                        aria-label="Обновить историю"
+                        className="h-11 min-h-11 w-11 px-0"
+                        onClick={() => setReloadToken((value) => value + 1)}
+                    >
+                        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+                    </AdminAction>
+                </AdminWorkspaceHeader>
 
-                                    <div className="flex items-center gap-3">
-                                        <span className={`rounded-full px-3 py-1 text-xs ${
-                                            order.status === 'RECEIVED'
-                                                ? 'border border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                                                : 'border border-amber-500/40 bg-amber-500/10 text-amber-200'
-                                        }`}>
-                                            {order.status === 'RECEIVED' ? 'ПОЛУЧЕН' : 'ВОЗВРАЩЁН'}
-                                        </span>
-                                        <span className="font-mono text-sm text-white">{formatRub(order.total)}</span>
-                                    </div>
-                                </div>
+                {error ? <AdminInlineError>{error}</AdminInlineError> : null}
 
-                                <div className="mt-3 text-sm text-gray-300">
-                                    {order.user?.name || 'Покупатель'}{order.user?.username ? ` (@${order.user.username})` : ''}
-                                </div>
-                                <div className="mt-1 text-sm text-gray-500">
-                                    {order.contact_phone || order.contact_email || 'Контакты не указаны'}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </section>
+                <AdminTableSurface minWidth={980}>
+                    {loading ? (
+                        <AdminWorkspaceState state="loading">Загрузка истории…</AdminWorkspaceState>
+                    ) : visibleOrders.length === 0 ? (
+                        <AdminWorkspaceState state="empty">История не найдена</AdminWorkspaceState>
+                    ) : (
+                        <table className="w-full border-collapse text-left text-[13px]" data-testid="sales-history-table">
+                            <thead className="bg-[#10151b] text-[#8f98a4]">
+                                <tr className="h-12 border-b border-[#2a3039]">
+                                    <HeaderCell>Дата</HeaderCell>
+                                    <HeaderCell>Заказ</HeaderCell>
+                                    <HeaderCell>Покупатель</HeaderCell>
+                                    <HeaderCell>Контакт</HeaderCell>
+                                    <HeaderCell>Результат</HeaderCell>
+                                    <HeaderCell align="right">Сумма</HeaderCell>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {visibleOrders.map((order) => (
+                                    <tr key={order.id} className="border-b border-[#252b33] bg-[#11161d] text-[#d8dde3] transition hover:bg-[#151b22] last:border-b-0" data-testid={`sales-history-row-${order.id}`}>
+                                        <td className="whitespace-nowrap px-4 py-3 text-[#9aa3ae]">{formatOrderDate(order.updated_at)}</td>
+                                        <td className="px-4 py-3 font-medium text-[#f1f4f7]">#{order.id.slice(0, 8)}</td>
+                                        <td className="max-w-[260px] px-4 py-3">
+                                            <div className="truncate">{order.user?.name || 'Покупатель'}</div>
+                                            {order.user?.username ? <div className="mt-1 truncate text-[12px] text-[#7f8894]">@{order.user.username}</div> : null}
+                                        </td>
+                                        <td className="max-w-[260px] px-4 py-3"><div className="truncate">{order.contact_phone || order.contact_email || 'Не указан'}</div></td>
+                                        <td className="px-4 py-3">
+                                            <AdminStatus label={order.status === 'RECEIVED' ? 'Получен' : 'Возвращён'} tone={order.status === 'RECEIVED' ? 'success' : 'danger'} />
+                                        </td>
+                                        <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-[#f1f4f7]">{formatRub(order.total)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                </AdminTableSurface>
+            </AdminWorkspace>
         </div>
     );
 }
 
-function SummaryCard({ title, value, tone }: { title: string; value: number | string; tone: string }) {
-    return (
-        <div className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
-            <div className="text-sm text-gray-400">{title}</div>
-            <div className={`mt-2 text-3xl font-bold ${tone}`}>{value}</div>
-        </div>
-    );
+function HeaderCell({ children, align = 'left' }: { children: ReactNode; align?: 'left' | 'right' }) {
+    return <th className={`px-4 py-3 text-[12px] font-medium ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</th>;
 }

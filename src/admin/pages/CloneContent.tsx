@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { RotateCcw, Search, Save } from 'lucide-react';
 import type { CloneItemView } from '../../public/components/DigitalCloneView';
 import { DigitalCloneView } from '../../public/components/DigitalCloneView';
 import {
@@ -8,27 +9,49 @@ import {
 } from '../../shared/clonePageContent';
 import { apiFetch } from '../../utils/apiFetch';
 import { authFetch } from '../../utils/authFetch';
+import {
+    AdminAction,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState,
+    adminFieldClassName
+} from '../components/AdminWorkspaceUI';
+
+type CloneContentSection = 'hero' | 'details' | 'media' | 'authenticity';
 
 const FIELD_CONFIG: Array<{
+    section: CloneContentSection;
     key: keyof ClonePageContent;
     label: string;
-    hint?: string;
     multiline?: boolean;
 }> = [
-    { key: 'hero_badge', label: 'Бейдж в шапке' },
-    { key: 'hero_description', label: 'Описание в hero', multiline: true },
-    { key: 'details_heading', label: 'Заголовок блока данных' },
-    { key: 'field_collection_date_label', label: 'Подпись даты сбора' },
-    { key: 'field_collection_time_label', label: 'Подпись времени сбора' },
-    { key: 'field_coords_label', label: 'Подпись координат' },
-    { key: 'media_heading', label: 'Заголовок media-блока' },
-    { key: 'media_empty_text', label: 'Текст, если media нет' },
-    { key: 'photo_button_text', label: 'Кнопка фото' },
-    { key: 'video_button_text', label: 'Кнопка видео' },
-    { key: 'authenticity_heading', label: 'Заголовок блока подлинности' },
-    { key: 'authenticity_text', label: 'Текст блока подлинности', multiline: true },
-    { key: 'field_serial_number_label', label: 'Подпись серийного номера' }
+    { section: 'hero', key: 'hero_badge', label: 'Бейдж в шапке' },
+    { section: 'hero', key: 'hero_description', label: 'Описание в первом экране', multiline: true },
+    { section: 'details', key: 'details_heading', label: 'Заголовок блока данных' },
+    { section: 'details', key: 'field_collection_date_label', label: 'Дата сбора' },
+    { section: 'details', key: 'field_collection_time_label', label: 'Время сбора' },
+    { section: 'details', key: 'field_coords_label', label: 'Координаты' },
+    { section: 'details', key: 'field_serial_number_label', label: 'Серийный номер' },
+    { section: 'media', key: 'media_heading', label: 'Заголовок медиа' },
+    { section: 'media', key: 'media_empty_text', label: 'Текст без медиа' },
+    { section: 'media', key: 'photo_button_text', label: 'Кнопка фото' },
+    { section: 'media', key: 'video_button_text', label: 'Кнопка видео' },
+    { section: 'authenticity', key: 'authenticity_heading', label: 'Заголовок подлинности' },
+    { section: 'authenticity', key: 'authenticity_text', label: 'Текст подлинности', multiline: true }
 ];
+
+const SECTION_CONFIG: Array<{ id: CloneContentSection; title: string }> = [
+    { id: 'hero', title: 'Первый экран' },
+    { id: 'details', title: 'Данные' },
+    { id: 'media', title: 'Медиа' },
+    { id: 'authenticity', title: 'Подлинность' }
+];
+
+const FIELD_GROUPS = SECTION_CONFIG.map((section) => ({
+    ...section,
+    fields: FIELD_CONFIG.filter((field) => field.section === section.id)
+}));
 
 const PREVIEW_ITEM: CloneItemView = {
     serial_number: 'RUSPREVIEW000001',
@@ -36,7 +59,7 @@ const PREVIEW_ITEM: CloneItemView = {
     product_name: 'Демо-товар ZAGARAMI',
     product_description: 'Короткое описание карточки товара, которое наследуется публичным паспортом.',
     location_name: 'Москва, тестовая локация',
-    location_description: 'Описание локации из товарного шаблона. Этот текст теперь показывается в публичном паспорте вместо стандартной фразы про публичный токен.',
+    location_description: 'Описание локации из товарного шаблона.',
     collection_date: new Date().toISOString(),
     collection_time: '14:30',
     gps_lat: 55.751244,
@@ -47,6 +70,9 @@ const PREVIEW_ITEM: CloneItemView = {
     has_video: false
 };
 
+const inputClassName = `${adminFieldClassName} w-full px-3`;
+const textareaClassName = 'min-h-[96px] w-full resize-y rounded-lg border border-[#2a3039] bg-[#151a21] px-3 py-2.5 text-[13px] text-[#eef2f6] outline-none transition focus:border-[#4c91f3]';
+
 export function CloneContent() {
     const [draft, setDraft] = useState<ClonePageContent>(DEFAULT_CLONE_PAGE_CONTENT);
     const [saved, setSaved] = useState<ClonePageContent>(DEFAULT_CLONE_PAGE_CONTENT);
@@ -56,7 +82,8 @@ export function CloneContent() {
     const [saving, setSaving] = useState(false);
     const [loadingPreview, setLoadingPreview] = useState(false);
     const [statusText, setStatusText] = useState('');
-    const [previewStatus, setPreviewStatus] = useState('');
+    const [statusTone, setStatusTone] = useState<'neutral' | 'success' | 'error'>('neutral');
+    const [previewStatus, setPreviewStatus] = useState('Показан демо-предмет.');
 
     const hasChanges = useMemo(
         () => JSON.stringify(draft) !== JSON.stringify(saved),
@@ -67,55 +94,51 @@ export function CloneContent() {
         const loadContent = async () => {
             setLoading(true);
             try {
-                const res = await apiFetch('/api/content/clone-page');
-                if (res.ok) {
-                    const data = sanitizeClonePageContent(await res.json());
-                    setDraft(data);
-                    setSaved(data);
-                } else {
-                    setDraft(DEFAULT_CLONE_PAGE_CONTENT);
-                    setSaved(DEFAULT_CLONE_PAGE_CONTENT);
-                }
+                const response = await apiFetch('/api/content/clone-page');
+                if (!response.ok) throw new Error('Не удалось загрузить тексты.');
+                const content = sanitizeClonePageContent(await response.json());
+                setDraft(content);
+                setSaved(content);
             } catch (_error) {
                 setDraft(DEFAULT_CLONE_PAGE_CONTENT);
                 setSaved(DEFAULT_CLONE_PAGE_CONTENT);
+                setStatusText('Используются стандартные тексты.');
+                setStatusTone('error');
             } finally {
                 setLoading(false);
             }
         };
-
         void loadContent();
     }, []);
 
     const handleFieldChange = (key: keyof ClonePageContent, value: string) => {
-        setDraft((prev) => ({ ...prev, [key]: value }));
+        setDraft((current) => ({ ...current, [key]: value }));
         setStatusText('');
+        setStatusTone('neutral');
     };
 
     const handleSave = async () => {
         setSaving(true);
         setStatusText('');
+        setStatusTone('neutral');
         try {
-            const res = await authFetch('/api/content/clone-page', {
+            const response = await authFetch('/api/content/clone-page', {
                 method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(draft)
             });
-
-            if (!res.ok) {
-                const payload = await res.json().catch(() => ({ error: 'Не удалось сохранить текст страницы.' }));
-                setStatusText(payload.error || 'Не удалось сохранить текст страницы.');
-                return;
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ error: 'Не удалось сохранить тексты.' }));
+                throw new Error(payload.error || 'Не удалось сохранить тексты.');
             }
-
-            const data = sanitizeClonePageContent(await res.json());
-            setDraft(data);
-            setSaved(data);
-            setStatusText('Изменения сохранены.');
-        } catch (_error) {
-            setStatusText('Не удалось сохранить текст страницы.');
+            const content = sanitizeClonePageContent(await response.json());
+            setDraft(content);
+            setSaved(content);
+            setStatusText('Сохранено.');
+            setStatusTone('success');
+        } catch (error) {
+            setStatusText(error instanceof Error ? error.message : 'Не удалось сохранить тексты.');
+            setStatusTone('error');
         } finally {
             setSaving(false);
         }
@@ -123,7 +146,8 @@ export function CloneContent() {
 
     const handleReset = () => {
         setDraft(saved);
-        setStatusText('Локальные изменения сброшены.');
+        setStatusText('Изменения сброшены.');
+        setStatusTone('neutral');
     };
 
     const handleLoadPreviewItem = async () => {
@@ -137,118 +161,137 @@ export function CloneContent() {
         setLoadingPreview(true);
         setPreviewStatus('');
         try {
-            const res = await apiFetch(`/api/public/items/${encodeURIComponent(serialNumber)}`);
-            if (!res.ok) {
-                setPreviewStatus('Предмет по серийному номеру не найден, показан демо-предмет.');
+            const response = await apiFetch(`/api/public/items/${encodeURIComponent(serialNumber)}`);
+            if (!response.ok) {
                 setPreviewItem(PREVIEW_ITEM);
+                setPreviewStatus('Предмет не найден. Показан демо-предмет.');
                 return;
             }
-            const data = await res.json() as CloneItemView;
-            setPreviewItem(data);
-            setPreviewStatus('Загружен реальный предмет для предпросмотра.');
+            setPreviewItem(await response.json() as CloneItemView);
+            setPreviewStatus('Загружен реальный предмет.');
         } catch (_error) {
             setPreviewItem(PREVIEW_ITEM);
-            setPreviewStatus('Ошибка загрузки предмета, показан демо-предмет.');
+            setPreviewStatus('Ошибка загрузки. Показан демо-предмет.');
         } finally {
             setLoadingPreview(false);
         }
     };
 
     if (loading) {
-        return <div className="text-gray-400">Загрузка настроек страницы клона...</div>;
+        return (
+            <AdminWorkspace data-testid="clone-content-workspace">
+                <AdminTableSurface>
+                    <AdminWorkspaceState state="loading">Загрузка текстов паспорта…</AdminWorkspaceState>
+                </AdminTableSurface>
+            </AdminWorkspace>
+        );
     }
 
     return (
-        <div className="space-y-6">
-            <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                    <h1 className="text-2xl font-bold text-white">Страница цифрового клона</h1>
-                    <p className="text-gray-500 mt-1">
-                        Live-редактирование текста. Справа вы видите, как текст встаёт в реальный макет.
-                    </p>
+        <AdminWorkspace data-testid="clone-content-workspace">
+            <AdminWorkspaceHeader title="Контент паспорта" count={`Полей: ${FIELD_CONFIG.length}`} />
+
+            <section
+                className="flex min-h-14 items-center justify-between gap-4 rounded-lg border border-[#2a3039] bg-[#11161d] px-4 py-2.5"
+                data-testid="clone-content-savebar"
+            >
+                <div className={`min-w-0 truncate text-[13px] ${statusTone === 'error' ? 'text-red-200' : statusTone === 'success' ? 'text-emerald-200' : 'text-[#89919d]'}`}>
+                    {statusText || (hasChanges ? 'Есть несохранённые изменения.' : 'Все изменения сохранены.')}
                 </div>
-                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
-                    <button
+                <div className="flex shrink-0 gap-2">
+                    <AdminAction
+                        tone="secondary"
+                        disabled={!hasChanges || saving}
                         onClick={handleReset}
-                        disabled={!hasChanges || saving}
-                        className="flex-1 rounded-lg border border-white/10 px-4 py-2 text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50 sm:flex-none"
+                        data-testid="clone-content-reset"
                     >
-                        Сбросить
-                    </button>
-                    <button
+                        <RotateCcw size={15} /> Сбросить
+                    </AdminAction>
+                    <AdminAction
+                        disabled={!hasChanges || saving}
                         onClick={() => void handleSave()}
-                        disabled={!hasChanges || saving}
-                        className="flex-1 rounded-lg border border-white/10 bg-white/[0.07] px-4 py-2 text-white hover:bg-white/[0.11] disabled:opacity-50 sm:flex-none"
+                        data-testid="clone-content-save"
                     >
-                        {saving ? 'Сохранение...' : 'Сохранить'}
-                    </button>
+                        <Save size={15} /> {saving ? 'Сохранение…' : 'Сохранить'}
+                    </AdminAction>
                 </div>
-            </header>
+            </section>
 
-            {statusText && (
-                <div className="rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-gray-200">
-                    {statusText}
-                </div>
-            )}
-
-            <div className="grid grid-cols-1 xl:grid-cols-[460px_1fr] gap-6">
-                <section className="space-y-4">
-                    <div className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-3">
-                        <h2 className="text-sm uppercase tracking-wider text-gray-400">Предпросмотр по серийному номеру</h2>
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                            <input
-                                value={previewSerialNumber}
-                                onChange={(e) => setPreviewSerialNumber(e.target.value)}
-                                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white"
-                                placeholder="Введите serial_number (необязательно)"
-                            />
-                            <button
-                                onClick={() => void handleLoadPreviewItem()}
-                                disabled={loadingPreview}
-                                className="rounded-lg bg-[#1b1e24] px-3 py-2 text-sm text-white hover:bg-white/[0.07]"
-                            >
-                                {loadingPreview ? '...' : 'Загрузить'}
-                            </button>
-                        </div>
-                        {previewStatus && <p className="text-xs text-gray-400">{previewStatus}</p>}
-                    </div>
-
-                    <div className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-4 max-h-[calc(100vh-260px)] overflow-auto">
-                        {FIELD_CONFIG.map((field) => (
-                            <label key={field.key} className="block">
-                                <span className="block text-sm text-gray-300 mb-1">{field.label}</span>
-                                {field.hint && <span className="block text-xs text-gray-500 mb-2">{field.hint}</span>}
-                                {field.multiline ? (
-                                    <textarea
-                                        value={draft[field.key]}
-                                        onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                                        rows={3}
-                                        className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white"
-                                    />
-                                ) : (
-                                    <input
-                                        value={draft[field.key]}
-                                        onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                                        className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white"
-                                    />
-                                )}
-                            </label>
+            <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(560px,1fr)_500px]">
+                <AdminTableSurface className="overflow-hidden">
+                    <form className="divide-y divide-[#2a3039]" data-testid="clone-content-form">
+                        {FIELD_GROUPS.map((group) => (
+                            <section key={group.id} className="px-5 py-5">
+                                <h2 className="mb-4 text-[15px] font-semibold text-[#f1f4f7]">{group.title}</h2>
+                                <div className="grid gap-x-4 gap-y-4 md:grid-cols-2">
+                                    {group.fields.map((field) => (
+                                        <label key={field.key} className={field.multiline ? 'md:col-span-2' : ''}>
+                                            <span className="mb-1.5 block text-[12px] font-medium text-[#a8b0ba]">{field.label}</span>
+                                            {field.multiline ? (
+                                                <textarea
+                                                    value={draft[field.key]}
+                                                    onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                                                    className={textareaClassName}
+                                                    rows={3}
+                                                    data-testid={`clone-content-field-${field.key}`}
+                                                />
+                                            ) : (
+                                                <input
+                                                    value={draft[field.key]}
+                                                    onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                                                    className={inputClassName}
+                                                    data-testid={`clone-content-field-${field.key}`}
+                                                />
+                                            )}
+                                        </label>
+                                    ))}
+                                </div>
+                            </section>
                         ))}
-                    </div>
-                </section>
+                    </form>
+                </AdminTableSurface>
 
-                <section className="rounded-2xl border border-white/6 bg-black/60 p-4">
-                    <div className="max-h-[calc(100vh-170px)] overflow-auto rounded-[28px] bg-[#02040a]">
+                <section
+                    className="min-w-0 overflow-hidden rounded-lg border border-[#2a3039] bg-[#11161d] shadow-[0_22px_50px_rgba(0,0,0,0.22)] xl:sticky xl:top-3 xl:self-start"
+                    data-testid="clone-content-preview"
+                >
+                    <header className="border-b border-[#2a3039] bg-[#10151b] px-4 py-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <h2 className="text-[15px] font-semibold text-[#f1f4f7]">Предпросмотр</h2>
+                                <div className="mt-1 truncate text-[12px] text-[#7f8894]">{previewItem.serial_number}</div>
+                            </div>
+                            <div className="flex min-w-0 flex-1 justify-end gap-2">
+                                <input
+                                    value={previewSerialNumber}
+                                    onChange={(event) => setPreviewSerialNumber(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') void handleLoadPreviewItem();
+                                    }}
+                                    className={`${inputClassName} max-w-[220px]`}
+                                    placeholder="Серийный номер"
+                                    aria-label="Серийный номер для предпросмотра"
+                                    data-testid="clone-content-preview-serial"
+                                />
+                                <AdminAction
+                                    tone="secondary"
+                                    disabled={loadingPreview}
+                                    onClick={() => void handleLoadPreviewItem()}
+                                    data-testid="clone-content-preview-load"
+                                >
+                                    <Search size={15} /> {loadingPreview ? 'Загрузка…' : 'Показать'}
+                                </AdminAction>
+                            </div>
+                        </div>
+                        <div className="mt-2 text-right text-[12px] text-[#89919d]">{previewStatus}</div>
+                    </header>
+                    <div className="max-h-[calc(100vh-300px)] overflow-auto bg-[#02040a]">
                         <div className="mx-auto w-[430px] max-w-full">
-                            <DigitalCloneView
-                                item={previewItem}
-                                content={draft}
-                                previewMode
-                            />
+                            <DigitalCloneView item={previewItem} content={draft} previewMode />
                         </div>
                     </div>
                 </section>
             </div>
-        </div>
+        </AdminWorkspace>
     );
 }

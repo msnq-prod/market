@@ -1,167 +1,159 @@
-import { ArrowUpRight, ChevronDown, ChevronRight, Home, X } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, Home, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { adminPrototypeFeatures } from '../shared/features';
-import type { AdminPrototypeAction, AdminPrototypeFeature, AdminPrototypeFeatureId } from '../shared/types';
+import { Link, useSearchParams } from 'react-router-dom';
+import { getMegaMenuZones } from './config';
+import { PhysicalMenu, PhysicalWorkspace } from './PhysicalZone';
+import { PlanetMenu, PlanetWorkspace } from './PlanetZone';
+import { SalesMenu, SalesWorkspace } from './SalesZone';
+import { SystemMenu, SystemWorkspace } from './SystemZone';
+import type { MegaMenuZone, ZoneStage, ZoneSurfaceProps } from './types';
+import { getAccentStyles, getStageStateClasses } from './zoneStyles';
+import type { AdminPrototypeFeatureId } from '../shared/types';
+import { isProductScenarioId, productScenarioStages } from './products/productScenarios';
 
 type ActiveSelection = {
     featureId: AdminPrototypeFeatureId;
-    actionIndex: number;
+    stageId: string;
+};
+
+const zoneSurfaceById: Record<
+    AdminPrototypeFeatureId,
+    {
+        Menu: (props: ZoneSurfaceProps) => React.JSX.Element;
+        Workspace: (props: ZoneSurfaceProps) => React.JSX.Element;
+    }
+> = {
+    physical: { Menu: PhysicalMenu, Workspace: PhysicalWorkspace },
+    sales: { Menu: SalesMenu, Workspace: SalesWorkspace },
+    planet: { Menu: PlanetMenu, Workspace: PlanetWorkspace },
+    system: { Menu: SystemMenu, Workspace: SystemWorkspace }
 };
 
 export function MegaMenuPrototype() {
-    const [selection, setSelection] = useState<ActiveSelection>({ featureId: 'physical', actionIndex: 0 });
-    const [openFeatureId, setOpenFeatureId] = useState<AdminPrototypeFeatureId | null>(null);
-    const activeFeature = useMemo(
-        () => adminPrototypeFeatures.find((feature) => feature.id === selection.featureId) || adminPrototypeFeatures[0],
-        [selection.featureId]
-    );
-    const activeAction = activeFeature.actions[selection.actionIndex] || activeFeature.actions[0];
-    const openFeature = openFeatureId
-        ? adminPrototypeFeatures.find((feature) => feature.id === openFeatureId) || activeFeature
+    const role = localStorage.getItem('userRole');
+    const zones = useMemo(() => getMegaMenuZones(role), [role]);
+    const [searchParams, setSearchParams] = useSearchParams();
+    const requestedProductView = searchParams.get('productsView');
+    const [selection, setSelection] = useState<ActiveSelection>({
+        featureId: 'physical',
+        stageId: requestedProductView && isProductScenarioId(requestedProductView) ? requestedProductView : 'queue'
+    });
+    const [openFeatureId, setOpenFeatureId] = useState<AdminPrototypeFeatureId | null>('physical');
+
+    const activeZone = zones.find((zone) => zone.id === selection.featureId) || zones[0];
+    const activeStages = activeZone.id === 'physical' ? [...productScenarioStages, ...activeZone.stages] : activeZone.stages;
+    const activeStage = activeStages.find((stage) => stage.id === selection.stageId) || activeStages[0];
+    const mobileActiveStage = activeZone.id === 'physical'
+        ? activeZone.stages.find((stage) => stage.id === selection.stageId) || activeZone.stages[0]
+        : activeStage;
+    const openZone = openFeatureId ? zones.find((zone) => zone.id === openFeatureId) || null : null;
+    const openStages = openZone?.id === 'physical' ? productScenarioStages : openZone?.stages;
+    const openStage = openZone
+        ? openStages?.find((stage) => stage.id === (openZone.id === selection.featureId ? selection.stageId : '')) || openStages?.[0] || null
         : null;
-    const Preview = activeFeature.Preview;
+    const ActiveWorkspace = zoneSurfaceById[activeZone.id].Workspace;
 
-    const toggleFeatureMenu = (feature: AdminPrototypeFeature) => {
-        const shouldClose = openFeatureId === feature.id;
+    const toggleZone = (zone: MegaMenuZone) => {
+        const shouldClose = openFeatureId === zone.id;
 
-        setOpenFeatureId(shouldClose ? null : feature.id);
-
-        if (!shouldClose && selection.featureId !== feature.id) {
-            setSelection({ featureId: feature.id, actionIndex: 0 });
+        if (!shouldClose && selection.featureId !== zone.id) {
+            setSelection({ featureId: zone.id, stageId: zone.id === 'physical' ? 'queue' : zone.stages[0].id });
+            if (zone.id === 'physical') {
+                const nextParams = new URLSearchParams(searchParams);
+                nextParams.set('productsView', 'queue');
+                nextParams.delete('batchId');
+                setSearchParams(nextParams);
+            }
         }
+
+        setOpenFeatureId(shouldClose ? null : zone.id);
     };
 
-    const selectAction = (feature: AdminPrototypeFeature, actionIndex: number) => {
-        setSelection({ featureId: feature.id, actionIndex });
-        setOpenFeatureId(null);
+    const selectStage = (zone: MegaMenuZone, stageId: string) => {
+        setSelection({ featureId: zone.id, stageId });
     };
 
     return (
         <div className="min-h-screen bg-[#090b0e] text-gray-100">
-            <header className="sticky top-0 z-30 border-b border-white/8 bg-[#0d1014]/95 backdrop-blur">
-                <div className="mx-auto flex min-h-16 w-full max-w-[1340px] items-center gap-4 px-4 sm:px-6 lg:px-8">
+            <header className="sticky top-0 z-30 border-b border-white/8 bg-[#0b0e12]/95 backdrop-blur-xl">
+                <div className="mx-auto flex min-h-16 w-full max-w-[1440px] items-center gap-3 px-3 sm:px-6 lg:px-8">
                     <Link
                         to="/admin"
-                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/[0.035] text-gray-300 transition hover:bg-white/[0.06] hover:text-white"
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/[0.035] text-gray-400 transition hover:bg-white/[0.06] hover:text-white"
                         aria-label="Текущая админка"
                     >
                         <Home size={17} />
                     </Link>
 
-                    <nav className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto" aria-label="Зоны админки">
-                        {adminPrototypeFeatures.map((feature) => (
+                    <div className="hidden min-w-44 shrink-0 lg:block">
+                        <div className="text-sm font-semibold tracking-[0.18em] text-white">ZAGARAMI</div>
+                        <div className="mt-0.5 text-[9px] uppercase tracking-[0.24em] text-gray-600">Admin HQ</div>
+                    </div>
+
+                    <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:gap-2" aria-label="Зоны админки">
+                        {zones.map((zone) => (
                             <MegaNavButton
-                                key={feature.id}
-                                feature={feature}
-                                active={feature.id === activeFeature.id}
-                                open={feature.id === openFeatureId}
-                                onClick={() => toggleFeatureMenu(feature)}
+                                key={zone.id}
+                                zone={zone}
+                                active={zone.id === activeZone.id}
+                                open={zone.id === openFeatureId}
+                                onClick={() => toggleZone(zone)}
                             />
                         ))}
                     </nav>
+
+                    <div className="hidden shrink-0 text-right sm:block">
+                        <div className="text-xs font-medium text-gray-300">{role === 'MANAGER' ? 'Менеджер HQ' : 'Администратор'}</div>
+                        <div className="mt-0.5 text-[9px] uppercase tracking-[0.18em] text-gray-700">{role || 'ADMIN'}</div>
+                    </div>
                 </div>
 
-                {openFeature ? (
+                {openZone && openStage ? (
                     <MegaPanel
-                        feature={openFeature}
-                        activeAction={openFeature.id === activeFeature.id ? activeAction : null}
-                        onSelectAction={selectAction}
+                        zone={openZone}
+                        activeStage={openStage}
+                        onSelectStage={(stageId) => {
+                            selectStage(openZone, stageId);
+                            if (openZone.id === 'physical') setOpenFeatureId(null);
+                        }}
                         onClose={() => setOpenFeatureId(null)}
                     />
                 ) : null}
             </header>
 
-            <main className="mx-auto w-full max-w-[1340px] px-4 py-6 sm:px-6 lg:px-8">
-                <section className="border-b border-white/8 pb-5">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-sm text-gray-500">
-                                <span>Admin HQ</span>
-                                <ChevronRight size={15} />
-                                <span className={activeFeature.tone.text}>{activeFeature.title}</span>
-                            </div>
-                            <h1 className="mt-2 text-3xl font-semibold text-white">{activeAction.label}</h1>
-                            <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-400">{activeAction.detail}</p>
+            <main className="mx-auto w-full max-w-[1440px] px-3 py-5 sm:px-6 lg:px-8">
+                <section className={`flex flex-col gap-4 border-b border-white/8 pb-5 sm:flex-row sm:items-end sm:justify-between ${activeZone.id === 'physical' ? 'lg:hidden' : ''}`}>
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-gray-700">
+                            <span>{activeZone.title}</span>
+                            <span>/</span>
+                            <span className={getStageStateClasses(mobileActiveStage.state)}>{mobileActiveStage.label}</span>
                         </div>
-
-                        <Link
-                            to={activeAction.to}
-                            data-testid="mega-open-action"
-                            className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-[#090b0e] transition hover:opacity-90 ${activeFeature.tone.accent}`}
-                        >
-                            Открыть
-                            <ArrowUpRight size={15} />
-                        </Link>
+                        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">{mobileActiveStage.label}</h1>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">{mobileActiveStage.detail}</p>
                     </div>
+
+                    <Link
+                        to={mobileActiveStage.to}
+                        data-testid="mega-open-action"
+                        className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition hover:brightness-105 ${getAccentStyles(activeZone).solid}`}
+                    >
+                        {mobileActiveStage.cta}
+                        <ArrowUpRight size={15} />
+                    </Link>
                 </section>
 
-                <section className="grid gap-4 py-5 sm:grid-cols-3">
-                    {activeFeature.metrics.map((metric) => (
-                        <div key={metric.label} className="flex min-h-20 items-center justify-between rounded-lg border border-white/8 bg-white/[0.025] px-4 py-3">
-                            <div>
-                                <div className="text-sm text-gray-500">{metric.label}</div>
-                                <div className="mt-1 text-xs text-gray-500">{metric.detail}</div>
-                            </div>
-                            <div className="text-2xl font-semibold text-white">{metric.value}</div>
-                        </div>
-                    ))}
-                </section>
+                <div className={activeZone.id === 'physical' ? 'lg:hidden' : ''}>
+                    <StageRail
+                        zone={activeZone}
+                        activeStage={mobileActiveStage}
+                        onSelectStage={(stageId) => selectStage(activeZone, stageId)}
+                        onOpenMenu={() => setOpenFeatureId(activeZone.id)}
+                    />
+                </div>
 
-                <section className="grid gap-5 lg:grid-cols-[minmax(360px,520px)_1fr]">
-                    <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
-                        <div className={`inline-flex rounded-lg px-2.5 py-1 text-xs ${activeFeature.tone.accentSoft} ${activeFeature.tone.text}`}>
-                            {activeFeature.navLabel}
-                        </div>
-                        <h2 className="mt-3 text-xl font-semibold text-white">Быстрые сценарии</h2>
-                        <p className="mt-1 text-sm leading-6 text-gray-500">{activeFeature.subtitle}</p>
-
-                        <div className="mt-4 grid gap-2">
-                            {activeFeature.actions.map((action, index) => (
-                                <ScenarioRow
-                                    key={action.label}
-                                    feature={activeFeature}
-                                    action={action}
-                                    active={index === selection.actionIndex}
-                                    testId={`mega-main-action-${activeFeature.id}-${index}`}
-                                    onSelect={() => setSelection({ featureId: activeFeature.id, actionIndex: index })}
-                                />
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
-                        <div className="flex items-start justify-between gap-3">
-                            <div>
-                                <h2 className="text-xl font-semibold text-white">Состояние зоны</h2>
-                                <p className="mt-1 text-sm text-gray-500">{activeFeature.intent}</p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setOpenFeatureId(activeFeature.id)}
-                                className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition hover:bg-white/[0.06] ${activeFeature.tone.border} ${activeFeature.tone.text}`}
-                            >
-                                Меню зоны
-                                <ChevronDown size={15} />
-                            </button>
-                        </div>
-
-                        <div className="mt-6">
-                            <Preview />
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap gap-2 border-t border-white/8 pt-4">
-                            {activeFeature.links.map((link) => (
-                                <Link
-                                    key={link.label}
-                                    to={link.to}
-                                    className="rounded-lg border border-white/8 px-3 py-2 text-sm text-gray-400 transition hover:bg-white/[0.04] hover:text-white"
-                                >
-                                    {link.label}
-                                </Link>
-                            ))}
-                        </div>
-                    </div>
+                <section className="pb-8">
+                    <ActiveWorkspace zone={activeZone} activeStage={activeStage} onSelectStage={(stageId) => selectStage(activeZone, stageId)} />
                 </section>
             </main>
         </div>
@@ -169,126 +161,115 @@ export function MegaMenuPrototype() {
 }
 
 function MegaNavButton({
-    feature,
+    zone,
     active,
     open,
     onClick
 }: {
-    feature: AdminPrototypeFeature;
+    zone: MegaMenuZone;
     active: boolean;
     open: boolean;
     onClick: () => void;
 }) {
-    const Icon = feature.icon;
+    const Icon = zone.icon;
+    const accent = getAccentStyles(zone);
 
     return (
         <button
             type="button"
-            data-testid={`mega-zone-${feature.id}`}
+            data-testid={`mega-zone-${zone.id}`}
             onClick={onClick}
-            className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-lg border px-3 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${
+            className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-lg border px-2.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20 sm:px-3 ${
                 active || open
-                    ? `${feature.tone.border} ${feature.tone.accentSoft} text-white`
-                    : 'border-transparent text-gray-500 hover:bg-white/[0.04] hover:text-gray-200'
+                    ? `${accent.border} ${accent.background} text-white`
+                    : 'border-transparent text-gray-600 hover:bg-white/[0.04] hover:text-gray-300'
             }`}
             aria-expanded={open}
         >
             <Icon size={16} />
-            <span>{feature.navLabel}</span>
-            <ChevronDown size={14} className={open ? 'rotate-180 transition' : 'transition'} />
+            <span>{zone.navLabel}</span>
+            <ChevronDown size={13} className={open ? 'rotate-180 transition' : 'transition'} />
         </button>
     );
 }
 
 function MegaPanel({
-    feature,
-    activeAction,
-    onSelectAction,
+    zone,
+    activeStage,
+    onSelectStage,
     onClose
 }: {
-    feature: AdminPrototypeFeature;
-    activeAction: AdminPrototypeAction | null;
-    onSelectAction: (feature: AdminPrototypeFeature, actionIndex: number) => void;
+    zone: MegaMenuZone;
+    activeStage: ZoneStage;
+    onSelectStage: (stageId: string) => void;
     onClose: () => void;
 }) {
-    const Preview = feature.Preview;
+    const Menu = zoneSurfaceById[zone.id].Menu;
 
     return (
-        <div className="border-t border-white/8 bg-[#0d1014]">
-            <div className="mx-auto grid w-full max-w-[1340px] gap-5 px-4 py-4 sm:px-6 lg:grid-cols-[1fr_420px] lg:px-8">
-                <div className="min-w-0">
-                    <div className="flex items-start justify-between gap-3">
-                        <div>
-                            <h2 className="text-xl font-semibold text-white">{feature.title}</h2>
-                            <p className="mt-1 max-w-xl text-sm leading-6 text-gray-500">{feature.intent}</p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/8 text-gray-500 transition hover:bg-white/[0.05] hover:text-white"
-                            aria-label="Закрыть меню"
-                        >
-                            <X size={16} />
-                        </button>
-                    </div>
-
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        {feature.actions.map((action, index) => (
-                            <ScenarioRow
-                                key={action.label}
-                                feature={feature}
-                                action={action}
-                                active={activeAction === action}
-                                testId={`mega-menu-action-${feature.id}-${index}`}
-                                onSelect={() => onSelectAction(feature, index)}
-                            />
-                        ))}
-                    </div>
+        <div className="max-h-[calc(100svh-4rem)] overflow-y-auto border-t border-white/8 bg-[#0d1014] shadow-2xl shadow-black/40">
+            <div className="mx-auto w-full max-w-[1440px] px-3 py-4 sm:px-6 lg:px-8 lg:py-5">
+                <div className="mb-1 flex justify-end">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 text-gray-600 transition hover:bg-white/[0.05] hover:text-white"
+                        aria-label="Закрыть меню"
+                    >
+                        <X size={16} />
+                    </button>
                 </div>
-
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-3">
-                    <Preview />
-                </div>
+                <Menu zone={zone} activeStage={activeStage} onSelectStage={onSelectStage} />
             </div>
         </div>
     );
 }
 
-function ScenarioRow({
-    feature,
-    action,
-    active,
-    testId,
-    onSelect
+function StageRail({
+    zone,
+    activeStage,
+    onSelectStage,
+    onOpenMenu
 }: {
-    feature: AdminPrototypeFeature;
-    action: AdminPrototypeAction;
-    active: boolean;
-    testId: string;
-    onSelect: () => void;
+    zone: MegaMenuZone;
+    activeStage: ZoneStage;
+    onSelectStage: (stageId: string) => void;
+    onOpenMenu: () => void;
 }) {
-    const Icon = action.icon;
+    const accent = getAccentStyles(zone);
 
     return (
-        <button
-            type="button"
-            data-testid={testId}
-            onClick={onSelect}
-            className={`group flex min-h-16 items-center gap-3 rounded-lg border px-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20 ${
-                active
-                    ? `${feature.tone.border} ${feature.tone.accentSoft} text-white`
-                    : 'border-white/8 bg-white/[0.025] text-gray-400 hover:bg-white/[0.04] hover:text-gray-100'
-            }`}
-            aria-pressed={active}
-        >
-            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? feature.tone.accentSoft : 'bg-white/[0.04]'}`}>
-                <Icon size={18} />
-            </span>
-            <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{action.label}</span>
-                <span className="mt-0.5 block truncate text-xs text-gray-500">{action.detail}</span>
-            </span>
-            <ChevronRight size={15} className={active ? feature.tone.text : 'text-gray-600 group-hover:text-gray-400'} />
-        </button>
+        <section className="flex items-center gap-2 overflow-x-auto py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {zone.stages.map((stage) => {
+                const Icon = stage.icon;
+                const active = stage.id === activeStage.id;
+
+                return (
+                    <button
+                        key={stage.id}
+                        type="button"
+                        onClick={() => onSelectStage(stage.id)}
+                        className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs transition ${
+                            active
+                                ? `${accent.border} ${accent.background} ${accent.text}`
+                                : 'border-white/8 text-gray-600 hover:bg-white/[0.035] hover:text-gray-300'
+                        }`}
+                        aria-pressed={active}
+                    >
+                        <Icon size={14} />
+                        <span>{stage.label}</span>
+                        <span className={active ? 'text-white' : 'text-gray-500'}>{stage.count}</span>
+                    </button>
+                );
+            })}
+            <button
+                type="button"
+                onClick={onOpenMenu}
+                className="ml-auto inline-flex min-h-10 shrink-0 items-center gap-2 rounded-lg border border-white/8 px-3 text-xs text-gray-500 transition hover:bg-white/[0.035] hover:text-white"
+            >
+                Полное меню
+                <ChevronDown size={13} />
+            </button>
+        </section>
     );
 }

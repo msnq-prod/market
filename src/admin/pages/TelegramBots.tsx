@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
-import { useBeforeUnload } from 'react-router-dom';
-import { CheckCircle2, Copy, Plus, RefreshCw, RotateCcw, Save, Shield, Trash2 } from 'lucide-react';
+import { useBeforeUnload, useLocation, useNavigate } from 'react-router-dom';
+import { CheckCircle2, Copy, Plus, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import {
+    AdminAction,
+    AdminInlineError,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState,
+    adminFieldClassName
+} from '../components/AdminWorkspaceUI';
 import {
     TELEGRAM_EVENT_GROUPS,
     buildDefaultTelegramEventSettings,
@@ -39,6 +49,16 @@ type TelegramBotContact = {
 type TokenValidationState = {
     status: 'idle' | 'loading' | 'success' | 'error';
     message: string;
+};
+
+type TelegramWorkspaceView = 'bots' | 'recipients' | 'events' | 'chats' | 'test';
+
+const telegramViewMeta: Record<TelegramWorkspaceView, { label: string }> = {
+    bots: { label: 'Боты' },
+    recipients: { label: 'Получатели' },
+    events: { label: 'События' },
+    chats: { label: 'Чаты' },
+    test: { label: 'Тест' }
 };
 
 const mapBot = (bot: Omit<TelegramBotRecord, 'manual_recipients_text' | 'token'>): TelegramBotRecord => ({
@@ -138,7 +158,24 @@ const getValidationTone = (state: TokenValidationState) => {
     return 'border-gray-800 bg-gray-950/70 text-gray-300';
 };
 
-export function TelegramBots() {
+const telegramViewRoutes: Record<TelegramWorkspaceView, string> = {
+    bots: '/admin/telegram',
+    recipients: '/admin/telegram/recipients',
+    events: '/admin/telegram/events',
+    chats: '/admin/telegram/chats',
+    test: '/admin/telegram/test'
+};
+
+export const TelegramBots = TelegramBotsWorkspace;
+export const TelegramRecipientsWorkspace = TelegramBotsWorkspace;
+export const TelegramEventsWorkspace = TelegramBotsWorkspace;
+export const TelegramChatsWorkspace = TelegramBotsWorkspace;
+export const TelegramTestWorkspace = TelegramBotsWorkspace;
+
+function TelegramBotsWorkspace() {
+    const navigate = useNavigate();
+    const location = useLocation();
+    const telegramView = pathToTelegramView(location.pathname);
     const [bots, setBots] = useState<TelegramBotRecord[]>([]);
     const [savedBotsById, setSavedBotsById] = useState<Record<string, TelegramBotRecord>>({});
     const [activeBotId, setActiveBotId] = useState<string | null>(null);
@@ -367,7 +404,7 @@ export function TelegramBots() {
             }));
             setTokenValidation(createdBot.id, EMPTY_VALIDATION);
             setActiveBotId(createdBot.id);
-            setNotice('Создан новый бот. Заполните token и выберите получателей уведомлений.');
+            setNotice('Создан новый бот. Заполните токен и выберите получателей уведомлений.');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Не удалось создать Telegram-бота.');
         } finally {
@@ -443,7 +480,7 @@ export function TelegramBots() {
                 [savedBot.id]: savedBot
             }));
             setTokenValidation(savedBot.id, savedBot.bot_username
-                ? { status: 'success', message: `Token валиден. Username: @${savedBot.bot_username}` }
+                ? { status: 'success', message: `Токен валиден. Имя бота: @${savedBot.bot_username}` }
                 : EMPTY_VALIDATION);
             setNotice('Настройки Telegram-бота сохранены.');
             await loadRecentChats(savedBot.id);
@@ -463,7 +500,7 @@ export function TelegramBots() {
         setNotice('');
         setTokenValidation(activeBot.id, {
             status: 'loading',
-            message: 'Проверка token…'
+            message: 'Проверка токена…'
         });
 
         try {
@@ -476,7 +513,7 @@ export function TelegramBots() {
             });
             if (!res.ok) {
                 const payload = await res.json().catch(() => ({}));
-                throw new Error(payload.error || 'Не удалось проверить Telegram token.');
+                throw new Error(payload.error || 'Не удалось проверить Telegram токен.');
             }
 
             const payload = await res.json() as { username?: string | null };
@@ -486,13 +523,13 @@ export function TelegramBots() {
             setTokenValidation(activeBot.id, {
                 status: 'success',
                 message: payload.username
-                    ? `Token валиден. Username: @${payload.username}`
-                    : 'Token валиден.'
+                    ? `Токен валиден. Имя бота: @${payload.username}`
+                    : 'Токен валиден.'
             });
         } catch (err) {
             setTokenValidation(activeBot.id, {
                 status: 'error',
-                message: err instanceof Error ? err.message : 'Не удалось проверить Telegram token.'
+                message: err instanceof Error ? err.message : 'Не удалось проверить Telegram токен.'
             });
         }
     };
@@ -597,377 +634,573 @@ export function TelegramBots() {
         patchActiveBot({ event_settings: nextSettings });
     };
 
-    if (loading) {
-        return (
-            <div className="rounded-2xl border border-gray-800 bg-[#101218] p-8 text-sm text-gray-300">
-                Загрузка Telegram-ботов…
-            </div>
-        );
-    }
+    const setTelegramView = (nextView: TelegramWorkspaceView) => {
+        navigate(telegramViewRoutes[nextView]);
+    };
 
     return (
-        <div className="space-y-4 pb-24">
-            <header className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                    <div className="mb-1 inline-flex items-center gap-2 text-xs text-gray-400">
-                        <Shield size={12} aria-hidden="true" />
-                        ADMIN
-                    </div>
-                    <h1 className="text-2xl font-semibold text-white">Telegram-боты</h1>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void handleRefresh()}
-                        disabled={refreshing}
-                        className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-gray-700 bg-[#12161f] px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60"
-                    >
-                        <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                        {refreshing ? 'Обновление…' : 'Обновить'}
-                    </button>
-                    <button
-                        type="button"
+        <AdminWorkspace data-testid="telegram-workspace" className="pb-24">
+            <AdminWorkspaceHeader title="Telegram">
+                <div className="ml-auto flex min-w-0 items-center gap-2">
+                    <label className="relative min-w-[220px] max-w-[360px] flex-1">
+                        <span className="sr-only">Активный бот</span>
+                        <select
+                            aria-label="Активный бот"
+                            value={activeBotId || ''}
+                            onChange={(event) => handleSelectBot(event.target.value)}
+                            disabled={loading || bots.length === 0}
+                            className={adminFieldClassName + ' w-full truncate px-3'}
+                        >
+                            {bots.length === 0 ? <option value="">Нет ботов</option> : null}
+                            {bots.map((bot) => (
+                                <option key={bot.id} value={bot.id}>
+                                    {bot.name + (dirtyBotIds.has(bot.id) ? ' • изменён' : '')}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <AdminAction
                         onClick={() => void handleCreateBot()}
                         disabled={creating}
-                        className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-blue-600 px-3.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/80 disabled:opacity-60"
+                        className="shrink-0"
                     >
                         <Plus size={15} aria-hidden="true" />
                         {creating ? 'Создание…' : 'Новый бот'}
-                    </button>
+                    </AdminAction>
+                    <AdminAction
+                        tone="secondary"
+                        onClick={() => void handleRefresh()}
+                        disabled={refreshing}
+                        className="shrink-0"
+                    >
+                        <RefreshCw
+                            size={15}
+                            className={refreshing ? 'animate-spin' : ''}
+                            aria-hidden="true"
+                        />
+                        {refreshing ? 'Обновление…' : 'Обновить'}
+                    </AdminAction>
+                </div>
+            </AdminWorkspaceHeader>
+
+            <nav
+                aria-label="Разделы Telegram"
+                className="flex min-w-0 gap-1 overflow-x-auto border-b border-[#2a3039]"
+            >
+                {(Object.keys(telegramViewMeta) as TelegramWorkspaceView[]).map((view) => {
+                    const selected = telegramView === view;
+                    return (
+                        <button
+                            key={view}
+                            type="button"
+                            onClick={() => setTelegramView(view)}
+                            aria-current={selected ? 'page' : undefined}
+                            className={
+                                selected
+                                    ? 'min-h-10 shrink-0 border-b-2 border-[#5ca0f4] px-4 text-[13px] font-medium text-[#8bc2ff]'
+                                    : 'min-h-10 shrink-0 border-b-2 border-transparent px-4 text-[13px] font-medium text-[#8c95a1] transition hover:text-[#e7ebef]'
+                            }
+                        >
+                            {telegramViewMeta[view].label}
+                        </button>
+                    );
+                })}
+            </nav>
+
+            {error ? <AdminInlineError>{error}</AdminInlineError> : null}
+            {notice ? (
+                <div
+                    aria-live="polite"
+                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-100"
+                >
+                    {notice}
+                </div>
+            ) : null}
+
+            {loading ? (
+                <AdminTableSurface>
+                    <AdminWorkspaceState state="loading">Загрузка Telegram…</AdminWorkspaceState>
+                </AdminTableSurface>
+            ) : !activeBot ? (
+                <AdminTableSurface>
+                    <AdminWorkspaceState state="empty">Нет созданных ботов.</AdminWorkspaceState>
+                </AdminTableSurface>
+            ) : (
+                <>
+                    <div data-testid={'telegram-' + telegramView + '-view'}>
+                        {telegramView === 'bots' ? (
+                            <TelegramBotSettings
+                                bot={activeBot}
+                                deleting={deleting}
+                                onPatch={patchActiveBot}
+                                onDelete={handleDeleteBot}
+                            />
+                        ) : null}
+
+                        {telegramView === 'recipients' ? (
+                            <TelegramRecipientsSettings
+                                bot={activeBot}
+                                onPatch={patchActiveBot}
+                                onToggleRole={handleToggleRole}
+                            />
+                        ) : null}
+
+                        {telegramView === 'events' ? (
+                            <TelegramEventsTable
+                                bot={activeBot}
+                                onToggleEvent={handleToggleEvent}
+                                onSetGroup={handleSetGroupEvents}
+                            />
+                        ) : null}
+
+                        {telegramView === 'chats' ? (
+                            <TelegramChatsTable
+                                chats={recentChats}
+                                loading={loadingChats}
+                                onReload={() => activeBotId && void loadRecentChats(activeBotId)}
+                                onCopy={handleCopyChatId}
+                            />
+                        ) : null}
+
+                        {telegramView === 'test' ? (
+                            <TelegramTokenTest
+                                bot={activeBot}
+                                validation={tokenValidation}
+                                onValidate={handleValidateBot}
+                            />
+                        ) : null}
+                    </div>
+
+                    <TelegramSaveBar
+                        dirty={activeBotDirty}
+                        saving={saving}
+                        onReset={handleResetActiveBot}
+                        onSave={handleSaveBot}
+                    />
+                </>
+            )}
+        </AdminWorkspace>
+    );
+}
+
+type PatchTelegramBot = (
+    patch: Partial<TelegramBotRecord>,
+    options?: { resetValidation?: boolean }
+) => void;
+
+function TelegramBotSettings({
+    bot,
+    deleting,
+    onPatch,
+    onDelete
+}: {
+    bot: TelegramBotRecord;
+    deleting: boolean;
+    onPatch: PatchTelegramBot;
+    onDelete: () => void | Promise<void>;
+}) {
+    return (
+        <AdminTableSurface className="overflow-hidden">
+            <header className="flex min-h-14 items-center justify-between gap-4 border-b border-[#2a3039] px-4">
+                <h2 className="text-[15px] font-semibold text-[#f2f5f7]">Настройки бота</h2>
+                <div className="flex items-center gap-2">
+                    <AdminStatus
+                        label={bot.has_token ? 'Токен сохранён' : 'Без токена'}
+                        tone={bot.has_token ? 'success' : 'warning'}
+                    />
+                    <AdminStatus
+                        label={bot.bot_username ? '@' + bot.bot_username : 'Не проверен'}
+                        tone={bot.bot_username ? 'info' : 'neutral'}
+                    />
                 </div>
             </header>
 
-            <div className="overflow-hidden rounded-2xl border border-gray-800 bg-[#0f131a]">
-                <div className="flex items-end gap-1 overflow-x-auto px-3 pt-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    {bots.map((bot) => {
-                        const isActive = bot.id === activeBotId;
-                        const isDirty = dirtyBotIds.has(bot.id);
+            <div className="grid gap-4 p-4 lg:grid-cols-[minmax(220px,0.42fr)_minmax(360px,1fr)]">
+                <label className="space-y-1.5">
+                    <span className="text-[12px] font-medium text-[#aeb6c0]">Название бота</span>
+                    <input
+                        aria-label="Название бота"
+                        name="bot_name"
+                        autoComplete="off"
+                        value={bot.name}
+                        onChange={(event) => onPatch({ name: event.target.value })}
+                        className={adminFieldClassName + ' w-full px-3'}
+                    />
+                </label>
 
-                        return (
-                            <button
-                                key={bot.id}
-                                type="button"
-                                onClick={() => handleSelectBot(bot.id)}
-                                className={`group relative min-w-[176px] max-w-[220px] shrink-0 rounded-t-2xl border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 ${
-                                    isActive
-                                        ? 'border-gray-700 border-b-[#11161f] bg-[#11161f] text-white'
-                                        : 'border-gray-800 bg-[#0b0f15] text-gray-300 hover:bg-[#121722]'
-                                }`}
-                            >
-                                <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-white/18 to-transparent opacity-60" />
-                                <div className="flex items-start justify-between gap-2">
-                                    <div className="min-w-0">
-                                        <div className="truncate text-sm font-medium">{bot.name}</div>
-                                        <div className="truncate text-xs text-gray-500">
-                                            {bot.bot_username ? `@${bot.bot_username}` : bot.has_token ? 'Token сохранен' : 'Без token'}
-                                        </div>
-                                    </div>
-                                    {isDirty && (
-                                        <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-label="Есть несохраненные изменения" />
-                                    )}
-                                </div>
-                            </button>
-                        );
-                    })}
-                    <button
-                        type="button"
-                        onClick={() => void handleCreateBot()}
-                        disabled={creating}
-                        aria-label="Добавить бота"
-                        className="mb-px inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-t-xl border border-gray-800 bg-[#0b0f15] text-gray-300 transition-colors hover:bg-[#121722] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60"
-                    >
-                        <Plus size={16} aria-hidden="true" />
-                    </button>
-                </div>
-                <div className="border-t border-gray-800 bg-[#11161f] px-4 py-2 text-xs text-gray-500">
-                    {hasUnsavedChanges ? 'Есть несохраненные изменения.' : 'Все изменения сохранены.'}
-                </div>
+                <label className="space-y-1.5">
+                    <span className="text-[12px] font-medium text-[#aeb6c0]">Токен бота</span>
+                    <input
+                        aria-label="Токен бота"
+                        name="bot_token"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={bot.token}
+                        onChange={(event) => onPatch(
+                            { token: event.target.value },
+                            { resetValidation: true }
+                        )}
+                        placeholder={bot.has_token ? 'Введите новый токен для замены' : '123456:AA…'}
+                        className={adminFieldClassName + ' w-full px-3 font-mono'}
+                    />
+                </label>
             </div>
 
-            {error && (
-                <div aria-live="polite" className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                    {error}
-                </div>
-            )}
+            <footer className="flex min-h-14 items-center justify-between gap-4 border-t border-[#2a3039] px-4">
+                <span className="text-[12px] text-[#7f8894]">
+                    Обновлён {formatDateTime(bot.updated_at)}
+                </span>
+                <AdminAction
+                    tone="danger"
+                    onClick={() => void onDelete()}
+                    disabled={deleting}
+                >
+                    <Trash2 size={15} aria-hidden="true" />
+                    {deleting ? 'Удаление…' : 'Удалить бота'}
+                </AdminAction>
+            </footer>
+        </AdminTableSurface>
+    );
+}
 
-            {notice && (
-                <div aria-live="polite" className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-                    {notice}
-                </div>
-            )}
+function TelegramRecipientsSettings({
+    bot,
+    onPatch,
+    onToggleRole
+}: {
+    bot: TelegramBotRecord;
+    onPatch: PatchTelegramBot;
+    onToggleRole: (
+        key: keyof Pick<
+            TelegramBotRecord,
+            'notify_admin' | 'notify_sales_manager' | 'notify_franchisee'
+        >
+    ) => void;
+}) {
+    return (
+        <AdminTableSurface minWidth={760}>
+            <header className="flex min-h-14 items-center border-b border-[#2a3039] px-4">
+                <h2 className="text-[15px] font-semibold text-[#f2f5f7]">Получатели</h2>
+            </header>
 
-            {!activeBot ? (
-                <section className="rounded-2xl border border-gray-800 bg-[#101218] px-6 py-14 text-center text-sm text-gray-300">
-                    Нет созданных ботов.
-                </section>
-            ) : (
-                <div className="space-y-4">
-                    <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
-                        <section className="rounded-2xl border border-gray-800 bg-[#101218] p-4 lg:p-5">
-                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                                <div className="min-w-0">
-                                    <h2 className="truncate text-base font-semibold text-white">{activeBot.name}</h2>
-                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-400">
-                                        <span>{activeBot.bot_username ? `@${activeBot.bot_username}` : 'Username появится после проверки'}</span>
-                                        <span>•</span>
-                                        <span>Обновлен {formatDateTime(activeBot.updated_at)}</span>
-                                    </div>
-                                </div>
-                                {activeBotDirty && (
-                                    <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-100">
-                                        Есть изменения
-                                    </span>
-                                )}
-                            </div>
-
-                            <div className="grid gap-3 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto]">
-                                <label className="space-y-1.5">
-                                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-gray-400">Название</span>
-                                    <input
-                                        aria-label="Название вкладки"
-                                        name="bot_name"
-                                        autoComplete="off"
-                                        value={activeBot.name}
-                                        onChange={(event) => patchActiveBot({ name: event.target.value })}
-                                        className="w-full rounded-xl border border-gray-700 bg-[#0b1016] px-3.5 py-2.5 text-sm text-white transition-colors placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-                                        placeholder="Бот продаж…"
-                                    />
-                                </label>
-                                <label className="space-y-1.5">
-                                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-gray-400">Token</span>
-                                    <input
-                                        aria-label="Token бота"
-                                        name="bot_token"
-                                        autoComplete="off"
-                                        spellCheck={false}
-                                        value={activeBot.token}
-                                        onChange={(event) => patchActiveBot({ token: event.target.value }, { resetValidation: true })}
-                                        className="w-full rounded-xl border border-gray-700 bg-[#0b1016] px-3.5 py-2.5 text-sm text-white transition-colors placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-                                        placeholder={activeBot.has_token ? 'Token сохранен. Введите новый при замене…' : '123456:AA…'}
-                                    />
-                                </label>
-                                <div className="flex items-end">
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleValidateBot()}
-                                        disabled={tokenValidation.status === 'loading'}
-                                        className="inline-flex min-h-10 items-center justify-center rounded-xl border border-gray-700 bg-[#151b24] px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60"
-                                    >
-                                        {tokenValidation.status === 'loading' ? 'Проверка…' : 'Проверить token'}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="mt-3 flex flex-wrap items-center gap-3">
-                                <div className="inline-flex items-center gap-2 rounded-full border border-gray-700 bg-[#0b1016] px-3 py-1.5 text-sm text-gray-200">
-                                    <span className="text-gray-500">Username:</span>
-                                    <span translate="no">{activeBot.bot_username ? `@${activeBot.bot_username}` : 'не подтвержден'}</span>
-                                    {activeBot.bot_username && <CheckCircle2 size={14} className="text-emerald-400" aria-hidden="true" />}
-                                </div>
-                                <div
-                                    aria-live="polite"
-                                    className={`rounded-full border px-3 py-1.5 text-sm ${getValidationTone(tokenValidation)}`}
-                                >
-                                    {tokenValidation.message || (activeBot.has_token && !activeBot.token.trim()
-                                        ? 'Сохраненный token активен.'
-                                        : 'Проверка token не запускалась.')}
-                                </div>
-                            </div>
-                        </section>
-                        <section className="rounded-2xl border border-gray-800 bg-[#101218] p-4 lg:p-5">
-                            <div className="mb-3 flex items-center justify-between gap-3">
-                                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-gray-300">Получатели</h3>
-                                <div className="text-xs text-gray-500">Роли и ручные chat_id</div>
-                            </div>
-
-                            <div className="space-y-2">
-                                {ROLE_TOGGLES.map((toggle) => (
-                                    <SwitchRow
-                                        key={toggle.key}
+            <table className="w-full border-collapse text-left text-[13px]">
+                <thead className="bg-[#151a21] text-[11px] uppercase tracking-[0.08em] text-[#7f8894]">
+                    <tr>
+                        <th className="h-10 px-4 font-medium">Роль</th>
+                        <th className="h-10 w-[170px] px-4 text-right font-medium">Уведомления</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {ROLE_TOGGLES.map((toggle) => (
+                        <tr key={toggle.key} className="border-t border-[#252c35]">
+                            <td className="h-14 px-4 font-medium text-[#e8ebef]">{toggle.label}</td>
+                            <td className="h-14 px-4">
+                                <div className="flex justify-end">
+                                    <TelegramSwitch
                                         label={toggle.label}
-                                        checked={activeBot[toggle.key]}
-                                        onToggle={() => handleToggleRole(toggle.key)}
+                                        checked={bot[toggle.key]}
+                                        onToggle={() => onToggleRole(toggle.key)}
                                     />
-                                ))}
-                            </div>
+                                </div>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
 
-                            <div className="mt-4 grid gap-3">
-                                <label className="space-y-1.5">
-                                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-gray-400">Ручные получатели</span>
-                                    <textarea
-                                        aria-label="Ручные получатели"
-                                        name="manual_recipients"
-                                        autoComplete="off"
-                                        spellCheck={false}
-                                        value={activeBot.manual_recipients_text}
-                                        onChange={(event) => patchActiveBot({ manual_recipients_text: event.target.value })}
-                                        rows={5}
-                                        className="w-full rounded-xl border border-gray-700 bg-[#0b1016] px-3.5 py-3 text-sm text-white transition-colors placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-                                        placeholder={'123456789\n-1001234567890\n@my_group'}
-                                    />
-                                </label>
-                                <label className="space-y-1.5">
-                                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-gray-400">Low-stock</span>
-                                    <input
-                                        aria-label="Порог low-stock"
-                                        name="low_stock_threshold"
-                                        type="number"
-                                        min={0}
-                                        max={999999}
-                                        inputMode="numeric"
-                                        value={activeBot.low_stock_threshold}
-                                        onChange={(event) => patchActiveBot({ low_stock_threshold: Number(event.target.value || 0) })}
-                                        className="w-full rounded-xl border border-gray-700 bg-[#0b1016] px-3.5 py-2.5 text-sm text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-                                    />
-                                </label>
-                            </div>
-                        </section>
+            <div className="grid gap-4 border-t border-[#2a3039] p-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <label className="space-y-1.5">
+                    <span className="text-[12px] font-medium text-[#aeb6c0]">Ручные получатели</span>
+                    <textarea
+                        aria-label="Ручные получатели"
+                        name="manual_recipients"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={bot.manual_recipients_text}
+                        onChange={(event) => onPatch({ manual_recipients_text: event.target.value })}
+                        rows={5}
+                        placeholder={'123456789\n-1001234567890\n@my_group'}
+                        className="w-full resize-y rounded-lg border border-[#2a3039] bg-[#151a21] px-3 py-3 text-[13px] text-[#eef2f6] outline-none transition placeholder:text-[#727b88] focus:border-[#4c91f3]"
+                    />
+                </label>
+                <label className="space-y-1.5">
+                    <span className="text-[12px] font-medium text-[#aeb6c0]">Порог низкого остатка</span>
+                    <input
+                        aria-label="Порог low-stock"
+                        name="low_stock_threshold"
+                        type="number"
+                        min={0}
+                        max={999999}
+                        inputMode="numeric"
+                        value={bot.low_stock_threshold}
+                        onChange={(event) => onPatch({
+                            low_stock_threshold: Number(event.target.value || 0)
+                        })}
+                        className={adminFieldClassName + ' w-full px-3'}
+                    />
+                </label>
+            </div>
+        </AdminTableSurface>
+    );
+}
 
-                        <section className="rounded-2xl border border-gray-800 bg-[#101218] p-4 lg:p-5">
-                            <div className="mb-3 flex items-center justify-between gap-3">
-                                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-gray-300">Недавние чаты</h3>
-                                <button
-                                    type="button"
-                                    onClick={() => activeBotId && void loadRecentChats(activeBotId)}
-                                    disabled={loadingChats}
-                                    className="inline-flex min-h-8 items-center rounded-lg border border-gray-700 bg-[#141922] px-2.5 text-xs font-medium text-gray-200 transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60"
-                                >
-                                    {loadingChats ? '…' : 'Обновить'}
-                                </button>
-                            </div>
+function TelegramEventsTable({
+    bot,
+    onToggleEvent,
+    onSetGroup
+}: {
+    bot: TelegramBotRecord;
+    onToggleEvent: (eventKey: keyof TelegramEventSettings) => void;
+    onSetGroup: (groupKey: string, enabled: boolean) => void;
+}) {
+    const enabledEvents = Object.values(bot.event_settings).filter(Boolean).length;
+    const totalEvents = Object.values(bot.event_settings).length;
 
-                            <div className="space-y-2.5">
-                                {recentChats.length === 0 && (
-                                    <div className="rounded-xl border border-dashed border-gray-700 bg-[#0b1016] px-3 py-4 text-sm text-gray-400">
-                                        Нет чатов.
-                                    </div>
-                                )}
+    return (
+        <AdminTableSurface minWidth={840}>
+            <header className="flex min-h-14 items-center justify-between gap-4 border-b border-[#2a3039] px-4">
+                <h2 className="text-[15px] font-semibold text-[#f2f5f7]">События</h2>
+                <AdminStatus
+                    label={String(enabledEvents) + ' из ' + String(totalEvents)}
+                    tone={enabledEvents > 0 ? 'info' : 'neutral'}
+                />
+            </header>
 
-                                {recentChats.map((chat) => (
-                                    <div key={chat.id} className="rounded-xl border border-gray-800 bg-[#0b1016] px-3 py-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <div className="truncate text-sm font-medium text-white">{buildChatLabel(chat)}</div>
-                                                <div className="mt-1 text-xs text-gray-500">{formatDateTime(chat.last_seen_at)}</div>
-                                                <div className="mt-2 break-all font-mono text-xs text-gray-200">{chat.chat_id}</div>
-                                            </div>
+            <table className="w-full border-collapse text-left text-[13px]">
+                <thead className="bg-[#151a21] text-[11px] uppercase tracking-[0.08em] text-[#7f8894]">
+                    <tr>
+                        <th className="h-10 w-[260px] px-4 font-medium">Раздел</th>
+                        <th className="h-10 px-4 font-medium">Событие</th>
+                        <th className="h-10 w-[150px] px-4 text-right font-medium">Уведомление</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {TELEGRAM_EVENT_GROUPS.flatMap((group) => {
+                        const enabledCount = group.events.filter(
+                            (event) => bot.event_settings[event.key]
+                        ).length;
+
+                        return group.events.map((event, index) => (
+                            <tr key={event.key} className="border-t border-[#252c35]">
+                                {index === 0 ? (
+                                    <td
+                                        rowSpan={group.events.length}
+                                        className="border-r border-[#252c35] px-4 py-3 align-top"
+                                    >
+                                        <div className="font-medium text-[#eef2f6]">{group.label}</div>
+                                        <div className="mt-1 text-[12px] text-[#7f8894]">
+                                            {String(enabledCount) + ' / ' + String(group.events.length)}
+                                        </div>
+                                        <div className="mt-3 flex gap-2">
                                             <button
                                                 type="button"
-                                                onClick={() => void handleCopyChatId(chat.chat_id)}
-                                                aria-label={`Скопировать chat_id ${chat.chat_id}`}
-                                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-700 bg-[#141922] text-gray-300 transition-colors hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+                                                onClick={() => onSetGroup(group.key, true)}
+                                                className="h-8 rounded-md border border-[#333b46] bg-[#191f27] px-2.5 text-[12px] font-medium text-[#d5dae0] transition hover:border-[#4a5562] hover:bg-[#202832]"
                                             >
-                                                <Copy size={14} aria-hidden="true" />
+                                                Вкл. все
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => onSetGroup(group.key, false)}
+                                                className="h-8 rounded-md border border-[#333b46] bg-[#191f27] px-2.5 text-[12px] font-medium text-[#d5dae0] transition hover:border-[#4a5562] hover:bg-[#202832]"
+                                            >
+                                                Выкл. все
                                             </button>
                                         </div>
+                                    </td>
+                                ) : null}
+                                <td className="h-12 px-4 text-[#dce1e6]">{event.label}</td>
+                                <td className="h-12 px-4">
+                                    <div className="flex justify-end">
+                                        <TelegramSwitch
+                                            label={event.label}
+                                            checked={bot.event_settings[event.key]}
+                                            onToggle={() => onToggleEvent(event.key)}
+                                        />
                                     </div>
-                                ))}
-                            </div>
-                        </section>
-                    </div>
+                                </td>
+                            </tr>
+                        ));
+                    })}
+                </tbody>
+            </table>
+        </AdminTableSurface>
+    );
+}
 
-                    <section className="rounded-2xl border border-gray-800 bg-[#101218] p-4 lg:p-5">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-gray-300">События</h3>
-                                <span className="text-xs text-gray-500">
-                                    {Object.values(activeBot.event_settings).filter(Boolean).length} / {Object.values(activeBot.event_settings).length}
-                                </span>
-                            </div>
-                        </div>
+function TelegramChatsTable({
+    chats,
+    loading,
+    onReload,
+    onCopy
+}: {
+    chats: TelegramBotContact[];
+    loading: boolean;
+    onReload: () => void;
+    onCopy: (chatId: string) => void | Promise<void>;
+}) {
+    return (
+        <div className="space-y-3">
+            <div className="flex min-h-10 items-center justify-between gap-4 px-1">
+                <h2 className="text-[15px] font-semibold text-[#f2f5f7]">Недавние чаты</h2>
+                <AdminAction tone="secondary" onClick={onReload} disabled={loading}>
+                    <RefreshCw
+                        size={15}
+                        className={loading ? 'animate-spin' : ''}
+                        aria-hidden="true"
+                    />
+                    {loading ? 'Обновление…' : 'Обновить чаты'}
+                </AdminAction>
+            </div>
 
-                        <div className="grid gap-3 xl:grid-cols-2">
-                            {TELEGRAM_EVENT_GROUPS.map((group) => {
-                                const enabledCount = group.events.filter((event) => activeBot.event_settings[event.key]).length;
-
-                                return (
-                                    <section key={group.key} className="rounded-xl border border-gray-800 bg-[#0b1016] p-3">
-                                        <div className="mb-3 flex items-center justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <div className="truncate text-sm font-medium text-white">{group.label}</div>
-                                                <div className="text-xs text-gray-500">{enabledCount}/{group.events.length}</div>
-                                            </div>
-                                            <div className="flex shrink-0 gap-1.5">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleSetGroupEvents(group.key, true)}
-                                                    className="inline-flex h-8 items-center rounded-lg border border-gray-700 bg-[#141922] px-2.5 text-xs font-medium text-gray-200 transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-                                                >
-                                                    Все
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleSetGroupEvents(group.key, false)}
-                                                    className="inline-flex h-8 items-center rounded-lg border border-gray-700 bg-[#141922] px-2.5 text-xs font-medium text-gray-200 transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-                                                >
-                                                    Сброс
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        <div className="grid gap-2 sm:grid-cols-2">
-                                            {group.events.map((event) => (
-                                                <SwitchRow
-                                                    key={event.key}
-                                                    label={event.label}
-                                                    checked={activeBot.event_settings[event.key]}
-                                                    onToggle={() => handleToggleEvent(event.key)}
-                                                />
-                                            ))}
-                                        </div>
-                                    </section>
-                                );
-                            })}
-                        </div>
-                    </section>
-                </div>
-            )}
-
-            {activeBot && (
-                <div className="sticky bottom-0 z-20 rounded-t-2xl border border-gray-800 bg-[#0c0e13]/95 px-4 py-2.5 shadow-[0_-18px_40px_rgba(0,0,0,0.25)] backdrop-blur">
-                    <div className="mx-auto flex max-w-7xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="text-sm text-gray-300">
-                            {activeBotDirty
-                                ? 'Есть несохраненные изменения.'
-                                : 'Изменений нет.'}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            <button
-                                type="button"
-                                onClick={() => handleDeleteBot()}
-                                disabled={deleting}
-                                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 text-sm font-medium text-red-100 transition-colors hover:bg-red-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/70 disabled:opacity-60 sm:flex-none"
-                            >
-                                <Trash2 size={16} aria-hidden="true" />
-                                {deleting ? 'Удаление…' : 'Удалить'}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleResetActiveBot}
-                                disabled={!activeBotDirty || saving}
-                                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 disabled:opacity-60 sm:flex-none"
-                            >
-                                <RotateCcw size={16} aria-hidden="true" />
-                                Отменить
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => void handleSaveBot()}
-                                disabled={!activeBotDirty || saving}
-                                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 px-3.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/80 disabled:opacity-60 sm:flex-none"
-                            >
-                                <Save size={16} aria-hidden="true" />
-                                {saving ? 'Сохранение…' : 'Сохранить изменения'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <AdminTableSurface minWidth={940}>
+                {loading && chats.length === 0 ? (
+                    <AdminWorkspaceState state="loading">Загрузка чатов…</AdminWorkspaceState>
+                ) : chats.length === 0 ? (
+                    <AdminWorkspaceState state="empty">Нет чатов.</AdminWorkspaceState>
+                ) : (
+                    <table className="w-full border-collapse text-left text-[13px]">
+                        <thead className="bg-[#151a21] text-[11px] uppercase tracking-[0.08em] text-[#7f8894]">
+                            <tr>
+                                <th className="h-10 px-4 font-medium">Чат</th>
+                                <th className="h-10 w-[130px] px-4 font-medium">Тип</th>
+                                <th className="h-10 w-[190px] px-4 font-medium">Chat ID</th>
+                                <th className="h-10 w-[180px] px-4 font-medium">Начало</th>
+                                <th className="h-10 w-[180px] px-4 font-medium">Активность</th>
+                                <th className="h-10 w-[64px] px-4"><span className="sr-only">Действия</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {chats.map((chat) => (
+                                <tr
+                                    key={chat.id}
+                                    className="border-t border-[#252c35] transition hover:bg-[#151b23]"
+                                >
+                                    <td className="h-14 px-4">
+                                        <div className="font-medium text-[#eef2f6]">{buildChatLabel(chat)}</div>
+                                    </td>
+                                    <td className="h-14 px-4 text-[#aeb6c0]">{chat.chat_type}</td>
+                                    <td className="h-14 px-4 font-mono text-[12px] text-[#dce1e6]">
+                                        {chat.chat_id}
+                                    </td>
+                                    <td className="h-14 px-4 text-[#aeb6c0]">
+                                        {formatDateTime(chat.started_at)}
+                                    </td>
+                                    <td className="h-14 px-4 text-[#aeb6c0]">
+                                        {formatDateTime(chat.last_seen_at)}
+                                    </td>
+                                    <td className="h-14 px-4 text-right">
+                                        <button
+                                            type="button"
+                                            onClick={() => void onCopy(chat.chat_id)}
+                                            aria-label={'Скопировать chat_id ' + chat.chat_id}
+                                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-[#333b46] bg-[#191f27] text-[#aeb6c0] transition hover:border-[#4a5562] hover:text-white"
+                                        >
+                                            <Copy size={15} aria-hidden="true" />
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </AdminTableSurface>
         </div>
     );
 }
 
-function SwitchRow({
+function TelegramTokenTest({
+    bot,
+    validation,
+    onValidate
+}: {
+    bot: TelegramBotRecord;
+    validation: TokenValidationState;
+    onValidate: () => void | Promise<void>;
+}) {
+    const tokenState = bot.token.trim()
+        ? 'Новый токен'
+        : bot.has_token
+            ? 'Сохранённый токен'
+            : 'Токен не задан';
+
+    return (
+        <AdminTableSurface>
+            <header className="flex min-h-14 items-center justify-between gap-4 border-b border-[#2a3039] px-4">
+                <h2 className="text-[15px] font-semibold text-[#f2f5f7]">Проверка токена</h2>
+                <AdminStatus
+                    label={tokenState}
+                    tone={bot.token.trim() || bot.has_token ? 'info' : 'warning'}
+                />
+            </header>
+            <div className="grid min-h-[240px] items-center gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_auto]">
+                <div
+                    aria-live="polite"
+                    className={'rounded-lg border px-4 py-4 text-sm ' + getValidationTone(validation)}
+                >
+                    <div className="font-medium">
+                        {validation.message || 'Проверка ещё не запускалась.'}
+                    </div>
+                    <div className="mt-2 text-[12px] opacity-70">
+                        {bot.bot_username ? '@' + bot.bot_username : bot.name}
+                    </div>
+                </div>
+                <AdminAction
+                    onClick={() => void onValidate()}
+                    disabled={validation.status === 'loading'}
+                    className="min-w-[190px]"
+                >
+                    <CheckCircle2 size={16} aria-hidden="true" />
+                    {validation.status === 'loading' ? 'Проверка…' : 'Проверить токен'}
+                </AdminAction>
+            </div>
+        </AdminTableSurface>
+    );
+}
+
+function TelegramSaveBar({
+    dirty,
+    saving,
+    onReset,
+    onSave
+}: {
+    dirty: boolean;
+    saving: boolean;
+    onReset: () => void;
+    onSave: () => void | Promise<void>;
+}) {
+    return (
+        <section
+            data-testid="telegram-save-bar"
+            className="sticky bottom-3 z-20 flex min-h-16 items-center justify-between gap-4 rounded-lg border border-[#3e6f9f] bg-[#121d29]/95 px-4 shadow-[0_18px_50px_rgba(0,0,0,0.38)] backdrop-blur"
+        >
+            <AdminStatus
+                label={dirty ? 'Есть несохранённые изменения' : 'Изменения сохранены'}
+                tone={dirty ? 'warning' : 'success'}
+            />
+            <div className="flex items-center gap-2">
+                <AdminAction
+                    tone="secondary"
+                    onClick={onReset}
+                    disabled={!dirty || saving}
+                >
+                    <RotateCcw size={15} aria-hidden="true" />
+                    Сбросить
+                </AdminAction>
+                <AdminAction
+                    onClick={() => void onSave()}
+                    disabled={!dirty || saving}
+                    className="min-w-[190px]"
+                >
+                    <Save size={15} aria-hidden="true" />
+                    {saving ? 'Сохранение…' : 'Сохранить изменения'}
+                </AdminAction>
+            </div>
+        </section>
+    );
+}
+
+function TelegramSwitch({
     label,
     checked,
     onToggle
@@ -980,33 +1213,39 @@ function SwitchRow({
         <button
             type="button"
             role="switch"
+            aria-label={label}
             aria-checked={checked}
             onClick={onToggle}
-            className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 ${
+            className={
                 checked
-                    ? 'border-blue-500/40 bg-blue-500/10'
-                    : 'border-gray-800 bg-[#111318] hover:border-gray-700 hover:bg-gray-900'
-            }`}
+                    ? 'relative inline-flex h-7 w-12 shrink-0 rounded-full bg-[#397dca] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6aaef7]'
+                    : 'relative inline-flex h-7 w-12 shrink-0 rounded-full bg-[#343c47] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6aaef7]'
+            }
         >
-            <span className="text-sm font-medium text-white">{label}</span>
-            <SwitchKnob checked={checked} />
+            <span
+                aria-hidden="true"
+                className={
+                    checked
+                        ? 'absolute left-0.5 top-0.5 h-6 w-6 translate-x-5 rounded-full bg-white shadow transition-transform'
+                        : 'absolute left-0.5 top-0.5 h-6 w-6 translate-x-0 rounded-full bg-white shadow transition-transform'
+                }
+            />
         </button>
     );
 }
 
-function SwitchKnob({ checked }: { checked: boolean }) {
-    return (
-        <span
-            aria-hidden="true"
-            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
-                checked ? 'bg-blue-500' : 'bg-gray-700'
-            }`}
-        >
-            <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                    checked ? 'translate-x-[22px]' : 'translate-x-0.5'
-                }`}
-            />
-        </span>
-    );
+function pathToTelegramView(pathname: string): TelegramWorkspaceView {
+    if (pathname.endsWith('/recipients')) {
+        return 'recipients';
+    }
+    if (pathname.endsWith('/events')) {
+        return 'events';
+    }
+    if (pathname.endsWith('/chats')) {
+        return 'chats';
+    }
+    if (pathname.endsWith('/test')) {
+        return 'test';
+    }
+    return 'bots';
 }

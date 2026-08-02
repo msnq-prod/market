@@ -268,6 +268,7 @@ type StonesMediaQueueSnapshot = {
 
 type StonesMediaWorkflowKind = 'PHOTO_APPLY_WORKFLOW';
 type StonesMediaWorkflowPhase =
+    | 'staging'
     | 'queued'
     | 'converting'
     | 'uploading'
@@ -277,6 +278,16 @@ type StonesMediaWorkflowPhase =
     | 'failed'
     | 'stale'
     | 'completed'
+    | 'cancelled';
+
+type StonesMediaWorkflowItemStatus =
+    | 'pending'
+    | 'normalizing'
+    | 'uploading'
+    | 'uploaded'
+    | 'reused'
+    | 'committed'
+    | 'failed'
     | 'cancelled';
 
 type StonesMediaWorkflow = {
@@ -306,6 +317,17 @@ type StonesMediaWorkflow = {
         pendingSerials: string[];
         confirmedSerials: string[];
         failedSerials: string[];
+        statusCounts?: Partial<Record<StonesMediaWorkflowItemStatus, number>>;
+        currentItem?: {
+            itemSeq: number;
+            fileName: string | null;
+            status: StonesMediaWorkflowItemStatus;
+        } | null;
+        failedItems?: Array<{
+            itemSeq: number;
+            fileName: string | null;
+            error: string | null;
+        }>;
     } | null;
 };
 

@@ -96,9 +96,15 @@ test('API: normal collection request stays open and immediate request creates re
 
     await setAdminSession(page, admin);
     await page.goto('/admin/acceptance');
-    await page.getByPlaceholder('ID партии, товар или партнер').fill(immediateRequest.batch.id);
-    await page.locator('button', { hasText: immediateRequest.batch.id }).click();
-    await expect(page.getByText('Принята').first()).toBeVisible();
-    await expect(page.getByRole('link', { name: /Photo Tool/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Монтаж видео/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Партии' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Заявки на сбор' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Склад HQ' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Распределение' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'QR-печать' })).toBeVisible();
+    await page.getByPlaceholder('Поиск по ID партии, товару или партнёру').fill(immediateRequest.batch.id);
+    const batchRow = page.getByTestId(`batch-pipeline-row-${immediateRequest.batch.id}`);
+    await expect(batchRow).toBeVisible();
+    await expect(batchRow.getByText('Принято')).toBeVisible();
+    await expect(batchRow.getByRole('link', { name: 'Открыть Photo Tool' })).toBeVisible();
+    await expect(batchRow.getByRole('link', { name: 'Открыть Video Tool' })).toHaveCount(0);
 });

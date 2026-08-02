@@ -1,5 +1,6 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { PencilLine, RefreshCw, Save, Search, Trash2, Truck, X } from 'lucide-react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { CheckCircle2, Clock3, Edit3, PackageCheck, RefreshCw, Save, Truck } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { authFetch } from '../../utils/authFetch';
 import { formatRub } from '../../utils/currency';
 import type { OrderHistory, OrderStatus, ReturnReason } from '../../data/db';
@@ -9,9 +10,20 @@ import {
     isCustomerEditableOrderStatus,
     isReturnOrderStatus
 } from '../../../shared/domain/policy';
+import {
+    AdminAction,
+    AdminDrawer,
+    AdminInlineError,
+    AdminSearchField,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState,
+    adminFieldClassName
+} from '../components/AdminWorkspaceUI';
 
 type OrderFilter = 'ACTIVE' | 'NEW' | 'IN_PROGRESS' | 'PACKED' | 'DELIVERY' | 'RETURNS' | 'CLOSED';
-
 type SalesOrder = OrderHistory;
 
 type OrderEditForm = {
@@ -22,14 +34,24 @@ type OrderEditForm = {
     internal_note: string;
 };
 
-const filterLabels: Record<OrderFilter, string> = {
-    ACTIVE: 'Активные',
-    NEW: 'Новые',
-    IN_PROGRESS: 'В работе',
-    PACKED: 'Упакованы',
+const filterTitles: Record<OrderFilter, string> = {
+    ACTIVE: 'Заказы',
+    NEW: 'Новые заказы',
+    IN_PROGRESS: 'Заказы в работе',
+    PACKED: 'Упакованные заказы',
     DELIVERY: 'Доставка',
     RETURNS: 'Возвраты',
-    CLOSED: 'Закрытые'
+    CLOSED: 'Закрытые заказы'
+};
+
+const contextHeaders: Record<OrderFilter, string> = {
+    ACTIVE: 'Текущий этап',
+    NEW: 'Проверка заявки',
+    IN_PROGRESS: 'Состав и резерв',
+    PACKED: 'Отправка',
+    DELIVERY: 'СДЭК',
+    RETURNS: 'Возврат',
+    CLOSED: 'Закрыт'
 };
 
 const returnReasonLabels: Record<ReturnReason, string> = {
@@ -50,17 +72,7 @@ const formatOrderDate = (value: string): string => {
     }).format(date);
 };
 
-const comparableValue = (value: string | null | undefined): string => value?.trim() || '';
-const shortAddress = (value: string | null | undefined): string => {
-    if (!value) return 'Адрес не указан';
-    if (value.length <= 56) return value;
-    return `${value.slice(0, 56)}...`;
-};
-
-const orderBuyerLabel = (order: SalesOrder): string => {
-    const name = order.user?.name || 'Покупатель';
-    return order.user?.username ? `${name} (@${order.user.username})` : name;
-};
+const comparableValue = (value: string | null | undefined) => value?.trim() || '';
 
 const createEditForm = (order: SalesOrder | null): OrderEditForm => ({
     delivery_address: order?.delivery_address || '',
@@ -72,18 +84,18 @@ const createEditForm = (order: SalesOrder | null): OrderEditForm => ({
 
 const buildOrderPatchPayload = (order: SalesOrder, form: OrderEditForm) => {
     const payload: Partial<OrderEditForm> = {};
-    const allowCustomerEdits = isCustomerEditableOrderStatus(order.status);
+    const customerFieldsEditable = isCustomerEditableOrderStatus(order.status);
 
-    if (allowCustomerEdits && comparableValue(order.delivery_address) !== comparableValue(form.delivery_address)) {
+    if (customerFieldsEditable && comparableValue(order.delivery_address) !== comparableValue(form.delivery_address)) {
         payload.delivery_address = form.delivery_address;
     }
-    if (allowCustomerEdits && comparableValue(order.contact_phone) !== comparableValue(form.contact_phone)) {
+    if (customerFieldsEditable && comparableValue(order.contact_phone) !== comparableValue(form.contact_phone)) {
         payload.contact_phone = form.contact_phone;
     }
-    if (allowCustomerEdits && comparableValue(order.contact_email) !== comparableValue(form.contact_email)) {
+    if (customerFieldsEditable && comparableValue(order.contact_email) !== comparableValue(form.contact_email)) {
         payload.contact_email = form.contact_email;
     }
-    if (allowCustomerEdits && comparableValue(order.comment) !== comparableValue(form.comment)) {
+    if (customerFieldsEditable && comparableValue(order.comment) !== comparableValue(form.comment)) {
         payload.comment = form.comment;
     }
     if (comparableValue(order.internal_note) !== comparableValue(form.internal_note)) {
@@ -93,11 +105,28 @@ const buildOrderPatchPayload = (order: SalesOrder, form: OrderEditForm) => {
     return payload;
 };
 
-const matchesSearch = (order: SalesOrder, query: string): boolean => {
-    const normalized = query.trim().toLowerCase();
+const queueParamToFilter = (value: string | null): OrderFilter | null => {
+    if (value === 'ACTIVE' || value === 'NEW' || value === 'IN_PROGRESS' || value === 'PACKED' || value === 'DELIVERY' || value === 'RETURNS' || value === 'CLOSED') {
+        return value;
+    }
+    return null;
+};
+
+const orderMatchesFilter = (order: SalesOrder, filter: OrderFilter) => {
+    if (filter === 'NEW') return order.status === 'NEW';
+    if (filter === 'IN_PROGRESS') return order.status === 'IN_PROGRESS';
+    if (filter === 'PACKED') return order.status === 'PACKED';
+    if (filter === 'DELIVERY') return order.status === 'SHIPPED';
+    if (filter === 'RETURNS') return order.status === 'RETURN_REQUESTED' || order.status === 'RETURN_IN_TRANSIT';
+    if (filter === 'CLOSED') return isClosedOrderStatus(order.status);
+    return !isClosedOrderStatus(order.status);
+};
+
+const matchesSearch = (order: SalesOrder, query: string) => {
+    const normalized = query.trim().toLocaleLowerCase('ru');
     if (!normalized) return true;
 
-    const haystack = [
+    return [
         order.id,
         order.user?.name,
         order.user?.username,
@@ -108,16 +137,60 @@ const matchesSearch = (order: SalesOrder, query: string): boolean => {
     ]
         .filter(Boolean)
         .join(' ')
-        .toLowerCase();
-
-    return haystack.includes(normalized);
+        .toLocaleLowerCase('ru')
+        .includes(normalized);
 };
 
+const getBuyerLabel = (order: SalesOrder) => {
+    const name = order.user?.name || 'Покупатель';
+    return order.user?.username ? `${name} (@${order.user.username})` : name;
+};
+
+const getStatusTone = (status: OrderStatus): 'success' | 'warning' | 'danger' | 'info' | 'neutral' => {
+    if (status === 'RECEIVED') return 'success';
+    if (status === 'CANCELLED' || status === 'RETURNED') return 'danger';
+    if (status === 'IN_PROGRESS' || status === 'RETURN_REQUESTED' || status === 'RETURN_IN_TRANSIT') return 'warning';
+    if (status === 'PACKED' || status === 'SHIPPED') return 'info';
+    return 'neutral';
+};
+
+const reservedItemCount = (order: SalesOrder) => order.items.reduce((sum, item) => sum + (item.assigned_items?.length || 0), 0);
+const requestedItemCount = (order: SalesOrder) => order.items.reduce((sum, item) => sum + item.quantity, 0);
+
 export function Orders() {
+    return <OrdersWorkspace />;
+}
+
+export function NewOrdersWorkspace() {
+    return <OrdersWorkspace routeFilter="NEW" />;
+}
+
+export function InProgressOrdersWorkspace() {
+    return <OrdersWorkspace routeFilter="IN_PROGRESS" />;
+}
+
+export function PackedOrdersWorkspace() {
+    return <OrdersWorkspace routeFilter="PACKED" />;
+}
+
+export function DeliveryOrdersWorkspace() {
+    return <OrdersWorkspace routeFilter="DELIVERY" />;
+}
+
+export function ReturnsOrdersWorkspace() {
+    return <OrdersWorkspace routeFilter="RETURNS" />;
+}
+
+export function ClosedOrdersWorkspace() {
+    return <OrdersWorkspace routeFilter="CLOSED" />;
+}
+
+function OrdersWorkspace({ routeFilter }: { routeFilter?: OrderFilter }) {
+    const [searchParams] = useSearchParams();
+    const filter = routeFilter || queueParamToFilter(searchParams.get('queue')) || 'ACTIVE';
     const [orders, setOrders] = useState<SalesOrder[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [filter, setFilter] = useState<OrderFilter>('ACTIVE');
     const [query, setQuery] = useState('');
     const [reloadToken, setReloadToken] = useState(0);
     const [selectedOrderId, setSelectedOrderId] = useState('');
@@ -128,7 +201,7 @@ export function Orders() {
     const [saving, setSaving] = useState(false);
     const [savingShipment, setSavingShipment] = useState(false);
     const [syncingShipment, setSyncingShipment] = useState(false);
-    const [updatingStatus, setUpdatingStatus] = useState('');
+    const [updatingStatus, setUpdatingStatus] = useState<OrderStatus | ''>('');
     const [deletingOrderId, setDeletingOrderId] = useState('');
     const requestIdRef = useRef(0);
     const deferredQuery = useDeferredValue(query);
@@ -144,216 +217,139 @@ export function Orders() {
 
             try {
                 const params = new URLSearchParams();
-                const searchValue = deferredQuery.trim();
-                if (searchValue) {
-                    params.set('q', searchValue);
-                }
-
+                if (deferredQuery.trim()) params.set('q', deferredQuery.trim());
                 const response = await authFetch(`/api/sales/orders${params.toString() ? `?${params.toString()}` : ''}`, {
                     signal: controller.signal
                 });
 
-                if (requestId !== requestIdRef.current) {
-                    return;
-                }
-
+                if (requestId !== requestIdRef.current) return;
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить заказы.' }));
-                    setError(payload.error || 'Не удалось загрузить заказы.');
-                    return;
+                    throw new Error(payload.error || 'Не удалось загрузить заказы.');
                 }
 
-                const data = await response.json() as SalesOrder[];
-                setOrders(data);
-            } catch (_error) {
-                if (controller.signal.aborted || requestId !== requestIdRef.current) {
-                    return;
-                }
-
-                setError('Сетевая ошибка при загрузке заказов.');
+                setOrders(await response.json() as SalesOrder[]);
+            } catch (loadError) {
+                if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+                setOrders([]);
+                setError(loadError instanceof Error ? loadError.message : 'Сетевая ошибка при загрузке заказов.');
             } finally {
-                if (requestId === requestIdRef.current) {
-                    setLoading(false);
-                }
+                if (requestId === requestIdRef.current) setLoading(false);
             }
         };
 
         void loadOrders();
-
         return () => controller.abort();
     }, [deferredQuery, reloadToken]);
 
-    const searchedOrders = useMemo(() => orders.filter((order) => matchesSearch(order, query)), [orders, query]);
-
-    const filteredOrders = useMemo(() => {
-        if (filter === 'NEW') return searchedOrders.filter((order) => order.status === 'NEW');
-        if (filter === 'IN_PROGRESS') return searchedOrders.filter((order) => order.status === 'IN_PROGRESS');
-        if (filter === 'PACKED') return searchedOrders.filter((order) => order.status === 'PACKED');
-        if (filter === 'DELIVERY') return searchedOrders.filter((order) => order.status === 'SHIPPED');
-        if (filter === 'RETURNS') return searchedOrders.filter((order) => isReturnOrderStatus(order.status));
-        if (filter === 'CLOSED') return searchedOrders.filter((order) => isClosedOrderStatus(order.status));
-        return searchedOrders.filter((order) => !isClosedOrderStatus(order.status));
-    }, [filter, searchedOrders]);
+    const filteredOrders = useMemo(() => orders
+        .filter((order) => orderMatchesFilter(order, filter))
+        .filter((order) => matchesSearch(order, query)), [filter, orders, query]);
 
     const selectedOrder = useMemo(() => (
-        filteredOrders.find((order) => order.id === selectedOrderId) || filteredOrders[0] || null
+        filteredOrders.find((order) => order.id === selectedOrderId) || null
     ), [filteredOrders, selectedOrderId]);
 
     useEffect(() => {
-        if (filteredOrders.length === 0) {
+        if (selectedOrderId && !selectedOrder) {
             setSelectedOrderId('');
             setIsEditing(false);
-            setForm(createEditForm(null));
-            setTrackingNumber('');
-            return;
         }
+    }, [selectedOrder, selectedOrderId]);
 
-        if (!selectedOrderId || !filteredOrders.some((order) => order.id === selectedOrderId)) {
-            const nextOrder = filteredOrders[0];
-            setSelectedOrderId(nextOrder.id);
-            setIsEditing(false);
-            setForm(createEditForm(nextOrder));
-            setTrackingNumber(nextOrder.shipment?.tracking_number || '');
-            setReturnReason(nextOrder.return_reason || 'REFUSED_BY_CUSTOMER');
-        }
-    }, [filteredOrders, selectedOrderId]);
-
-    useEffect(() => {
-        if (!selectedOrder || isEditing) {
-            return;
-        }
-
-        setForm(createEditForm(selectedOrder));
-        setTrackingNumber(selectedOrder.shipment?.tracking_number || '');
-        setReturnReason(selectedOrder.return_reason || 'REFUSED_BY_CUSTOMER');
-    }, [isEditing, selectedOrder]);
-
-    const summary = useMemo(() => ({
-        active: searchedOrders.filter((order) => !isClosedOrderStatus(order.status)).length,
-        fresh: searchedOrders.filter((order) => order.status === 'NEW').length,
-        inWork: searchedOrders.filter((order) => order.status === 'IN_PROGRESS').length,
-        delivery: searchedOrders.filter((order) => order.status === 'PACKED' || order.status === 'SHIPPED').length,
-        returns: searchedOrders.filter((order) => isReturnOrderStatus(order.status)).length,
-        closed: searchedOrders.filter((order) => isClosedOrderStatus(order.status)).length
-    }), [searchedOrders]);
-
-    const hasFormChanges = selectedOrder ? Object.keys(buildOrderPatchPayload(selectedOrder, form)).length > 0 : false;
-    const shipmentChanged = comparableValue(selectedOrder?.shipment?.tracking_number) !== comparableValue(trackingNumber);
-    const customerFieldsLocked = selectedOrder ? !isCustomerEditableOrderStatus(selectedOrder.status) : false;
-
-    const replaceOrder = (updated: SalesOrder) => {
-        setOrders((prev) => prev.map((order) => order.id === updated.id ? updated : order));
-        setSelectedOrderId(updated.id);
-        setForm(createEditForm(updated));
-        setTrackingNumber(updated.shipment?.tracking_number || '');
-        setReturnReason(updated.return_reason || 'REFUSED_BY_CUSTOMER');
-    };
-
-    const handleSelectOrder = (order: SalesOrder) => {
+    const openOrder = (order: SalesOrder) => {
         setSelectedOrderId(order.id);
-        setIsEditing(false);
         setForm(createEditForm(order));
         setTrackingNumber(order.shipment?.tracking_number || '');
         setReturnReason(order.return_reason || 'REFUSED_BY_CUSTOMER');
+        setIsEditing(false);
         setError('');
+    };
+
+    const closeOrder = () => {
+        setSelectedOrderId('');
+        setIsEditing(false);
+        setError('');
+    };
+
+    const replaceOrder = (updated: SalesOrder) => {
+        setOrders((current) => current.map((order) => order.id === updated.id ? updated : order));
+        if (!orderMatchesFilter(updated, filter)) {
+            closeOrder();
+            return;
+        }
+        setForm(createEditForm(updated));
+        setTrackingNumber(updated.shipment?.tracking_number || '');
+        setReturnReason(updated.return_reason || 'REFUSED_BY_CUSTOMER');
+        setIsEditing(false);
+    };
+
+    const handleSave = async () => {
+        if (!selectedOrder) return;
+        const payload = buildOrderPatchPayload(selectedOrder, form);
+        if (Object.keys(payload).length === 0) {
+            setIsEditing(false);
+            return;
+        }
+
+        setSaving(true);
+        setError('');
+        try {
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({ error: 'Не удалось сохранить заказ.' }));
+            if (!response.ok) throw new Error(result.error || 'Не удалось сохранить заказ.');
+            replaceOrder(result as SalesOrder);
+        } catch (saveError) {
+            setError(saveError instanceof Error ? saveError.message : 'Сетевая ошибка при сохранении заказа.');
+        } finally {
+            setSaving(false);
+        }
     };
 
     const handleStatusUpdate = async (status: OrderStatus) => {
         if (!selectedOrder) return;
-
         setUpdatingStatus(status);
         setError('');
 
         try {
             const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/status`, {
                 method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     status,
                     return_reason: status === 'RETURN_REQUESTED' ? returnReason : undefined
                 })
             });
-
-            const payload = await response.json().catch(() => ({ error: 'Не удалось обновить статус заказа.' }));
-            if (!response.ok) {
-                setError(payload.error || 'Не удалось обновить статус заказа.');
-                return;
-            }
-
-            replaceOrder(payload as SalesOrder);
-            setIsEditing(false);
-        } catch (_error) {
-            setError('Сетевая ошибка при обновлении статуса заказа.');
+            const result = await response.json().catch(() => ({ error: 'Не удалось обновить статус заказа.' }));
+            if (!response.ok) throw new Error(result.error || 'Не удалось обновить статус заказа.');
+            replaceOrder(result as SalesOrder);
+        } catch (statusError) {
+            setError(statusError instanceof Error ? statusError.message : 'Сетевая ошибка при обновлении статуса заказа.');
         } finally {
             setUpdatingStatus('');
         }
     };
 
-    const handleSave = async () => {
-        if (!selectedOrder) return;
-
-        const payload = buildOrderPatchPayload(selectedOrder, form);
-        if (Object.keys(payload).length === 0) {
-            setIsEditing(false);
-            setError('');
-            return;
-        }
-
-        setSaving(true);
-        setError('');
-
-        try {
-            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            const result = await response.json().catch(() => ({ error: 'Не удалось сохранить заказ.' }));
-            if (!response.ok) {
-                setError(result.error || 'Не удалось сохранить заказ.');
-                return;
-            }
-
-            replaceOrder(result as SalesOrder);
-            setIsEditing(false);
-        } catch (_error) {
-            setError('Сетевая ошибка при сохранении заказа.');
-        } finally {
-            setSaving(false);
-        }
-    };
-
     const handleSaveShipment = async () => {
         if (!selectedOrder) return;
-
         setSavingShipment(true);
         setError('');
 
         try {
             const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/shipment`, {
                 method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    tracking_number: trackingNumber
-                })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tracking_number: trackingNumber })
             });
-
             const result = await response.json().catch(() => ({ error: 'Не удалось сохранить доставку.' }));
-            if (!response.ok) {
-                setError(result.error || 'Не удалось сохранить доставку.');
-                return;
-            }
-
+            if (!response.ok) throw new Error(result.error || 'Не удалось сохранить доставку.');
             replaceOrder(result as SalesOrder);
-        } catch (_error) {
-            setError('Сетевая ошибка при сохранении доставки.');
+        } catch (shipmentError) {
+            setError(shipmentError instanceof Error ? shipmentError.message : 'Сетевая ошибка при сохранении доставки.');
         } finally {
             setSavingShipment(false);
         }
@@ -361,24 +357,16 @@ export function Orders() {
 
     const handleSyncShipment = async () => {
         if (!selectedOrder) return;
-
         setSyncingShipment(true);
         setError('');
 
         try {
-            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/shipment/sync`, {
-                method: 'POST'
-            });
-
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}/shipment/sync`, { method: 'POST' });
             const result = await response.json().catch(() => ({ error: 'Не удалось синхронизировать доставку.' }));
-            if (!response.ok) {
-                setError(result.error || 'Не удалось синхронизировать доставку.');
-                return;
-            }
-
-            replaceOrder(result as SalesOrder);
-        } catch (_error) {
-            setError('Сетевая ошибка при синхронизации доставки.');
+            if (!response.ok) throw new Error(result.error || 'Не удалось синхронизировать доставку.');
+            if (result) replaceOrder(result as SalesOrder);
+        } catch (syncError) {
+            setError(syncError instanceof Error ? syncError.message : 'Сетевая ошибка при синхронизации доставки.');
         } finally {
             setSyncingShipment(false);
         }
@@ -386,584 +374,663 @@ export function Orders() {
 
     const handleDelete = async () => {
         if (!selectedOrder) return;
-        if (!window.confirm(`Скрыть заказ #${selectedOrder.id.slice(0, 8)} из интерфейса? Восстановление возможно только напрямую из БД.`)) {
-            return;
-        }
+        if (!window.confirm(`Скрыть заказ #${selectedOrder.id.slice(0, 8)} из интерфейса?`)) return;
 
         setDeletingOrderId(selectedOrder.id);
         setError('');
-
         try {
-            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}`, {
-                method: 'DELETE'
-            });
-
-            const result = await response.json().catch(() => ({ error: 'Не удалось удалить заказ.' }));
-            if (!response.ok) {
-                setError(result.error || 'Не удалось удалить заказ.');
-                return;
-            }
-
-            setOrders((prev) => prev.filter((order) => order.id !== selectedOrder.id));
-            setSelectedOrderId('');
-            setIsEditing(false);
-            setForm(createEditForm(null));
-            setTrackingNumber('');
-        } catch (_error) {
-            setError('Сетевая ошибка при удалении заказа.');
+            const response = await authFetch(`/api/sales/orders/${selectedOrder.id}`, { method: 'DELETE' });
+            const result = await response.json().catch(() => ({ error: 'Не удалось скрыть заказ.' }));
+            if (!response.ok) throw new Error(result.error || 'Не удалось скрыть заказ.');
+            setOrders((current) => current.filter((order) => order.id !== selectedOrder.id));
+            closeOrder();
+        } catch (deleteError) {
+            setError(deleteError instanceof Error ? deleteError.message : 'Сетевая ошибка при скрытии заказа.');
         } finally {
             setDeletingOrderId('');
         }
     };
 
     return (
-        <div className="space-y-6">
-            <header className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold text-white">Заказы с сайта</h1>
-                    <p className="mt-1 max-w-3xl text-gray-500">
-                        Рабочий pipeline продажника: принятие, упаковка, отправка, получение и возвраты по СДЭК.
-                    </p>
+        <div data-testid="sales-orders-workspace">
+            <AdminWorkspace>
+            <AdminWorkspaceHeader title={filterTitles[filter]} count={`Заказов: ${filteredOrders.length}`}>
+                <div className="ml-auto w-full max-w-[560px]" data-testid="orders-search">
+                    <AdminSearchField
+                        value={query}
+                        onChange={setQuery}
+                        placeholder="ID, покупатель, контакт или трек"
+                        ariaLabel="Поиск по заказам"
+                    />
                 </div>
-
-                <button
-                    type="button"
+                <AdminAction
+                    tone="secondary"
+                    aria-label="Обновить заказы"
+                    className="h-11 min-h-11 w-11 px-0"
                     onClick={() => setReloadToken((value) => value + 1)}
-                    className="bg-[#1b1e24] hover:bg-white/[0.07] text-white px-4 py-2 rounded-lg flex items-center gap-2"
                 >
                     <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-                    Обновить
-                </button>
-            </header>
+                </AdminAction>
+            </AdminWorkspaceHeader>
 
-            {error && (
-                <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-red-200">
-                    {error}
-                </div>
-            )}
+            {error ? <AdminInlineError>{error}</AdminInlineError> : null}
 
-            <section className="grid grid-cols-2 gap-4 xl:grid-cols-6">
-                <SummaryCard title="Активные" value={summary.active} />
-                <SummaryCard title="Новые" value={summary.fresh} />
-                <SummaryCard title="В работе" value={summary.inWork} />
-                <SummaryCard title="Логистика" value={summary.delivery} />
-                <SummaryCard title="Возвраты" value={summary.returns} />
-                <SummaryCard title="Закрытые" value={summary.closed} />
-            </section>
-
-            <section className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <aside className="rounded-2xl border border-white/6 bg-[#14161b] p-4 space-y-4">
-                    <div className="space-y-3">
-                        <label className="block space-y-2">
-                            <span className="text-xs uppercase tracking-wider text-gray-500">Поиск по заказам</span>
-                            <div className="flex items-center gap-3 rounded-xl border border-white/6 bg-[#0f1217] px-3 py-2">
-                                <Search size={16} className="text-gray-500" />
-                                <input
-                                    value={query}
-                                    onChange={(event) => setQuery(event.target.value)}
-                                    placeholder="ID, логин, контакты, трек"
-                                    className="w-full bg-transparent text-sm text-white placeholder:text-gray-600 focus:outline-none"
-                                    aria-label="Поиск по заказам"
-                                />
-                            </div>
-                        </label>
-
-                        <div className="flex flex-wrap gap-2">
-                            {(['ACTIVE', 'NEW', 'IN_PROGRESS', 'PACKED', 'DELIVERY', 'RETURNS', 'CLOSED'] as OrderFilter[]).map((value) => (
-                                <FilterButton
-                                    key={value}
-                                    label={filterLabels[value]}
-                                    active={filter === value}
-                                    onClick={() => setFilter(value)}
-                                />
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="flex items-center justify-between text-sm text-gray-500">
-                        <span>{filteredOrders.length} в списке</span>
-                        {loading && <span>Обновляем...</span>}
-                    </div>
-
-                    {loading && orders.length === 0 ? (
-                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
-                            Загружаем заказы...
-                        </div>
-                    ) : filteredOrders.length === 0 ? (
-                        <div className="rounded-xl border border-white/6 bg-[#0f1217] px-4 py-6 text-gray-400">
-                            По текущему поиску и фильтру заказов нет.
-                        </div>
-                    ) : (
-                        <div className="space-y-3">
+            <AdminTableSurface minWidth={1120}>
+                {loading ? (
+                    <AdminWorkspaceState state="loading">Загрузка заказов…</AdminWorkspaceState>
+                ) : filteredOrders.length === 0 ? (
+                    <AdminWorkspaceState state="empty">Заказы не найдены</AdminWorkspaceState>
+                ) : (
+                    <table className="w-full border-collapse text-left text-[13px]" data-testid="orders-table">
+                        <thead className="bg-[#10151b] text-[#8f98a4]">
+                            <tr className="h-12 border-b border-[#2a3039]">
+                                <TableHeader>Заказ</TableHeader>
+                                <TableHeader>Покупатель</TableHeader>
+                                <TableHeader>{contextHeaders[filter]}</TableHeader>
+                                <TableHeader align="right">Сумма</TableHeader>
+                                <TableHeader>Ответственный</TableHeader>
+                                <TableHeader>Статус</TableHeader>
+                                <TableHeader align="right">Действие</TableHeader>
+                            </tr>
+                        </thead>
+                        <tbody>
                             {filteredOrders.map((order) => (
-                                <button
-                                    type="button"
-                                    key={order.id}
-                                    onClick={() => handleSelectOrder(order)}
-                                    className={`w-full rounded-2xl border p-4 text-left transition-colors ${selectedOrder?.id === order.id
-                                        ? 'border-white/16 bg-white/[0.055]'
-                                        : 'border-white/6 bg-[#0f1217]'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <div className="text-sm font-medium text-white">Заказ #{order.id.slice(0, 8)}</div>
-                                            <div className="mt-1 text-xs text-gray-500">{formatOrderDate(order.created_at)}</div>
-                                        </div>
-                                        <span className={`px-2.5 py-1 rounded-full text-[11px] font-medium ${getOrderStatusMeta(order.status).className}`}>
-                                            {getOrderStatusMeta(order.status).label}
-                                        </span>
-                                    </div>
-
-                                    <div className="mt-3 text-sm text-gray-200">{orderBuyerLabel(order)}</div>
-                                    <div className="mt-1 text-sm text-gray-400">{order.contact_phone || order.contact_email || 'Контакты не указаны'}</div>
-                                    <div className="mt-2 text-xs text-gray-500">{shortAddress(order.delivery_address)}</div>
-                                    {order.shipment?.tracking_number && (
-                                        <div className="mt-2 text-xs font-mono text-gray-300">{order.shipment.tracking_number}</div>
-                                    )}
-                                    <div className="mt-3 flex items-center justify-between">
-                                        <span className="font-mono text-sm text-white">{formatRub(order.total)}</span>
-                                        <span className="rounded-lg border border-white/10 bg-[#1b1e24] px-3 py-1.5 text-xs font-medium text-white">
-                                            Открыть
-                                        </span>
-                                    </div>
-                                </button>
+                                <OrderTableRow key={order.id} order={order} filter={filter} onOpen={() => openOrder(order)} />
                             ))}
-                        </div>
-                    )}
-                </aside>
+                        </tbody>
+                    </table>
+                )}
+            </AdminTableSurface>
 
-                <section className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
-                    {!selectedOrder ? (
-                        <div className="rounded-xl border border-dashed border-white/10 bg-[#0f1217] px-6 py-10 text-center text-gray-500">
-                            Выберите заказ слева, чтобы открыть рабочую карточку.
-                        </div>
-                    ) : (
-                        <div className="space-y-6">
-                            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                                <div className="space-y-3">
-                                    <div className="flex flex-wrap items-center gap-3">
-                                        <h2 className="text-2xl font-semibold text-white">Заказ #{selectedOrder.id.slice(0, 8)}</h2>
-                                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getOrderStatusMeta(selectedOrder.status).className}`}>
-                                            {getOrderStatusMeta(selectedOrder.status).label}
-                                        </span>
-                                    </div>
-
-                                    <div className="space-y-1 text-sm text-gray-300">
-                                        <div>{orderBuyerLabel(selectedOrder)}</div>
-                                        <div className="text-gray-500">
-                                            Создан: {formatOrderDate(selectedOrder.created_at)} • Обновлён: {formatOrderDate(selectedOrder.updated_at)}
-                                        </div>
-                                        <div className="text-gray-500">
-                                            Ответственный: {selectedOrder.assigned_sales_manager?.name || 'Не назначен'}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="flex flex-col items-start gap-3 xl:items-end">
-                                    <div className="text-3xl font-bold text-white">{formatRub(selectedOrder.total)}</div>
-                                    <div className="flex flex-wrap gap-2">
-                                        {!isEditing ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setForm(createEditForm(selectedOrder));
-                                                    setIsEditing(true);
-                                                    setError('');
-                                                }}
-                                                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24]"
-                                            >
-                                                <PencilLine size={15} />
-                                                Редактировать
-                                            </button>
-                                        ) : (
-                                            <>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleSave()}
-                                                    disabled={saving || !hasFormChanges}
-                                                    className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50"
-                                                >
-                                                    <Save size={15} />
-                                                    Сохранить
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setForm(createEditForm(selectedOrder));
-                                                        setIsEditing(false);
-                                                        setError('');
-                                                    }}
-                                                    disabled={saving}
-                                                    className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50"
-                                                >
-                                                    <X size={15} />
-                                                    Отменить
-                                                </button>
-                                            </>
-                                        )}
-
-                                        <button
-                                            type="button"
-                                            onClick={() => void handleDelete()}
-                                            disabled={Boolean(updatingStatus) || saving || deletingOrderId === selectedOrder.id}
-                                            className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 px-3 py-2 text-sm text-red-200 hover:bg-red-500/10 disabled:opacity-50"
-                                        >
-                                            <Trash2 size={15} />
-                                            {deletingOrderId === selectedOrder.id ? 'Скрываем...' : 'Скрыть'}
-                                        </button>
-
-                                        {selectedOrder.status === 'NEW' && (
-                                            <ActionButton
-                                                disabled={Boolean(updatingStatus) || saving}
-                                                onClick={() => void handleStatusUpdate('IN_PROGRESS')}
-                                                label="Принять"
-                                            />
-                                        )}
-                                        {selectedOrder.status === 'IN_PROGRESS' && (
-                                            <ActionButton
-                                                disabled={Boolean(updatingStatus) || saving}
-                                                onClick={() => void handleStatusUpdate('PACKED')}
-                                                label="Упакован"
-                                            />
-                                        )}
-                                        {selectedOrder.status === 'PACKED' && (
-                                            <ActionButton
-                                                disabled={Boolean(updatingStatus) || saving || !trackingNumber.trim()}
-                                                onClick={() => void handleStatusUpdate('SHIPPED')}
-                                                label="Отправлен"
-                                            />
-                                        )}
-                                        {selectedOrder.status === 'SHIPPED' && (
-                                            <>
-                                                <ActionButton
-                                                    disabled={Boolean(updatingStatus) || saving}
-                                                    onClick={() => void handleStatusUpdate('RECEIVED')}
-                                                    label="Получен"
-                                                />
-                                                <ActionButton
-                                                    disabled={Boolean(updatingStatus) || saving}
-                                                    onClick={() => void handleStatusUpdate('RETURN_REQUESTED')}
-                                                    label="Возврат"
-                                                    variant="danger"
-                                                />
-                                            </>
-                                        )}
-                                        {selectedOrder.status === 'RETURN_REQUESTED' && (
-                                            <ActionButton
-                                                disabled={Boolean(updatingStatus) || saving}
-                                                onClick={() => void handleStatusUpdate('RETURN_IN_TRANSIT')}
-                                                label="Возврат в пути"
-                                                variant="danger"
-                                            />
-                                        )}
-                                        {selectedOrder.status === 'RETURN_IN_TRANSIT' && (
-                                            <ActionButton
-                                                disabled={Boolean(updatingStatus) || saving}
-                                                onClick={() => void handleStatusUpdate('RETURNED')}
-                                                label="Возвращён"
-                                                variant="danger"
-                                            />
-                                        )}
-                                        {(selectedOrder.status === 'NEW' || selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'PACKED') && (
-                                            <ActionButton
-                                                disabled={Boolean(updatingStatus) || saving}
-                                                onClick={() => void handleStatusUpdate('CANCELLED')}
-                                                label="Отменить"
-                                                variant="danger"
-                                            />
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {customerFieldsLocked && (
-                                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-                                    Данные клиента на текущем этапе доступны только для чтения. В режиме редактирования можно менять внутреннюю заметку.
-                                </div>
-                            )}
-
-                            <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-                                <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
-                                    <div className="text-xs uppercase tracking-wider text-gray-500">Контакты и доставка</div>
-                                    <Field
-                                        label="Контактный телефон"
-                                        value={form.contact_phone}
-                                        readOnly={!isEditing || customerFieldsLocked}
-                                        onChange={(value) => setForm((prev) => ({ ...prev, contact_phone: value }))}
-                                        placeholder="Телефон не указан"
-                                    />
-                                    <Field
-                                        label="Email"
-                                        value={form.contact_email}
-                                        readOnly={!isEditing || customerFieldsLocked}
-                                        onChange={(value) => setForm((prev) => ({ ...prev, contact_email: value }))}
-                                        placeholder="Email не указан"
-                                    />
-                                    <Field
-                                        label="Адрес доставки"
-                                        value={form.delivery_address}
-                                        readOnly={!isEditing || customerFieldsLocked}
-                                        onChange={(value) => setForm((prev) => ({ ...prev, delivery_address: value }))}
-                                        placeholder="Адрес не указан"
-                                        multiline
-                                    />
-                                </section>
-
-                                <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
-                                    <div className="text-xs uppercase tracking-wider text-gray-500">Комментарии</div>
-                                    <Field
-                                        label="Комментарий клиента"
-                                        value={form.comment}
-                                        readOnly={!isEditing || customerFieldsLocked}
-                                        onChange={(value) => setForm((prev) => ({ ...prev, comment: value }))}
-                                        placeholder="Комментарий не добавлен"
-                                        multiline
-                                    />
-                                    <Field
-                                        label="Внутренняя заметка"
-                                        value={form.internal_note}
-                                        readOnly={!isEditing}
-                                        onChange={(value) => setForm((prev) => ({ ...prev, internal_note: value }))}
-                                        placeholder="Заметка для менеджера не заполнена"
-                                        multiline
-                                    />
-
-                                    {(selectedOrder.status === 'SHIPPED' || isReturnOrderStatus(selectedOrder.status)) && (
-                                        <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
-                                            <span className="text-xs uppercase tracking-wider text-gray-500">Причина возврата</span>
-                                            <select
-                                                value={returnReason}
-                                                onChange={(event) => setReturnReason(event.target.value as ReturnReason)}
-                                                className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white focus:border-white/20 focus:outline-none"
-                                            >
-                                                <option value="REFUSED_BY_CUSTOMER">{returnReasonLabels.REFUSED_BY_CUSTOMER}</option>
-                                                <option value="NOT_PICKED_UP">{returnReasonLabels.NOT_PICKED_UP}</option>
-                                            </select>
-                                        </label>
-                                    )}
-                                </section>
-                            </div>
-
-                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
-                                <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-gray-500">
-                                    <Truck size={14} />
-                                    Доставка СДЭК
-                                </div>
-
-                                <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-                                    <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
-                                        <span className="text-xs uppercase tracking-wider text-gray-500">Трек-номер</span>
-                                        <input
-                                            value={trackingNumber}
-                                            onChange={(event) => setTrackingNumber(event.target.value)}
-                                            className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-white/20 focus:outline-none"
-                                            placeholder="Например, 1234567890"
-                                        />
-                                    </label>
-
-                                    <div className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
-                                        <div className="text-xs uppercase tracking-wider text-gray-500">Статус трекинга</div>
-                                        <div className="mt-2 text-sm text-gray-200">{selectedOrder.shipment?.tracking_status_label || 'Пока нет синхронизации'}</div>
-                                        <div className="mt-1 text-xs text-gray-500">
-                                            {selectedOrder.shipment?.last_synced_at ? `Синхронизирован: ${formatOrderDate(selectedOrder.shipment.last_synced_at)}` : 'Синхронизации ещё не было'}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleSaveShipment()}
-                                        disabled={savingShipment || !trackingNumber.trim() || !shipmentChanged}
-                                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50"
-                                    >
-                                        <Save size={15} />
-                                        {savingShipment ? 'Сохраняем...' : 'Сохранить трек'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleSyncShipment()}
-                                        disabled={syncingShipment || !selectedOrder.shipment?.tracking_number}
-                                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 hover:bg-[#1b1e24] disabled:opacity-50"
-                                    >
-                                        <RefreshCw size={15} className={syncingShipment ? 'animate-spin' : ''} />
-                                        {syncingShipment ? 'Синхронизируем...' : 'Синхронизировать'}
-                                    </button>
-                                </div>
-                            </section>
-
-                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <div className="text-xs uppercase tracking-wider text-gray-500">Состав заказа и резерв</div>
-                                    <div className="text-sm text-gray-500">{selectedOrder.items.length} позиций</div>
-                                </div>
-
-                                <div className="space-y-3">
-                                    {selectedOrder.items.map((item) => (
-                                        <div key={item.id} className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-3">
-                                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                                <div className="flex items-center gap-3">
-                                                    {item.product_image && (
-                                                        <img
-                                                            src={item.product_image}
-                                                            alt={item.product_name}
-                                                            className="h-12 w-12 rounded-lg border border-white/6 object-cover"
-                                                        />
-                                                    )}
-                                                    <div>
-                                                        <div className="text-sm text-white">{item.product_name}</div>
-                                                        <div className="text-xs text-gray-500">
-                                                            Количество: {item.quantity} • {formatRub(item.price)} / шт.
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="font-mono text-sm text-gray-200">{formatRub(item.subtotal)}</div>
-                                            </div>
-
-                                            <div className="flex flex-wrap gap-2">
-                                                {item.assigned_items && item.assigned_items.length > 0 ? item.assigned_items.map((assignedItem) => (
-                                                    <span key={assignedItem.id} className="rounded-full border border-white/10 bg-[#0f1217] px-3 py-1 text-xs text-gray-300">
-                                                        {assignedItem.serial_number || assignedItem.temp_id}
-                                                    </span>
-                                                )) : (
-                                                    <span className="text-xs text-gray-500">Конкретные Item будут показаны после резервирования.</span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </section>
-
-                            <section className="rounded-2xl border border-white/6 bg-[#0f1217] p-4 space-y-4">
-                                <div className="text-xs uppercase tracking-wider text-gray-500">Таймлайн заказа</div>
-                                <div className="relative border-l border-white/10 ml-3 space-y-6">
-                                    {selectedOrder.status_events?.map((event) => (
-                                        <div key={event.id} className="relative pl-6">
-                                            <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-blue-500 ring-4 ring-[#0f1217]" />
-                                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                                <div className="text-sm font-medium text-white">{getOrderStatusMeta(event.to_status).label}</div>
-                                                <div className="text-xs text-gray-500">{formatOrderDate(event.created_at)}</div>
-                                            </div>
-                                            <div className="mt-1 text-xs text-gray-500">
-                                                {event.actor_user?.name || (event.meta?.source === 'CDEK' ? 'Система / СДЭК' : 'Система')}
-                                            </div>
-                                            {typeof event.meta?.cdek_status_label === 'string' && (
-                                                <div className="mt-1 text-xs text-gray-300">{event.meta.cdek_status_label}</div>
-                                            )}
-                                        </div>
-                                    ))}
-                                    {(!selectedOrder.status_events || selectedOrder.status_events.length === 0) && (
-                                        <div className="pl-6 text-sm text-gray-500">История переходов пока пуста.</div>
-                                    )}
-                                </div>
-                            </section>
-                        </div>
-                    )}
-                </section>
-            </section>
+            {selectedOrder ? (
+                <OrderDrawer
+                    order={selectedOrder}
+                    form={form}
+                    setForm={setForm}
+                    isEditing={isEditing}
+                    setIsEditing={setIsEditing}
+                    trackingNumber={trackingNumber}
+                    setTrackingNumber={setTrackingNumber}
+                    returnReason={returnReason}
+                    setReturnReason={setReturnReason}
+                    saving={saving}
+                    savingShipment={savingShipment}
+                    syncingShipment={syncingShipment}
+                    updatingStatus={updatingStatus}
+                    deleting={deletingOrderId === selectedOrder.id}
+                    onClose={closeOrder}
+                    onSave={() => void handleSave()}
+                    onSaveShipment={() => void handleSaveShipment()}
+                    onSyncShipment={() => void handleSyncShipment()}
+                    onStatusUpdate={(status) => void handleStatusUpdate(status)}
+                    onDelete={() => void handleDelete()}
+                />
+            ) : null}
+            </AdminWorkspace>
         </div>
     );
 }
 
-function SummaryCard({ title, value }: { title: string; value: number }) {
+function TableHeader({ children, align = 'left' }: { children: ReactNode; align?: 'left' | 'right' }) {
+    return <th className={`px-4 py-3 text-[12px] font-medium ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</th>;
+}
+
+function OrderTableRow({ order, filter, onOpen }: { order: SalesOrder; filter: OrderFilter; onOpen: () => void }) {
     return (
-        <div className="rounded-2xl border border-white/6 bg-[#14161b] p-5">
-            <div className="text-sm text-gray-400">{title}</div>
-            <div className="mt-2 text-3xl font-bold text-white">{value}</div>
-        </div>
+        <tr className="border-b border-[#252b33] bg-[#11161d] text-[#d8dde3] transition hover:bg-[#151b22] last:border-b-0" data-testid={`order-row-${order.id}`}>
+            <td className="px-4 py-3">
+                <button type="button" onClick={onOpen} className="text-left" data-testid={`order-open-${order.id}`}>
+                    <span className="block font-medium text-[#f2f5f8]">#{order.id.slice(0, 8)}</span>
+                    <span className="mt-1 block text-[11px] text-[#747e8a]">{formatOrderDate(order.created_at)}</span>
+                </button>
+            </td>
+            <td className="max-w-[260px] px-4 py-3">
+                <div className="truncate text-[#eef2f5]">{getBuyerLabel(order)}</div>
+                <div className="mt-1 truncate text-[12px] text-[#7f8894]">{order.contact_phone || order.contact_email || 'Контакт не указан'}</div>
+            </td>
+            <td className="max-w-[300px] px-4 py-3"><OrderContextCell order={order} filter={filter} /></td>
+            <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-[#f1f4f7]">{formatRub(order.total)}</td>
+            <td className="max-w-[180px] px-4 py-3">
+                <div className="truncate">{order.assigned_sales_manager?.name || 'Не назначен'}</div>
+            </td>
+            <td className="px-4 py-3">
+                <AdminStatus label={getOrderStatusMeta(order.status).label} tone={getStatusTone(order.status)} />
+            </td>
+            <td className="px-4 py-3 text-right">
+                <AdminAction tone="secondary" className="min-h-8 px-2.5" onClick={onOpen}>Открыть</AdminAction>
+            </td>
+        </tr>
     );
 }
 
-function FilterButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${active
-                ? 'border-white/16 bg-white/[0.07] text-white'
-                : 'bg-[#1b1e24] border-white/10 text-gray-300 hover:text-white hover:bg-white/[0.07]'
-            }`}
-        >
-            {label}
-        </button>
-    );
-}
-
-function Field({
-    label,
-    value,
-    readOnly,
-    onChange,
-    placeholder,
-    multiline = false
-}: {
-    label: string;
-    value: string;
-    readOnly: boolean;
-    onChange: (value: string) => void;
-    placeholder: string;
-    multiline?: boolean;
-}) {
-    if (readOnly) {
+function OrderContextCell({ order, filter }: { order: SalesOrder; filter: OrderFilter }) {
+    if (filter === 'ACTIVE') {
+        const activeFilter: OrderFilter = order.status === 'NEW'
+            ? 'NEW'
+            : order.status === 'IN_PROGRESS'
+                ? 'IN_PROGRESS'
+                : order.status === 'PACKED'
+                    ? 'PACKED'
+                    : order.status === 'SHIPPED'
+                        ? 'DELIVERY'
+                        : 'RETURNS';
+        return <OrderContextCell order={order} filter={activeFilter} />;
+    }
+    if (filter === 'NEW') {
         return (
-            <div className="rounded-xl border border-white/6 bg-[#14161b] px-4 py-3">
-                <div className="text-xs uppercase tracking-wider text-gray-500">{label}</div>
-                <div className={`mt-2 text-sm ${value ? 'text-gray-200' : 'text-gray-500'} whitespace-pre-line`}>
-                    {value || placeholder}
-                </div>
+            <div>
+                <div className="truncate text-[#dce1e6]">{order.delivery_address || 'Адрес не указан'}</div>
+                <div className="mt-1 text-[12px] text-[#7f8894]">{requestedItemCount(order)} шт. · {order.items.length} товаров</div>
             </div>
         );
     }
+    if (filter === 'IN_PROGRESS') {
+        return <span>{reservedItemCount(order)} из {requestedItemCount(order)} зарезервировано</span>;
+    }
+    if (filter === 'PACKED') {
+        return <span className={order.shipment?.tracking_number ? 'font-mono text-[#dce1e6]' : 'text-amber-200'}>{order.shipment?.tracking_number || 'Нужен трек-номер'}</span>;
+    }
+    if (filter === 'DELIVERY') {
+        return (
+            <div>
+                <div className="font-mono text-[#dce1e6]">{order.shipment?.tracking_number || 'Без трека'}</div>
+                <div className="mt-1 truncate text-[12px] text-[#7f8894]">{order.shipment?.tracking_status_label || 'Нет синхронизации'}</div>
+            </div>
+        );
+    }
+    if (filter === 'RETURNS') {
+        return (
+            <div>
+                <div>{order.return_reason ? returnReasonLabels[order.return_reason] : 'Причина не указана'}</div>
+                <div className="mt-1 font-mono text-[12px] text-[#7f8894]">{order.shipment?.tracking_number || 'Без трека'}</div>
+            </div>
+        );
+    }
+    if (filter === 'CLOSED') return <span>{formatOrderDate(order.updated_at)}</span>;
+    return <span>{getOrderStatusMeta(order.status).label}</span>;
+}
+
+type OrderDrawerProps = {
+    order: SalesOrder;
+    form: OrderEditForm;
+    setForm: Dispatch<SetStateAction<OrderEditForm>>;
+    isEditing: boolean;
+    setIsEditing: (value: boolean) => void;
+    trackingNumber: string;
+    setTrackingNumber: (value: string) => void;
+    returnReason: ReturnReason;
+    setReturnReason: (value: ReturnReason) => void;
+    saving: boolean;
+    savingShipment: boolean;
+    syncingShipment: boolean;
+    updatingStatus: OrderStatus | '';
+    deleting: boolean;
+    onClose: () => void;
+    onSave: () => void;
+    onSaveShipment: () => void;
+    onSyncShipment: () => void;
+    onStatusUpdate: (status: OrderStatus) => void;
+    onDelete: () => void;
+};
+
+function OrderDrawer(props: OrderDrawerProps) {
+    const { order } = props;
+    const role = localStorage.getItem('userRole');
+    const currentUserId = localStorage.getItem('userId');
+    const assignedToAnotherManager = role !== 'ADMIN'
+        && Boolean(order.assigned_sales_manager?.id)
+        && order.assigned_sales_manager?.id !== currentUserId;
+    const closed = isClosedOrderStatus(order.status);
+    const shipmentChanged = comparableValue(order.shipment?.tracking_number) !== comparableValue(props.trackingNumber);
+    const busy = Boolean(props.updatingStatus) || props.saving || props.savingShipment || props.syncingShipment || props.deleting;
 
     return (
-        <label className="block rounded-xl border border-white/6 bg-[#14161b] px-4 py-3 space-y-2">
-            <span className="text-xs uppercase tracking-wider text-gray-500">{label}</span>
-            {multiline ? (
-                <textarea
-                    value={value}
-                    onChange={(event) => onChange(event.target.value)}
-                    rows={4}
-                    className="w-full resize-y rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-white/20 focus:outline-none"
-                    placeholder={placeholder}
-                    aria-label={label}
-                />
-            ) : (
-                <input
-                    value={value}
-                    onChange={(event) => onChange(event.target.value)}
-                    className="w-full rounded-lg border border-white/10 bg-[#0f1217] px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-white/20 focus:outline-none"
-                    placeholder={placeholder}
-                    aria-label={label}
-                />
-            )}
-        </label>
+        <div data-testid="order-drawer">
+            <AdminDrawer
+                title={`Заказ #${order.id.slice(0, 8)}`}
+                onClose={props.onClose}
+                footer={closed ? undefined : (
+                    <OrderDrawerActions
+                        order={order}
+                        busy={busy}
+                        assignedToAnotherManager={assignedToAnotherManager}
+                        shipmentChanged={shipmentChanged}
+                        hasTracking={Boolean(order.shipment?.tracking_number)}
+                        onStatusUpdate={props.onStatusUpdate}
+                    />
+                )}
+            >
+                <div className="space-y-5">
+                    <div className="flex items-start justify-between gap-4 border-b border-[#2a3039] pb-4">
+                        <div className="min-w-0">
+                            <div className="truncate text-base font-medium text-[#f1f4f7]">{getBuyerLabel(order)}</div>
+                            <div className="mt-1 text-[12px] text-[#7f8894]">{formatOrderDate(order.created_at)}</div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                            <AdminStatus label={getOrderStatusMeta(order.status).label} tone={getStatusTone(order.status)} />
+                            <div className="mt-2 font-medium text-[#f1f4f7]">{formatRub(order.total)}</div>
+                        </div>
+                    </div>
+
+                    {assignedToAnotherManager ? (
+                        <div className="border-l-2 border-amber-400 px-3 py-1 text-sm text-amber-100">
+                            Заказ назначен менеджеру {order.assigned_sales_manager?.name}. Действия недоступны.
+                        </div>
+                    ) : null}
+
+                    {!closed ? (
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm text-[#8d96a2]">
+                                {order.assigned_sales_manager?.name || 'Ответственный не назначен'}
+                            </div>
+                            <AdminAction
+                                tone="secondary"
+                                className="min-h-9"
+                                disabled={assignedToAnotherManager || busy}
+                                onClick={() => {
+                                    if (props.isEditing) props.setForm(createEditForm(order));
+                                    props.setIsEditing(!props.isEditing);
+                                }}
+                                data-testid="order-edit-toggle"
+                            >
+                                <Edit3 size={14} />
+                                {props.isEditing ? 'Отменить' : isCustomerEditableOrderStatus(order.status) ? 'Изменить данные' : 'Изменить заметку'}
+                            </AdminAction>
+                        </div>
+                    ) : null}
+
+                    {props.isEditing && !closed ? (
+                        <OrderEditFields
+                            order={order}
+                            form={props.form}
+                            setForm={props.setForm}
+                            saving={props.saving}
+                            onSave={props.onSave}
+                        />
+                    ) : (
+                        <OrderStageDetails order={order} />
+                    )}
+
+                    {(order.status === 'PACKED' || order.status === 'SHIPPED' || isReturnOrderStatus(order.status)) && !closed ? (
+                        <ShipmentEditor
+                            order={order}
+                            trackingNumber={props.trackingNumber}
+                            setTrackingNumber={props.setTrackingNumber}
+                            returnReason={props.returnReason}
+                            setReturnReason={props.setReturnReason}
+                            saving={props.savingShipment}
+                            syncing={props.syncingShipment}
+                            disabled={assignedToAnotherManager || busy}
+                            shipmentChanged={shipmentChanged}
+                            onSave={props.onSaveShipment}
+                            onSync={props.onSyncShipment}
+                        />
+                    ) : null}
+
+                    <OrderTimeline order={order} />
+
+                    {!closed && (order.status === 'NEW' || order.status === 'IN_PROGRESS' || order.status === 'PACKED') ? (
+                        <details className="border-t border-[#2a3039] pt-4 text-sm">
+                            <summary className="cursor-pointer text-[#8d96a2]">Другие действия</summary>
+                            <AdminAction
+                                tone="danger"
+                                className="mt-3"
+                                disabled={assignedToAnotherManager || busy}
+                                onClick={props.onDelete}
+                                data-testid="order-delete"
+                            >
+                                {props.deleting ? 'Скрываем…' : 'Скрыть заказ'}
+                            </AdminAction>
+                        </details>
+                    ) : null}
+                </div>
+            </AdminDrawer>
+        </div>
     );
 }
 
-function ActionButton({
-    label,
-    onClick,
-    disabled,
-    variant = 'default'
+function OrderDrawerActions({
+    order,
+    busy,
+    assignedToAnotherManager,
+    shipmentChanged,
+    hasTracking,
+    onStatusUpdate
 }: {
-    label: string;
-    onClick: () => void;
-    disabled: boolean;
-    variant?: 'default' | 'danger';
+    order: SalesOrder;
+    busy: boolean;
+    assignedToAnotherManager: boolean;
+    shipmentChanged: boolean;
+    hasTracking: boolean;
+    onStatusUpdate: (status: OrderStatus) => void;
 }) {
-    const className = variant === 'danger'
-        ? 'border-red-500/40 text-red-200 hover:bg-red-500/10'
-        : 'border-white/10 text-gray-200 hover:bg-[#1b1e24]';
+    const disabled = busy || assignedToAnotherManager;
 
     return (
-        <button
-            type="button"
-            disabled={disabled}
-            onClick={onClick}
-            className={`px-3 py-2 rounded-lg text-sm border disabled:opacity-50 ${className}`}
-        >
-            {label}
-        </button>
+        <div className="flex flex-wrap justify-end gap-2" data-testid="order-stage-actions">
+            {(order.status === 'NEW' || order.status === 'IN_PROGRESS' || order.status === 'PACKED') ? (
+                <AdminAction tone="danger" disabled={disabled} onClick={() => onStatusUpdate('CANCELLED')} data-testid="order-action-cancelled">
+                    Отменить
+                </AdminAction>
+            ) : null}
+            {order.status === 'NEW' ? (
+                <AdminAction disabled={disabled} onClick={() => onStatusUpdate('IN_PROGRESS')} data-testid="order-action-in-progress">
+                    Принять
+                </AdminAction>
+            ) : null}
+            {order.status === 'IN_PROGRESS' ? (
+                <AdminAction disabled={disabled} onClick={() => onStatusUpdate('PACKED')} data-testid="order-action-packed">
+                    Упакован
+                </AdminAction>
+            ) : null}
+            {order.status === 'PACKED' ? (
+                <AdminAction disabled={disabled || !hasTracking || shipmentChanged} onClick={() => onStatusUpdate('SHIPPED')} data-testid="order-action-shipped">
+                    Отправлен
+                </AdminAction>
+            ) : null}
+            {order.status === 'SHIPPED' ? (
+                <>
+                    <AdminAction tone="danger" disabled={disabled} onClick={() => onStatusUpdate('RETURN_REQUESTED')} data-testid="order-action-return-requested">
+                        Возврат
+                    </AdminAction>
+                    <AdminAction disabled={disabled} onClick={() => onStatusUpdate('RECEIVED')} data-testid="order-action-received">
+                        Получен
+                    </AdminAction>
+                </>
+            ) : null}
+            {order.status === 'RETURN_REQUESTED' ? (
+                <AdminAction disabled={disabled} onClick={() => onStatusUpdate('RETURN_IN_TRANSIT')} data-testid="order-action-return-in-transit">
+                    Возврат в пути
+                </AdminAction>
+            ) : null}
+            {order.status === 'RETURN_IN_TRANSIT' ? (
+                <AdminAction disabled={disabled} onClick={() => onStatusUpdate('RETURNED')} data-testid="order-action-returned">
+                    Возвращён
+                </AdminAction>
+            ) : null}
+        </div>
+    );
+}
+
+function OrderEditFields({
+    order,
+    form,
+    setForm,
+    saving,
+    onSave
+}: {
+    order: SalesOrder;
+    form: OrderEditForm;
+    setForm: Dispatch<SetStateAction<OrderEditForm>>;
+    saving: boolean;
+    onSave: () => void;
+}) {
+    const customerFieldsEditable = isCustomerEditableOrderStatus(order.status);
+    const fields: Array<{ key: keyof OrderEditForm; label: string; multiline?: boolean }> = customerFieldsEditable
+        ? [
+            { key: 'contact_phone', label: 'Телефон' },
+            { key: 'contact_email', label: 'Email' },
+            { key: 'delivery_address', label: 'Адрес', multiline: true },
+            { key: 'comment', label: 'Комментарий клиента', multiline: true },
+            { key: 'internal_note', label: 'Внутренняя заметка', multiline: true }
+        ]
+        : [{ key: 'internal_note', label: 'Внутренняя заметка', multiline: true }];
+
+    return (
+        <section className="space-y-3 border-y border-[#2a3039] py-4" data-testid="order-edit-form">
+            {fields.map((field) => (
+                <label key={field.key} className="block">
+                    <span className="mb-1.5 block text-[12px] text-[#8d96a2]">{field.label}</span>
+                    {field.multiline ? (
+                        <textarea
+                            value={form[field.key]}
+                            onChange={(event) => setForm((current) => ({ ...current, [field.key]: event.target.value }))}
+                            rows={3}
+                            aria-label={field.key === 'delivery_address' ? 'Адрес доставки' : field.label}
+                            className={`${adminFieldClassName} min-h-[84px] w-full resize-y px-3 py-2.5`}
+                        />
+                    ) : (
+                        <input
+                            value={form[field.key]}
+                            onChange={(event) => setForm((current) => ({ ...current, [field.key]: event.target.value }))}
+                            aria-label={field.key === 'contact_phone' ? 'Контактный телефон' : field.key === 'delivery_address' ? 'Адрес доставки' : field.label}
+                            className={`${adminFieldClassName} w-full px-3`}
+                        />
+                    )}
+                </label>
+            ))}
+            <AdminAction disabled={saving} onClick={onSave} data-testid="order-save">
+                <Save size={14} />
+                {saving ? 'Сохраняем…' : 'Сохранить'}
+            </AdminAction>
+        </section>
+    );
+}
+
+function OrderStageDetails({ order }: { order: SalesOrder }) {
+    const closed = isClosedOrderStatus(order.status);
+    const primaryContacts = order.status === 'NEW' || closed;
+    const primaryItems = order.status === 'NEW' || order.status === 'IN_PROGRESS' || order.status === 'PACKED' || closed;
+
+    return (
+        <div className="space-y-5">
+            {primaryContacts ? <OrderContacts order={order} /> : (
+                <SecondaryOrderDetails label="Данные клиента">
+                    <OrderContacts order={order} />
+                </SecondaryOrderDetails>
+            )}
+            {primaryItems ? <OrderItems order={order} /> : (
+                <SecondaryOrderDetails label={`Состав · ${requestedItemCount(order)} шт.`}>
+                    <OrderItems order={order} />
+                </SecondaryOrderDetails>
+            )}
+            {order.internal_note ? (
+                <ReadOnlyBlock label="Внутренняя заметка">{order.internal_note}</ReadOnlyBlock>
+            ) : null}
+            {isReturnOrderStatus(order.status) || order.status === 'RETURNED' ? (
+                <ReadOnlyBlock label="Причина возврата">{order.return_reason ? returnReasonLabels[order.return_reason] : 'Не указана'}</ReadOnlyBlock>
+            ) : null}
+            {closed && order.shipment ? <ShipmentSummary order={order} /> : null}
+        </div>
+    );
+}
+
+function OrderContacts({ order }: { order: SalesOrder }) {
+    return (
+        <section>
+            <SectionTitle icon={<CheckCircle2 size={15} />} title="Контакты" />
+            <dl className="mt-3 divide-y divide-[#252b33] border-y border-[#2a3039] text-sm">
+                <DefinitionRow label="Телефон" value={order.contact_phone || 'Не указан'} />
+                <DefinitionRow label="Email" value={order.contact_email || 'Не указан'} />
+                <DefinitionRow label="Адрес" value={order.delivery_address || 'Не указан'} />
+                <DefinitionRow label="Комментарий" value={order.comment || 'Нет'} />
+            </dl>
+        </section>
+    );
+}
+
+function OrderItems({ order }: { order: SalesOrder }) {
+    const showAssignments = order.status !== 'NEW';
+
+    return (
+        <section data-testid="order-items-detail">
+            <SectionTitle icon={<PackageCheck size={15} />} title={`Состав · ${requestedItemCount(order)} шт.`} />
+            <div className="mt-3 divide-y divide-[#252b33] border-y border-[#2a3039]">
+                {order.items.map((item) => (
+                    <div key={item.id} className="py-3">
+                        <div className="flex items-start justify-between gap-4 text-sm">
+                            <div className="min-w-0">
+                                <div className="truncate text-[#eef2f5]">{item.product_name}</div>
+                                <div className="mt-1 text-[12px] text-[#7f8894]">{item.quantity} шт. × {formatRub(item.price)}</div>
+                            </div>
+                            <div className="shrink-0 text-[#dce1e6]">{formatRub(item.subtotal)}</div>
+                        </div>
+                        {showAssignments && item.assigned_items?.length ? (
+                            <div className="mt-2 flex flex-wrap gap-1.5" data-testid={`order-item-assignments-${item.id}`}>
+                                {item.assigned_items.map((assignedItem) => (
+                                    <span key={assignedItem.id} className="rounded-md border border-[#303842] bg-[#181e26] px-2 py-1 font-mono text-[11px] text-[#aeb6c0]">
+                                        {assignedItem.serial_number || assignedItem.temp_id}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
+                ))}
+            </div>
+        </section>
+    );
+}
+
+function ShipmentEditor({
+    order,
+    trackingNumber,
+    setTrackingNumber,
+    returnReason,
+    setReturnReason,
+    saving,
+    syncing,
+    disabled,
+    shipmentChanged,
+    onSave,
+    onSync
+}: {
+    order: SalesOrder;
+    trackingNumber: string;
+    setTrackingNumber: (value: string) => void;
+    returnReason: ReturnReason;
+    setReturnReason: (value: ReturnReason) => void;
+    saving: boolean;
+    syncing: boolean;
+    disabled: boolean;
+    shipmentChanged: boolean;
+    onSave: () => void;
+    onSync: () => void;
+}) {
+    return (
+        <section className="border-t border-[#2a3039] pt-4" data-testid="order-shipment">
+            <SectionTitle icon={<Truck size={15} />} title="Доставка СДЭК" />
+            <label className="mt-3 block">
+                <span className="mb-1.5 block text-[12px] text-[#8d96a2]">Трек-номер</span>
+                <input
+                    value={trackingNumber}
+                    onChange={(event) => setTrackingNumber(event.target.value)}
+                    aria-label="Трек-номер"
+                    className={`${adminFieldClassName} w-full px-3 font-mono`}
+                    data-testid="order-tracking-input"
+                />
+            </label>
+            {order.status === 'SHIPPED' ? (
+                <label className="mt-3 block">
+                    <span className="mb-1.5 block text-[12px] text-[#8d96a2]">Причина возврата</span>
+                    <select
+                        value={returnReason}
+                        onChange={(event) => setReturnReason(event.target.value as ReturnReason)}
+                        aria-label="Причина возврата"
+                        className={`${adminFieldClassName} w-full px-3`}
+                    >
+                        <option value="REFUSED_BY_CUSTOMER">{returnReasonLabels.REFUSED_BY_CUSTOMER}</option>
+                        <option value="NOT_PICKED_UP">{returnReasonLabels.NOT_PICKED_UP}</option>
+                    </select>
+                </label>
+            ) : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+                <AdminAction
+                    tone="secondary"
+                    disabled={disabled || saving || !trackingNumber.trim() || !shipmentChanged}
+                    onClick={onSave}
+                    data-testid="order-save-tracking"
+                >
+                    <Save size={14} />
+                    {saving ? 'Сохраняем…' : 'Сохранить трек'}
+                </AdminAction>
+                {(order.status === 'SHIPPED' || isReturnOrderStatus(order.status)) ? (
+                    <AdminAction
+                        tone="secondary"
+                        disabled={disabled || syncing || !order.shipment?.tracking_number}
+                        onClick={onSync}
+                        data-testid="order-sync"
+                    >
+                        <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+                        {syncing ? 'Синхронизация…' : 'Синхронизировать'}
+                    </AdminAction>
+                ) : null}
+            </div>
+            <div className="mt-3 text-[12px] text-[#7f8894]">
+                {order.shipment?.tracking_status_label || 'Нет данных синхронизации'}
+                {order.shipment?.last_synced_at ? ` · ${formatOrderDate(order.shipment.last_synced_at)}` : ''}
+            </div>
+        </section>
+    );
+}
+
+function ShipmentSummary({ order }: { order: SalesOrder }) {
+    return (
+        <section>
+            <SectionTitle icon={<Truck size={15} />} title="Доставка" />
+            <dl className="mt-3 divide-y divide-[#252b33] border-y border-[#2a3039] text-sm">
+                <DefinitionRow label="Трек" value={order.shipment?.tracking_number || 'Не указан'} monospace />
+                <DefinitionRow label="Статус" value={order.shipment?.tracking_status_label || 'Нет данных'} />
+            </dl>
+        </section>
+    );
+}
+
+function OrderTimeline({ order }: { order: SalesOrder }) {
+    const events = order.status_events || [];
+
+    return (
+        <details className="border-t border-[#2a3039] pt-4" data-testid="order-timeline">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-[#aab2bc]">
+                <Clock3 size={15} />
+                История статусов · {events.length}
+            </summary>
+            <div className="mt-3 divide-y divide-[#252b33] border-y border-[#2a3039]">
+                {events.length ? events.map((event) => (
+                    <div key={event.id} className="flex items-start justify-between gap-4 py-3 text-sm">
+                        <div>
+                            <div className="text-[#e1e5ea]">{getOrderStatusMeta(event.to_status).label}</div>
+                            <div className="mt-1 text-[12px] text-[#7f8894]">{event.actor_user?.name || 'Система'}</div>
+                        </div>
+                        <div className="shrink-0 text-[12px] text-[#7f8894]">{formatOrderDate(event.created_at)}</div>
+                    </div>
+                )) : <div className="py-3 text-sm text-[#7f8894]">История пока пуста</div>}
+            </div>
+        </details>
+    );
+}
+
+function SectionTitle({ icon, title }: { icon: ReactNode; title: string }) {
+    return (
+        <div className="flex items-center gap-2 text-sm font-medium text-[#dce1e6]">
+            <span className="text-[#7f8894]">{icon}</span>
+            {title}
+        </div>
+    );
+}
+
+function DefinitionRow({ label, value, monospace = false }: { label: string; value: string; monospace?: boolean }) {
+    return (
+        <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-4 py-2.5">
+            <dt className="text-[#7f8894]">{label}</dt>
+            <dd className={`break-words text-[#dce1e6] ${monospace ? 'font-mono' : ''}`}>{value}</dd>
+        </div>
+    );
+}
+
+function ReadOnlyBlock({ label, children }: { label: string; children: ReactNode }) {
+    return (
+        <div className="border-y border-[#2a3039] py-3 text-sm">
+            <div className="text-[12px] text-[#7f8894]">{label}</div>
+            <div className="mt-1.5 whitespace-pre-line text-[#dce1e6]">{children}</div>
+        </div>
+    );
+}
+
+function SecondaryOrderDetails({ label, children }: { label: string; children: ReactNode }) {
+    return (
+        <details className="border-y border-[#2a3039] py-3">
+            <summary className="cursor-pointer text-sm text-[#aab2bc]">{label}</summary>
+            <div className="mt-4">{children}</div>
+        </details>
     );
 }

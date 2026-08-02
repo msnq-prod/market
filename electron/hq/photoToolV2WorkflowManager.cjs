@@ -108,6 +108,8 @@ const normalizeFailure = (error, fallbackMessage) => {
 
 const workflowPhaseForStatus = (status) => {
     switch (status) {
+        case 'staging':
+            return 'staging';
         case 'normalizing':
             return 'converting';
         case 'uploading':
@@ -477,9 +479,25 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
         const phase = workflowPhaseForStatus(run.status);
         const updatedAt = Date.parse(run.updated_at || '');
         const summary = JSON.parse(run.summary_json || '{}');
+        const statusCounts = items.reduce((acc, item) => {
+            acc[item.status] = (acc[item.status] || 0) + 1;
+            return acc;
+        }, {});
+        const currentItem = items.find((item) => ['normalizing', 'uploading'].includes(item.status))
+            || items.find((item) => item.status === 'pending')
+            || items.find((item) => item.status === 'failed')
+            || null;
         const pendingSerials = items.filter((item) => !['reused', 'uploaded', 'committed'].includes(item.status)).map((item) => String(item.item_seq));
         const confirmedSerials = items.filter((item) => ['reused', 'uploaded', 'committed'].includes(item.status)).map((item) => String(item.item_seq));
         const failedSerials = items.filter((item) => item.status === 'failed').map((item) => String(item.item_seq));
+        const failedItems = items
+            .filter((item) => item.status === 'failed')
+            .slice(0, 10)
+            .map((item) => ({
+                itemSeq: item.item_seq,
+                fileName: item.original_name || null,
+                error: item.last_error || null
+            }));
         return {
             id: run.id,
             kind: 'PHOTO_APPLY_WORKFLOW',
@@ -501,7 +519,14 @@ class PhotoToolV2WorkflowManager extends EventEmitter {
             uploadState: {
                 pendingSerials,
                 confirmedSerials,
-                failedSerials
+                failedSerials,
+                statusCounts,
+                currentItem: currentItem ? {
+                    itemSeq: currentItem.item_seq,
+                    fileName: currentItem.original_name || null,
+                    status: currentItem.status
+                } : null,
+                failedItems
             }
         };
     }

@@ -146,7 +146,16 @@ async function installDesktopPhotoMock(page: Page, options: { workflowSnapshot?:
                         uploadState: null
                     };
                 },
-                completePhotoApplyWorkflowStaging: async () => workflowSnapshot
+                completePhotoApplyWorkflowStaging: async () => workflowSnapshot,
+                retryMediaWorkflow: async (workflowId: string) => {
+                    window.localStorage.setItem('__retriedWorkflowId', workflowId);
+                    return workflowSnapshot;
+                },
+                cancelMediaWorkflow: async (workflowId: string) => {
+                    window.localStorage.setItem('__cancelledWorkflowId', workflowId);
+                    return workflowSnapshot;
+                },
+                clearCompletedMediaQueueJobs: async () => ({ jobs: [], counts: {} })
             }
         });
     }, options);
@@ -1030,7 +1039,14 @@ test('UI: active desktop photo workflow locks editing controls', async ({ page, 
                     lastError: null,
                     createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
                     updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
-                    uploadState: null
+                    uploadState: {
+                        pendingSerials: ['1', '2'],
+                        confirmedSerials: [],
+                        failedSerials: [],
+                        statusCounts: { uploading: 1, pending: 1 },
+                        currentItem: { itemSeq: 1, fileName: 'locked-1.png', status: 'uploading' },
+                        failedItems: []
+                    }
                 }
             ],
             counts: { uploading: 1 }
@@ -1038,6 +1054,8 @@ test('UI: active desktop photo workflow locks editing controls', async ({ page, 
     });
     await page.goto(`/admin/photo-tool/${batchId}`);
     await expect(page.getByTestId('photo-tool-heading')).toBeVisible();
+    await expect(page.getByTestId('photo-workflow-banner')).toContainText('Обработка фото: 0/2');
+    await expect(page.getByTestId('photo-workflow-banner')).toContainText('Сейчас: загрузка, позиция 001');
     await expect(page.getByTestId('photo-workflow-banner')).toContainText('Редактирование заблокировано до завершения фоновой задачи.');
     await expect(page.getByTestId('photo-sort-name')).toBeDisabled();
     await expect(page.getByTestId('photo-preset-standard')).toBeDisabled();
@@ -1071,10 +1089,17 @@ test('UI: terminal desktop photo workflow shows in-page recovery banner', async 
                     phase: 'failed',
                     progress: { completed: 0, total: 1 },
                     routePath: `/admin/photo-tool/${batchId}`,
-                    lastError: 'upload failed',
+                    lastError: 'CHECKSUM_MISMATCH',
                     createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
                     updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
-                    uploadState: null
+                    uploadState: {
+                        pendingSerials: ['1'],
+                        confirmedSerials: [],
+                        failedSerials: ['1'],
+                        statusCounts: { failed: 1 },
+                        currentItem: { itemSeq: 1, fileName: 'broken.png', status: 'failed' },
+                        failedItems: [{ itemSeq: 1, fileName: 'broken.png', error: 'CHECKSUM_MISMATCH' }]
+                    }
                 }
             ],
             counts: { failed: 1 }
@@ -1085,9 +1110,107 @@ test('UI: terminal desktop photo workflow shows in-page recovery banner', async 
     const terminalBanner = page.getByTestId('photo-workflow-terminal-banner');
     await expect(terminalBanner).toBeVisible();
     await expect(terminalBanner).toHaveAttribute('role', 'alert');
-    await expect(terminalBanner).toContainText('Ошибка');
-    await expect(terminalBanner).toContainText('upload failed');
+    await expect(terminalBanner).toContainText('Обработка фото: 0/1');
+    await expect(terminalBanner).toContainText('Ошибки: 001');
+    await expect(terminalBanner).toContainText('Файл изменился или поврежден');
     await expect(page.getByTestId('photo-workflow-banner')).toHaveCount(0);
+});
+
+test('UI: stale and cancelled desktop photo workflows show clear recovery states', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const stalePayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+    const cancelledPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 1);
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page, {
+        workflowSnapshot: {
+            workflows: [
+                {
+                    id: 'photo-workflow-stale-e2e',
+                    kind: 'PHOTO_APPLY_WORKFLOW',
+                    batchId: stalePayload.batch.id,
+                    phase: 'stale',
+                    progress: { completed: 0, total: 1 },
+                    routePath: `/admin/photo-tool/${stalePayload.batch.id}`,
+                    lastError: 'PHOTO_TOOL_RUN_STALE',
+                    createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
+                    updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
+                    uploadState: { pendingSerials: ['1'], confirmedSerials: [], failedSerials: [], statusCounts: { pending: 1 }, currentItem: null, failedItems: [] }
+                },
+                {
+                    id: 'photo-workflow-cancelled-e2e',
+                    kind: 'PHOTO_APPLY_WORKFLOW',
+                    batchId: cancelledPayload.batch.id,
+                    phase: 'cancelled',
+                    progress: { completed: 0, total: 1 },
+                    routePath: `/admin/photo-tool/${cancelledPayload.batch.id}`,
+                    lastError: null,
+                    createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
+                    updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
+                    uploadState: { pendingSerials: ['1'], confirmedSerials: [], failedSerials: [], statusCounts: { cancelled: 1 }, currentItem: null, failedItems: [] }
+                }
+            ],
+            counts: { stale: 1, cancelled: 1 }
+        }
+    });
+
+    await page.goto(`/admin/photo-tool/${stalePayload.batch.id}`);
+    await expect(page.getByTestId('photo-workflow-terminal-banner')).toContainText('Партия изменилась');
+
+    await page.goto(`/admin/photo-tool/${cancelledPayload.batch.id}`);
+    await expect(page.getByTestId('photo-workflow-cancelled-banner')).toContainText('Отменено пользователем');
+    await expect(page.getByTestId('photo-workflow-terminal-banner')).toHaveCount(0);
+});
+
+test('UI: Status Center workflow details show staging, item counts and guarded cancel', async ({ page, request }) => {
+    const admin = await login(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const partner = await login(request, PARTNER_EMAIL, PARTNER_PASSWORD);
+    const { productId } = await createProductFixture({ isPublished: false });
+    const toolPayload = await createReceivedBatchWithSerials(request, admin, partner, productId, 2);
+    const batchId = toolPayload.batch.id;
+
+    await setAdminSession(page, admin);
+    await installDesktopPhotoMock(page, {
+        workflowSnapshot: {
+            workflows: [
+                {
+                    id: 'photo-workflow-status-e2e',
+                    kind: 'PHOTO_APPLY_WORKFLOW',
+                    batchId,
+                    phase: 'staging',
+                    progress: { completed: 0, total: 2 },
+                    routePath: `/admin/photo-tool/${batchId}`,
+                    lastError: null,
+                    createdAt: new Date('2026-04-05T10:00:00.000Z').toISOString(),
+                    updatedAt: new Date('2026-04-05T10:01:00.000Z').toISOString(),
+                    uploadState: {
+                        pendingSerials: ['1', '2'],
+                        confirmedSerials: [],
+                        failedSerials: [],
+                        statusCounts: { pending: 2 },
+                        currentItem: { itemSeq: 1, fileName: 'first.png', status: 'pending' },
+                        failedItems: []
+                    }
+                }
+            ],
+            counts: { staging: 1 }
+        }
+    });
+
+    await page.goto(`/admin/photo-tool/${batchId}`);
+    await page.getByRole('button', { name: /Status Center Workflow/i }).click();
+    await page.getByRole('button', { name: 'Загрузки' }).click();
+    await expect(page.getByText('Подготовка файлов', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('workflow-stage-chips-photo-workflow-status-e2e')).toContainText('Ожидает: 2');
+    await page.getByTestId('workflow-cancel-request-photo-workflow-status-e2e').click();
+    await expect(page.getByText('Остановить фоновую задачу?')).toBeVisible();
+    await page.getByTestId('workflow-cancel-dismiss-photo-workflow-status-e2e').click();
+    await expect(page.getByText('Остановить фоновую задачу?')).toHaveCount(0);
+    await page.getByTestId('workflow-cancel-request-photo-workflow-status-e2e').click();
+    await page.getByTestId('workflow-cancel-confirm-photo-workflow-status-e2e').click();
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('__cancelledWorkflowId'))).toBe('photo-workflow-status-e2e');
 });
 
 test('UI: unsaved Photo Tool edits block SPA navigation', async ({ page, request }) => {

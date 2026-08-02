@@ -66,6 +66,16 @@ test('UI smoke: admin configures Telegram bot and binds user chat_id', async ({ 
     };
 
     let bots: TelegramBotRecord[] = [];
+    let savedBotPayload: {
+        name: string;
+        token?: string;
+        notify_admin: boolean;
+        notify_sales_manager: boolean;
+        notify_franchisee: boolean;
+        event_settings: Record<string, boolean>;
+        manual_recipients?: string;
+        low_stock_threshold: number;
+    } | null = null;
     let users: UserRow[] = [
         {
             id: 'user-sales-1',
@@ -140,6 +150,7 @@ test('UI smoke: admin configures Telegram bot and binds user chat_id', async ({ 
         if (url.pathname === '/api/telegram/bots/bot-e2e-1' && request.method() === 'PUT') {
             const body = JSON.parse(request.postData() || '{}') as {
                 name: string;
+                token?: string;
                 notify_admin: boolean;
                 notify_sales_manager: boolean;
                 notify_franchisee: boolean;
@@ -147,6 +158,7 @@ test('UI smoke: admin configures Telegram bot and binds user chat_id', async ({ 
                 manual_recipients?: string;
                 low_stock_threshold: number;
             };
+            savedBotPayload = body;
             const savedBot: TelegramBotRecord = {
                 ...bots[0],
                 name: body.name,
@@ -203,37 +215,54 @@ test('UI smoke: admin configures Telegram bot and binds user chat_id', async ({ 
 
     await page.goto('/admin/telegram-bots');
 
-    await expect(page.getByRole('heading', { name: 'Telegram-боты' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Telegram' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Новый бот' }).click();
-    await expect(page.getByLabel('Название вкладки')).toHaveValue('Бот 1');
+    await expect(page.getByLabel('Название бота')).toHaveValue('Бот 1');
 
-    await page.getByLabel('Название вкладки').fill('Бот продаж');
-    await page.getByLabel('Token бота').fill('123456:AAATESTTOKEN');
-    await page.getByRole('button', { name: 'Проверить token' }).click();
-    await expect(page.getByText('Token валиден. Username: @stones_notify_bot')).toBeVisible();
+    await page.getByLabel('Название бота').fill('Бот продаж');
+    await page.getByLabel('Токен бота').fill('123456:AAATESTTOKEN');
 
+    await page.getByRole('button', { name: 'Получатели', exact: true }).click();
     await page.getByRole('switch', { name: /Администратор/ }).click();
     await page.getByRole('switch', { name: /Менеджер по продажам/ }).click();
-    await page.getByRole('switch', { name: 'Создание заявки' }).click();
-    await page.getByRole('switch', { name: 'Партия прибыла на склад' }).click();
     await page.getByLabel('Ручные получатели').fill('321654987\n@stones_alerts');
     await page.getByLabel('Порог low-stock').fill('3');
 
-    const recentChatsPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Недавние чаты' }) });
-    await expect(recentChatsPanel.getByText('321654987', { exact: true })).toBeVisible();
-    await expect(recentChatsPanel.getByText('@sales_user', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'События', exact: true }).click();
+    await page.getByRole('switch', { name: 'Создание заявки' }).click();
+    await page.getByRole('switch', { name: 'Партия прибыла на склад' }).click();
+
+    await page.getByRole('button', { name: 'Чаты', exact: true }).click();
+    await expect(page.getByTestId('telegram-chats-view').getByText('321654987', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('telegram-chats-view').getByText('@sales_user', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Тест', exact: true }).click();
+    await page.getByRole('button', { name: 'Проверить токен' }).click();
+    await expect(page.getByText('Токен валиден. Имя бота: @stones_notify_bot')).toBeVisible();
 
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
     await expect(page.getByText('Настройки Telegram-бота сохранены.')).toBeVisible();
+    expect(savedBotPayload).toMatchObject({
+        name: 'Бот продаж',
+        token: '123456:AAATESTTOKEN',
+        notify_admin: true,
+        notify_sales_manager: true,
+        manual_recipients: '321654987\n@stones_alerts',
+        low_stock_threshold: 3,
+        event_settings: expect.objectContaining({
+            sales_order_created: true,
+            supply_batch_received: true
+        })
+    });
 
     await page.goto('/admin/users');
-    await expect(page.getByRole('heading', { name: 'Управление пользователями' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Пользователи' })).toBeVisible();
     await page.getByRole('button', { name: 'Telegram' }).click();
 
-    await page.getByLabel('Telegram chat_id').fill('321654987');
-    await page.getByLabel('Telegram username').fill('@sales_user');
+    await page.getByLabel('Chat ID').fill('321654987');
+    await page.getByLabel('Username').fill('@sales_user');
     await page.getByRole('button', { name: 'Сохранить' }).click();
 
     await expect(page.getByText('Telegram-привязка сохранена.')).toBeVisible();

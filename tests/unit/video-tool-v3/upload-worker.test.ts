@@ -388,6 +388,31 @@ test('upload recovery accepts matching server-completed item without uploading c
     assert.equal(harness.db.get('SELECT upload_status FROM export_items WHERE id = ?', [ids.exportItem]).upload_status, 'UPLOADED');
 });
 
+test('upload worker parses manifest before audible audio check', async (t) => {
+    const harness = await createHarness();
+    t.after(() => harness.close());
+    const run = harness.db.get('SELECT manifest_json FROM export_runs WHERE id = ?', [ids.run]);
+    const manifest = JSON.parse(run.manifest_json);
+    manifest.settings.audio = 'source';
+    manifest.sources = manifest.sources.map((source: Record<string, unknown>) => ({
+        ...source,
+        originalHasAudio: true
+    }));
+    harness.db.run(`UPDATE export_runs SET manifest_json = ? WHERE id = ?`, [JSON.stringify(manifest), ids.run]);
+
+    const worker = new UploadWorker({
+        db: harness.db,
+        uploadService: harness.uploadService,
+        networkService: { getState: () => ({ online: true, apiReachable: true, authenticated: true }) },
+        ffmpegService: { assertAudibleAudio: async () => undefined }
+    });
+    const job = harness.db.get('SELECT * FROM jobs WHERE id = ?', [ids.job]);
+    const result = await worker.handle(job, {});
+
+    assert.equal(result.status, 'DONE');
+    assert.equal(harness.db.get('SELECT upload_status FROM export_items WHERE id = ?', [ids.exportItem]).upload_status, 'UPLOADED');
+});
+
 test('upload worker does not mark stale run item as uploaded after complete returns', async (t) => {
     const harness = await createHarness();
     t.after(() => harness.close());

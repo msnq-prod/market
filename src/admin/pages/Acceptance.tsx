@@ -1,28 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Camera, Download, MapPin, PackageCheck, QrCode, Search, Video } from 'lucide-react';
-import { Button, Modal } from '../components/ui';
-import { authFetch } from '../../utils/authFetch';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Navigate } from 'react-router-dom';
 import {
-    canFinalizeBatch,
-    canReceiveBatch,
-    getBatchStatusMeta,
-    getItemStatusMeta
-} from '../../../shared/domain/policy';
+    AlertTriangle,
+    Box,
+    CalendarDays,
+    Camera,
+    Check,
+    CheckCircle2,
+    ChevronLeft,
+    ChevronRight,
+    Search,
+    Video
+} from 'lucide-react';
+import { authFetch } from '../../utils/authFetch';
+import { canFinalizeBatch, canReceiveBatch } from '../../../shared/domain/policy';
 
 type BatchItem = {
     id: string;
-    temp_id: string;
-    serial_number: string | null;
-    status: string;
-    is_sold: boolean;
-    photo_url?: string | null;
     item_photo_url?: string | null;
     item_video_url?: string | null;
-    item_seq?: number | null;
-    created_at: string;
-    clone_url: string | null;
-    qr_url: string | null;
 };
 
 type BatchView = {
@@ -35,11 +31,6 @@ type BatchView = {
         name: string;
         email: string;
     };
-    collection_request?: {
-        id: string;
-        status: string;
-        requested_qty: number;
-    } | null;
     product?: {
         id: string;
         country_code: string;
@@ -64,20 +55,14 @@ type BatchView = {
     items: BatchItem[];
 };
 
-type BatchLocationInfo = {
-    key: string;
-    label: string;
-    code: string;
-    country: string;
+type MediaCounts = {
+    total: number;
+    photoReady: number;
+    videoReady: number;
 };
 
-type BatchLocationGroup = BatchLocationInfo & {
-    batches: BatchView[];
-    itemCount: number;
-};
-
-const isPublicPassportItem = (batchStatus: string, itemStatus: string) =>
-    (batchStatus === 'RECEIVED' || batchStatus === 'FINISHED') && itemStatus !== 'REJECTED';
+const PAGE_SIZE = 10;
+const PIPELINE_COLUMNS = '430px repeat(4, minmax(190px, 1fr))';
 
 const getDefaultTranslationValue = <T extends { language_id: number }>(translations: T[], field: keyof T) => {
     const translation = translations.find((item) => item.language_id === 2)
@@ -87,718 +72,575 @@ const getDefaultTranslationValue = <T extends { language_id: number }>(translati
     return typeof value === 'string' ? value : '';
 };
 
-const createClonePath = (serialNumber: string | null) => serialNumber ? `/clone/${encodeURIComponent(serialNumber)}` : null;
-
-const countBatchMedia = (batch: BatchView | null) => {
-    if (!batch) {
-        return {
-            total: 0,
-            photoReady: 0,
-            videoReady: 0,
-            fullyReady: 0
-        };
-    }
-
-    const photoReady = batch.items.filter((item) => Boolean(item.item_photo_url)).length;
-    const videoReady = batch.items.filter((item) => Boolean(item.item_video_url)).length;
-    const fullyReady = batch.items.filter((item) => Boolean(item.item_photo_url) && Boolean(item.item_video_url)).length;
-
-    return {
-        total: batch.items.length,
-        photoReady,
-        videoReady,
-        fullyReady
-    };
-};
-
 const getProductName = (batch: BatchView) => (
-    batch.product ? getDefaultTranslationValue(batch.product.translations, 'name') : 'Без привязки к товару'
+    batch.product ? getDefaultTranslationValue(batch.product.translations, 'name') : 'Товар не указан'
 );
 
-const getBatchLocationInfo = (batch: BatchView): BatchLocationInfo => {
-    if (!batch.product) {
-        return {
-            key: 'no-location',
-            label: 'Без локации',
-            code: '—',
-            country: 'Партии без карточки товара'
-        };
-    }
+const getLocationName = (batch: BatchView) => {
+    if (!batch.product) return 'Локация не указана';
 
     const locationName = batch.product.location
         ? getDefaultTranslationValue(batch.product.location.translations, 'name')
         : '';
-    const countryName = batch.product.location
-        ? getDefaultTranslationValue(batch.product.location.translations, 'country')
-        : '';
-    const code = `${batch.product.country_code}${batch.product.location_code}`;
+    return locationName || batch.product.location_description || batch.product.location_code || 'Локация не указана';
+};
+
+const getProductCode = (batch: BatchView) => {
+    if (!batch.product) return '';
+    return [batch.product.country_code, batch.product.location_code, batch.product.item_code]
+        .filter(Boolean)
+        .join(' · ');
+};
+
+const getMediaCounts = (batch: BatchView): MediaCounts => {
+    let photoReady = 0;
+    let videoReady = 0;
+
+    batch.items.forEach((item) => {
+        if (item.item_photo_url) photoReady += 1;
+        if (item.item_video_url) videoReady += 1;
+    });
 
     return {
-        key: batch.product.location?.id || code,
-        label: locationName || batch.product.location_description || `Локация ${batch.product.location_code}`,
-        code,
-        country: countryName || batch.product.country_code
+        total: batch.items.length,
+        photoReady,
+        videoReady
     };
 };
 
-const compareText = (left: string, right: string) => left.localeCompare(right, 'ru');
-
-const sortBatchesForAcceptance = (left: BatchView, right: BatchView) => {
-    const leftLocation = getBatchLocationInfo(left);
-    const rightLocation = getBatchLocationInfo(right);
-    const locationOrder = compareText(leftLocation.label, rightLocation.label);
-    if (locationOrder !== 0) {
-        return locationOrder;
+const getPipelinePriority = (batch: BatchView) => {
+    if (batch.status === 'ERROR') return 0;
+    if (canReceiveBatch(batch.status)) return 1;
+    if (canFinalizeBatch(batch.status)) {
+        const counts = getMediaCounts(batch);
+        if (counts.photoReady < counts.total) return 2;
+        if (counts.videoReady < counts.total) return 3;
+        return 4;
     }
+    if (batch.status === 'FINISHED') return 5;
+    return 6;
+};
 
-    const statusOrder = Number(canReceiveBatch(right.status)) - Number(canReceiveBatch(left.status));
-    if (statusOrder !== 0) {
-        return statusOrder;
-    }
+const sortPipelineBatches = (left: BatchView, right: BatchView) => {
+    const priority = getPipelinePriority(left) - getPipelinePriority(right);
+    if (priority !== 0) return priority;
+    return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+};
 
-    const createdOrder = new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
-    if (createdOrder !== 0) {
-        return createdOrder;
-    }
+const normalizeDate = (value: string) => value.slice(0, 10);
 
-    return compareText(getProductName(left), getProductName(right));
+const formatDate = (value: string) => {
+    const [year, month, day] = value.split('-');
+    return [day, month, year].filter(Boolean).join('.');
 };
 
 export function Acceptance() {
+    return <BatchPipeline />;
+}
+
+export function AcceptanceBatchesWorkspace() {
+    return <BatchPipeline />;
+}
+
+export function AcceptanceMediaWorkspace() {
+    return <Navigate to="/admin/acceptance/batches" replace />;
+}
+
+export function AcceptanceReadyWorkspace() {
+    return <Navigate to="/admin/acceptance/batches" replace />;
+}
+
+function BatchPipeline() {
+    const hasLoadedRef = useRef(false);
     const [batches, setBatches] = useState<BatchView[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [selectedBatchId, setSelectedBatchId] = useState('');
-    const [selectedQrItemIds, setSelectedQrItemIds] = useState<string[]>([]);
-    const [batchQuery, setBatchQuery] = useState('');
+    const [query, setQuery] = useState('');
+    const [date, setDate] = useState('ALL');
+    const [status, setStatus] = useState('ALL');
+    const [location, setLocation] = useState('ALL');
+    const [partner, setPartner] = useState('ALL');
+    const [page, setPage] = useState(1);
     const [updatingBatchId, setUpdatingBatchId] = useState('');
-    const [receivingBatchId, setReceivingBatchId] = useState('');
-    const [receivedCount, setReceivedCount] = useState('');
 
     const loadBatches = async (showSpinner = true) => {
-        if (showSpinner) {
-            setLoading(true);
-        }
+        if (showSpinner) setLoading(true);
         setError('');
 
         try {
             const response = await authFetch('/api/batches');
-            if (!response.ok) {
-                throw new Error('Не удалось загрузить партии для приемки.');
-            }
-
-            const payload = await response.json() as BatchView[];
-            setBatches(payload);
+            if (!response.ok) throw new Error('Не удалось загрузить партии.');
+            setBatches(await response.json() as BatchView[]);
         } catch (loadError) {
             console.error(loadError);
-            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить партии для приемки.');
+            setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить партии.');
         } finally {
-            if (showSpinner) {
-                setLoading(false);
-            }
+            if (showSpinner) setLoading(false);
         }
     };
 
     useEffect(() => {
+        if (hasLoadedRef.current) return;
+        hasLoadedRef.current = true;
         void loadBatches();
     }, []);
 
-    const relevantBatches = useMemo(
-        () => batches.filter((batch) => canReceiveBatch(batch.status) || canFinalizeBatch(batch.status)),
-        [batches]
-    );
+    const locationOptions = useMemo(() => Array.from(new Set(
+        batches.map(getLocationName).filter(Boolean)
+    )).sort((left, right) => left.localeCompare(right, 'ru')), [batches]);
 
-    useEffect(() => {
-        if (relevantBatches.length === 0) {
-            if (selectedBatchId) {
-                setSelectedBatchId('');
-            }
-            return;
-        }
+    const partnerOptions = useMemo(() => Array.from(new Set(
+        batches.map((batch) => batch.owner?.name || '').filter(Boolean)
+    )).sort((left, right) => left.localeCompare(right, 'ru')), [batches]);
 
-        const exists = relevantBatches.some((batch) => batch.id === selectedBatchId);
-        if (!selectedBatchId || !exists) {
-            const nextBatch = relevantBatches.find((batch) => canReceiveBatch(batch.status)) || relevantBatches[0];
-            setSelectedBatchId(nextBatch.id);
-        }
-    }, [relevantBatches, selectedBatchId]);
+    const dateOptions = useMemo(() => Array.from(new Set(
+        batches.map((batch) => normalizeDate(batch.created_at)).filter(Boolean)
+    )).sort((left, right) => right.localeCompare(left)), [batches]);
 
     const filteredBatches = useMemo(() => {
-        const normalizedQuery = batchQuery.trim().toLowerCase();
-        if (!normalizedQuery) {
-            return relevantBatches;
-        }
+        const normalizedQuery = query.trim().toLocaleLowerCase('ru');
 
-        return relevantBatches.filter((batch) => {
-            const ownerMatch = batch.owner?.name?.toLowerCase().includes(normalizedQuery);
-            const productName = getProductName(batch).toLowerCase();
-            const location = getBatchLocationInfo(batch);
-            const locationMatch = `${location.label} ${location.code} ${location.country}`.toLowerCase().includes(normalizedQuery);
-            return batch.id.toLowerCase().includes(normalizedQuery)
-                || productName.includes(normalizedQuery)
-                || locationMatch
-                || Boolean(ownerMatch);
-        });
-    }, [batchQuery, relevantBatches]);
+        return batches
+            .filter((batch) => {
+                if (status !== 'ALL' && batch.status !== status) return false;
+                if (location !== 'ALL' && getLocationName(batch) !== location) return false;
+                if (partner !== 'ALL' && (batch.owner?.name || '') !== partner) return false;
+                if (date !== 'ALL' && normalizeDate(batch.created_at) !== date) return false;
+                if (!normalizedQuery) return true;
 
-    const filteredBatchGroups = useMemo(() => {
-        const groups = new Map<string, BatchLocationGroup>();
-
-        [...filteredBatches].sort(sortBatchesForAcceptance).forEach((batch) => {
-            const location = getBatchLocationInfo(batch);
-            const existing = groups.get(location.key);
-            if (existing) {
-                existing.batches.push(batch);
-                existing.itemCount += batch.items.length;
-                return;
-            }
-
-            groups.set(location.key, {
-                ...location,
-                batches: [batch],
-                itemCount: batch.items.length
-            });
-        });
-
-        return Array.from(groups.values()).sort((left, right) => compareText(left.label, right.label));
-    }, [filteredBatches]);
-
-    const selectedBatch = useMemo(
-        () => relevantBatches.find((batch) => batch.id === selectedBatchId) || null,
-        [relevantBatches, selectedBatchId]
-    );
-    const printableItemIds = useMemo(
-        () => selectedBatch
-            ? selectedBatch.items
-                .filter((item) => isPublicPassportItem(selectedBatch.status, item.status))
-                .map((item) => item.id)
-            : [],
-        [selectedBatch]
-    );
-    const printableItemIdSet = useMemo(() => new Set(printableItemIds), [printableItemIds]);
-    const hasPrintableItems = printableItemIds.length > 0;
-
-    const mediaStats = useMemo(() => countBatchMedia(selectedBatch), [selectedBatch]);
-    const missingMediaCount = Math.max(0, mediaStats.total - mediaStats.fullyReady);
-    const canFinalize = Boolean(
-        selectedBatch
-        && canFinalizeBatch(selectedBatch.status)
-        && missingMediaCount === 0
-    );
-    const selectedBatchLocation = useMemo(
-        () => selectedBatch ? getBatchLocationInfo(selectedBatch) : null,
-        [selectedBatch]
-    );
+                const haystack = [
+                    batch.id,
+                    getProductName(batch),
+                    getLocationName(batch),
+                    getProductCode(batch),
+                    batch.owner?.name || ''
+                ].join(' ').toLocaleLowerCase('ru');
+                return haystack.includes(normalizedQuery);
+            })
+            .sort(sortPipelineBatches);
+    }, [batches, date, location, partner, query, status]);
 
     useEffect(() => {
-        setSelectedQrItemIds((current) => current.filter((itemId) => printableItemIdSet.has(itemId)));
-    }, [printableItemIdSet, selectedBatchId]);
+        setPage(1);
+    }, [date, location, partner, query, status]);
 
-    const refreshAndKeepBatch = async (batchId: string) => {
-        await loadBatches(false);
-        setSelectedBatchId(batchId);
-    };
+    const pageCount = Math.max(1, Math.ceil(filteredBatches.length / PAGE_SIZE));
+    const safePage = Math.min(page, pageCount);
+    const visibleBatches = filteredBatches.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-    const handleSelectBatch = (batchId: string) => {
-        setSelectedBatchId(batchId);
-        setError('');
-    };
-
-    const handleReceiveBatch = async (batchId: string) => {
+    const updateBatch = async (batchId: string, action: 'receive' | 'finalize') => {
         setUpdatingBatchId(batchId);
         setError('');
 
         try {
-            const response = await authFetch(`/api/batches/${batchId}/receive`, { method: 'POST' });
+            const response = await authFetch(`/api/batches/${batchId}/${action}`, { method: 'POST' });
             if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось принять партию.' }));
-                throw new Error(payload.error || 'Не удалось принять партию.');
+                const payload = await response.json().catch(() => ({ error: 'Не удалось обновить партию.' }));
+                throw new Error(payload.error || 'Не удалось обновить партию.');
             }
-
-            await refreshAndKeepBatch(batchId);
-        } catch (receiveError) {
-            console.error(receiveError);
-            setError(receiveError instanceof Error ? receiveError.message : 'Не удалось принять партию.');
-        } finally {
-            setUpdatingBatchId('');
-        }
-    };
-
-    const handleFinalizeBatch = async (batchId: string) => {
-        setUpdatingBatchId(batchId);
-        setError('');
-
-        try {
-            const response = await authFetch(`/api/batches/${batchId}/finalize`, { method: 'POST' });
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({ error: 'Не удалось перевести партию на склад.' }));
-                throw new Error(payload.error || 'Не удалось перевести партию на склад.');
-            }
-
             await loadBatches(false);
-        } catch (finalizeError) {
-            console.error(finalizeError);
-            setError(finalizeError instanceof Error ? finalizeError.message : 'Не удалось перевести партию на склад.');
+        } catch (updateError) {
+            console.error(updateError);
+            setError(updateError instanceof Error ? updateError.message : 'Не удалось обновить партию.');
         } finally {
             setUpdatingBatchId('');
         }
-    };
-
-    const toggleQrItem = (itemId: string) => {
-        if (!printableItemIdSet.has(itemId)) {
-            return;
-        }
-
-        setSelectedQrItemIds((current) => (
-            current.includes(itemId)
-                ? current.filter((value) => value !== itemId)
-                : [...current, itemId]
-        ));
-    };
-
-    const handlePrintAllQr = () => {
-        if (!selectedBatch || !hasPrintableItems) {
-            setError('Для QR PDF нет публичных позиций.');
-            return;
-        }
-
-        const params = new URLSearchParams({
-            batchId: selectedBatch.id,
-            mode: 'all'
-        });
-        window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
-    };
-
-    const handlePrintSelectedQr = () => {
-        if (!selectedBatch || selectedQrItemIds.length === 0) {
-            setError('Выберите позиции для QR PDF.');
-            return;
-        }
-
-        const params = new URLSearchParams({
-            batchId: selectedBatch.id,
-            mode: 'selected',
-            ids: selectedQrItemIds.join(',')
-        });
-        window.open(`/admin/qr/print?${params.toString()}`, '_blank', 'noopener,noreferrer');
     };
 
     return (
-        <div className="space-y-5">
-            {error && (
-                <div className="rounded-[24px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+        <div className="mx-auto min-w-0 max-w-[1600px] space-y-3" data-testid="batch-pipeline">
+            <header
+                className="grid min-w-0 items-center gap-3 px-1"
+                style={{ gridTemplateColumns: '200px minmax(220px, 1fr) 140px 140px 140px 140px' }}
+            >
+                <h1 className="text-[28px] font-semibold leading-none tracking-[-0.025em] text-[#f5f7fa]">
+                    Партии
+                </h1>
+
+                <label className="relative block min-w-0">
+                    <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#77808d]" size={17} />
+                    <input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="Поиск по ID партии, товару или партнёру"
+                        aria-label="Поиск партий"
+                        className="h-11 w-full rounded-lg border border-[#2a3039] bg-[#151a21] pl-10 pr-3 text-[13px] text-[#eef2f6] outline-none transition placeholder:text-[#727b88] focus:border-[#4c91f3]"
+                    />
+                </label>
+
+                <label className="relative block w-full min-w-0">
+                    <CalendarDays className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#79828f]" size={16} />
+                    <select
+                        value={date}
+                        onChange={(event) => setDate(event.target.value)}
+                        aria-label="Дата партии"
+                        className="h-11 w-full appearance-none rounded-lg border border-[#2a3039] bg-[#151a21] pl-9 pr-8 text-[13px] text-[#eef2f6] outline-none transition focus:border-[#4c91f3]"
+                    >
+                        <option value="ALL">Все даты</option>
+                        {dateOptions.map((value) => (
+                            <option key={value} value={value}>{formatDate(value)}</option>
+                        ))}
+                    </select>
+                    <ChevronRight className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-[#727b87]" size={14} />
+                </label>
+
+                <FilterSelect label="Статус" value={status} onChange={setStatus} options={[
+                    { value: 'ALL', label: 'Все' },
+                    { value: 'TRANSIT', label: 'В пути' },
+                    { value: 'RECEIVED', label: 'Приняты' },
+                    { value: 'ERROR', label: 'Ошибка' },
+                    { value: 'FINISHED', label: 'Завершены' }
+                ]} />
+                <FilterSelect
+                    label="Локация"
+                    value={location}
+                    onChange={setLocation}
+                    options={[{ value: 'ALL', label: 'Все' }, ...locationOptions.map((value) => ({ value, label: value }))]}
+                />
+                <FilterSelect
+                    label="Партнер"
+                    value={partner}
+                    onChange={setPartner}
+                    options={[{ value: 'ALL', label: 'Все' }, ...partnerOptions.map((value) => ({ value, label: value }))]}
+                />
+
+            </header>
+
+            {error ? (
+                <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-200">
+                    <AlertTriangle size={16} />
                     {error}
                 </div>
-            )}
+            ) : null}
 
-            <section className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4">
-                <MetricCard title="В пути" value={relevantBatches.filter((batch) => canReceiveBatch(batch.status)).length} />
-                <MetricCard title="Приняты" value={relevantBatches.filter((batch) => canFinalizeBatch(batch.status)).length} />
-                <MetricCard title="Фото готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_photo_url)).length, 0)} />
-                <MetricCard title="Видео готовы" value={relevantBatches.reduce((sum, batch) => sum + batch.items.filter((item) => Boolean(item.item_video_url)).length, 0)} />
-            </section>
-
-            <section className="admin-panel overflow-hidden rounded-[24px]">
-                <div className="border-b border-white/6 px-5 py-4">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-                        <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-blue-100">
-                                    <PackageCheck size={18} />
-                                </span>
-                                <h2 className="text-lg font-semibold text-white">Партии приемки</h2>
-                            </div>
-                            <p className="mt-1 text-sm text-gray-500">Показываются только партии в стадиях `TRANSIT` и `RECEIVED`, сгруппированные по локациям.</p>
+            <section className="overflow-x-auto rounded-lg border border-[#2a3039] bg-[#11161d] shadow-[0_22px_50px_rgba(0,0,0,0.22)]">
+                <div className="min-w-[1120px]">
+                    <div
+                        className="grid min-h-[48px] border-b border-[#2a3039] bg-[#10151b] text-[13px] font-semibold text-[#f1f4f7]"
+                        style={{ gridTemplateColumns: PIPELINE_COLUMNS }}
+                    >
+                        <div className="flex items-center border-r border-[#2a3039] px-4 text-[12px] font-medium text-[#8f98a4]">
+                            Партия / Товар и локация / Партнёр / Количество
                         </div>
-
-                        <div className="w-full xl:max-w-xl">
-                            <label className="mb-2 block text-sm font-medium text-gray-400">Поиск партии</label>
-                            <div className="relative">
-                                <Search className="absolute left-3 top-3 text-gray-500" size={18} />
-                                <input
-                                    value={batchQuery}
-                                    onChange={(event) => setBatchQuery(event.target.value)}
-                                    placeholder="ID партии, товар или партнер"
-                                    className="h-11 w-full rounded-xl border border-white/8 bg-[#11141a] py-2.5 pl-10 pr-4 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-blue-300/60"
-                                />
-                            </div>
-                        </div>
+                        <PipelineHeader icon={Box} label="Приёмка" />
+                        <PipelineHeader icon={Camera} label="Фото" />
+                        <PipelineHeader icon={Video} label="Видео" />
+                        <PipelineHeader icon={CheckCircle2} label="Завершение" last />
                     </div>
-                </div>
 
-                <div className="p-4 sm:p-5">
                     {loading ? (
-                        <div className="admin-panel-soft rounded-2xl px-4 py-6 text-sm text-gray-400">
-                            Загружаем партии приемки...
-                        </div>
-                    ) : filteredBatches.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-white/8 bg-[#11141a] px-4 py-8 text-sm text-gray-500">
-                            По текущему фильтру нет партий для приемки.
-                        </div>
+                        <div className="flex h-[420px] items-center justify-center text-sm text-[#7f8894]">Загрузка…</div>
+                    ) : visibleBatches.length === 0 ? (
+                        <div className="flex h-[420px] items-center justify-center text-sm text-[#7f8894]">Партии не найдены</div>
                     ) : (
-                        <div className="space-y-4">
-                            {filteredBatchGroups.map((group) => (
-                                <section key={group.key} className="overflow-hidden rounded-[22px] border border-white/6 bg-[#11141a]/70">
-                                    <div className="flex flex-col gap-3 border-b border-white/6 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-                                        <div className="flex min-w-0 items-center gap-3">
-                                            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-cyan-100">
-                                                <MapPin size={17} />
-                                            </span>
-                                            <div className="min-w-0">
-                                                <h3 className="truncate text-base font-semibold text-white">{group.label}</h3>
-                                                <p className="mt-0.5 text-xs text-gray-500">{group.country} · {group.code}</p>
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-                                            <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">Партий: {group.batches.length}</span>
-                                            <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">Позиций: {group.itemCount}</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3 p-3">
-                                        {group.batches.map((batch) => {
-                                            const productName = getProductName(batch);
-                                            const counts = countBatchMedia(batch);
-                                            const isSelected = batch.id === selectedBatchId;
-
-                                            return (
-                                                <button
-                                                    key={batch.id}
-                                                    type="button"
-                                                    aria-pressed={isSelected}
-                                                    onClick={() => handleSelectBatch(batch.id)}
-                                                    className={`flex min-h-[178px] w-full flex-col justify-between rounded-2xl border p-4 text-left transition ${isSelected
-                                                        ? 'border-blue-400/40 bg-blue-500/10 shadow-[0_0_24px_rgba(147,197,253,0.12)]'
-                                                        : 'border-white/6 bg-black/10 hover:border-white/12 hover:bg-white/[0.035]'
-                                                        }`}
-                                                >
-                                                    <div className="space-y-3">
-                                                        <div className="flex items-start justify-between gap-3">
-                                                            <p className="min-w-0 text-base font-semibold leading-snug text-white">{productName}</p>
-                                                            <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBatchStatusMeta(batch.status).className}`}>
-                                                                {getBatchStatusMeta(batch.status).label}
-                                                            </span>
-                                                        </div>
-                                                        <p className="break-all font-mono text-[11px] leading-5 text-gray-500">{batch.id}</p>
-                                                    </div>
-
-                                                    <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-500">
-                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
-                                                            {batch.owner?.name || 'Без партнера'}
-                                                        </span>
-                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
-                                                            Камней: {batch.items.length}
-                                                        </span>
-                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1">
-                                                            Media: {counts.fullyReady}/{counts.total}
-                                                        </span>
-                                                    </div>
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </section>
-                            ))}
-                        </div>
+                        visibleBatches.map((batch) => (
+                            <BatchPipelineRow
+                                key={batch.id}
+                                batch={batch}
+                                updating={updatingBatchId === batch.id}
+                                onReceive={() => void updateBatch(batch.id, 'receive')}
+                                onFinalize={() => void updateBatch(batch.id, 'finalize')}
+                            />
+                        ))
                     )}
                 </div>
             </section>
 
-            <section className="space-y-6">
-                {!selectedBatch ? (
-                    <div className="admin-panel rounded-[24px] border-dashed px-6 py-12 text-center text-gray-500">
-                        Выберите партию выше, чтобы открыть рабочее место приемки.
-                    </div>
-                ) : (
-                    <>
-                        <article className="admin-panel overflow-hidden rounded-[24px]">
-                            <div className="border-b border-white/6 px-6 py-5">
-                                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                                    <div className="min-w-0 space-y-3">
-                                        <div className="flex flex-wrap items-center gap-3">
-                                            <h2 className="text-xl font-semibold text-white">
-                                                {getProductName(selectedBatch)}
-                                            </h2>
-                                            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${getBatchStatusMeta(selectedBatch.status).className}`}>
-                                                {getBatchStatusMeta(selectedBatch.status).label}
-                                            </span>
-                                        </div>
+            <Pagination page={safePage} pageCount={pageCount} onChange={setPage} />
+        </div>
+    );
+}
 
-                                        <div className="space-y-1 text-sm text-gray-400">
-                                            <p className="font-mono text-xs text-gray-500">{selectedBatch.id}</p>
-                                            {selectedBatchLocation && (
-                                                <p className="inline-flex items-center gap-2">
-                                                    <MapPin size={14} />
-                                                    {selectedBatchLocation.label} · {selectedBatchLocation.code}
-                                                </p>
-                                            )}
-                                            <p>Партнер: {selectedBatch.owner?.name || 'Не назначен'}{selectedBatch.owner?.email ? ` • ${selectedBatch.owner.email}` : ''}</p>
-                                            <p>Позиций в партии: {selectedBatch.items.length}</p>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex flex-wrap gap-2 lg:justify-end">
-                                        {canReceiveBatch(selectedBatch.status) && (
-                                            <Button
-                                                onClick={() => setReceivingBatchId(selectedBatch.id)}
-                                                disabled={updatingBatchId === selectedBatch.id}
-                                            >
-                                                Принять партию
-                                            </Button>
-                                        )}
-
-                                        {canFinalizeBatch(selectedBatch.status) && (
-                                            <>
-                                                <Button
-                                                    variant="ghost"
-                                                    onClick={handlePrintSelectedQr}
-                                                    disabled={selectedQrItemIds.length === 0}
-                                                >
-                                                    <Download size={16} />
-                                                    PDF выбранных QR
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    onClick={handlePrintAllQr}
-                                                    disabled={!hasPrintableItems}
-                                                >
-                                                    <Download size={16} />
-                                                    PDF всех QR
-                                                </Button>
-                                                <Link
-                                                    to={`/admin/photo-tool/${encodeURIComponent(selectedBatch.id)}`}
-                                                    className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-cyan-100 transition hover:bg-white/[0.07] hover:text-white"
-                                                >
-                                                    <Camera size={16} />
-                                                    Photo Tool
-                                                </Link>
-                                                <Link
-                                                    to={`/admin/video-tool/${encodeURIComponent(selectedBatch.id)}`}
-                                                    className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-white/[0.07] hover:text-white"
-                                                >
-                                                    <Video size={16} />
-                                                    Монтаж видео
-                                                </Link>
-                                                <Button
-                                                    onClick={() => void handleFinalizeBatch(selectedBatch.id)}
-                                                    disabled={updatingBatchId === selectedBatch.id || !canFinalize}
-                                                >
-                                                    На склад
-                                                </Button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="grid gap-4 px-6 py-5 md:grid-cols-2 xl:grid-cols-4">
-                                <InfoTile title="Фото готовы" value={`${mediaStats.photoReady}/${mediaStats.total}`} note="Назначения через Photo Tool" />
-                                <InfoTile title="Видео готовы" value={`${mediaStats.videoReady}/${mediaStats.total}`} note="Финальные ролики по item" />
-                                <InfoTile title="Media полностью" value={`${mediaStats.fullyReady}/${mediaStats.total}`} note="Готово к переводу на склад" />
-                                <InfoTile title="Позиции в партии" value={`${mediaStats.total}`} note="Все экземпляры текущей партии" />
-                            </div>
-
-                            {canFinalizeBatch(selectedBatch.status) && (
-                                <div className="border-t border-white/6 px-6 py-5">
-                                    <div className="grid gap-4 lg:grid-cols-3">
-                                        <NoticeCard
-                                            title="Фото"
-                                            text="Фото назначаются отдельным Photo Tool по позициям `001`, `002`, `003` с ручной корректировкой и проверкой полного покрытия партии."
-                                        />
-                                        <NoticeCard
-                                            title="Видео"
-                                            text="Монтаж запускается отдельным инструментом. В приемке остается только точка входа и контроль прогресса."
-                                        />
-                                        <NoticeCard
-                                            title="Готовность к складу"
-                                            text={canFinalize
-                                                ? 'Все позиции укомплектованы. Партию можно переводить на склад.'
-                                                : `Не хватает media для ${missingMediaCount} позиций.`}
-                                            tone={canFinalize ? 'success' : 'warning'}
-                                        />
-                                    </div>
-                                    {canFinalizeBatch(selectedBatch.status) && (
-                                        <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-gray-400">
-                                            <span>Публичные QR: {printableItemIds.length}</span>
-                                            <button
-                                                type="button"
-                                                onClick={() => setSelectedQrItemIds(printableItemIds)}
-                                                className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1 transition hover:bg-white/[0.07] hover:text-white"
-                                            >
-                                                Выбрать все
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setSelectedQrItemIds([])}
-                                                className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1 transition hover:bg-white/[0.07] hover:text-white"
-                                            >
-                                                Сбросить выбор
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </article>
-
-                        <article className="admin-panel overflow-hidden rounded-[24px]">
-                            <div className="border-b border-white/6 px-6 py-4">
-                                <h3 className="text-lg font-semibold text-white">Позиции партии</h3>
-                                <p className="mt-1 text-sm text-gray-500">Плитки по item: серийники, media-статус и быстрые ссылки.</p>
-                            </div>
-
-                            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3 p-4">
-                                {selectedBatch.items.map((item) => {
-                                    const clonePath = createClonePath(item.serial_number);
-                                    const publicPassportAvailable = isPublicPassportItem(selectedBatch.status, item.status);
-
-                                    return (
-                                        <article key={item.id} className="flex min-h-[230px] flex-col justify-between rounded-2xl border border-white/6 bg-[#11141a] p-4 transition hover:border-white/12 hover:bg-[#171a20]">
-                                            <div className="space-y-3">
-                                                <div className="flex items-start gap-3">
-                                                    {canFinalizeBatch(selectedBatch.status) && (
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selectedQrItemIds.includes(item.id)}
-                                                            onChange={() => toggleQrItem(item.id)}
-                                                            disabled={!publicPassportAvailable}
-                                                            aria-label={`Выбрать QR ${item.serial_number || item.temp_id}`}
-                                                            className="mt-1 h-4 w-4 rounded border-white/10 bg-[#11141a] accent-blue-300"
-                                                        />
-                                                    )}
-                                                    <div className="min-w-0 flex-1">
-                                                        <p className="break-words font-semibold leading-snug text-white">{item.serial_number || item.temp_id}</p>
-                                                        <div className="mt-2 flex flex-wrap gap-2">
-                                                            <span className={`rounded-full border px-2.5 py-1 text-xs ${getItemStatusMeta(item.status).className}`}>
-                                                                {getItemStatusMeta(item.status).label}
-                                                            </span>
-                                                            <span className={`rounded-full border px-2.5 py-1 text-xs ${publicPassportAvailable ? 'border-blue-500/30 bg-blue-500/15 text-blue-200' : 'border-white/8 bg-white/[0.04] text-gray-400'}`}>
-                                                                {publicPassportAvailable ? 'Паспорт доступен' : 'QR недоступен'}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
-                                                    <span className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">Пакет<br /><strong className="font-mono font-medium text-gray-300">{item.temp_id}</strong></span>
-                                                    <span className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">Позиция<br /><strong className="font-medium text-gray-300">{item.item_seq != null ? String(item.item_seq).padStart(3, '0') : '—'}</strong></span>
-                                                    <span className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">Фото<br /><strong className={item.item_photo_url ? 'font-medium text-emerald-200' : 'font-medium text-gray-400'}>{item.item_photo_url ? 'есть' : 'нет'}</strong></span>
-                                                    <span className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">Видео<br /><strong className={item.item_video_url ? 'font-medium text-emerald-200' : 'font-medium text-gray-400'}>{item.item_video_url ? 'есть' : 'нет'}</strong></span>
-                                                </div>
-
-                                                <span className="inline-flex rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs text-gray-500">
-                                                    {item.is_sold ? 'Продан' : 'Не продан'}
-                                                </span>
-                                            </div>
-
-                                            <div className="mt-4 flex flex-wrap gap-2">
-                                                {publicPassportAvailable ? (
-                                                    <>
-                                                        <a
-                                                            href={item.qr_url || '#'}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            aria-disabled={!item.qr_url}
-                                                            className="inline-flex items-center gap-2 rounded-xl border border-blue-400/20 bg-blue-500/20 px-3 py-2 text-sm font-medium text-blue-100 transition hover:bg-blue-500/30"
-                                                        >
-                                                            <QrCode size={16} />
-                                                            QR
-                                                        </a>
-                                                        {clonePath && (
-                                                            <a
-                                                                href={clonePath}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="inline-flex items-center gap-2 rounded-xl border border-white/8 bg-white/[0.04] px-3 py-2 text-sm font-medium text-gray-200 transition hover:bg-white/[0.07] hover:text-white"
-                                                            >
-                                                                Просмотр
-                                                            </a>
-                                                        )}
-                                                    </>
-                                                ) : (
-                                                    <span className="inline-flex items-center rounded-xl border border-white/6 bg-white/[0.03] px-3 py-2 text-sm text-gray-500">
-                                                        Паспорт появится после публикации
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </article>
-                                    );
-                                })}
-                            </div>
-                        </article>
-                    </>
-                )}
-            </section>
-
-            <Modal
-                isOpen={Boolean(receivingBatchId)}
-                onClose={() => { setReceivingBatchId(''); setReceivedCount(''); }}
-                title="Подтверждение приемки"
+function FilterSelect({
+    label,
+    value,
+    onChange,
+    options
+}: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    options: Array<{ value: string; label: string }>;
+}) {
+    return (
+        <label className="relative block w-full min-w-0">
+            <span className="sr-only">{label}</span>
+            <select
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                aria-label={label}
+                className="h-11 w-full min-w-0 appearance-none truncate rounded-lg border border-[#2a3039] bg-[#151a21] pl-3 pr-8 text-[13px] text-[#e4e8ed] outline-none transition focus:border-[#4c91f3]"
             >
-                <div className="space-y-4">
-                    <p className="text-sm text-gray-300">
-                        Пожалуйста, пересчитайте физически приехавшие позиции и введите их количество для сверки с системой.
-                    </p>
-                    <input
-                        type="number"
-                        value={receivedCount}
-                        onChange={(e) => setReceivedCount(e.target.value)}
-                        placeholder={`Ожидается: ${selectedBatch?.items.length} шт.`}
-                        className="w-full rounded-xl border border-white/10 bg-[#0f1217] px-4 py-3 text-white focus:border-blue-500/50 focus:outline-none"
-                    />
-                    <div className="mt-4 flex justify-end gap-3 border-t border-white/10 pt-4">
-                        <Button variant="ghost" onClick={() => { setReceivingBatchId(''); setReceivedCount(''); }}>Отмена</Button>
-                        <Button 
-                            onClick={() => {
-                                if (Number(receivedCount) === selectedBatch?.items.length) {
-                                    void handleReceiveBatch(receivingBatchId);
-                                    setReceivingBatchId('');
-                                    setReceivedCount('');
-                                } else {
-                                    setError(`Ошибка приемки: Введенное количество (${receivedCount}) не совпадает с ожидаемым в партии (${selectedBatch?.items.length}).`);
-                                    setReceivingBatchId('');
-                                    setReceivedCount('');
-                                }
-                            }}
-                        >
-                            Подтвердить
-                        </Button>
+                {options.map((option) => (
+                    <option key={option.value} value={option.value}>{label}: {option.label}</option>
+                ))}
+            </select>
+            <ChevronRight className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-[#727b87]" size={14} />
+        </label>
+    );
+}
+
+function PipelineHeader({
+    icon: Icon,
+    label,
+    last = false
+}: {
+    icon: typeof Box;
+    label: string;
+    last?: boolean;
+}) {
+    return (
+        <div className={`flex items-center justify-between gap-3 px-4 ${last ? '' : 'border-r border-[#2a3039]'}`}>
+            <span className="inline-flex items-center gap-2">
+                <Icon size={16} className="text-[#c9d0d8]" />
+                {label}
+            </span>
+            {last ? null : <ChevronRight size={16} className="text-[#59616c]" />}
+        </div>
+    );
+}
+
+function BatchPipelineRow({
+    batch,
+    updating,
+    onReceive,
+    onFinalize
+}: {
+    batch: BatchView;
+    updating: boolean;
+    onReceive: () => void;
+    onFinalize: () => void;
+}) {
+    const counts = getMediaCounts(batch);
+    const received = batch.status === 'RECEIVED' || batch.status === 'FINISHED';
+    const finished = batch.status === 'FINISHED';
+    const photoComplete = finished || (counts.total > 0 && counts.photoReady === counts.total);
+    const videoComplete = finished || (counts.total > 0 && counts.videoReady === counts.total);
+    const hasError = batch.status === 'ERROR';
+    const locationName = getLocationName(batch);
+    const productCode = getProductCode(batch);
+
+    return (
+        <div
+            data-testid={`batch-pipeline-row-${batch.id}`}
+            className="grid min-h-[70px] border-b border-[#272d35] bg-[#141a21] last:border-b-0 hover:bg-[#171e26]"
+            style={{ gridTemplateColumns: PIPELINE_COLUMNS }}
+        >
+            <div className="grid grid-cols-[36px_minmax(0,1fr)_56px] items-center gap-3 border-r border-[#2a3039] px-4 py-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#29313a] bg-[#1d242c] text-[#d4dae1]">
+                    <Box size={17} />
+                </span>
+                <div className="min-w-0">
+                    <div className="truncate text-[14px] font-semibold leading-5 text-[#f1f4f7]">{batch.id}</div>
+                    <div className="truncate text-[12px] leading-4 text-[#a7afb9]">{getProductName(batch)}</div>
+                    <div className="truncate text-[11px] leading-4 text-[#7f8895]">
+                        {[locationName, batch.owner?.name || 'Партнер не указан', productCode].filter(Boolean).join(' · ')}
                     </div>
                 </div>
-            </Modal>
+                <span className="text-right text-[20px] font-semibold tabular-nums text-[#eef2f6]">{counts.total}</span>
+            </div>
+
+            <StageCell>
+                {canReceiveBatch(batch.status) ? (
+                    <StageButton onClick={onReceive} disabled={updating} icon={Box}>
+                        {updating ? 'Принимаем…' : 'Принять партию'}
+                    </StageButton>
+                ) : received ? (
+                    <CompleteState label="Принято" count={counts.total} />
+                ) : hasError ? (
+                    <ErrorState count={counts.total} />
+                ) : (
+                    <EmptyState />
+                )}
+            </StageCell>
+
+            <StageCell>
+                {received && photoComplete ? (
+                    <CompleteState label="Готово" count={finished ? counts.total : counts.photoReady} />
+                ) : batch.status === 'RECEIVED' ? (
+                    <StageLink to={`/admin/photo-tool/${encodeURIComponent(batch.id)}`} icon={Camera}>
+                        Открыть Photo Tool
+                    </StageLink>
+                ) : (
+                    <EmptyState />
+                )}
+            </StageCell>
+
+            <StageCell>
+                {received && videoComplete ? (
+                    <CompleteState label="Готово" count={finished ? counts.total : counts.videoReady} />
+                ) : batch.status === 'RECEIVED' && photoComplete ? (
+                    <StageLink to={`/admin/video-tool/${encodeURIComponent(batch.id)}`} icon={Video}>
+                        Открыть Video Tool
+                    </StageLink>
+                ) : (
+                    <EmptyState />
+                )}
+            </StageCell>
+
+            <StageCell last>
+                {finished ? (
+                    <CompleteState label="Завершено" count={counts.total} />
+                ) : canFinalizeBatch(batch.status) && photoComplete && videoComplete ? (
+                    <StageButton onClick={onFinalize} disabled={updating} icon={CheckCircle2}>
+                        {updating ? 'Завершаем…' : 'Завершить'}
+                    </StageButton>
+                ) : (
+                    <EmptyState />
+                )}
+            </StageCell>
         </div>
     );
 }
 
-function MetricCard({ title, value }: { title: string; value: number }) {
+function StageCell({ children, last = false }: { children: React.ReactNode; last?: boolean }) {
     return (
-        <div className="admin-panel-soft rounded-[24px] px-5 py-4">
-            <p className="text-sm text-gray-500">{title}</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+        <div className={`flex min-w-0 items-center px-3 py-2 ${last ? '' : 'border-r border-[#2a3039]'}`}>
+            {children}
         </div>
     );
 }
 
-function InfoTile({ title, value, note }: { title: string; value: string; note: string }) {
+function CompleteState({ label, count }: { label: string; count: number }) {
     return (
-        <div className="admin-panel-soft rounded-[24px] px-4 py-4">
-            <p className="text-sm text-gray-500">{title}</p>
-            <p className="mt-2 text-xl font-semibold text-white">{value}</p>
-            <p className="mt-2 text-xs text-gray-500">{note}</p>
+        <div className="flex items-center gap-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[#1fa65a] text-[#31d474]">
+                <Check size={15} strokeWidth={2.2} />
+            </span>
+            <div className="text-[12px] leading-4">
+                <div className="text-[#8f98a5]">{label}</div>
+                <div className="font-medium tabular-nums text-[#eef2f6]">{count}</div>
+            </div>
         </div>
     );
 }
 
-function NoticeCard({ title, text, tone = 'default' }: { title: string; text: string; tone?: 'default' | 'success' | 'warning' }) {
-    const toneClass = tone === 'success'
-        ? 'border-emerald-500/20 bg-emerald-500/10'
-        : tone === 'warning'
-        ? 'border-amber-500/20 bg-amber-500/10'
-        : 'border-white/6 bg-[#11141a]';
+function ErrorState({ count }: { count: number }) {
+    return (
+        <div className="flex items-center gap-3 text-red-300">
+            <AlertTriangle size={21} />
+            <div className="text-[12px] leading-4">
+                <div>Ошибка</div>
+                <div className="font-medium tabular-nums text-[#eef2f6]">{count}</div>
+            </div>
+        </div>
+    );
+}
+
+function EmptyState() {
+    return <span className="mx-auto text-[18px] text-[#69727e]">—</span>;
+}
+
+function StageButton({
+    onClick,
+    disabled,
+    icon: Icon,
+    children
+}: {
+    onClick: () => void;
+    disabled: boolean;
+    icon: typeof Box;
+    children: React.ReactNode;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[#4b89d9] bg-[#152130] px-3 text-[13px] font-medium text-[#6eb2ff] transition hover:border-[#67a5f4] hover:bg-[#192a3d] disabled:cursor-wait disabled:opacity-60"
+        >
+            <Icon size={17} />
+            {children}
+        </button>
+    );
+}
+
+function StageLink({
+    to,
+    icon: Icon,
+    children
+}: {
+    to: string;
+    icon: typeof Box;
+    children: React.ReactNode;
+}) {
+    return (
+        <Link
+            to={to}
+            className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[#4b89d9] bg-[#152130] px-3 text-[13px] font-medium text-[#6eb2ff] transition hover:border-[#67a5f4] hover:bg-[#192a3d]"
+        >
+            <Icon size={17} />
+            {children}
+        </Link>
+    );
+}
+
+function Pagination({
+    page,
+    pageCount,
+    onChange
+}: {
+    page: number;
+    pageCount: number;
+    onChange: (page: number) => void;
+}) {
+    const visiblePages = Array.from({ length: Math.min(pageCount, 5) }, (_, index) => {
+        const start = Math.min(Math.max(page - 2, 1), Math.max(pageCount - 4, 1));
+        return start + index;
+    });
 
     return (
-        <div className={`rounded-[24px] border px-4 py-4 ${toneClass}`}>
-            <p className="text-sm font-semibold text-white">{title}</p>
-            <p className="mt-2 text-sm text-gray-400">{text}</p>
-        </div>
+        <nav className="flex items-center justify-center gap-2 py-1" aria-label="Страницы партий">
+            <PageButton
+                label="Предыдущая страница"
+                disabled={page === 1}
+                onClick={() => onChange(Math.max(1, page - 1))}
+            >
+                <ChevronLeft size={15} />
+            </PageButton>
+            {visiblePages.map((value) => (
+                <PageButton key={value} active={value === page} onClick={() => onChange(value)} label={`Страница ${value}`}>
+                    {value}
+                </PageButton>
+            ))}
+            <PageButton
+                label="Следующая страница"
+                disabled={page === pageCount}
+                onClick={() => onChange(Math.min(pageCount, page + 1))}
+            >
+                <ChevronRight size={15} />
+            </PageButton>
+            <span className="ml-4 text-[12px] text-[#7f8894]">По {PAGE_SIZE} на странице</span>
+        </nav>
+    );
+}
+
+function PageButton({
+    children,
+    onClick,
+    label,
+    active = false,
+    disabled = false
+}: {
+    children: React.ReactNode;
+    onClick: () => void;
+    label: string;
+    active?: boolean;
+    disabled?: boolean;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            aria-label={label}
+            aria-current={active ? 'page' : undefined}
+            className={`flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-[12px] transition ${active
+                ? 'border-[#4c91f3] bg-[#438eea] text-white shadow-[0_0_16px_rgba(76,145,243,0.26)]'
+                : 'border-[#283039] bg-[#171d24] text-[#a4acb6] hover:border-[#46515e] hover:text-white disabled:cursor-default disabled:opacity-35'
+            }`}
+        >
+            {children}
+        </button>
     );
 }

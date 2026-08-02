@@ -54,15 +54,21 @@ model CategoryTranslation {
 }
 
 model Location {
-  id           String                @id @default(uuid())
-  lat          Float
-  lng          Float
-  image        String?
-  deleted_at   DateTime?
-  created_at   DateTime              @default(now())
-  updated_at   DateTime              @updatedAt
-  products     Product[]
-  translations LocationTranslation[]
+  id                      String                @id @default(uuid())
+  lat                     Float
+  lng                     Float
+  image                   String?
+  label_desktop_offset    Int                   @default(100)
+  label_desktop_vertical_offset Int              @default(16)
+  label_desktop_direction String                @default("UP") @db.VarChar(8)
+  label_mobile_offset     Int                   @default(80)
+  label_mobile_vertical_offset Int               @default(16)
+  label_mobile_direction  String                @default("UP") @db.VarChar(8)
+  deleted_at              DateTime?
+  created_at              DateTime              @default(now())
+  updated_at              DateTime              @updatedAt
+  products                Product[]
+  translations            LocationTranslation[]
 
   @@index([deleted_at])
   @@map("locations")

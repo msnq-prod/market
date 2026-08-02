@@ -1,6 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, Boxes, Truck, Users } from 'lucide-react';
+import {
+    AlertTriangle,
+    Archive,
+    ArrowRight,
+    CheckCircle2,
+    Database,
+    PackageCheck,
+    Store,
+    Truck
+} from 'lucide-react';
+import {
+    AdminInlineError,
+    AdminStatus,
+    AdminTableSurface,
+    AdminWorkspace,
+    AdminWorkspaceHeader,
+    AdminWorkspaceState
+} from '../components/AdminWorkspaceUI';
+import { DesktopStatusCenter } from '../components/DesktopStatusCenter';
 import { authFetch } from '../../utils/authFetch';
 
 type DashboardStats = {
@@ -16,6 +34,18 @@ type DashboardStats = {
     stockOnlineItems: number;
 };
 
+type DashboardTask = {
+    id: string;
+    title: string;
+    context: string;
+    value: number;
+    status: string;
+    tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+    to: string;
+    action: string;
+    icon: ReactNode;
+};
+
 const initialStats: DashboardStats = {
     locationsTotal: 0,
     locationsPublished: 0,
@@ -26,26 +56,36 @@ const initialStats: DashboardStats = {
     inTransitBatches: 0,
     receivedBatches: 0,
     stockHQItems: 0,
-    stockOnlineItems: 0,
+    stockOnlineItems: 0
 };
 
 const PROJECT_VERSION = import.meta.env.VITE_PROJECT_VERSION || 'dev';
 
 export function Dashboard() {
+    return <DashboardWorkspace view="today" />;
+}
+
+export function SystemStatusDashboardWorkspace() {
+    return <DashboardWorkspace view="status" />;
+}
+
+function DashboardWorkspace({ view }: { view: 'today' | 'status' }) {
     const [stats, setStats] = useState<DashboardStats>(initialStats);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
     useEffect(() => {
+        const controller = new AbortController();
+
         const fetchStats = async () => {
             setLoading(true);
             setError('');
 
             try {
-                const response = await authFetch('/api/admin/dashboard-summary');
+                const response = await authFetch('/api/admin/dashboard-summary', { signal: controller.signal });
                 if (!response.ok) {
-                    const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить дашборд' }));
-                    throw new Error(payload.error || 'Не удалось загрузить дашборд');
+                    const payload = await response.json().catch(() => ({ error: 'Не удалось загрузить сводку.' }));
+                    throw new Error(payload.error || 'Не удалось загрузить сводку.');
                 }
 
                 const summary = await response.json() as {
@@ -71,97 +111,191 @@ export function Dashboard() {
                     inTransitBatches: summary.batches_in_transit,
                     receivedBatches: summary.batches_received,
                     stockHQItems: summary.items_stock_hq,
-                    stockOnlineItems: summary.items_stock_online,
+                    stockOnlineItems: summary.items_stock_online
                 });
-            } catch (err) {
-                setError(err instanceof Error ? err.message : 'Не удалось загрузить дашборд');
+            } catch (loadError) {
+                if (controller.signal.aborted) return;
+                setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить сводку.');
             } finally {
-                setLoading(false);
+                if (!controller.signal.aborted) setLoading(false);
             }
         };
 
-        fetchStats();
+        void fetchStats();
+        return () => controller.abort();
     }, []);
 
-    const cards = [
+    return (
+        <AdminWorkspace data-testid="dashboard-workspace">
+            {error ? <AdminInlineError>{error}</AdminInlineError> : null}
+            {view === 'today'
+                ? <TodayDashboard stats={stats} loading={loading} />
+                : <StatusDashboard stats={stats} loading={loading} error={error} />}
+        </AdminWorkspace>
+    );
+}
+
+function TodayDashboard({ stats, loading }: { stats: DashboardStats; loading: boolean }) {
+    const tasks: DashboardTask[] = [
         {
-            title: 'Товары и локации',
-            to: '/admin/products',
-            icon: <Boxes size={18} />,
-            accentClass: 'bg-blue-400/10 text-blue-200',
-            value: stats.productsTotal,
-            subtitle: `Опубликовано: ${stats.productsPublished} · локаций: ${stats.locationsTotal} · с товарами: ${stats.locationsPublished}`
-        },
-        {
-            title: 'Пользователи',
-            to: '/admin/users',
-            icon: <Users size={18} />,
-            accentClass: 'bg-violet-400/10 text-violet-200',
-            value: stats.usersTotal,
-            subtitle: `Все роли · франчайзи: ${stats.franchiseesTotal}`
-        },
-        {
+            id: 'transit',
             title: 'Партии в пути',
-            to: '/admin/acceptance',
-            icon: <Truck size={18} />,
-            accentClass: 'bg-emerald-400/10 text-emerald-200',
+            context: 'Контроль прибытия в HQ',
             value: stats.inTransitBatches,
-            subtitle: `Уже получены HQ: ${stats.receivedBatches}`
+            status: stats.inTransitBatches > 0 ? 'В работе' : 'Нет задач',
+            tone: stats.inTransitBatches > 0 ? 'info' : 'success',
+            to: '/admin/acceptance/batches',
+            action: 'Открыть партии',
+            icon: <Truck size={17} />
         },
         {
-            title: 'Товары на складе HQ',
-            to: '/admin/warehouse',
-            icon: <Archive size={18} />,
-            accentClass: 'bg-indigo-400/10 text-indigo-200',
+            id: 'received',
+            title: 'Принятые партии',
+            context: 'Фото, видео и завершение',
+            value: stats.receivedBatches,
+            status: stats.receivedBatches > 0 ? 'Требуют проверки' : 'Нет задач',
+            tone: stats.receivedBatches > 0 ? 'warning' : 'success',
+            to: '/admin/acceptance/batches',
+            action: 'Открыть партии',
+            icon: <PackageCheck size={17} />
+        },
+        {
+            id: 'stock-hq',
+            title: 'Остаток HQ',
+            context: 'Доступен для распределения',
             value: stats.stockHQItems,
-            subtitle: `В онлайне: ${stats.stockOnlineItems}`
+            status: stats.stockHQItems > 0 ? 'На складе' : 'Пусто',
+            tone: stats.stockHQItems > 0 ? 'neutral' : 'success',
+            to: '/admin/warehouse',
+            action: 'Открыть склад',
+            icon: <Archive size={17} />
+        },
+        {
+            id: 'publication',
+            title: 'Карточки без публикации',
+            context: 'Не видны на публичной витрине',
+            value: Math.max(stats.productsTotal - stats.productsPublished, 0),
+            status: stats.productsTotal > stats.productsPublished ? 'Требуют решения' : 'Готово',
+            tone: stats.productsTotal > stats.productsPublished ? 'warning' : 'success',
+            to: '/admin/products/publication',
+            action: 'Открыть публикацию',
+            icon: <Store size={17} />
         }
     ];
 
     return (
-        <div className="space-y-4">
-            {error && (
-                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                    {error}
-                </div>
-            )}
-
-            <section className="admin-panel rounded-[24px] px-5 py-4">
-                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <p className="text-sm font-medium text-gray-300">Текущая версия проекта</p>
-                        <p className="text-xs text-gray-500">Версия интерфейса и серверной части, актуальная для этого релиза.</p>
-                    </div>
-                    <div className="text-lg font-semibold text-white">
-                        {PROJECT_VERSION}
-                    </div>
-                </div>
-            </section>
-
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {cards.map((card) => (
-                    <Link
-                        key={card.title}
-                        to={card.to}
-                        className="admin-panel group rounded-[24px] px-5 py-5 transition duration-200 hover:border-white/10 hover:bg-[#1b1e24]"
-                    >
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <div className="text-sm font-medium text-gray-400">{card.title}</div>
-                                <div className="mt-4 text-[2.2rem] font-semibold leading-none text-white">
-                                    {loading ? '...' : formatCount(card.value)}
-                                </div>
-                            </div>
-                            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${card.accentClass}`}>
-                                {card.icon}
-                            </div>
-                        </div>
-                        <p className="mt-4 text-sm text-gray-500">{card.subtitle}</p>
-                    </Link>
-                ))}
-            </section>
-        </div>
+        <>
+            <AdminWorkspaceHeader
+                title="Сегодня"
+                count={loading ? 'Загрузка…' : `Задач: ${tasks.filter((task) => task.value > 0).length}`}
+            />
+            <TaskTable tasks={tasks} loading={loading} />
+        </>
     );
+}
+
+function StatusDashboard({ stats, loading, error }: { stats: DashboardStats; loading: boolean; error: string }) {
+    const rows = [
+        {
+            id: 'api',
+            title: 'API сводки',
+            value: error || (loading ? 'Проверка…' : 'Доступен'),
+            status: error ? 'Ошибка' : loading ? 'Проверка' : 'Работает',
+            tone: error ? 'danger' as const : loading ? 'neutral' as const : 'success' as const
+        },
+        {
+            id: 'session',
+            title: 'Сессия сотрудника',
+            value: 'Доступ подтверждён',
+            status: 'Работает',
+            tone: 'success' as const
+        },
+        {
+            id: 'version',
+            title: 'Версия интерфейса',
+            value: PROJECT_VERSION,
+            status: 'Установлена',
+            tone: 'success' as const
+        },
+        {
+            id: 'snapshot',
+            title: 'Снимок данных',
+            value: `${formatCount(stats.productsTotal)} карточек · ${formatCount(stats.stockHQItems + stats.stockOnlineItems)} позиций`,
+            status: error ? 'Недоступен' : loading ? 'Проверка' : 'Получен',
+            tone: error ? 'danger' as const : loading ? 'neutral' as const : 'success' as const
+        }
+    ];
+
+    return (
+        <>
+            <AdminWorkspaceHeader title="Состояние системы" count={loading ? 'Проверка…' : error ? 'Есть ошибка' : 'Всё работает'}>
+                <div className="ml-auto"><DesktopStatusCenter label="Диагностика" /></div>
+            </AdminWorkspaceHeader>
+            <AdminTableSurface minWidth={860}>
+                <div className="grid min-h-12 grid-cols-[minmax(280px,1fr)_minmax(400px,2fr)_170px] border-b border-[#2a3039] bg-[#10151b] px-4 text-[12px] font-medium text-[#8f98a4]">
+                    <TableHead>Проверка</TableHead>
+                    <TableHead>Результат</TableHead>
+                    <TableHead>Статус</TableHead>
+                </div>
+                {rows.map((row) => (
+                    <div key={row.id} className="grid min-h-[66px] grid-cols-[minmax(280px,1fr)_minmax(400px,2fr)_170px] items-center border-b border-[#272d35] bg-[#141a21] px-4 text-[13px] last:border-b-0 hover:bg-[#171e26]">
+                        <div className="flex items-center gap-3 font-medium text-[#eef2f6]">
+                            {row.tone === 'danger'
+                                ? <AlertTriangle size={17} className="text-red-300" />
+                                : row.tone === 'success'
+                                    ? <CheckCircle2 size={17} className="text-[#48d787]" />
+                                    : <Database size={17} className="text-[#87909c]" />}
+                            {row.title}
+                        </div>
+                        <div className="truncate pr-4 text-[#9ba4af]">{row.value}</div>
+                        <AdminStatus label={row.status} tone={row.tone} />
+                    </div>
+                ))}
+            </AdminTableSurface>
+        </>
+    );
+}
+
+function TaskTable({ tasks, loading }: { tasks: DashboardTask[]; loading: boolean }) {
+    return (
+        <AdminTableSurface minWidth={980}>
+            <div className="grid min-h-12 grid-cols-[minmax(320px,1.5fr)_minmax(300px,1.3fr)_130px_170px_190px] border-b border-[#2a3039] bg-[#10151b] px-4 text-[12px] font-medium text-[#8f98a4]">
+                <TableHead>Задача</TableHead>
+                <TableHead>Контекст</TableHead>
+                <TableHead>Количество</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead>Действие</TableHead>
+            </div>
+            {loading ? (
+                <AdminWorkspaceState state="loading">Загрузка…</AdminWorkspaceState>
+            ) : tasks.map((task) => (
+                <div
+                    key={task.id}
+                    data-testid={`dashboard-task-${task.id}`}
+                    className="grid min-h-[66px] grid-cols-[minmax(320px,1.5fr)_minmax(300px,1.3fr)_130px_170px_190px] items-center border-b border-[#272d35] bg-[#141a21] px-4 text-[13px] last:border-b-0 hover:bg-[#171e26]"
+                >
+                    <div className="flex min-w-0 items-center gap-3 pr-4 font-medium text-[#eef2f6]">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#303842] bg-[#1b222b] text-[#c8d0d9]">{task.icon}</span>
+                        <span className="truncate">{task.title}</span>
+                    </div>
+                    <div className="min-w-0 truncate pr-4 text-[#9ba4af]">{task.context}</div>
+                    <div className="text-lg font-semibold tabular-nums text-[#eef2f6]">{formatCount(task.value)}</div>
+                    <AdminStatus label={task.status} tone={task.tone} />
+                    <Link
+                        to={task.to}
+                        className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-md border border-[#4b89d9] bg-[#152130] px-3 text-[13px] font-medium text-[#79b9ff] transition hover:border-[#67a5f4] hover:bg-[#192a3d]"
+                    >
+                        {task.action}
+                        <ArrowRight size={14} />
+                    </Link>
+                </div>
+            ))}
+        </AdminTableSurface>
+    );
+}
+
+function TableHead({ children }: { children: ReactNode }) {
+    return <div className="flex items-center pr-4">{children}</div>;
 }
 
 function formatCount(value: number) {

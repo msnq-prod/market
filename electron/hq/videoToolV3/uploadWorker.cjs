@@ -4,6 +4,13 @@ const { nowIso } = require('./db.cjs');
 const { VideoToolV3ServerError } = require('./serverClient.cjs');
 
 const failMessage = (error) => (error instanceof Error ? error.message : 'Загрузка прервалась.');
+const parseManifest = (manifestJson) => {
+    try {
+        return JSON.parse(manifestJson);
+    } catch {
+        throw new Error('Manifest export run поврежден.');
+    }
+};
 
 class UploadWorker {
     constructor({ db, uploadService, networkService = null, exportService = null, ffmpegService = null }) {

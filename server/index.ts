@@ -180,6 +180,158 @@ const serializeProduct = <T extends {
     };
 };
 
+const LOCATION_LABEL_OFFSET_MIN = 24;
+const LOCATION_LABEL_OFFSET_MAX = 280;
+const LOCATION_LABEL_VERTICAL_OFFSET_MIN = 0;
+const LOCATION_LABEL_VERTICAL_OFFSET_MAX = 180;
+type LocationLabelDirection = 'UP' | 'DOWN';
+type LocationLabelLayout = {
+    label_desktop_offset: number;
+    label_desktop_vertical_offset: number;
+    label_desktop_direction: LocationLabelDirection;
+    label_mobile_offset: number;
+    label_mobile_vertical_offset: number;
+    label_mobile_direction: LocationLabelDirection;
+};
+
+const DEFAULT_LOCATION_LABEL_LAYOUT: LocationLabelLayout = {
+    label_desktop_offset: 100,
+    label_desktop_vertical_offset: 16,
+    label_desktop_direction: 'UP',
+    label_mobile_offset: 80,
+    label_mobile_vertical_offset: 16,
+    label_mobile_direction: 'UP'
+};
+
+const parseLocationLabelOffset = (value: unknown, fallback: number): number | null => {
+    if (value == null || value === '') {
+        return fallback;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return null;
+    }
+
+    const rounded = Math.round(parsed);
+    if (rounded < LOCATION_LABEL_OFFSET_MIN || rounded > LOCATION_LABEL_OFFSET_MAX) {
+        return null;
+    }
+
+    return rounded;
+};
+
+const parseLocationLabelVerticalOffset = (value: unknown, fallback: number): number | null => {
+    if (value == null || value === '') {
+        return fallback;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return null;
+    }
+
+    const rounded = Math.round(parsed);
+    if (rounded < LOCATION_LABEL_VERTICAL_OFFSET_MIN || rounded > LOCATION_LABEL_VERTICAL_OFFSET_MAX) {
+        return null;
+    }
+
+    return rounded;
+};
+
+const parseLocationLabelDirection = (value: unknown, fallback: string): LocationLabelDirection | null => {
+    if (value == null || value === '') {
+        return fallback === 'DOWN' ? 'DOWN' : 'UP';
+    }
+
+    if (value === 'UP' || value === 'DOWN') {
+        return value;
+    }
+
+    return null;
+};
+
+const parseLocationLabelLayout = (
+    body: Record<string, unknown>,
+    fallback: LocationLabelLayout = DEFAULT_LOCATION_LABEL_LAYOUT
+): { layout: LocationLabelLayout } | { error: string } => {
+    const labelDesktopOffset = parseLocationLabelOffset(body.label_desktop_offset, fallback.label_desktop_offset);
+    const labelMobileOffset = parseLocationLabelOffset(body.label_mobile_offset, fallback.label_mobile_offset);
+    const labelDesktopVerticalOffset = parseLocationLabelVerticalOffset(
+        body.label_desktop_vertical_offset,
+        fallback.label_desktop_vertical_offset
+    );
+    const labelMobileVerticalOffset = parseLocationLabelVerticalOffset(
+        body.label_mobile_vertical_offset,
+        fallback.label_mobile_vertical_offset
+    );
+    const labelDesktopDirection = parseLocationLabelDirection(body.label_desktop_direction, fallback.label_desktop_direction);
+    const labelMobileDirection = parseLocationLabelDirection(body.label_mobile_direction, fallback.label_mobile_direction);
+
+    if (
+        labelDesktopOffset == null
+        || labelMobileOffset == null
+        || labelDesktopVerticalOffset == null
+        || labelMobileVerticalOffset == null
+        || labelDesktopDirection == null
+        || labelMobileDirection == null
+    ) {
+        return {
+            error: `Настройки подписей должны быть в диапазоне: горизонталь ${LOCATION_LABEL_OFFSET_MIN}-${LOCATION_LABEL_OFFSET_MAX}, вертикаль ${LOCATION_LABEL_VERTICAL_OFFSET_MIN}-${LOCATION_LABEL_VERTICAL_OFFSET_MAX}, направление: UP или DOWN.`
+        };
+    }
+
+    return {
+        layout: {
+            label_desktop_offset: labelDesktopOffset,
+            label_desktop_vertical_offset: labelDesktopVerticalOffset,
+            label_desktop_direction: labelDesktopDirection,
+            label_mobile_offset: labelMobileOffset,
+            label_mobile_vertical_offset: labelMobileVerticalOffset,
+            label_mobile_direction: labelMobileDirection
+        }
+    };
+};
+
+type NormalizedLocationTranslation = {
+    language_id: number;
+    name: string;
+    country: string;
+    description: string;
+};
+
+const normalizeLocationTranslations = (value: unknown): NormalizedLocationTranslation[] | null => {
+    if (!Array.isArray(value) || value.length === 0) {
+        return null;
+    }
+
+    const translations: NormalizedLocationTranslation[] = [];
+    for (const translation of value) {
+        if (!translation || typeof translation !== 'object') {
+            return null;
+        }
+
+        const source = translation as Record<string, unknown>;
+        const languageId = Number(source.language_id);
+        const name = typeof source.name === 'string' ? source.name.trim() : '';
+        const country = typeof source.country === 'string' ? source.country.trim() : '';
+        const description = typeof source.description === 'string' ? source.description : '';
+
+        if (!Number.isInteger(languageId) || !name || !country) {
+            return null;
+        }
+
+        translations.push({
+            language_id: languageId,
+            name,
+            country,
+            description
+        });
+    }
+
+    return translations;
+};
+
 // Ensure uploads directory exists
 const uploadDir = resolveProjectPath('public', 'uploads');
 const locationsDir = resolveProjectPath('public', 'locations');
@@ -629,14 +781,25 @@ app.post('/api/locations', authenticateToken, requireRole(HQ_STAFF_ROLES), async
         const {
             lat, lng, image, translations
         } = req.body;
+        const normalizedTranslations = normalizeLocationTranslations(translations);
+        if (!normalizedTranslations) {
+            return res.status(400).json({ error: 'Некорректные переводы локации.' });
+        }
+
+        const parsedLayout = parseLocationLabelLayout(req.body);
+        if ('error' in parsedLayout) {
+            return res.status(400).json({ error: parsedLayout.error });
+        }
+
         // translations should be an array of { language_id, name, country, description }
         const location = await prisma.location.create({
             data: {
                 lat: parseFloat(lat),
                 lng: parseFloat(lng),
                 image,
+                ...parsedLayout.layout,
                 translations: {
-                    create: translations
+                    create: normalizedTranslations
                 }
             },
             include: { translations: true }
@@ -663,17 +826,41 @@ app.put('/api/locations/:id', authenticateToken, requireRole(HQ_STAFF_ROLES), as
         const {
             lat, lng, image, translations
         } = req.body;
+        const normalizedTranslations = normalizeLocationTranslations(translations);
+        if (!normalizedTranslations) {
+            return res.status(400).json({ error: 'Некорректные переводы локации.' });
+        }
 
         const existingLocation = await prisma.location.findFirst({
             where: {
                 id,
                 deleted_at: null
             },
-            select: { id: true }
+            select: {
+                id: true,
+                label_desktop_offset: true,
+                label_desktop_vertical_offset: true,
+                label_desktop_direction: true,
+                label_mobile_offset: true,
+                label_mobile_vertical_offset: true,
+                label_mobile_direction: true
+            }
         });
 
         if (!existingLocation) {
             return res.status(404).json({ error: 'Локация не найдена.' });
+        }
+
+        const parsedLayout = parseLocationLabelLayout(req.body, {
+            label_desktop_offset: existingLocation.label_desktop_offset,
+            label_desktop_vertical_offset: existingLocation.label_desktop_vertical_offset,
+            label_desktop_direction: existingLocation.label_desktop_direction === 'DOWN' ? 'DOWN' : 'UP',
+            label_mobile_offset: existingLocation.label_mobile_offset,
+            label_mobile_vertical_offset: existingLocation.label_mobile_vertical_offset,
+            label_mobile_direction: existingLocation.label_mobile_direction === 'DOWN' ? 'DOWN' : 'UP'
+        });
+        if ('error' in parsedLayout) {
+            return res.status(400).json({ error: parsedLayout.error });
         }
 
         // Update basic info and translations
@@ -684,9 +871,10 @@ app.put('/api/locations/:id', authenticateToken, requireRole(HQ_STAFF_ROLES), as
                 lat: parseFloat(lat),
                 lng: parseFloat(lng),
                 image,
+                ...parsedLayout.layout,
                 translations: {
                     deleteMany: {},
-                    create: translations
+                    create: normalizedTranslations
                 }
             },
             include: { translations: true }
